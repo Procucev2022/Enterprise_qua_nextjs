@@ -40,6 +40,7 @@ const {
   VENDOR_ASSIGNMENT_LIMITS,
   VENDOR_DIRECTORY_QUERY_CONFIG,
   formatMessage,
+  foldCategoryDashes,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -393,7 +394,7 @@ function parseCategoryFilterList(rawValue) {
  * dash from turning a valid category filter into an empty result.
  */
 function normalizeCategoryDashes(value) {
-  return String(value ?? '').replace(/[–—]/g, '-');
+  return foldCategoryDashes(value);
 }
 
 /**

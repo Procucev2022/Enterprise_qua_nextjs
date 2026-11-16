@@ -45,6 +45,7 @@ const {
   normalizePincodeDigits,
   resolveVendorPinDigits,
   compareVendorPincodeProximity,
+  foldCategoryDashes,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -125,19 +126,26 @@ function buildTaxonomyMaps(taxonomy) {
     if (!group || !group.majorCategory) continue;
     const majorCanonical = String(group.majorCategory).trim();
     const majorKey = majorCanonical.toLowerCase();
+    const foldedMajorKey = foldCategoryDashes(majorKey);
     if (!MAJOR_TO_MINORS_MAP.has(majorKey)) {
       MAJOR_TO_MINORS_MAP.set(majorKey, new Set());
+    }
+    if (foldedMajorKey !== majorKey && !MAJOR_TO_MINORS_MAP.has(foldedMajorKey)) {
+      MAJOR_TO_MINORS_MAP.set(foldedMajorKey, MAJOR_TO_MINORS_MAP.get(majorKey));
     }
     const minorSet = MAJOR_TO_MINORS_MAP.get(majorKey);
     for (const minor of Array.isArray(group.minorCategories) ? group.minorCategories : []) {
       if (!minor) continue;
       const mTrimmed = String(minor).trim();
       const mKey = mTrimmed.toLowerCase();
+      const foldedMinorKey = foldCategoryDashes(mKey);
       minorSet.add(mKey);
-      if (!MINOR_TO_MAJORS_MAP.has(mKey)) MINOR_TO_MAJORS_MAP.set(mKey, new Set());
-      MINOR_TO_MAJORS_MAP.get(mKey).add(majorCanonical);
-      if (!MINOR_TO_MAJOR_MAP.has(mKey)) {
-        MINOR_TO_MAJOR_MAP.set(mKey, majorCanonical);
+      for (const lookupKey of foldedMinorKey !== mKey ? [mKey, foldedMinorKey] : [mKey]) {
+        if (!MINOR_TO_MAJORS_MAP.has(lookupKey)) MINOR_TO_MAJORS_MAP.set(lookupKey, new Set());
+        MINOR_TO_MAJORS_MAP.get(lookupKey).add(majorCanonical);
+        if (!MINOR_TO_MAJOR_MAP.has(lookupKey)) {
+          MINOR_TO_MAJOR_MAP.set(lookupKey, majorCanonical);
+        }
       }
     }
   }
@@ -148,7 +156,7 @@ function resolveCanonicalCategory(cat) {
   if (!cat) return '';
   const trimmed = String(cat).trim();
   const lower = trimmed.toLowerCase();
-  const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[lower];
+  const alias = MAJOR_CATEGORY_ALIASES && (MAJOR_CATEGORY_ALIASES[lower] || MAJOR_CATEGORY_ALIASES[foldCategoryDashes(lower)]);
   if (alias) return alias;
   return trimmed;
 }
@@ -164,14 +172,14 @@ function minorCategoryKey(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/&/g, 'and')
-    .replace(/[/_.,-]/g, ' ')
+    .replace(/[/_.,–—-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /** Lookup key for the taxonomy maps above, which are keyed by trimmed lower case. */
 function taxonomyKeyOf(value) {
-  return String(value || '').trim().toLowerCase();
+  return foldCategoryDashes(String(value || '').trim().toLowerCase());
 }
 
 /** True when the name is a taxonomy minor and not also a taxonomy major. */
@@ -251,7 +259,14 @@ function vendorKey(vendor) {
 
 /** Lower-case major names a vendor is filed under: majorCategory, or category on a legacy record that carries only that. */
 function vendorMajorKeys(vendor) {
-  return extractCategories(vendor?.majorCategory || vendor?.category).map((name) => name.toLowerCase());
+  const keys = new Set();
+  for (const name of extractCategories(vendor?.majorCategory || vendor?.category)) {
+    const lower = name.toLowerCase();
+    keys.add(lower);
+    const folded = foldCategoryDashes(lower);
+    if (folded) keys.add(folded);
+  }
+  return Array.from(keys);
 }
 
 const deferredVendorPlanRfqs = new WeakSet();
@@ -6882,6 +6897,13 @@ class StoreService {
    */
   _majorCategoriesForMinors(minors, { allMajors = false } = {}) {
     const majors = new Set();
+    const addMajorWithDashVariants = (raw) => {
+      const key = String(raw || '').trim().toLowerCase();
+      if (!key) return;
+      majors.add(key);
+      const folded = foldCategoryDashes(key);
+      if (folded !== key) majors.add(folded);
+    };
     for (const minor of minors) {
       const key = taxonomyKeyOf(minor);
       const parents = allMajors
@@ -6889,9 +6911,11 @@ class StoreService {
         : [MINOR_TO_MAJOR_MAP.get(key)].filter(Boolean);
       for (const parent of parents) {
         const parentKey = parent.toLowerCase();
-        majors.add(parentKey);
+        const foldedParentKey = foldCategoryDashes(parentKey);
+        addMajorWithDashVariants(parentKey);
         for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES || {})) {
-          if (String(canonical).trim().toLowerCase() === parentKey) majors.add(alias.toLowerCase());
+          const canonicalFolded = foldCategoryDashes(String(canonical).trim().toLowerCase());
+          if (canonicalFolded === foldedParentKey) addMajorWithDashVariants(alias);
         }
       }
     }
@@ -7761,12 +7785,22 @@ class StoreService {
         // 1. Public vendors carrying one of the RFQ's minor categories, plus vendors under the minors'
         // parent majors for the top-up. Each minor is looked up on its own when the combined lookup is full.
         try {
-          const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsByMinorCategoryFromDB(
-            minorSearchTerms(subset),
-            this._majorCategoriesForMinors(subset, { allMajors: true }),
-            rowLimit,
-            ...pinLookupOpts
-          ));
+          const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => {
+            const lookupMajors = this._majorCategoriesForMinors(subset, { allMajors: true });
+            if (lookupMajors.length > 0 && typeof domainQueries.getPublicVendorsByMinorCategoryFromDB === 'function') {
+              return domainQueries.getPublicVendorsByMinorCategoryFromDB(
+                minorSearchTerms(subset),
+                lookupMajors,
+                rowLimit,
+                ...pinLookupOpts
+              );
+            }
+            return domainQueries.getPublicVendorsMatchingCategories(
+              minorSearchTerms(subset),
+              rowLimit,
+              ...pinLookupOpts
+            );
+          });
           const majorRows = await this._fetchMajorFallbackFromDB(minors, targetLocation);
           dbMatches = [...minorRows, ...majorRows];
         } catch (err) {

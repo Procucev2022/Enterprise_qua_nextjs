@@ -6079,3 +6079,10 @@ In RFQ invitations process, an RFQ created for the Pin code 110002, but RFQ invi
 During RFQ creation, 25 matching vendors are displayed for the selected category, but the email acknowledgement shows 0 matched suppliers and 0 invited suppliers. I verified the category mapping in Category Manager, including different locations, it went to certain vendors
 ```
 ---
+
+### Prompt 241
+**Timestamp**: 2026-11-16T10:38:04+05:30
+```text
+Here also, "0 minor vendors found" data displayed, please check & fix it.
+```
+---

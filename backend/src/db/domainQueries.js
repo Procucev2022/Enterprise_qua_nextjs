@@ -40,6 +40,7 @@ const {
   clearDummyPanFields,
   normalizePincodeDigits,
   exclusiveDigitPrefixUpperBound,
+  expandCategoryDashVariants,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -665,9 +666,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
  */
 async function countPublicVendorsMatchingCategories(signals) {
   if (!pool.hasStorage()) return 0;
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return 0;
 
   const params = [];
@@ -927,9 +926,7 @@ async function executePincodeTieredPublicVendorQuery({
  */
 async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, options = {}) {
   if (!pool.hasStorage()) return [];
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return [];
 
   const safeLimit = Math.min(
@@ -975,12 +972,8 @@ async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VEN
  */
 async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCategories, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, options = {}) {
   if (!pool.hasStorage()) return [];
-  const terms = Array.from(
-    new Set((Array.isArray(minorSearchTerms) ? minorSearchTerms : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
-  const majors = Array.from(
-    new Set((Array.isArray(majorCategories) ? majorCategories : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const terms = expandCategoryDashVariants(minorSearchTerms).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const majors = expandCategoryDashVariants(majorCategories).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (terms.length === 0 || majors.length === 0) return [];
 
   const safeLimit = Math.min(
@@ -1043,9 +1036,7 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
  */
 async function getPublicVendorsMatchingCategories(signals, limit = 100, options = {}) {
   if (!pool.hasStorage()) return [];
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return [];
 
   const params = [];

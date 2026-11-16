@@ -889,6 +889,8 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     pumps: 'Engineering Spares - Mechanical',
     motors: 'Engineering Spares - Electrical',
     'general procurement': 'Others – New Product',
+    'others - new product': 'Others – New Product',
+    'others - new service': 'Others – New Service',
   },
 
   // Keywords that describe raw/component materials rather than product purpose.
@@ -3951,6 +3953,30 @@ function resolveAttachmentContentType(declaredMimeType, fileName) {
   return normalized || 'application/octet-stream';
 }
 
+/**
+ * Folds typographic en-dashes (–) and em-dashes (—) in category labels to a plain ASCII hyphen (-),
+ * aligning taxonomy labels ("Others – New Product") with stored database category strings ("Others - New Product").
+ */
+function foldCategoryDashes(value) {
+  return String(value ?? '').replace(/[–—]/g, '-');
+}
+
+/**
+ * Expands lower-case category values to include their plain-hyphen variant whenever any entry
+ * contains an en-dash or em-dash, without adding duplicate entries for already-hyphenated labels.
+ */
+function expandCategoryDashVariants(values) {
+  const expanded = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const lower = String(value || '').trim().toLowerCase();
+    if (!lower) continue;
+    expanded.add(lower);
+    const folded = foldCategoryDashes(lower);
+    if (folded !== lower) expanded.add(folded);
+  }
+  return Array.from(expanded);
+}
+
 module.exports = {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
@@ -4207,6 +4233,8 @@ module.exports = {
   commonPincodePrefixLength,
   resolveVendorPinDigits,
   compareVendorPincodeProximity,
+  foldCategoryDashes,
+  expandCategoryDashVariants,
   parseSearchTokens,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
