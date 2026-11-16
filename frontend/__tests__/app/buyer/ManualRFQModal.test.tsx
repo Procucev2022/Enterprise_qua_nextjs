@@ -634,6 +634,35 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
   });
 
+  it('sorts Mode 3 fetched category candidates by delivery pincode proximity before submitting top 10', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      candidates: [
+        { id: 'pin-far', name: 'Far Kerala Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '683542', rating: 4 },
+        { id: 'pin-dist', name: 'Delhi District Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '110045', rating: 4 },
+        { id: 'pin-exact', name: 'Delhi Exact Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '110002', rating: 4 },
+      ],
+    });
+    renderModal();
+    fireEvent.click(screen.getByLabelText(/(Mode 3|Version 3)/i));
+    fillRow();
+    fillHeaderFields();
+    fireEvent.change(screen.getByLabelText(/Delivery Location/i), { target: { value: 'Central Delhi, Delhi' } });
+    fireEvent.change(screen.getByLabelText(/Pincode|PIN/i), { target: { value: '110002' } });
+
+    await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+    clickSave();
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const submittedIds = rfqClient.createRFQ.mock.calls[0][0].assignedVendors.map((v: { id: string }) => v.id);
+    expect(submittedIds).toEqual(['pin-exact', 'pin-dist', 'pin-far']);
+  });
+
   it('blocks save and shows the sourcing-mode message when no mode is chosen', () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],

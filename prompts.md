@@ -6065,3 +6065,10 @@ the downloaded sample PO Dump Excel template still contains the old columns (PO 
 there are currently in my buyer account 11 vendors in the Vendor Directory, but the Evaluation Summary is showing only 1 vendor. When I try to search for or select another vendor, it shows "No vendors found."
 ```
 ---
+
+### Prompt 239
+**Timestamp**: 2026-11-16T10:30:54+05:30
+```text
+In RFQ invitations process, an RFQ created for the Pin code 110002, but RFQ invitations sent to some other pincode vendors, Can you please check & fix.
+```
+---

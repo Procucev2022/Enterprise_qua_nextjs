@@ -421,9 +421,11 @@ function validateVendorDirectoryQuery(rawQuery) {
   for (const key of ['buyerId', 'search', 'email', 'category', 'minor', 'state', 'city']) {
     if (q[key] !== undefined) normalized[key] = q[key];
   }
-  // Pincode: digits only (spaces stripped, e.g. "560 001"); an empty value means no filter.
-  if (q.pincode !== undefined && String(q.pincode).trim() !== '') {
-    normalized.pincode = String(q.pincode).replace(/\s+/g, '');
+  // Pincode / preferredPincode: digits only (spaces stripped, e.g. "560 001"); empty means no filter.
+  for (const pinKey of ['pincode', 'preferredPincode']) {
+    if (q[pinKey] !== undefined && String(q[pinKey]).trim() !== '') {
+      normalized[pinKey] = String(q[pinKey]).replace(/\s+/g, '');
+    }
   }
   for (const listKey of ['majors', 'minors']) {
     if (q[listKey] !== undefined) {
@@ -447,10 +449,11 @@ function mergeUniquePublicVendors(targetMap, candidates, cap) {
   }
 }
 
-async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
+async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit, preferredPincode = '') {
   if (!Array.isArray(majors) || majors.length === 0 || poolMap.size >= poolLimit) return;
+  const pinOpts = preferredPincode ? [{ pincode: preferredPincode }] : [];
   if (majors.length === 1) {
-    const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, rows, poolLimit);
     return;
   }
@@ -458,7 +461,7 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
   // out secondary line-item divisions under a single SQL LIMIT.
   const perMajorLimit = Math.max(20, Math.ceil(poolLimit / majors.length));
   const buckets = await Promise.all(
-    majors.map((major) => domainQueries.getPublicVendorsByMajorCategoryFromDB([major], perMajorLimit))
+    majors.map((major) => domainQueries.getPublicVendorsByMajorCategoryFromDB([major], perMajorLimit, ...pinOpts))
   );
   const maxLen = buckets.reduce((max, arr) => Math.max(max, Array.isArray(arr) ? arr.length : 0), 0);
   for (let idx = 0; idx < maxLen && poolMap.size < poolLimit; idx += 1) {
@@ -470,7 +473,7 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
     }
   }
   if (poolMap.size < poolLimit) {
-    const combined = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    const combined = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, combined, poolLimit);
   }
 }
@@ -479,19 +482,20 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
  * Fetches indexed public Procucev network candidates matching RFQ minor/major categories.
  * Minor matches lead the pool; parent-major vendors top up the pool when minor matches are sparse.
  */
-async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize }) {
+async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize, preferredPincode = '' }) {
   const poolLimit = Math.min(
     VENDOR_DIRECTORY_QUERY_CONFIG.MAX_POOL_LIMIT,
     Math.max(pageSize, VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT * VENDOR_DIRECTORY_QUERY_CONFIG.MIN_MINOR_POOL_FACTOR)
   );
   const minorTarget = VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT;
+  const pinOpts = preferredPincode ? [{ pincode: preferredPincode }] : [];
   const poolMap = new Map();
 
   if (minors.length > 0) {
     const inferredMajors = storeService._majorCategoriesForMinors(minors, { allMajors: true });
     const lookupMajors = dedupeCategoryStrings([...majors, ...inferredMajors]);
     const searchTerms = storeService.minorSearchTerms(minors);
-    const batchMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(searchTerms, lookupMajors, poolLimit);
+    const batchMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(searchTerms, lookupMajors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, batchMinorRows, poolLimit);
 
     if (minors.length > 1 && poolMap.size < poolLimit) {
@@ -503,7 +507,8 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
         const singleMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(
           storeService.minorSearchTerms([minor]),
           storeService._majorCategoriesForMinors([minor], { allMajors: true }),
-          perMinorLimit
+          perMinorLimit,
+          ...pinOpts
         );
         mergeUniquePublicVendors(poolMap, singleMinorRows, poolLimit);
       }
@@ -514,15 +519,15 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
     ).length;
 
     if (minorMatchedCount < minorTarget && poolMap.size < poolLimit && lookupMajors.length === 0 && !isD1Overloaded()) {
-      const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2);
+      const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2, ...pinOpts);
       mergeUniquePublicVendors(poolMap, legacyMinorRows, poolLimit);
     }
 
     if (poolMap.size < pageSize && lookupMajors.length > 0) {
-      await fetchMajorPoolsFromDB(lookupMajors, poolMap, poolLimit);
+      await fetchMajorPoolsFromDB(lookupMajors, poolMap, poolLimit, preferredPincode);
     }
   } else {
-    await fetchMajorPoolsFromDB(majors, poolMap, poolLimit);
+    await fetchMajorPoolsFromDB(majors, poolMap, poolLimit, preferredPincode);
   }
 
   return Array.from(poolMap.values()).slice(0, pageSize);
@@ -606,7 +611,7 @@ async function getVendors(req, res, next) {
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
     const { page } = rawQuery;
-    const { search, email, category, state, city, pincode } = cleanQuery;
+    const { search, email, category, state, city, pincode, preferredPincode } = cleanQuery;
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -630,7 +635,12 @@ async function getVendors(req, res, next) {
       );
       try {
         if (publicOnly && (minors.length > 0 || majors.length > 0) && !search && !email && !state && !city && !pincode && pageNumber === 1) {
-          const candidates = await fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize });
+          const candidates = await fetchPublicCategoryCandidatesFromDB({
+            minors,
+            majors,
+            pageSize,
+            ...(preferredPincode ? { preferredPincode } : {}),
+          });
           logger.info('Fetched indexed public vendor category candidates', {
             minorsCount: minors.length,
             majorsCount: majors.length,

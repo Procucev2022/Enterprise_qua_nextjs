@@ -1178,6 +1178,13 @@ const VALIDATION_SCHEMAS = {
       pattern: /^\d{3,6}$/,
       message: 'pincode must be 3 to 6 digits.',
     },
+    // Soft proximity preference used to prioritize nearby suppliers before nationwide fallback.
+    preferredPincode: {
+      type: 'string',
+      required: false,
+      pattern: /^\d{3,6}$/,
+      message: 'preferredPincode must be 3 to 6 digits.',
+    },
     publicOnly: {
       type: 'string',
       required: false,

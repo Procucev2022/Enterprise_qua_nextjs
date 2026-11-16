@@ -1314,7 +1314,7 @@ describe('rfqClient RFQ persistence', () => {
       expect(url.searchParams.get('minors')).toBe('Laptop');
     });
 
-    test('includes publicOnly, deduplicated majors, and minors in the query string when provided', async () => {
+    test('includes publicOnly, deduplicated majors, minors, and valid preferredPincode in the query string when provided', async () => {
       global.fetch = reply(200, { success: true, data: [], pagination: { ...pagination, total: 0 } });
 
       await fetchAllVendors({
@@ -1323,6 +1323,7 @@ describe('rfqClient RFQ persistence', () => {
         publicOnly: true,
         majors: [' IT ', 'IT', 'Civil Works', ''],
         minors: [' Laptop ', 'Laptop', '  '],
+        preferredPincode: '110 002',
       });
 
       const url = new URL(lastPath(), 'http://localhost');
@@ -1333,6 +1334,7 @@ describe('rfqClient RFQ persistence', () => {
       expect(url.searchParams.get('publicOnly')).toBe('true');
       expect(url.searchParams.get('majors')).toBe('IT,Civil Works');
       expect(url.searchParams.get('minors')).toBe('Laptop');
+      expect(url.searchParams.get('preferredPincode')).toBe('110002');
     });
 
     test('sends en/em dash category names with the plain hyphen the database stores', async () => {

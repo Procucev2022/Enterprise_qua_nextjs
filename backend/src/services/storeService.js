@@ -41,6 +41,10 @@ const {
   EXTENSION_HOURS_PER_DAY,
   clearDummyPanFields,
   resolveVendorLocationFields,
+  extractIndianAddressLocation,
+  normalizePincodeDigits,
+  resolveVendorPinDigits,
+  compareVendorPincodeProximity,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -6498,6 +6502,47 @@ class StoreService {
   }
 
   /**
+   * Extracts cleaned delivery location and pincode from an RFQ or destination object.
+   * Falls back to extracting a 6-digit Indian PIN from deliveryLocation text when deliveryPincode is empty.
+   */
+  _extractTargetLocation(source) {
+    if (!source) return { pincode: null, location: null };
+    if (typeof source === 'string') {
+      const trimmed = source.trim();
+      const digits = normalizePincodeDigits(trimmed);
+      if (digits && /^\d+$/.test(trimmed.replace(/\s+/g, ''))) {
+        return { pincode: digits, location: null };
+      }
+      return {
+        pincode: extractIndianAddressLocation(trimmed).pincode || null,
+        location: trimmed || null,
+      };
+    }
+    const rawLocation = source.deliveryLocation || source.location || '';
+    const location = String(rawLocation || '').trim() || null;
+    const rawPin = String(source.deliveryPincode || source.pincode || '').replace(/\s+/g, '');
+    const directPin = /^\d{3,6}$/.test(rawPin) ? rawPin : '';
+    const pincode = directPin || (location ? extractIndianAddressLocation(location).pincode : '') || null;
+    return { pincode, location };
+  }
+
+  /**
+   * Deterministic vendor comparator: location proximity score, then rating descending,
+   * then closer PIN prefix / numerical PIN distance on ties.
+   */
+  _compareVendorsByLocationAndRating(a, b, destination) {
+    if (destination) {
+      const aLoc = this.scoreVendorLocation(a, destination);
+      const bLoc = this.scoreVendorLocation(b, destination);
+      if (aLoc !== bLoc) return bLoc - aLoc;
+    }
+    const ratingDiff = (Number(b?.rating) || 0) - (Number(a?.rating) || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+    const destPin = this._extractTargetLocation(destination).pincode;
+    return compareVendorPincodeProximity(a, b, destPin);
+  }
+
+  /**
    * Scores vendor location relevance to delivery destination.
    * Priority:
    *  - Exact 6-digit pincode match: 100
@@ -6510,12 +6555,9 @@ class StoreService {
    */
   scoreVendorLocation(vendor, destination) {
     if (!vendor || !destination) return 40;
-    const vendorPin = String(vendor.pincode || '').replace(/\D/g, '');
-    const destPin = String(
-      (typeof destination === 'string' && /^\d{6}$/.test(destination.trim())
-        ? destination
-        : destination.pincode || destination.deliveryPincode) || ''
-    ).replace(/\D/g, '');
+    const vendorPin = resolveVendorPinDigits(vendor);
+    const { pincode: extractedDestPin, location: extractedDestLoc } = this._extractTargetLocation(destination);
+    const destPin = String(extractedDestPin || '').replace(/\D/g, '');
 
     if (vendorPin.length === 6 && destPin.length === 6) {
       if (vendorPin === destPin) return 100;
@@ -6523,13 +6565,7 @@ class StoreService {
       if (vendorPin[0] === destPin[0]) return 70;
     }
 
-    const destText = String(
-      (typeof destination === 'string' && !/^\d{6}$/.test(destination.trim())
-        ? destination
-        : destination.location || destination.deliveryLocation) || ''
-    )
-      .toLowerCase()
-      .trim();
+    const destText = String(extractedDestLoc || '').toLowerCase().trim();
 
     const vendorText = `${vendor.location || ''} ${vendor.city || ''} ${vendor.state || ''}`.toLowerCase().trim();
 
@@ -7040,14 +7076,7 @@ class StoreService {
     }
 
     const sortCandidates = (list) => {
-      list.sort((a, b) => {
-        if (targetLocationOrPincode) {
-          const aLoc = this.scoreVendorLocation(a, targetLocationOrPincode);
-          const bLoc = this.scoreVendorLocation(b, targetLocationOrPincode);
-          if (aLoc !== bLoc) return bLoc - aLoc;
-        }
-        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-      });
+      list.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, targetLocationOrPincode));
     };
 
     const selectedMap = new Map();
@@ -7159,14 +7188,7 @@ class StoreService {
       if (key && !seeds.has(key) && !pool.has(key)) pool.set(key, { vendor: candidate, view: candidate });
     }
 
-    const rank = (a, b) => {
-      if (targetLocation) {
-        const aLoc = this.scoreVendorLocation(a.view, targetLocation);
-        const bLoc = this.scoreVendorLocation(b.view, targetLocation);
-        if (aLoc !== bLoc) return bLoc - aLoc;
-      }
-      return (Number(b.view.rating) || 0) - (Number(a.view.rating) || 0);
-    };
+    const rank = (a, b) => this._compareVendorsByLocationAndRating(a.view, b.view, targetLocation);
 
     const shortfalls = [];
     // Each minor takes its own vendors first. A vendor is invited once, so a vendor an earlier minor has
@@ -7570,7 +7592,7 @@ class StoreService {
    * @param {string[]} minors
    * @returns {Promise<Object[]>}
    */
-  async _fetchMajorFallbackFromDB(minors) {
+  async _fetchMajorFallbackFromDB(minors, targetLocation = null) {
     const perMinor = this._minorLookupLimit();
     const majorBuckets = new Map();
     for (const minor of minors) {
@@ -7582,10 +7604,13 @@ class StoreService {
       }
       majorBuckets.get(setKey).minorKeys.add(taxonomyKeyOf(minor));
     }
+    const targetPin = this._extractTargetLocation(targetLocation).pincode;
     const rows = [];
     for (const { majors, minorKeys } of majorBuckets.values()) {
       const majorLimit = Math.min(perMinor * minorKeys.size, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
-      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
+      const majorRows = targetPin
+        ? await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit, { pincode: targetPin })
+        : await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
       if (Array.isArray(majorRows)) rows.push(...majorRows);
     }
     return rows;
@@ -7677,6 +7702,8 @@ class StoreService {
     // RFQs without a minor.
     const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
+    const targetLocation = this._extractTargetLocation(rfq);
+    const pinLookupOpts = targetLocation.pincode ? [{ pincode: targetLocation.pincode }] : [];
 
     let dbMatches = [];
     if (pool.hasStorage()) {
@@ -7687,20 +7714,19 @@ class StoreService {
           const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsByMinorCategoryFromDB(
             minorSearchTerms(subset),
             this._majorCategoriesForMinors(subset, { allMajors: true }),
-            rowLimit
+            rowLimit,
+            ...pinLookupOpts
           ));
-          const majorRows = await this._fetchMajorFallbackFromDB(minors);
+          const majorRows = await this._fetchMajorFallbackFromDB(minors, targetLocation);
           dbMatches = [...minorRows, ...majorRows];
         } catch (err) {
           return this._deferMinorVendorPlan(rfq, 'v0-augment', err, { rethrowOnDatabaseError });
         }
       } else {
-        // 1. Category-matched public vendors from the whole directory.
+        // 1. Category-matched public vendors from the whole directory, prioritized by delivery pincode.
         if (Array.isArray(signals) && signals.length > 0) {
           try {
-            // Indexed major-category lookup. The LIKE scan over the raw JSON read about a million
-            // rows per call on D1 and was the query that failed under overload, leaving the RFQ with no vendors.
-            dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit);
+            dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit, ...pinLookupOpts);
           } catch (err) {
             logger.warn(
               'V0 DB-backed vendor assignment query failed',
@@ -7711,13 +7737,26 @@ class StoreService {
         }
         if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
           try {
-            const page = await domainQueries.getVendorsPageFromDB({
-              limit,
-              offset: 0,
-              publicOnly: true,
-              skipCount: true,
-            });
-            dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+            const districtPin = targetLocation.pincode ? targetLocation.pincode.slice(0, 3) : '';
+            if (districtPin) {
+              const pinPage = await domainQueries.getVendorsPageFromDB({
+                limit,
+                offset: 0,
+                publicOnly: true,
+                skipCount: true,
+                pincode: districtPin,
+              });
+              dbMatches = (pinPage && Array.isArray(pinPage.rows)) ? pinPage.rows : [];
+            }
+            if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+              const page = await domainQueries.getVendorsPageFromDB({
+                limit,
+                offset: 0,
+                publicOnly: true,
+                skipCount: true,
+              });
+              dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+            }
           } catch (err) {
             logger.warn(
               'V0 DB-backed network fallback query failed',
@@ -7738,10 +7777,6 @@ class StoreService {
     }
 
     const network = (Array.isArray(dbMatches) ? dbMatches : []).filter((v) => this.isProcucevVendor(v));
-    const targetLocation = {
-      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
 
     let sorted;
@@ -7763,14 +7798,7 @@ class StoreService {
       sorted = network.length === 0 ? [] : this.selectVendorsForRFQ(network, rfq, maxProcucevPerCat, targetLocation);
       if (!sorted || sorted.length === 0) {
         sorted = network
-          .sort((a, b) => {
-            if (targetLocation.pincode || targetLocation.location) {
-              const aLoc = this.scoreVendorLocation(a, targetLocation);
-              const bLoc = this.scoreVendorLocation(b, targetLocation);
-              if (aLoc !== bLoc) return bLoc - aLoc;
-            }
-            return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-          })
+          .sort((a, b) => this._compareVendorsByLocationAndRating(a, b, targetLocation))
           .slice(0, limit);
       }
     }
@@ -7987,10 +8015,8 @@ class StoreService {
     const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
-    const targetLocation = {
-      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
+    const targetLocation = this._extractTargetLocation(rfq);
+    const pinLookupOpts = targetLocation.pincode ? [{ pincode: targetLocation.pincode }] : [];
     let clientCandidates = [];
     if (isV1 || isV2) {
       let clientDbMatches = [];
@@ -8067,18 +8093,24 @@ class StoreService {
                 return domainQueries.getPublicVendorsByMinorCategoryFromDB(
                   minorSearchTerms(subset),
                   lookupMajors,
-                  rowLimit
+                  rowLimit,
+                  ...pinLookupOpts
                 );
               }
               return domainQueries.getPublicVendorsMatchingCategories(
                 minorSearchTerms(subset),
-                rowLimit
+                rowLimit,
+                ...pinLookupOpts
               );
             });
-            const majorRows = await this._fetchMajorFallbackFromDB(minors);
+            const majorRows = await this._fetchMajorFallbackFromDB(minors, targetLocation);
             dbMatches = [...minorRows, ...majorRows];
           } else {
-            dbMatches = await domainQueries.getPublicVendorsMatchingCategories(this._rfqMatchSignals(rfq), limit * 2);
+            dbMatches = await domainQueries.getPublicVendorsMatchingCategories(
+              this._rfqMatchSignals(rfq),
+              limit * 2,
+              ...pinLookupOpts
+            );
           }
         } catch (err) {
           if (minorScoped) return this._deferMinorVendorPlan(rfq, 'auto-assign', err, { rethrowOnDatabaseError });
@@ -8386,10 +8418,7 @@ class StoreService {
    */
   candidateVendorsForRFQ(rfq, limit = null) {
     const signals = this._rfqCategorySignals(rfq);
-    const destination = {
-      pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
+    const destination = this._extractTargetLocation(rfq);
     const matches = this._rfqVendorMatcher(rfq);
     const candidates = this.vendors
       .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
@@ -8397,12 +8426,7 @@ class StoreService {
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
 
     if (destination.pincode || destination.location) {
-      candidates.sort((a, b) => {
-        const aLoc = this.scoreVendorLocation(a, destination);
-        const bLoc = this.scoreVendorLocation(b, destination);
-        if (aLoc !== bLoc) return bLoc - aLoc;
-        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-      });
+      candidates.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, destination));
     }
 
     if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
@@ -8424,26 +8448,19 @@ class StoreService {
           const fetchLimit = (limit && Number.isInteger(Number(limit)) && Number(limit) > 0)
             ? Number(limit)
             : 100;
+          const destination = this._extractTargetLocation(rfq);
+          const pinOpts = destination.pincode ? [{ pincode: destination.pincode }] : [];
           const dbVendors = this._narrowDbVendorsToRFQ(
             rfq,
-            await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit)
+            await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit, ...pinOpts)
           );
           if (Array.isArray(dbVendors) && dbVendors.length > 0) {
-            const destination = {
-              pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-              location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-            };
             candidates = dbVendors.map((v) => ({
               ...v,
               alreadyInvited: this._isInvitedVendor(v, rfq),
             }));
             if (destination.pincode || destination.location) {
-              candidates.sort((a, b) => {
-                const aLoc = this.scoreVendorLocation(a, destination);
-                const bLoc = this.scoreVendorLocation(b, destination);
-                if (aLoc !== bLoc) return bLoc - aLoc;
-                return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-              });
+              candidates.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, destination));
             }
           }
         } catch (err) {
@@ -8994,7 +9011,7 @@ class StoreService {
    * rating so the enquiry lands with the best-matched suppliers first.
    */
   selectVendorsForRFQEmail(rfq, limit = 10) {
-    const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
+    const destination = this._extractTargetLocation(rfq);
     const minors = this._rfqMinorCategories(rfq);
     const rawSignals = minors.length > 0 ? minors : this._rfqCategorySignals(rfq);
     const distinctSignals = Array.from(new Set(rawSignals.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)));
@@ -9006,7 +9023,7 @@ class StoreService {
       vendor: v,
       score:
         this._vendorTierRank(v.subscriptionPlan) * 1000 +
-        (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
+        ((destination.pincode || destination.location) ? this.scoreVendorLocation(v, destination) : 0) +
         (Number(v.rating) || 0),
     });
 

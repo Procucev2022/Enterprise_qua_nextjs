@@ -656,8 +656,9 @@ export default function IngestionWizard({
     const { majors, minors } = extractRfqCategoryFilters(form);
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
+    const cleanPreferredPincode = String(form.deliveryPincode || '').replace(/\D/g, '').slice(0, 6);
     // Pull an indexed public candidate pool covering every RFQ division and minor category;
-    // the server widens sparse minors with parent majors and the client selects the top 10.
+    // the server prioritizes delivery pincode proximity and widens sparse minors cleanly.
     void withVendorFetchSignal(controller.signal, () =>
       fetchAllVendors({
         page: 1,
@@ -667,6 +668,7 @@ export default function IngestionWizard({
         publicOnly: true,
         ...(majors.length > 0 ? { majors } : {}),
         ...(minors.length > 0 ? { minors } : {}),
+        ...(cleanPreferredPincode.length >= 3 ? { preferredPincode: cleanPreferredPincode } : {}),
       })
     ).then((result) => {
       if (seq !== procucevV3FetchSeqRef.current) return;

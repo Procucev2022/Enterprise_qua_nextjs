@@ -74,10 +74,32 @@ describe('augmentV0AssignmentsFromDB', () => {
 
       const result = await storeService.augmentV0AssignmentsFromDB(rfq);
 
-      expect(majorSpy).toHaveBeenCalledWith(expect.arrayContaining(['Engineering Spares - Mechanical']), expect.any(Number));
+      expect(majorSpy).toHaveBeenCalledWith(
+        expect.arrayContaining(['Engineering Spares - Mechanical']),
+        expect.any(Number),
+        { pincode: '516267' }
+      );
       expect(likeSpy).not.toHaveBeenCalled();
       expect(pageSpy).not.toHaveBeenCalled();
       expect(result.assignedVendors.map((vendor) => vendor.id).sort()).toEqual(['v-far', 'v-near']);
+    });
+
+    test('falls back from district-pincode page to unfiltered public vendor page when district page has no rows', async () => {
+      const rfq = newV0Rfq({ deliveryPincode: '110002', deliveryLocation: 'Central Delhi, Delhi' });
+      jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue([]);
+      jest.spyOn(domainQueries, 'getPublicVendorsMatchingCategories').mockResolvedValue([]);
+      const pageSpy = jest.spyOn(domainQueries, 'getVendorsPageFromDB')
+        .mockResolvedValueOnce({ rows: [], total: 0 })
+        .mockResolvedValueOnce({
+          rows: [{ id: 'v-fallback-all', name: 'All Page Vendor', source: 'procucev_network', rating: 4 }],
+          total: 1,
+        });
+
+      const result = await storeService.augmentV0AssignmentsFromDB(rfq);
+
+      expect(pageSpy).toHaveBeenNthCalledWith(1, expect.objectContaining({ publicOnly: true, skipCount: true, pincode: '110' }));
+      expect(pageSpy).toHaveBeenNthCalledWith(2, expect.objectContaining({ publicOnly: true, skipCount: true }));
+      expect(result.assignedVendors.map((vendor) => vendor.id)).toEqual(['v-fallback-all']);
     });
 
     test('falls back to the public vendor page when the category lookup finds no match', async () => {

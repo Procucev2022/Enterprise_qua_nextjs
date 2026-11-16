@@ -9,6 +9,7 @@ import {
   scoreVendorLocation,
   rankProcucevVendorsForV3,
   selectTopProcucevVendorsForMode3,
+  compareVendorPincodeProximity,
   minorNamesMatch,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
@@ -813,5 +814,29 @@ describe('Mode 3 top-10 vendor selection', () => {
     });
     expect(filters.minors).toEqual(['Centrifugal Pumps']);
     expect(filters.majors.map((m) => m.toLowerCase())).toContain('mechanical');
+  });
+
+  it('extracts pincode from vendor address/location and tie-breaks equal ratings by exact/closer PIN proximity', () => {
+    const exactInAddress = { id: 'v-exact', name: 'Exact', location: 'ITO, Central Delhi 110002', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+    const farDistrict = { id: 'v-far-pin', name: 'FarDistrict', pincode: '110099', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+    const midDistrict = { id: 'v-mid-pin', name: 'MidDistrict', pincode: '110005', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+
+    expect(scoreVendorLocation(exactInAddress, { pincode: '110002' }).score).toBe(100);
+    expect(compareVendorPincodeProximity(exactInAddress, farDistrict, '110002')).toBeLessThan(0);
+    expect(compareVendorPincodeProximity(midDistrict, farDistrict, '110002')).toBeLessThan(0);
+    expect(compareVendorPincodeProximity(exactInAddress, farDistrict, '12')).toBe(0);
+    expect(compareVendorPincodeProximity({ city: 'Delhi' } as unknown as VendorEntry, { city: 'Noida' } as unknown as VendorEntry, '110002')).toBe(0);
+
+    const v3Ranked = rankProcucevVendorsForV3([farDistrict, midDistrict, exactInAddress], ['Laptop'], { pincode: '110002' }, 3, ['Laptop'], true);
+    expect(v3Ranked.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-mid-pin', 'v-far-pin']);
+
+    const catRanked = selectVendorsForCategories([farDistrict, exactInAddress], ['Laptop'], 2, { pincode: '110002' });
+    expect(catRanked.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-far-pin']);
+
+    const allCatTop = selectTopProcucevVendorsForMode3([farDistrict, midDistrict, exactInAddress], {
+      majorCategory: 'All Categories',
+      deliveryPincode: '110002',
+    });
+    expect(allCatTop.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-mid-pin', 'v-far-pin']);
   });
 });

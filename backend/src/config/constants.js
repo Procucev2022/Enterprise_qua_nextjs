@@ -390,6 +390,11 @@ const PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG = Object.freeze({
   MAX_LIMIT: 500,
   MAX_SIGNALS: 45,
 });
+const PINCODE_LOOKUP_CONFIG = Object.freeze({
+  MIN_PREFIX_LENGTH: 3,
+  MAX_PINCODE_DIGITS: 6,
+  MAX_UNION_PARAMS_D1: 85,
+});
 /**
  * Unnecessary / deprecated tables automatically purged during migrations and deployments.
  */
@@ -3458,6 +3463,71 @@ function resolveVendorLocationFields(input) {
   return { location, address, city, state, pincode };
 }
 
+/**
+ * Extracts up to 6 numeric digits from a PIN code input, returning empty string below MIN_PREFIX_LENGTH.
+ */
+function normalizePincodeDigits(value) {
+  const digits = String(value || '').replace(/\D/g, '').trim();
+  if (digits.length < PINCODE_LOOKUP_CONFIG.MIN_PREFIX_LENGTH) return '';
+  return digits.slice(0, PINCODE_LOOKUP_CONFIG.MAX_PINCODE_DIGITS);
+}
+
+/**
+ * Computes a locale-independent exclusive upper bound for a digit-only PIN prefix range scan.
+ */
+function exclusiveDigitPrefixUpperBound(prefix) {
+  const clean = String(prefix || '').replace(/\D/g, '');
+  if (!clean) return '';
+  for (let i = clean.length - 1; i >= 0; i -= 1) {
+    const code = clean.charCodeAt(i);
+    if (code < 57) {
+      return clean.slice(0, i) + String.fromCharCode(code + 1);
+    }
+  }
+  return `${clean}z`;
+}
+
+/**
+ * Counts shared leading digits between two numeric PIN strings.
+ */
+function commonPincodePrefixLength(pinA, pinB) {
+  const a = String(pinA || '').replace(/\D/g, '');
+  const b = String(pinB || '').replace(/\D/g, '');
+  const maxLen = Math.min(a.length, b.length);
+  let len = 0;
+  while (len < maxLen && a[len] === b[len]) {
+    len += 1;
+  }
+  return len;
+}
+
+/**
+ * Resolves a vendor's 6-digit PIN from explicit `pincode` or address fallback fields.
+ */
+function resolveVendorPinDigits(vendor) {
+  if (!vendor) return '';
+  const direct = String(vendor.pincode || '').replace(/\D/g, '');
+  if (direct.length === PINCODE_LOOKUP_CONFIG.MAX_PINCODE_DIGITS) return direct;
+  const rawAddr = [vendor.location, vendor.address, vendor.factoryAddress].filter(Boolean).join(' ');
+  return rawAddr ? (extractIndianAddressLocation(rawAddr).pincode || direct) : direct;
+}
+
+/**
+ * Deterministic proximity tie-breaker comparing two vendors against a target delivery pincode.
+ */
+function compareVendorPincodeProximity(a, b, destPincode) {
+  const dest = normalizePincodeDigits(destPincode);
+  if (!dest) return 0;
+  const aPin = resolveVendorPinDigits(a);
+  const bPin = resolveVendorPinDigits(b);
+  const prefixDiff = commonPincodePrefixLength(bPin, dest) - commonPincodePrefixLength(aPin, dest);
+  if (prefixDiff !== 0) return prefixDiff;
+  if (aPin.length === 6 && bPin.length === 6 && dest.length === 6) {
+    return Math.abs(Number(aPin) - Number(dest)) - Math.abs(Number(bPin) - Number(dest));
+  }
+  return 0;
+}
+
 
 
 
@@ -3966,6 +4036,7 @@ module.exports = {
   DATABASE_QUERY_LOGGING,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  PINCODE_LOOKUP_CONFIG,
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
@@ -4130,6 +4201,11 @@ module.exports = {
   looksLikeCombinedAddress,
   extractIndianAddressLocation,
   resolveVendorLocationFields,
+  normalizePincodeDigits,
+  exclusiveDigitPrefixUpperBound,
+  commonPincodePrefixLength,
+  resolveVendorPinDigits,
+  compareVendorPincodeProximity,
   parseSearchTokens,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,

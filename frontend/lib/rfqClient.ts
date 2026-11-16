@@ -702,6 +702,7 @@ export async function fetchAllVendors(
     state = '',
     city = '',
     pincode = '',
+    preferredPincode = '',
   } = options;
 
   // The database stores category names with a plain hyphen ("Others - New Product"), while some
@@ -723,6 +724,8 @@ export async function fetchAllVendors(
   if (city.trim()) params.set('city', city.trim());
   const cleanPincode = String(pincode || '').replace(/\s+/g, '');
   if (/^\d{3,6}$/.test(cleanPincode)) params.set('pincode', cleanPincode);
+  const cleanPreferredPincode = String(preferredPincode || '').replace(/\s+/g, '');
+  if (/^\d{3,6}$/.test(cleanPreferredPincode)) params.set('preferredPincode', cleanPreferredPincode);
 
   let res: Response;
   try {

@@ -17,7 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { resolveConfirmationVendorCount, resolveOwnVendorCount, V2_V3_SOURCING_MODES } from './ingestion-wizard';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, selectVendorsForCategories } from '@/lib/vendorMatching';
+import { compareVendorPincodeProximity, extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, scoreVendorLocation, selectVendorsForCategories } from '@/lib/vendorMatching';
 import {
   Plus,
   Trash2,
@@ -686,8 +686,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
       if (form.sourcingMode === 'mode_3' && Array.isArray(fetchedCategoryVendors) && fetchedCategoryVendors.length > 0) {
         const already = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const destination = { location: form.deliveryLocation, pincode: form.deliveryPincode };
         const procAdditions = fetchedCategoryVendors
           .filter((v) => !already.has(v.id))
+          .sort((a, b) => {
+            const locDiff =
+              scoreVendorLocation(b, destination).score - scoreVendorLocation(a, destination).score;
+            if (locDiff !== 0) return locDiff;
+            const ratingDiff = (Number(b.rating) || 0) - (Number(a.rating) || 0);
+            if (ratingDiff !== 0) return ratingDiff;
+            return compareVendorPincodeProximity(a, b, form.deliveryPincode);
+          })
           .slice(0, 10)
           .map((v) => ({
             id: v.id,

@@ -1776,6 +1776,7 @@ describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)',
     // The geographically closer vendor (same PIN district as 400701) ranks first.
     const cards = screen.getAllByTestId('procucev-v3-vendor');
     expect(within(cards[0]).getByText('Nearby Pumps Pvt Ltd')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('preferredPincode=400701'), expect.anything());
   });
 
   it('selects all / deselects all and dispatches the chosen Procucev vendors', async () => {
