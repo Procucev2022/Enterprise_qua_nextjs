@@ -28,6 +28,7 @@ const {
   RFQ_NOTIFICATION_MESSAGES,
   RFQ_NOTIFICATION_ERROR_CODES,
   EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_MAX_BATCH_SIZE,
   EMAIL_REGEX,
   MAJOR_CATEGORY_ALIASES,
   KEYWORD_TAXONOMY_MAP,
@@ -63,6 +64,7 @@ const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = requi
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
 const mailerService = require('./mailerService');
+const mailTransport = require('./mailTransport');
 // Real multi-channel outreach services — both are fire-and-forget and
 // no-op under test (NODE_ENV === 'test') or when credentials are not
 // configured, matching the same pattern mailerService uses above.
@@ -252,9 +254,14 @@ function extractCategories(val) {
   return [];
 }
 
+/** Resolves the primary contact email for a vendor, falling back to `corporateEmail`. */
+function resolveVendorEmail(vendor) {
+  return String((vendor && (vendor.email || vendor.corporateEmail)) || '').trim();
+}
+
 /** Dedupe key for a vendor: its id, else its email, else its name, in lower case. Empty when none is set. */
 function vendorKey(vendor) {
-  return String(vendor?.id || vendor?.email || vendor?.name || '').toLowerCase().trim();
+  return String(vendor?.id || resolveVendorEmail(vendor) || vendor?.name || '').toLowerCase().trim();
 }
 
 /** Lower-case major names a vendor is filed under: majorCategory, or category on a legacy record that carries only that. */
@@ -482,6 +489,8 @@ class StoreService {
       this.auditLogs = auditLogs;
 
       this.isHydratedFromDB = true;
+      this._lastRfqSyncTime = Date.now();
+      this._lastRfqSyncMap.clear();
       // The admin infrastructure list should describe the connection this load
       // just used, not a placeholder, so it is refreshed off the same boot.
       await this.refreshInfrastructureHealth().catch((err) =>
@@ -2709,8 +2718,9 @@ class StoreService {
   /**
    * Retrieves authoritative RFQ download credit balance & stats for a vendor.
    */
-  getVendorRfqCredits(vendorIdOrEmail) {
-    const vendor = this.getVendorById(vendorIdOrEmail, 'all');
+  getVendorRfqCredits(vendorIdOrEmail, resolvedVendor = null) {
+    const vendor = (resolvedVendor && typeof resolvedVendor === 'object' ? resolvedVendor : null)
+      || this.getVendorById(vendorIdOrEmail, 'all');
     if (!vendor) {
       return {
         vendorId: vendorIdOrEmail,
@@ -3935,6 +3945,10 @@ class StoreService {
         }
         return closed;
       }, []);
+    }
+
+    if (pool.hasStorage() && closedList.length > 0 && !this.isHydratedFromDB) {
+      await this.hydrateFromDB().catch(() => {});
     }
 
     for (const updated of closedList) {
@@ -5213,7 +5227,7 @@ class StoreService {
   _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false } = {}) {
     const targetsByEmail = new Map();
     for (const vendor of Array.isArray(vendors) ? vendors : []) {
-      const recipientEmail = String((vendor && vendor.email) || '').trim();
+      const recipientEmail = resolveVendorEmail(vendor);
       if (!recipientEmail) continue;
 
       const emailKey = recipientEmail.toLowerCase();
@@ -5246,15 +5260,34 @@ class StoreService {
     return Array.from(targetsByEmail.values());
   }
 
-  _dispatchRFQVendorInviteOutbox(rfq, operation) {
+  _resolveDispatchedInviteEventIds(rfq, invitationTargets, additions = [], { includeBuyerEmail = false, maxCount = null } = {}) {
+    if (!rfq || !rfq.id) return [];
+    const targets = Array.isArray(invitationTargets) && invitationTargets.length > 0
+      ? invitationTargets
+      : this._buildRFQVendorInviteTargets(rfq, additions, { includeBuyerEmail });
+    const ids = targets
+      .map((target) => (target && target.key ? `rfq-vendor-invite:${target.key}` : ''))
+      .filter(Boolean);
+    if (Number.isInteger(maxCount) && maxCount > 0 && ids.length > maxCount) {
+      return ids.slice(0, maxCount);
+    }
+    return ids;
+  }
+
+  _dispatchRFQVendorInviteOutbox(rfq, operation, targetEventIds = null) {
     if (!pool.hasStorage()) return false;
+    const ids = Array.isArray(targetEventIds) && targetEventIds.length > 0 ? targetEventIds : null;
+    const dispatchPromise = ids
+      ? eventOutboxService.dispatchDueEventOutboxJobs(ids.length, ids)
+      : eventOutboxService.dispatchDueEventOutboxJobs();
     this._background(
-      eventOutboxService.dispatchDueEventOutboxJobs(),
+      dispatchPromise,
       'Failed to dispatch durable RFQ vendor invitation events',
       {
         operation,
         rfqId: rfq.id,
         rfqNumber: rfq.rfqNumber,
+        ...(ids ? { targetEventCount: ids.length } : {}),
       }
     );
     return true;
@@ -5285,6 +5318,7 @@ class StoreService {
     clearVendorPlanPending = false,
   } = {}) {
     let committedAdditions = [];
+    let invitationTargets = [];
     const updatedRFQ = await this.updateRFQDurably(id, (current) => {
       const existing = Array.isArray(current.assignedVendors) ? current.assignedVendors : [];
       const assignedIds = new Set(existing.map((vendor) => vendor.id));
@@ -5303,14 +5337,15 @@ class StoreService {
           const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
           return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
         }).length;
+      invitationTargets = this._buildRFQVendorInviteTargets(
+        { ...current, assignedVendors },
+        committedAdditions,
+        { includeBuyerEmail: includeBuyerEmailInInvite }
+      );
       const updates = {
         assignedVendors,
         procucevVendorCount: procucevCount,
-        vendorInvitationTargets: this._buildRFQVendorInviteTargets(
-          { ...current, assignedVendors },
-          committedAdditions,
-          { includeBuyerEmail: includeBuyerEmailInInvite }
-        ),
+        vendorInvitationTargets: invitationTargets,
       };
       if (current.followUpData || ensureFollowUpData) {
         updates.followUpData = {
@@ -5328,7 +5363,7 @@ class StoreService {
       return updates;
     });
 
-    return { updatedRFQ, committedAdditions };
+    return { updatedRFQ, committedAdditions, invitationTargets };
   }
 
   _notifyRFQUpdate(updated, oldStatus, updates) {
@@ -5982,7 +6017,11 @@ class StoreService {
     const freshRfq = this.getRFQById(rfq.id || rfq.rfqNumber) || rfq;
     const quotes = Array.isArray(freshRfq.quotes) ? freshRfq.quotes : [];
     const buyerEmail = this.resolveBuyerEmailForRFQ(freshRfq);
-    const buyer = (freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId)) || {
+    let matchedBuyer = freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId);
+    if (!matchedBuyer && buyerEmail && pool.hasStorage()) {
+      matchedBuyer = await this.getBuyerAccountByEmail(buyerEmail).catch(() => null);
+    }
+    const buyer = matchedBuyer || {
       id: freshRfq.buyerAccountId || null,
       corporateEmail: buyerEmail,
       organizationName: freshRfq.buyerAccountName || freshRfq.buyerName || 'Buyer',
@@ -6383,6 +6422,18 @@ class StoreService {
     return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
   }
 
+  /** Direct per-recipient notification query on unhydrated isolates; uses in-memory store once hydrated. */
+  async getNotificationsSummaryForDurably(recipientType, recipientId, limit = 50) {
+    if (!recipientType || !recipientId) return { data: [], unreadCount: 0 };
+    if (pool.hasStorage() && !this.isHydratedFromDB && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
+      return domainQueries.getNotificationsForRecipientFromDB(recipientType, recipientId, limit);
+    }
+    return {
+      data: this.getNotificationsFor(recipientType, recipientId, limit),
+      unreadCount: this.getUnreadNotificationCountFor(recipientType, recipientId),
+    };
+  }
+
   // Both producers pass a real RFQ and a meta object; keep it that way so this
   // has no defensive branches to leave uncovered.
   _buildNotification({ recipientType, recipientId, kind, rfq, title, message, meta }) {
@@ -6462,16 +6513,21 @@ class StoreService {
     const notification = this.notifications.find(
       (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
     );
-    if (!notification) return null;
+    if (!notification && this.isHydratedFromDB) return null;
 
     try {
       const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
       if (!persisted) {
-        this.notifications = this.notifications.filter((item) => item.id !== id);
+        if (notification) {
+          this.notifications = this.notifications.filter((item) => item.id !== id);
+        }
         return null;
       }
-      notification.read = true;
-      return notification;
+      if (notification) {
+        notification.read = true;
+        return notification;
+      }
+      return { id, recipientType, recipientId, read: true };
     } catch (error) {
       logger.error('Failed to persist notification read state', error, 'STORE_SERVICE');
       const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
@@ -7911,7 +7967,7 @@ class StoreService {
       .map((v) => ({
         id: v.id,
         name: v.name,
-        email: v.email || null,
+        email: resolveVendorEmail(v) || null,
         contactPerson: v.contactPerson || null,
         phone: v.phone || v.mobile || v.mobileNumber || null,
         source: v.source || 'procucev_network',
@@ -7934,7 +7990,7 @@ class StoreService {
     }
     if (additions.length === 0) return rfq;
 
-    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
+    const { updatedRFQ: updated, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
       { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: true }
@@ -7948,7 +8004,7 @@ class StoreService {
       return {
         ...v,
         phone: full.phone || full.mobile || full.mobileNumber || v.phone,
-        email: full.email || v.email,
+        email: resolveVendorEmail(full) || resolveVendorEmail(v) || null,
         name: full.name || v.name,
         contactPerson: full.contactPerson || v.contactPerson,
       };
@@ -7996,7 +8052,8 @@ class StoreService {
         }
       }
 
-      if (vendor.email) {
+      const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+      if (vendor.email && !sendEmailViaOutboxOnly) {
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8056,7 +8113,13 @@ class StoreService {
     }
 
     this._persistRFQ(updated);
-    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-v0-augmented-vendor-invites');
+    this._dispatchRFQVendorInviteOutbox(
+      updated,
+      'rfq-v0-augmented-vendor-invites',
+      this._resolveDispatchedInviteEventIds(updated, invitationTargets, committedAdditions, {
+        maxCount: EVENT_OUTBOX_MAX_BATCH_SIZE,
+      })
+    );
 
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${updated.assignedVendors.length} Procucev vendors from DB match (${committedAdditions.length} added)`,
@@ -8258,7 +8321,7 @@ class StoreService {
         return {
           id: v.id,
           name: v.name,
-          email: v.email || null,
+          email: resolveVendorEmail(v) || null,
           contactPerson: v.contactPerson || null,
           phone: v.phone || v.mobile || v.mobileNumber || null,
           source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
@@ -8283,7 +8346,7 @@ class StoreService {
     }
     if (additions.length === 0) return rfq;
 
-    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
+    const { updatedRFQ: updated, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
       { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: !preserveVendorPlanPending }
@@ -8297,7 +8360,7 @@ class StoreService {
         return {
           ...vendor,
           phone: full.phone || vendor.phone || null,
-          email: full.email || vendor.email || null,
+          email: resolveVendorEmail(full) || resolveVendorEmail(vendor) || null,
           name: full.name || vendor.name,
           contactPerson: full.contactPerson || vendor.contactPerson || null,
         };
@@ -8349,7 +8412,8 @@ class StoreService {
             }
           }
 
-          if (vendor.email) {
+          const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+          if (vendor.email && !sendEmailViaOutboxOnly) {
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
               mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8436,7 +8500,13 @@ class StoreService {
     }
 
     this._persistRFQ(preserveVendorPlanPending ? { ...updated, vendorPlanPending: true } : updated);
-    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
+    this._dispatchRFQVendorInviteOutbox(
+      updated,
+      'rfq-auto-assigned-vendor-invites',
+      this._resolveDispatchedInviteEventIds(updated, invitationTargets, committedAdditions, {
+        maxCount: EVENT_OUTBOX_MAX_BATCH_SIZE,
+      })
+    );
     logger.info(
       `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
@@ -8501,7 +8571,7 @@ class StoreService {
   _isInvitedVendor(vendor, rfq) {
     if (!vendor || !rfq) return false;
     const vId = String(vendor.id || vendor.vendorId || '').toLowerCase().trim();
-    const vEmail = String(vendor.email || '').toLowerCase().trim();
+    const targetEmail = resolveVendorEmail(vendor).toLowerCase().trim();
     const vName = String(vendor.name || '').toLowerCase().trim();
 
     const checkList = (list) => {
@@ -8509,11 +8579,11 @@ class StoreService {
       return list.some((v) => {
         if (!v) return false;
         const targetId = String(v.id || v.vendorId || '').toLowerCase().trim();
-        const targetEmail = String(v.email || '').toLowerCase().trim();
+        const candEmail = resolveVendorEmail(v).toLowerCase().trim();
         const targetName = String(v.name || '').toLowerCase().trim();
         return Boolean(
           (vId && targetId && vId === targetId) ||
-          (vEmail && targetEmail && vEmail === targetEmail) ||
+          (targetEmail && candEmail && targetEmail === candEmail) ||
           (vName && targetName && vName === targetName)
         );
       });
@@ -8665,7 +8735,7 @@ class StoreService {
     const entries = newlyInvited.map((v) => ({
       id: v.id,
       name: v.name,
-      email: v.email || null,
+      email: resolveVendorEmail(v) || null,
       contactPerson: v.contactPerson || null,
       phone: v.phone || v.mobile || v.mobileNumber || null,
       source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
@@ -8679,7 +8749,7 @@ class StoreService {
     // Persist the assignment before emitting any invitation side effects or
     // acknowledging the request. A configured database failure must not leave
     // vendors notified about an invitation that disappears after restart.
-    const { updatedRFQ, committedAdditions } = await this._appendRFQAssignmentsDurably(rfq.id, entries, {
+    const { updatedRFQ, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(rfq.id, entries, {
       clearCategoryManagerAssignment: true,
       clearCategoryNotAvailable: true,
       advanceStatus: true,
@@ -8732,18 +8802,19 @@ class StoreService {
       this._persistNotification(notification);
 
       // Real invite email
-      if (vendor.email && !pool.hasStorage()) {
+      const vendorEmail = resolveVendorEmail(vendor);
+      if (vendorEmail && !pool.hasStorage()) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         logger.info(
-          `Checking quotation credits for invited vendor ${vendor.name || vendor.email}: ${creditInfo.freeCreditsRemaining} free credits, subscribed: ${creditInfo.isSubscribed}`,
+          `Checking quotation credits for invited vendor ${vendor.name || vendorEmail}: ${creditInfo.freeCreditsRemaining} free credits, subscribed: ${creditInfo.isSubscribed}`,
           { vendorId: vendor.id, freeCreditsRemaining: creditInfo.freeCreditsRemaining, isSubscribed: creditInfo.isSubscribed },
           'STORE_SERVICE'
         );
         const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
         const resolvedIsBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
-          mailerService.sendRfqInviteEmail(vendor.email, {
+          mailerService.sendRfqInviteEmail(vendorEmail, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
@@ -8765,7 +8836,13 @@ class StoreService {
     }
 
     if (pool.hasStorage()) {
-      this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment');
+      const targetEventIds = this._resolveDispatchedInviteEventIds(
+        updatedRFQ,
+        invitationTargets,
+        dispatchedInvites,
+        { includeBuyerEmail: true }
+      );
+      this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment', targetEventIds);
     }
 
     this.addAuditLog({
@@ -8780,7 +8857,7 @@ class StoreService {
       return {
         ...v,
         phone: full.phone || full.mobile || full.mobileNumber || v.phone,
-        email: full.email || v.email,
+        email: resolveVendorEmail(full) || resolveVendorEmail(v) || null,
         name: full.name || v.name,
         contactPerson: full.contactPerson || v.contactPerson,
       };

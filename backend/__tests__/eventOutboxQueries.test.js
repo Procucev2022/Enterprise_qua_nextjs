@@ -1,6 +1,7 @@
 const pool = require('../src/db/pool');
 const d1Bridge = require('../src/db/d1Bridge');
 const eventOutboxQueries = require('../src/db/eventOutboxQueries');
+const { EVENT_OUTBOX_MAX_BATCH_SIZE } = require('../src/config/constants');
 const { logger } = require('../src/services/loggerService');
 
 describe('event-outbox database operations', () => {
@@ -141,7 +142,7 @@ describe('event-outbox database operations', () => {
       .resolves.toEqual([{ id: 'quote-ready-1' }]);
     expect(querySpy.mock.calls[0][0]).toContain("e.status = $1 AND e.event_type = $2");
     expect(querySpy.mock.calls[0][0]).toContain(expectedExpression);
-    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', 10]);
+    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', EVENT_OUTBOX_MAX_BATCH_SIZE]);
     expect(querySpy.mock.calls[0][2].d1Text).toContain("lower(json_extract(e.raw, '$.recipientEmail'))");
     expect(querySpy.mock.calls[0][2].d1Text).toContain("json_extract(b.raw, '$.onboardingRequired')");
   });
@@ -153,7 +154,7 @@ describe('event-outbox database operations', () => {
     await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB()).resolves.toEqual([]);
     await expect(eventOutboxQueries.releaseReadyOnboardingQuoteNotificationsInDB(0)).resolves.toEqual([]);
 
-    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', 10]);
+    expect(querySpy.mock.calls[0][1]).toEqual(['onboarding', 'rfq_quote_received_email', EVENT_OUTBOX_MAX_BATCH_SIZE]);
     expect(querySpy.mock.calls[1][1]).toEqual(['onboarding', 'rfq_quote_received_email', 1]);
   });
 

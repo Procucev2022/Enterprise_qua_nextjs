@@ -1070,7 +1070,6 @@ sellerDirectory: {
 
     // Line items
     lineItemsHeading: 'Line Items',
-    lineItemsSubtitle: 'Package requirement specification',
     lineItemSearchPlaceholder: 'Search line items…',
     lineItemSearchAria: 'Search the line items of this RFQ',
     allMinorCategories: 'All Categories',
@@ -1346,6 +1345,13 @@ sellerDirectory: {
     inviteSelectedAction: 'Invite Selected Vendors',
     successTitle: 'Vendors Invited',
     successMessage: '{count} vendor(s) invited to {rfqNumber}. They can now see it, and have been notified.',
+    alreadyInvitedTitle: 'Already Invited',
+    alreadyInvitedMessage: 'All selected vendors have already been invited to this RFQ.',
+    noNewVendorsTitle: 'No New Vendors Invited',
+    noNewVendorsMessage: 'None of the selected vendors could be newly invited because they are already assigned or unavailable.',
+    excludedTitle: 'Category Mismatch Excluded',
+    excludedMessage: '{count} vendor(s) could not be invited.',
+    inviteRequestFailedMessage: 'Could not send vendor invitations. Please try again.',
     failTitle: 'Could Not Invite Vendors',
     categoryMatchesTab: 'Category Matches',
     allVendorsTab: 'All Vendors',
@@ -2027,15 +2033,15 @@ sellerDirectory: {
 
     poDump: {
       heading: 'Step 3 — Upload File 2: Historical PO Purchase Dump',
-      hint: 'Required. Upload your PO dump with these 2 mandatory columns: Vendor/Supplier Name and Item Description/Short Text/Material Description. Specifications & other columns are optional. Category is not a column: the system extracts each supplier\'s category from its PO history with AI.',
+      hint: 'Required. Upload your PO dump with these 3 template columns: Vendor/Supplier Name, Item Description, and Specifications (Optional). Category is not a column: the system extracts each supplier\'s category from its PO history with AI.',
       requiredBadge: 'Required',
-      requiredColumnsBanner: 'Mandatory 2 columns only: Vendor/Supplier Name & Item Description/Short Text/Material Description. Specifications & other columns are optional; Category is extracted by AI.',
+      requiredColumnsBanner: 'Columns: Vendor/Supplier Name (Required), Item Description (Required), and Specifications (Optional). Category is extracted by AI.',
       fieldVendor: 'Vendor/Supplier Name',
-      fieldDescription: 'Item Description/Short Text/Material Description',
+      fieldDescription: 'Item Description',
       fieldSpecsOptional: 'Specifications (Optional)',
       requiredTitle: 'PO Dump Required',
       requiredError:
-        'Historical PO Purchase Dump is mandatory. Please upload your PO dump file (containing Vendor/Supplier Name and Item Description/Short Text/Material Description) before continuing.',
+        'Historical PO Purchase Dump is mandatory. Please upload your PO dump file (containing Vendor/Supplier Name and Item Description) before continuing.',
       missingColumnsTemplate: 'Missing required columns: {columns}. (Found: [{found}]). Download the PO Dump template and use its headers.',
       invalidHeadersTitle: 'Invalid PO Sheet Headers',
       noHeadersFound: 'None',

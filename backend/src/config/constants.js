@@ -330,7 +330,7 @@ const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
   VENDOR_PLAN: 'planning',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
-const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
+const EVENT_OUTBOX_MAX_BATCH_SIZE = 25;
 const EVENT_OUTBOX_LEASE_MS = 5 * 60 * 1000;
 const EVENT_OUTBOX_RETRY_BASE_MS = 1000;
 const EVENT_OUTBOX_RETRY_MAX_MS = 15 * 60 * 1000;
@@ -357,6 +357,7 @@ const RFQ_CHASER_MAX_ATTEMPTS = 5;
 const RFQ_CHASER_RETRY_BASE_MS = 30 * 1000;
 const RFQ_CHASER_RETRY_MAX_MS = 15 * 60 * 1000;
 const RFQ_CHASER_ERROR_MAX_LENGTH = 2000;
+const RFQ_CHASER_BATCH_UPDATE_SIZE = 80;
 // Database row in the admin infrastructure list. It is the only row: it starts as
 // CHECKING and is replaced by the live result of pool.checkDatabaseHealth() (see
 // storeService.refreshInfrastructureHealth). No other service is listed.
@@ -445,18 +446,32 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/approvals',
     '/api/auth',
     '/api/bot',
+    '/api/buyer-accounts/active',
     '/api/buyer-profile',
     '/api/crypto',
     '/api/db',
     '/api/document-vault',
     '/api/enterprise-inquiries',
     '/api/internal-tasks',
+    '/api/notifications',
     '/api/payment-dues',
     '/api/pincode',
     '/api/subscriptions',
     '/api/tickets',
     '/api/vendor-ingestion',
+    '/api/vendors/heartbeat',
+    '/api/vendors/presence',
+    '/api/vendors/public',
+    '/api/vendors/rfq-credits',
+    '/api/vendors/subscription-pricing',
     '/api/zoho',
+  ]),
+  DIRECT_GET_PATH_PATTERNS: Object.freeze([
+    /^\/api\/vendors\/[^/]+$/,
+    /^\/api\/vendors\/[^/]+\/rfq-credits$/,
+    /^\/api\/vendors\/[^/]+\/payment-links$/,
+    /^\/api\/vendors\/[^/]+\/payment-links\/[^/]+\/invoice$/,
+    /^\/api\/vendors\/bulk-import\/[^/]+$/,
   ]),
   UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
 });
@@ -4236,6 +4251,7 @@ module.exports = {
   RFQ_CHASER_RETRY_BASE_MS,
   RFQ_CHASER_RETRY_MAX_MS,
   RFQ_CHASER_ERROR_MAX_LENGTH,
+  RFQ_CHASER_BATCH_UPDATE_SIZE,
   DEFAULT_CATEGORY_TAXONOMY,
   MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
   QUA_AI_EMAIL_TEMPLATES,

@@ -2676,45 +2676,28 @@ export default function InitialSetupModal() {
                     PO Line Items Preview ({poLineItems.length.toLocaleString('en-IN')} Line Items):
                   </span>
                 </div>
-                <span className="text-[10px] text-purple-600 dark:text-purple-400 font-bold">
-                  Total Spend: {formatCurrency(poLineItems.reduce((acc, p) => acc + p.totalSpend, 0))}
-                </span>
               </div>
 
               <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden max-h-56 overflow-y-auto overflow-x-auto text-xs bg-white dark:bg-gray-900/60 shadow-xs">
-                <table className="w-full text-left border-collapse min-w-[1000px]">
+                <table className="w-full text-left border-collapse">
                   <thead className="bg-slate-100 dark:bg-gray-800 text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 sticky top-0 z-10">
                     <tr>
-                      <th className="p-2.5">PO Number</th>
-                      <th className="p-2.5">PO Date</th>
-                      <th className="p-2.5">Vendor / Supplier</th>
-                      <th className="p-2.5">Line Item Description</th>
-                      <th className="p-2.5">Specifications</th>
-                      <th className="p-2.5">Quantity</th>
-                      <th className="p-2.5">Unit</th>
-                      <th className="p-2.5">Unit Price</th>
-                      <th className="p-2.5">Total Spend</th>
+                      <th className="p-2.5">{UI_STRINGS.vendorPoIngestion.poDump.fieldVendor}</th>
+                      <th className="p-2.5">{UI_STRINGS.vendorPoIngestion.poDump.fieldDescription}</th>
+                      <th className="p-2.5">{UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-gray-800 bg-white dark:bg-gray-900/60">
                     {poLineItems.slice(0, poPreviewLimit).map((p) => (
                       <tr key={p.id} className="hover:bg-slate-50 dark:hover:bg-gray-800/40">
-                        <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[120px] truncate" title={p.poNumber}>{p.poNumber || '—'}</td>
-                        <td className="p-2.5 font-mono text-[10px] text-slate-600 dark:text-gray-300">{normalizePoDate(p.poDate) || p.poDate || '—'}</td>
-                        <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[160px]">
+                        <td className="p-2.5 font-bold text-slate-800 dark:text-white max-w-[240px]">
                           <span className="truncate block" title={p.vendorIdentifier}>{p.vendorIdentifier}</span>
                         </td>
-                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200 max-w-[200px]">
+                        <td className="p-2.5 font-semibold text-slate-800 dark:text-gray-200 max-w-[320px]">
                           <span className="truncate block" title={p.itemName}>{p.itemName}</span>
                         </td>
-                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[160px]">
+                        <td className="p-2.5 text-slate-400 text-[10px] max-w-[260px]">
                           <span className="truncate block" title={p.specs || undefined}>{p.specs || '—'}</span>
-                        </td>
-                        <td className="p-2.5 text-slate-600 dark:text-gray-300 font-bold">{p.quantity > 0 ? p.quantity.toLocaleString('en-IN') : '—'}</td>
-                        <td className="p-2.5 text-slate-500 dark:text-gray-400 text-[10px]">{p.unit}</td>
-                        <td className="p-2.5 font-mono text-slate-600 dark:text-gray-300">{p.unitPrice ? formatCurrency(p.unitPrice) : '—'}</td>
-                        <td className="p-2.5 font-mono font-bold text-indigo-700 dark:text-indigo-300">
-                          {p.totalSpend > 0 ? formatCurrency(p.totalSpend) : '—'}
                         </td>
                       </tr>
                     ))}

@@ -278,4 +278,67 @@ describe('notificationController unit coverage for branches', () => {
     await markAllRead({ user: { role: 'admin' } }, res, next);
     expect(res.json).toHaveBeenCalledWith({ success: true, updated: 0 });
   });
+
+  test('resolves notifications and mark-read directly from DB on unhydrated isolates', async () => {
+    const pool = require('../src/db/pool');
+    const domainQueries = require('../src/db/domainQueries');
+    const { listNotifications, resolveRecipient } = require('../src/controllers/notificationController');
+    const origHydrated = storeService.isHydratedFromDB;
+    storeService.isHydratedFromDB = false;
+
+    const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const vendorFallbackSpy = jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue({
+      id: 'v-cold-db-1',
+      email: 'cold-vendor@example.test',
+    });
+    jest.spyOn(storeService, 'getVendorById').mockReturnValue(undefined);
+    const recipient = await resolveRecipient({ user: { role: 'vendor', email: 'cold-vendor@example.test' } });
+    expect(recipient).toEqual({ type: 'vendor', id: 'v-cold-db-1' });
+    expect(vendorFallbackSpy).toHaveBeenCalledWith('cold-vendor@example.test', 'all');
+
+    const dbSummary = {
+      data: [{ id: 'ntf-cold-1', recipientType: 'vendor', recipientId: 'v-cold-db-1', read: false }],
+      unreadCount: 1,
+    };
+    const dbNotifSpy = jest.spyOn(domainQueries, 'getNotificationsForRecipientFromDB').mockResolvedValue(dbSummary);
+    const res = { json: jest.fn((val) => val) };
+    await listNotifications({ user: { role: 'vendor', vendorId: 'v-cold-db-1' }, query: { limit: '10' } }, res, jest.fn());
+    expect(dbNotifSpy).toHaveBeenCalledWith('vendor', 'v-cold-db-1', 10);
+    expect(res.json).toHaveBeenCalledWith({ success: true, ...dbSummary });
+
+    const markSpy = jest.spyOn(domainQueries, 'markNotificationReadInDB')
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    await expect(storeService.markNotificationReadDurably('ntf-uncached-1', 'vendor', 'v-cold-db-1')).resolves.toEqual({
+      id: 'ntf-uncached-1',
+      recipientType: 'vendor',
+      recipientId: 'v-cold-db-1',
+      read: true,
+    });
+    await expect(storeService.markNotificationReadDurably('ntf-missing-db', 'vendor', 'v-cold-db-1')).resolves.toBeNull();
+    expect(markSpy).toHaveBeenCalledTimes(2);
+
+    const credits = storeService.getVendorRfqCredits('v-cold-db-1', {
+      id: 'v-cold-db-1',
+      freeQuotationCredits: 7,
+    });
+    expect(credits.freeCreditsRemaining).toBe(7);
+
+    // Lazy hydration inside closeExpiredRFQsDurably skips idle runs and hydrates only when RFQs close.
+    const hydrateSpy = jest.spyOn(storeService, 'hydrateFromDB').mockResolvedValue({ hydrated: true });
+    jest.spyOn(domainQueries, 'closeExpiredRFQsInDB')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ id: 'rfq-exp-1', rfqNumber: 'RFQ-EXP-1', status: 'Closed' }]);
+    jest.spyOn(storeService, 'notifyOfRFQClosure').mockImplementation(() => {});
+
+    await storeService.closeExpiredRFQsDurably(Date.now());
+    expect(hydrateSpy).not.toHaveBeenCalled();
+
+    await storeService.closeExpiredRFQsDurably(Date.now());
+    expect(hydrateSpy).toHaveBeenCalledTimes(1);
+
+    jest.restoreAllMocks();
+    hasStorageSpy.mockRestore();
+    storeService.isHydratedFromDB = origHydrated;
+  });
 });

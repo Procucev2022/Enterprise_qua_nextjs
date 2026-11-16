@@ -1787,7 +1787,7 @@ async function getVendorRfqCredits(req, res, next) {
       });
     }
 
-    const creditsInfo = storeService.getVendorRfqCredits(vendor.id);
+    const creditsInfo = storeService.getVendorRfqCredits(vendor.id, vendor);
     res.json({
       success: true,
       data: creditsInfo,

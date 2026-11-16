@@ -30,6 +30,13 @@ function isPaginatedVendorDirectoryRead(req) {
     && String(req.query.page).trim() !== '';
 }
 
+function isDirectDatabaseRead(req) {
+  if (!req || req.method !== 'GET') return false;
+  const normalized = normalizePath(req.path);
+  const patterns = STORE_HYDRATION_CONFIG.DIRECT_GET_PATH_PATTERNS;
+  return Array.isArray(patterns) && patterns.some((pattern) => pattern.test(normalized));
+}
+
 function sendUnavailable(res, retryAfterSeconds, message) {
   res.setHeader('Retry-After', String(retryAfterSeconds));
   return res.status(503).json({ success: false, retryable: true, error: message });
@@ -84,7 +91,8 @@ function createStoreHydrationGate({
       !hasStorage() ||
       shouldSkipPath(req.path) ||
       isLogIngestionRequest(req) ||
-      isPaginatedVendorDirectoryRead(req)
+      isPaginatedVendorDirectoryRead(req) ||
+      isDirectDatabaseRead(req)
     ) {
       return next();
     }
@@ -122,4 +130,5 @@ module.exports = {
   createStoreHydrationGate,
   isLogIngestionRequest,
   isPaginatedVendorDirectoryRead,
+  isDirectDatabaseRead,
 };

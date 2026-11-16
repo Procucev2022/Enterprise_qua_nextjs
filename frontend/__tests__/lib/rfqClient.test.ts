@@ -1447,6 +1447,27 @@ describe('rfqClient RFQ persistence', () => {
       expect(JSON.parse(init.body as string)).toEqual({ vendorIds: ['v-1', 'v-2'] });
     });
 
+    test('forwards non-empty excludedCount and excludedVendors from the invite response', async () => {
+      const excludedVendors = [{ id: 'v-3', name: 'Third Vendor', reason: 'Category mismatch' }];
+      global.fetch = reply(200, {
+        success: true,
+        data: RFQ,
+        invitedCount: 0,
+        excludedCount: 1,
+        excludedVendors,
+      });
+
+      const res = await inviteVendorsToRFQ('rfq-1', ['v-3']);
+
+      expect(res).toEqual({
+        success: true,
+        rfq: RFQ,
+        invitedCount: 0,
+        excludedCount: 1,
+        excludedVendors,
+      });
+    });
+
     test('reports an error instead of inventing invitedCount when the server omits it', async () => {
       global.fetch = reply(200, { success: true, data: RFQ });
 

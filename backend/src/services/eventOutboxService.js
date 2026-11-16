@@ -139,7 +139,19 @@ async function persistWithOutboxFallback({ eventType, idempotencyKey, payload, w
   }
 }
 
-async function dispatchEvent(job) {
+async function loadCachedRfqById(rfqId, rfqCache) {
+  if (rfqCache && rfqCache.has(rfqId)) {
+    return rfqCache.get(rfqId);
+  }
+  const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+  if (rfqCache) {
+    rfqCache.set(rfqId, rfq);
+  }
+  return rfq;
+}
+
+async function dispatchEvent(job, options = {}) {
+  const rfqCache = options.rfqCache || null;
   switch (job.event_type) {
     case EVENT_OUTBOX_TYPES.AI_FEED: {
       const saved = await domainQueries.upsertAIFeedItemInDB(job.raw);
@@ -756,7 +768,7 @@ async function dispatchEvent(job) {
         throw error;
       }
 
-      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const rfq = await loadCachedRfqById(rfqId, rfqCache);
       if (!rfq) {
         const error = new Error('RFQ vendor invitation retry references a missing RFQ.');
         error.code = 'INVALID_PERSISTED_RECORD';
@@ -1181,6 +1193,24 @@ async function dispatchScheduledEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_S
 async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, eventIds = null) {
   if (!pool.hasStorage()) return { claimed: 0, completed: 0, retried: 0, dead: 0 };
 
+  if (Array.isArray(eventIds) && eventIds.length > EVENT_OUTBOX_MAX_BATCH_SIZE) {
+    const aggregate = { claimed: 0, completed: 0, retried: 0, dead: 0, completedIds: [] };
+    for (let i = 0; i < eventIds.length; i += EVENT_OUTBOX_MAX_BATCH_SIZE) {
+      const slice = eventIds.slice(i, i + EVENT_OUTBOX_MAX_BATCH_SIZE);
+      const step = await dispatchDueEventOutboxBatch(slice.length, slice);
+      aggregate.claimed += step.claimed;
+      aggregate.completed += step.completed;
+      aggregate.retried += step.retried;
+      aggregate.dead += step.dead;
+      if (Array.isArray(step.completedIds)) aggregate.completedIds.push(...step.completedIds);
+    }
+    return aggregate;
+  }
+
+  return dispatchDueEventOutboxBatch(limit, eventIds);
+}
+
+async function dispatchDueEventOutboxBatch(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, eventIds = null) {
   const now = new Date();
   const leaseToken = crypto.randomUUID();
   const jobs = await eventOutboxQueries.claimDueEventOutboxInDB({
@@ -1192,6 +1222,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
     ids: eventIds,
   });
 
+  const rfqCache = new Map();
   let completed = 0;
   let retried = 0;
   let dead = 0;
@@ -1199,7 +1230,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
   for (const job of jobs) {
     try {
       if (job.parseError) throw job.parseError;
-      await dispatchEvent(job);
+      await dispatchEvent(job, { rfqCache });
       const saved = await eventOutboxQueries.markEventOutboxCompleteInDB(job.id, job.lease_token || leaseToken);
       if (!saved) {
         logger.warn('Event-outbox lease expired before completion was recorded', {

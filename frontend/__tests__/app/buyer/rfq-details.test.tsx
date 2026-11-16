@@ -509,6 +509,16 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
         ],
       });
 
+    it('renders the line items panel heading and count without package subtitle text', () => {
+      renderDetails(twoItems());
+
+      const heading = screen.getByRole('heading', { name: DETAILS.lineItemsHeading });
+      const headerGroup = heading.parentElement;
+      if (!headerGroup) throw new Error('Expected header wrapper around line items heading');
+      expect(within(headerGroup).getByText('2')).toBeInTheDocument();
+      expect(screen.queryByText(/Package(?:s)? requirement specification/i)).not.toBeInTheDocument();
+    });
+
     it('renders every line item with its classification and confidence', () => {
       renderDetails(twoItems());
 

@@ -15,7 +15,10 @@ async function resolveRecipient(req) {
   if (!req || !req.user) return null;
   if (req.user.role === 'vendor') {
     if (req.user.vendorId) return { type: 'vendor', id: req.user.vendorId };
-    const vendor = storeService.getVendorById(req.user.email, 'all');
+    const vendor = storeService.getVendorById(req.user.email, 'all')
+      || (typeof storeService.getVendorByIdWithDBFallback === 'function'
+        ? await storeService.getVendorByIdWithDBFallback(req.user.email, 'all')
+        : null);
     if (vendor) {
       req.user.vendorId = vendor.id;
       return { type: 'vendor', id: vendor.id };
@@ -44,8 +47,12 @@ async function listNotifications(req, res, next) {
     }
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = (parsedLimit && Number.isInteger(parsedLimit) && parsedLimit > 0) ? Math.min(parsedLimit, 200) : 50;
-    const data = storeService.getNotificationsFor(recipient.type, recipient.id, limit);
-    const unreadCount = storeService.getUnreadNotificationCountFor(recipient.type, recipient.id);
+    const { data, unreadCount } = typeof storeService.getNotificationsSummaryForDurably === 'function'
+      ? await storeService.getNotificationsSummaryForDurably(recipient.type, recipient.id, limit)
+      : {
+          data: storeService.getNotificationsFor(recipient.type, recipient.id, limit),
+          unreadCount: storeService.getUnreadNotificationCountFor(recipient.type, recipient.id),
+        };
     logger.info(
       'Fetching notifications',
       { recipientType: recipient.type, count: data.length, unreadCount, limit },

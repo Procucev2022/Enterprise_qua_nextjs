@@ -53,6 +53,15 @@ const _ignoreError = (error) => logger.warn(
   'RFQ_CHASER'
 );
 
+async function _recordChaserJobFired(jobId, followUpOptions = {}) {
+  if (!jobId) return;
+  if (Array.isArray(followUpOptions?.firedJobIds)) {
+    followUpOptions.firedJobIds.push(jobId);
+    return;
+  }
+  await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+}
+
 // ── Timer registry ────────────────────────────────────────────────────────────
 // Maps rfqNumber → array of NodeJS.Timeout handles.
 // Only used by tests (clearScheduledChasers) and graceful shutdown.
@@ -441,7 +450,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOption
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone) {
     logger.debug(`[CHASER] WhatsApp skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'whatsapp', skipped: true };
   }
   try {
@@ -461,7 +470,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOption
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.success) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
     if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor, rfq, followUpOptions);
@@ -482,7 +491,10 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
   if (!phone && vendor.id) {
     try {
       const storeService = require('./storeService');
-      const full = storeService.getVendorById ? storeService.getVendorById(vendor.id, 'all') : null;
+      let full = storeService.getVendorById ? storeService.getVendorById(vendor.id, 'all') : null;
+      if (!full && !storeService.isHydratedFromDB && typeof storeService.getVendorByIdWithDBFallback === 'function') {
+        full = await storeService.getVendorByIdWithDBFallback(vendor.id, 'all');
+      }
       if (full) phone = full.phone || full.mobile || full.mobileNumber;
     } catch (error) {
       logger.warn(
@@ -494,7 +506,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
   }
   if (!phone) {
     logger.debug(`[CHASER] SMS skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'sms', skipped: true };
   }
   try {
@@ -512,7 +524,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.success) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
     if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor, rfq, followUpOptions);
@@ -533,7 +545,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
   if (!vendor.email) {
     logger.debug(`[CHASER] Reminder email skipped for ${vendor.name} — no email`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'email', skipped: true };
   }
   try {
@@ -555,7 +567,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.sent) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.sent) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed', attempt).catch(_ignoreError);
     }
     if (result.sent) {
@@ -573,7 +585,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
  * Fire-and-forget call reminder step for one vendor.
  * Kept in the flow/logic as required; actual telephony calling is deferred for now.
  */
-async function _dispatchCall(rfq, vendor, jobId) {
+async function _dispatchCall(rfq, vendor, jobId, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'call', skipped: true };
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   logger.info(
@@ -581,7 +593,7 @@ async function _dispatchCall(rfq, vendor, jobId) {
     { rfqNumber: rfq.rfqNumber, vendorId: vendor.id, phone },
     'RFQ_CHASER'
   );
-  if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+  await _recordChaserJobFired(jobId, followUpOptions);
   return { channel: 'call', skipped: true, reason: 'calling_not_implemented' };
 }
 
@@ -858,10 +870,12 @@ async function dispatchDueChaserJobs(limit = 25) {
   );
   const rfqCache = new Map();
   const updatedRfqNumbers = new Set();
+  const firedJobIds = [];
   const followUpOptions = {
     persist: false,
     preferFallback: true,
     updatedRfqNumbers,
+    firedJobIds,
   };
   let sent = 0;
   let failed = 0;
@@ -892,7 +906,7 @@ async function dispatchDueChaserJobs(limit = 25) {
           : job.channel === 'sms'
             ? await _dispatchSms(rfq, vendor, job.id, job.attempts, followUpOptions)
             : job.channel === 'call'
-              ? await _dispatchCall(rfq, vendor, job.id)
+              ? await _dispatchCall(rfq, vendor, job.id, followUpOptions)
               : null;
 
       if (!result) {
@@ -905,6 +919,20 @@ async function dispatchDueChaserJobs(limit = 25) {
       failed++;
       logger.error(`[CHASER] Scheduled dispatch failed for job ${job.id}: ${err.message}`, err, 'RFQ_CHASER');
       await domainQueries.markChaserJobFailedInDB(job.id, err.message, job.attempts);
+    }
+  }
+
+  if (firedJobIds.length === 1) {
+    await domainQueries.markChaserJobFiredInDB(firedJobIds[0]).catch(_ignoreError);
+  } else if (firedJobIds.length > 1) {
+    try {
+      if (typeof domainQueries.markChaserJobsFiredInDB === 'function') {
+        await domainQueries.markChaserJobsFiredInDB(firedJobIds);
+      } else {
+        await Promise.all(firedJobIds.map((id) => domainQueries.markChaserJobFiredInDB(id).catch(_ignoreError)));
+      }
+    } catch (error) {
+      _ignoreError(error);
     }
   }
 

@@ -232,6 +232,109 @@ describe('InviteVendorsModal', () => {
 
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
   });
+
+  it('shows inline feedback and keeps modal open when invitedCount is 0 without exclusions', async () => {
+    const rfqUnchanged = { ...RFQ, assignedVendors: [] };
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockResolvedValue({ success: true, rfq: rfqUnchanged, invitedCount: 0 });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => expect(mockInvite).toHaveBeenCalledWith('rfq-1', ['v-1']));
+    expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.noNewVendorsMessage);
+    expect(mockShowToast).toHaveBeenCalledWith(S.noNewVendorsTitle, S.noNewVendorsMessage, 'warning');
+    expect(mockOnInvited).toHaveBeenCalledWith(rfqUnchanged, 0);
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('catches rejected invite requests, shows inline error feedback, and re-enables the submit button', async () => {
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockRejectedValue(new Error('Network timeout'));
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    const submitBtn = screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.inviteRequestFailedMessage);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(S.failTitle, S.inviteRequestFailedMessage, 'warning');
+    expect(mockOnClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) })).not.toBeDisabled();
+  });
+
+  it('shows inline error feedback when the invite response fails with a server message', async () => {
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockResolvedValue({ success: false, reason: 'SERVER', error: 'Rate limit exceeded.' });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent('Rate limit exceeded.');
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(S.failTitle, 'Rate limit exceeded.', 'warning');
+  });
+
+  it('treats vendors matching assigned emails case-insensitively as already invited', async () => {
+    const rfqWithEmailOnly = {
+      ...RFQ,
+      assignedVendors: [{ id: 'legacy-other-id', name: 'Assigned Vendor', email: 'MatchMe@Example.test' }],
+    };
+    const emailDup = candidate({
+      id: 'v-email-dup',
+      name: 'Email Dup Vendor',
+      email: 'matchme@example.test',
+      alreadyInvited: false,
+    });
+    const freshVendor = candidate({
+      id: 'v-fresh',
+      name: 'Fresh Vendor',
+      email: 'fresh@example.test',
+      alreadyInvited: false,
+    });
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [emailDup] });
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [emailDup, freshVendor],
+      pagination: { page: 1, pageSize: 50, total: 2, totalPages: 1 },
+    });
+
+    render(
+      <InviteVendorsModal
+        isOpen={true}
+        rfq={rfqWithEmailOnly}
+        onClose={mockOnClose}
+        onInvited={mockOnInvited}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('Email Dup Vendor')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    expect(mockInvite).not.toHaveBeenCalled();
+    expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.alreadyInvitedMessage);
+    expect(mockShowToast).toHaveBeenCalledWith(S.alreadyInvitedTitle, S.alreadyInvitedMessage, 'warning');
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Fresh Vendor')).toBeInTheDocument());
+    expect(screen.getByText(S.alreadyInvitedBadge)).toBeInTheDocument();
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes[0]).toBeDisabled();
+    expect(checkboxes[1]).not.toBeDisabled();
+  });
 });
 
 describe('InviteVendorsModal — All Vendors tab', () => {

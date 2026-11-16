@@ -3589,6 +3589,9 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
           if (state.currentPollId === pollId) {
             state.pollStartedAt = Date.now();
           }
+          if (typeof options.ensureHydrated === 'function') {
+            await options.ensureHydrated();
+          }
           const result = await emailGateway.processMessage(rawSource, config);
           const resolvedMessageId = (result.message && result.message.messageId) || dedupeKey;
 
@@ -3640,8 +3643,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
               INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED,
               INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED,
             ].includes(result.status);
+            const isAutomatedRejection = Boolean(
+              expectedOutcome && (result.message?.automatedReason || isSystemOrAutomatedSender(result.message?.fromAddress))
+            );
             logger.log(
-              expectedOutcome ? 'WARN' : 'ERROR',
+              isAutomatedRejection ? 'INFO' : (expectedOutcome ? 'WARN' : 'ERROR'),
               `RFQ creation failed for message ${resolvedMessageId} (${result.status}): ${result.detail || 'unknown reason'}`,
               {
                 messageId: resolvedMessageId,
@@ -3784,10 +3790,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
 
 // Vendor replies arrive in the vendor identity's Gmail inbox, read with the
 // vendor token. Messages go through the same processMessage path as buyer mail.
-async function pollVendorViaGmailApi(config = resolveVendorConfig()) {
+async function pollVendorViaGmailApi(config = resolveVendorConfig(), options = {}) {
   return pollViaGmailApi(config, {
     auth: mailerService.getVendorGmailOAuthClient(),
     state: vendorRuntime,
+    ...options,
   });
 }
 
@@ -3799,8 +3806,8 @@ async function pollVendorViaGmailApi(config = resolveVendorConfig()) {
  * now — this is a thin, named entry point kept for callers/tests that poll
  * the buyer inbox specifically.
  */
-async function pollOnce(config = resolveConfig()) {
-  return emailGateway.pollViaGmailApi(config);
+async function pollOnce(config = resolveConfig(), options = {}) {
+  return emailGateway.pollViaGmailApi(config, options);
 }
 
 /**
@@ -3879,13 +3886,18 @@ function startVendorPolling(config = resolveVendorConfig()) {
  * Executes both in parallel using Promise.allSettled so an error in one inbox
  * never blocks or disrupts the other.
  */
-async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig = resolveVendorConfig()) {
+async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig = resolveVendorConfig(), options = {}) {
   logger.info('Executing scheduled dual-inbox email poll cycle', {}, 'EMAIL_GATEWAY');
+  const pollOptions = typeof options?.ensureHydrated === 'function'
+    ? { ensureHydrated: options.ensureHydrated }
+    : null;
   const [buyerSettled, vendorSettled] = await Promise.allSettled([
-    emailGateway.pollOnce(buyerConfig),
+    pollOptions ? emailGateway.pollOnce(buyerConfig, pollOptions) : emailGateway.pollOnce(buyerConfig),
     // Vendor replies are read through the vendor Gmail identity only. The IMAP
     // path cannot connect from a Worker, so it is not used here.
-    emailGateway.pollVendorViaGmailApi(vendorConfig),
+    pollOptions
+      ? emailGateway.pollVendorViaGmailApi(vendorConfig, pollOptions)
+      : emailGateway.pollVendorViaGmailApi(vendorConfig),
   ]);
 
   const buyer = buyerSettled.status === 'fulfilled'

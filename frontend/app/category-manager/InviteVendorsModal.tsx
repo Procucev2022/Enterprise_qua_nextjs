@@ -201,6 +201,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [submitFeedback, setSubmitFeedback] = useState<{ type: 'warning' | 'error'; message: string } | null>(null);
 
   // Persistent registry of all seen vendor records to resolve names in selected chips
   const knownVendorsRef = useRef<Map<string, RFQVendorCandidate>>(new Map());
@@ -232,6 +233,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setLoading(true);
     setError(null);
     setSelected(new Set());
+    setSubmitFeedback(null);
     setAllVendors(null);
     setAllVendorsError(null);
     setAllVendorsPagination(null);
@@ -289,9 +291,27 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     return () => clearTimeout(t);
   }, [search]);
 
+  const buildAssignedMatcher = (currentRfq: RFQItem | null) => {
+    const invitedIds = new Set<string>();
+    const invitedEmails = new Set<string>();
+    for (const v of currentRfq?.assignedVendors || []) {
+      const id = String(v?.id || (v as unknown as { vendorId?: string })?.vendorId || '').trim();
+      const email = String(v?.email || '').trim().toLowerCase();
+      if (id) invitedIds.add(id);
+      if (email) invitedEmails.add(email);
+    }
+    return (candidate: { id?: string; email?: string } | undefined | null): boolean => {
+      if (!candidate) return false;
+      const cid = String(candidate.id || '').trim();
+      if (cid && invitedIds.has(cid)) return true;
+      const cemail = String(candidate.email || '').trim().toLowerCase();
+      return Boolean(cemail && invitedEmails.has(cemail));
+    };
+  };
+
   const stampInvited = (vendors: RFQVendorCandidate[]): RFQVendorCandidate[] => {
-    const invitedIds = new Set((rfq?.assignedVendors || []).map((v) => v.id));
-    return vendors.map((v) => ({ ...v, alreadyInvited: invitedIds.has(v.id) }));
+    const isAssigned = buildAssignedMatcher(rfq);
+    return vendors.map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
   };
 
   // Fetched lazily on first switch into "All Vendors", and re-fetched from
@@ -542,6 +562,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
   const toggle = (id: string) => {
+    setSubmitFeedback(null);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -600,43 +621,66 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const handleSubmit = async () => {
     if (selected.size === 0) return;
 
-    // Duplicate-invitation prevention: filter out already invited vendors
-    const invitedIds = new Set((rfq.assignedVendors || []).map((v) => v.id));
-    const toInvite = Array.from(selected).filter((id) => !invitedIds.has(id));
+    // Duplicate-invitation prevention: filter out already invited vendors by id or email
+    const isAssigned = buildAssignedMatcher(rfq);
+    const toInvite = Array.from(selected).filter((id) => {
+      const candidate = knownVendorsRef.current.get(id);
+      return !isAssigned(candidate || { id });
+    });
 
     if (toInvite.length === 0) {
-      showToast('Already Invited', 'All selected vendors have already been invited to this RFQ.', 'warning');
+      setSubmitFeedback({ type: 'warning', message: S.alreadyInvitedMessage });
+      showToast(S.alreadyInvitedTitle, S.alreadyInvitedMessage, 'warning');
       return;
     }
 
     if (toInvite.length > MAX_INVITE_VENDORS) {
-      showToast('Limit Reached', formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS }), 'warning');
+      const limitMsg = formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS });
+      setSubmitFeedback({ type: 'warning', message: limitMsg });
+      showToast('Limit Reached', limitMsg, 'warning');
       return;
     }
 
+    setSubmitFeedback(null);
     setSubmitting(true);
-    const result = await inviteVendorsToRFQ(rfq.id, toInvite);
-    setSubmitting(false);
+    try {
+      const result = await inviteVendorsToRFQ(rfq.id, toInvite);
 
-    if (result.success) {
-      if (result.invitedCount > 0) {
-        showToast(
-          S.successTitle,
-          formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber }),
-          'success'
-        );
+      if (result.success) {
+        const excludedCount = typeof result.excludedCount === 'number' ? result.excludedCount : 0;
+        const excludedReason = result.excludedVendors?.[0]?.reason;
+        if (result.invitedCount > 0) {
+          showToast(
+            S.successTitle,
+            formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber }),
+            'success'
+          );
+        }
+        if (excludedCount > 0) {
+          showToast(
+            S.excludedTitle,
+            excludedReason || formatString(S.excludedMessage, { count: excludedCount }),
+            'warning'
+          );
+        }
+        if (result.invitedCount === 0 && excludedCount === 0) {
+          setSubmitFeedback({ type: 'warning', message: S.noNewVendorsMessage });
+          showToast(S.noNewVendorsTitle, S.noNewVendorsMessage, 'warning');
+          onInvited?.(result.rfq, result.invitedCount);
+          return;
+        }
+        onInvited?.(result.rfq, result.invitedCount);
+        onClose();
+      } else {
+        const errMsg = result.error || S.inviteRequestFailedMessage;
+        setSubmitFeedback({ type: 'error', message: errMsg });
+        showToast(S.failTitle, errMsg, 'warning');
       }
-      if ((result as any).excludedCount > 0) {
-        showToast(
-          'Category Mismatch Excluded',
-          `${(result as any).excludedCount} vendor(s) were excluded from shortlist due to category mismatch. Profile update emails dispatched.`,
-          'warning'
-        );
-      }
-      onInvited?.(result.rfq, result.invitedCount);
-      onClose();
-    } else {
-      showToast(S.failTitle, result.error, 'warning');
+    } catch {
+      setSubmitFeedback({ type: 'error', message: S.inviteRequestFailedMessage });
+      showToast(S.failTitle, S.inviteRequestFailedMessage, 'warning');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -1208,6 +1252,22 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               </>
             )}
         </div>
+
+        {/* Inline Invitation Action Feedback */}
+        {submitFeedback && (
+          <div
+            role="alert"
+            data-testid="invite-submit-feedback"
+            className={`mx-6 mt-2 mb-1 px-3 py-2 rounded-lg border text-xs flex items-center gap-2 shrink-0 ${
+              submitFeedback.type === 'error'
+                ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300'
+                : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+            }`}
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{submitFeedback.message}</span>
+          </div>
+        )}
 
         {/* Footer with Clear Count and Action Buttons */}
         <div className="p-4 px-6 border-t border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/30 flex items-center justify-between gap-3 shrink-0">

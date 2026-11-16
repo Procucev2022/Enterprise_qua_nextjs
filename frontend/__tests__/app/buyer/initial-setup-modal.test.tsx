@@ -2436,7 +2436,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Date': '2025-04-11',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Civil works peb tmt steel structure', // lines 1226-1227
-        Specifications: 'Steel structure, Fe 500',
+        // Specifications intentionally omitted so the preview cell falls back to '—'
         Quantity: 1,
         'Total Spend': 5000,
       },
@@ -4477,6 +4477,18 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(await screen.findByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
     expect(screen.getByText('Industrial Ball Valve 2 Inch')).toBeInTheDocument();
     expect(screen.getByText('SS316 PN40')).toBeInTheDocument();
+
+    // Preview table and instructions show only the 3 fields matching the latest Excel template
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
+    const headerCells = Array.from(container.querySelectorAll('table thead th')).map((th) => th.textContent?.trim());
+    expect(headerCells).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+    ]);
+    expect(screen.queryByText('PO Number')).not.toBeInTheDocument();
+    expect(screen.queryByText('PO Date')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Total Spend/i)).not.toBeInTheDocument();
   });
 });
 
