@@ -201,14 +201,26 @@ function canVendorViewRfq(vendor, rfq) {
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
   const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  // Buyer-specific vendor access rule:
-  // When a vendor is mapped to the buyer who created the RFQ, they can view that buyer's RFQs across all modes.
+  // Explicitly invited vendors can view the RFQ regardless of their registered category
+  if (storeService._isInvitedVendor(vendor, rfq)) {
+    return true;
+  }
+
+  // For RFQs with an explicit assigned vendors list, only invited vendors may view it in private modes
+  const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+  if (hasExplicitAssigned) {
+    if (isV0 || isV2 || isV3) {
+      if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+    }
+    return false;
+  }
+
+  // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists:
   if (storeService.isVendorMappedToRfqBuyer(vendor, rfq)) {
     return true;
   }
 
-  // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
-  // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
+  // RFQ details visible across network modes (V0, V2, V3) for category-matched vendors
   if (isV0 || isV2 || isV3) {
     if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
   }

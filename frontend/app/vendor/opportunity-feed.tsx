@@ -431,19 +431,28 @@ export default function OpportunityFeed({
   const isOwnBuyerRfq = React.useCallback((opp: VendorOpportunity) => {
     const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
     const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
-    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors;
-    if (assignedList && assignedList.length > 0) {
-      const isAssigned = assignedList.some((v) => {
+
+    // Mode 0 RFQs are public network opportunities for all vendors, never direct buyer enquiries
+    const mode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) return false;
+
+    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors || (rfqRecord?.followUpData as { vendors?: unknown[] })?.vendors;
+    if (Array.isArray(assignedList) && assignedList.length > 0) {
+      const isAssigned = assignedList.some((v: any) => {
+        if (!v) return false;
         const vEmail = (v.email ?? '').toLowerCase().trim();
         if (sessionEmail && vEmail === sessionEmail) return true;
-        const vId = String(v.id ?? '').trim();
-        if (myVendorId && vId === myVendorId) return true;
+        const vId = String(v.id ?? v.vendorId ?? '').trim().toLowerCase();
+        if (myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
         const vName = (v.name ?? '').toLowerCase().trim();
         return Boolean(myVendorName && vName === myVendorName.toLowerCase().trim());
       });
-      if (isAssigned) return true;
+      // When assignedVendors exists, ONLY invited vendors can see this RFQ in My Enquiries
+      return isAssigned;
     }
 
+    // Fallback only when no assignedVendors list exists on the RFQ
     const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
     if (bCompany && opp.buyer === bCompany) return true;
     const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;

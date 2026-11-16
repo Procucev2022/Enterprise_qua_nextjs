@@ -1235,37 +1235,44 @@ export default function IngestionWizard({
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
 
-        const matchingVendors: typeof candidatePool = [];
-        const mismatchedVendors: typeof candidatePool = [];
+        let finalMatching: typeof candidatePool = [];
 
-        for (const v of candidatePool) {
-          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
-            matchingVendors.push(v);
-          } else {
-            mismatchedVendors.push(v);
+        if (selectedVendorIds.length > 0) {
+          // Explicitly selected vendors are always assigned regardless of category
+          finalMatching = candidatePool;
+        } else {
+          const matchingVendors: typeof candidatePool = [];
+          const mismatchedVendors: typeof candidatePool = [];
+
+          for (const v of candidatePool) {
+            if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
+              matchingVendors.push(v);
+            } else {
+              mismatchedVendors.push(v);
+            }
           }
-        }
 
-        if (mismatchedVendors.length > 0) {
-          showToast(
-            'Shortlist Adjusted',
-            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
-            'info'
-          );
-        }
+          if (mismatchedVendors.length > 0) {
+            showToast(
+              'Shortlist Adjusted',
+              `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
+              'info'
+            );
+          }
 
-        let finalMatching = dispatchSignals.length > 0
-          ? selectVendorsForCategories(
-            matchingVendors,
-            dispatchSignals,
-            VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-            { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
-            dispatchMinorOnly
-          ).map((r) => r.vendor)
-          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          finalMatching = dispatchSignals.length > 0
+            ? selectVendorsForCategories(
+              matchingVendors,
+              dispatchSignals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+              dispatchMinorOnly
+            ).map((r) => r.vendor)
+            : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
-        if (finalMatching.length === 0 && matchingVendors.length > 0) {
-          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          if (finalMatching.length === 0 && matchingVendors.length > 0) {
+            finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          }
         }
 
         if (finalMatching.length > 0) {
@@ -2209,27 +2216,27 @@ export default function IngestionWizard({
                             : { isMatch: true };
                           const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
 
-                          const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+                          const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
+                          const isSelected = selectedVendorIds.length === 0
+                            ? defaultSelectedIds.includes(vendor.id)
+                            : selectedVendorIds.includes(vendor.id);
 
                           return (
                             <div
                               key={vendor.id || idx}
                               onClick={() => {
-                                if (isCategoryMismatch) return;
                                 setSelectedVendorIds((prev) => {
-                                  if (prev.length === 0) {
-                                    return allIds.filter((id) => id !== vendor.id);
-                                  }
-                                  return prev.includes(vendor.id)
-                                    ? prev.filter((id) => id !== vendor.id)
-                                    : [...prev, vendor.id];
+                                  const base = prev.length === 0 ? defaultSelectedIds : prev;
+                                  return base.includes(vendor.id)
+                                    ? base.filter((id) => id !== vendor.id)
+                                    : [...base, vendor.id];
                                 });
                               }}
-                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
+                              className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
                                   ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
                                   : isSelected
-                                    ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
-                                    : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                    ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
+                                    : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                                 }`}
                             >
                               <div className="flex items-start justify-between gap-1.5">
@@ -2583,27 +2590,27 @@ export default function IngestionWizard({
                               : { isMatch: true };
                             const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
 
-                            const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+                            const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
+                            const isSelected = selectedVendorIds.length === 0
+                              ? defaultSelectedIds.includes(vendor.id)
+                              : selectedVendorIds.includes(vendor.id);
 
                             return (
                               <div
                                 key={vendor.id || idx}
                                 onClick={() => {
-                                  if (isCategoryMismatch) return;
                                   setSelectedVendorIds((prev) => {
-                                    if (prev.length === 0) {
-                                      return allIds.filter((id) => id !== vendor.id);
-                                    }
-                                    return prev.includes(vendor.id)
-                                      ? prev.filter((id) => id !== vendor.id)
-                                      : [...prev, vendor.id];
+                                    const base = prev.length === 0 ? defaultSelectedIds : prev;
+                                    return base.includes(vendor.id)
+                                      ? base.filter((id) => id !== vendor.id)
+                                      : [...base, vendor.id];
                                   });
                                 }}
-                                className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
+                                className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
                                     ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
                                     : isSelected
-                                      ? 'cursor-pointer border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
-                                      : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                      ? 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
+                                      : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                                   }`}
                               >
                                 <div className="flex items-start justify-between gap-1.5">

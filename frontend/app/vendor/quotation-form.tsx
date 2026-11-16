@@ -271,24 +271,32 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
     if (!rfq && !rfqRecord) return false;
 
-    // Check if the vendor was explicitly invited/assigned by the buyer
-    const isExplicitlyAssigned = (rfqRecord?.assignedVendors || []).some((v) => {
-      const vEmail = (v.email || '').toLowerCase().trim();
-      const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
-      if (vEmail && sEmail && vEmail === sEmail) return true;
-      const vId = String(v.id || '').toLowerCase().trim();
-      if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
-      const vName = (v.name || '').toLowerCase().trim();
-      if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+    // Mode 0 RFQs are strictly Public Enquiries for all vendors
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) {
       return false;
-    });
-    if (isExplicitlyAssigned) return true;
+    }
 
-    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
+    const assignedList = rfqRecord?.assignedVendors || (rfq as { assignedVendors?: unknown[] })?.assignedVendors || (rfqRecord?.followUpData as { vendors?: unknown[] })?.vendors;
+    if (Array.isArray(assignedList) && assignedList.length > 0) {
+      // Check if the vendor was explicitly invited/assigned by the buyer
+      const isExplicitlyAssigned = (assignedList as Array<Record<string, unknown>>).some((v) => {
+        if (!v) return false;
+        const vEmail = (typeof v.email === 'string' ? v.email : '').toLowerCase().trim();
+        const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
+        if (vEmail && sEmail && vEmail === sEmail) return true;
+        const vId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
+        const vName = (typeof v.name === 'string' ? v.name : '').toLowerCase().trim();
+        if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+        return false;
+      });
+      // When assignedVendors exists, ONLY invited vendors can see this RFQ in My Enquiries
+      return isExplicitlyAssigned;
+    }
+
     if (
-      mode === 'mode_0' ||
-      mode === 'v0' ||
-      mode === 'version_0' ||
       mode === 'mode_3' ||
       mode === 'v3' ||
       mode === 'version_3'

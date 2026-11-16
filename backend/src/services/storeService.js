@@ -4465,10 +4465,12 @@ class StoreService {
       const shortlisted = [];
       const matchesRfq = this._rfqVendorMatcher(newRFQ);
       const mismatched = [];
+      const rfqWithoutInvitations = { ...newRFQ, assignedVendors: [], followUpData: null };
 
       for (const v of newRFQ.assignedVendors) {
         const full = (v.id ? this.getVendorById(v.id, 'all') : null);
         const resolved = full ? { ...v, ...full } : v;
+        const isBuyerVendor = this.isBuyerUploaded(resolved) || this.isVendorMappedToRfqBuyer(resolved, rfqWithoutInvitations);
         const hasCategory = Boolean(
           resolved.majorCategory ||
           extractCategories(resolved.minorCategories).length > 0 ||
@@ -4476,7 +4478,8 @@ class StoreService {
           extractCategories(resolved.clientMappedCategories).length > 0 ||
           extractCategories(resolved.categories).length > 0
         );
-        const isMatch = !hasCategory || matchesRfq(resolved);
+        // Buyer-uploaded or buyer-mapped vendors are preserved regardless of registered category
+        const isMatch = isBuyerVendor || !hasCategory || matchesRfq(resolved);
         if (isMatch) {
           shortlisted.push(resolved);
         } else {
@@ -4495,7 +4498,9 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
+        const selectedSet = new Set((selected || []).map((v) => v.id || v.email || v.name));
+        const nonCategoryVendors = shortlisted.filter((v) => !selectedSet.has(v.id || v.email || v.name) && (this.isBuyerUploaded(v) || this.isVendorMappedToRfqBuyer(v, rfqWithoutInvitations)) && !matchesRfq(v));
+        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? [...selected, ...nonCategoryVendors] : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -4533,7 +4538,7 @@ class StoreService {
         let clientMatches = minorScoped
           ? this.planMinorInvites(newRFQ, { candidatePool: clientCandidates, targetLocation: v1Location, limit: maxClientPerCat }).selected
           : this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, v1Location);
-        if (clientMatches.length === 0 && clientCandidates.length > 0 && !minorScoped) {
+        if (clientMatches.length === 0 && clientCandidates.length > 0) {
           clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
         }
         if (clientMatches.length > 0) {
@@ -8465,9 +8470,18 @@ class StoreService {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
 
-    // Buyer-specific vendor access rule:
-    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view and cover
-    // RFQs created by that respective buyer across all modes.
+    // Explicitly invited vendor always covers the RFQ regardless of registered category
+    if (this._isInvitedVendor(vendor, rfq)) {
+      return true;
+    }
+
+    // When an RFQ has an explicit assigned vendors list, only invited vendors cover it
+    const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+    if (hasExplicitAssigned) {
+      return false;
+    }
+
+    // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists
     if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
@@ -8483,16 +8497,29 @@ class StoreService {
     return this._isInvitedVendor(vendor, rfq);
   }
 
-  /** Whether a vendor is on the RFQ's assignedVendors invite list. */
+  /** Whether a vendor is on the RFQ's assignedVendors or followUpData.vendors invite list. */
   _isInvitedVendor(vendor, rfq) {
-    const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    return invited.some(
-      (v) =>
-        v &&
-        ((v.id && v.id === vendor.id) ||
-          (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
-          (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
-    );
+    if (!vendor || !rfq) return false;
+    const vId = String(vendor.id || vendor.vendorId || '').toLowerCase().trim();
+    const vEmail = String(vendor.email || '').toLowerCase().trim();
+    const vName = String(vendor.name || '').toLowerCase().trim();
+
+    const checkList = (list) => {
+      if (!Array.isArray(list)) return false;
+      return list.some((v) => {
+        if (!v) return false;
+        const targetId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        const targetEmail = String(v.email || '').toLowerCase().trim();
+        const targetName = String(v.name || '').toLowerCase().trim();
+        return Boolean(
+          (vId && targetId && vId === targetId) ||
+          (vEmail && targetEmail && vEmail === targetEmail) ||
+          (vName && targetName && vName === targetName)
+        );
+      });
+    };
+
+    return checkList(rfq.assignedVendors) || checkList(rfq.followUpData && rfq.followUpData.vendors);
   }
 
   /**
