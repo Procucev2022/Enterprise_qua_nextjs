@@ -2099,4 +2099,144 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
       fireEvent.click(clearCatBtn);
     }
   });
+
+  test('covers section-wise pincode popovers, chips, status filters, search, and resets for Direct and Network sections', async () => {
+    const directPin1: RFQFixture = {
+      ...DIRECT_OWN,
+      id: 'rfq-pin-d1',
+      rfqNumber: 'RFQ-DIRECT-PIN-400001',
+      deliveryLocation: 'Andheri West, Mumbai 400001',
+    };
+    const directPin2: RFQFixture = {
+      ...DIRECT_STEEL,
+      id: 'rfq-pin-d2',
+      rfqNumber: 'RFQ-DIRECT-PIN-411001',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      deliveryLocation: 'Hinjewadi, Pune 411001',
+    };
+    const netPin1: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-pin-n1',
+      rfqNumber: 'RFQ-NET-PIN-560001',
+      deliveryLocation: 'Whitefield, Bengaluru 560001',
+    };
+    const netPin2: RFQFixture = {
+      ...NETWORK_HVAC_QUOTED,
+      id: 'rfq-pin-n2',
+      rfqNumber: 'RFQ-NET-PIN-110001',
+      deliveryLocation: 'Connaught Place, Delhi 110001',
+    };
+
+    serveRFQs([directPin1, directPin2, netPin1, netPin2]);
+    await renderFeed();
+
+    // Direct Pincode Filter popover: select, unselect, Clear, remove chip, Clear Pincodes
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+    const dPin400 = screen.getByRole('checkbox', { name: '400001' });
+    const dPin411 = screen.getByRole('checkbox', { name: '411001' });
+    fireEvent.click(dPin400);
+    fireEvent.click(dPin411);
+    expect(screen.getByText('Selected Pincodes:')).toBeInTheDocument();
+    fireEvent.click(dPin411); // uncheck branch
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for pincode 400001' }));
+    expect(screen.queryByText('Selected Pincodes:')).not.toBeInTheDocument();
+
+    fireEvent.click(dPin400);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(dPin400);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pincodes' }));
+
+    // Direct status & search & Reset
+    const directStatusSelect = screen.getByRole('listbox', { name: 'Status' });
+    fireEvent.change(directStatusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'closed' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'open' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'all' } });
+
+    const directSearchInput = screen.getByPlaceholderText(/Search RFQ ID, Buyer\.\.\. Specs, location, keywords/i);
+    fireEvent.change(directSearchInput, { target: { value: 'Pumps' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Reset$/i }));
+
+    // Switch to Public Enquiries tab and exercise Network filters
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+    const nPin560 = screen.getByRole('checkbox', { name: '560001' });
+    const nPin110 = screen.getByRole('checkbox', { name: '110001' });
+    fireEvent.click(nPin560);
+    fireEvent.click(nPin110);
+    fireEvent.click(nPin110); // uncheck branch
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for pincode 560001' }));
+
+    fireEvent.click(nPin560);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(nPin560);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pincodes' }));
+
+    const netStatusSelect = screen.getByRole('listbox', { name: 'Network Status' });
+    fireEvent.change(netStatusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'closed' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'open' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'all' } });
+
+    const netSearchInput = screen.getByPlaceholderText(/Specs, location, keywords\.\.\./i);
+    fireEvent.change(netSearchInput, { target: { value: 'Plate' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Filters' }));
+  });
+
+  test('routes Mode 0 RFQs matching vendor line-item category and address pincode into Direct Invitations and Public Enquiries', async () => {
+    const mode0Matched: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-m0-pin-cat',
+      rfqNumber: 'RFQ-MODE0-MATCHED-400001',
+      sourcingMode: 'mode_0',
+      category: 'Engineering Spares - Mechanical',
+      deliveryLocation: 'Andheri East, Mumbai 400001',
+      extractedEntities: [],
+      lineItems: [
+        {
+          id: 'li-m0-1',
+          itemName: 'Steel Beam',
+          description: 'Structural Steel & Beams section',
+          minorCategory: 'Structural Steel & Beams',
+          category: 'Structural Steel & Beams',
+          quantity: 4,
+          unit: 'Nos',
+        } as unknown as NonNullable<RFQItem['lineItems']>[number],
+      ],
+    };
+
+    (global.fetch as jest.Mock).mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? {
+                success: true,
+                data: [mode0Matched],
+              }
+            : /\/api\/bootstrap/.test(String(url))
+              ? {
+                  success: true,
+                  data: {
+                    vendors: [
+                      {
+                        ...SELF_VENDOR_RECORD,
+                        address: 'Plot 12, MIDC, Mumbai 400001',
+                        majorCategory: 'Engineering Spares - Mechanical',
+                        minorCategories: ['Structural Steel & Beams'],
+                      },
+                    ],
+                  },
+                }
+              : { success: true, data: {} },
+      })
+    );
+
+    await renderFeed();
+
+    expect(screen.getAllByText('RFQ-MODE0-MATCHED-400001').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    expect(screen.getAllByText('RFQ-MODE0-MATCHED-400001').length).toBeGreaterThanOrEqual(1);
+  });
 });

@@ -2287,3 +2287,24 @@ export function resolveAttachmentMimeType(fileName?: string | null, declaredMime
   }
   return normalized || 'application/octet-stream';
 }
+
+/**
+ * Subscribes to cross-tab `storage` updates for `VENDOR_UPLOAD_HISTORY_STORAGE_KEY`
+ * and returns a cleanup callback safe for React `useEffect`.
+ */
+export function subscribeVendorUploadHistory(
+  onUpdate: (batches: VendorUploadHistoryBatch[]) => void
+): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === VENDOR_UPLOAD_HISTORY_STORAGE_KEY || event.key === null) {
+      onUpdate(loadVendorUploadHistoryFromStorage());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+  };
+}

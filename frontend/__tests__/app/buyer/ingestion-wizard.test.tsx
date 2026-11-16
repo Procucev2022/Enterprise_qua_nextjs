@@ -2,7 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import IngestionWizard, { resolveConfirmationVendorCount, resolveOwnVendorCount, isV2OrV3SourcingMode } from '@/app/buyer/ingestion-wizard';
 import { AppProvider } from '@/lib/store';
-import { entitledSourcingModes } from '@/lib/constants';
+import { entitledSourcingModes, VENDOR_UPLOAD_HISTORY_STORAGE_KEY } from '@/lib/constants';
 import { validatePincode } from '@/lib/validationSchemas';
 import {
   extractLineItemsFromDocument,
@@ -3546,5 +3546,66 @@ describe('IngestionWizard: mandatory fields', () => {
 
     const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
     expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker)).length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('IngestionWizard: upload history vendor reconciliation', () => {
+  it('shows uploaded vendors from upload history across Mode 1, Mode 2, and Mode 3 when store buyerVendors is empty', async () => {
+    const uploadBatches = [
+      {
+        id: 'batch-wizard-1',
+        records: [
+          {
+            vendorName: 'Govardhan Solutions pvt LTD',
+            email: 'govardhan.kilari@procucev.com',
+            contactPerson: 'Govardhan',
+            phone: '9876543210',
+            city: 'Bengaluru - 560037',
+            majorCategory: FIXTURE_MAJOR,
+            minorCategories: [FIXTURE_MINOR],
+          },
+          {
+            vendorName: 'Veera Industrial Corp',
+            email: 'veera@industrial.test',
+            majorCategory: 'Vendor Master',
+            minorCategories: [],
+          },
+        ],
+      },
+    ];
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(uploadBatches));
+
+    try {
+      renderWizard();
+
+      chooseSourcingMode('mode_1');
+      expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
+      expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+
+      chooseSourcingMode('mode_2');
+      expect(await screen.findByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+
+      chooseSourcingMode('mode_3');
+      expect(await screen.findByText(/2 Private Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+
+      localStorage.setItem(
+        VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+        JSON.stringify([
+          ...uploadBatches,
+          {
+            id: 'batch-wizard-2',
+            records: [{ vendorName: 'Live Storage Vendor', email: 'live@storage.test', majorCategory: FIXTURE_MAJOR }],
+          },
+        ])
+      );
+      fireEvent(window, new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+      expect(await screen.findByText('Live Storage Vendor')).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
   });
 });

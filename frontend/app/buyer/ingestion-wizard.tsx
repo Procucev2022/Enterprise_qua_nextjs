@@ -12,6 +12,9 @@ import {
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
   entitledSourcingModes,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  subscribeVendorUploadHistory,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -57,6 +60,7 @@ import type {
   SourcingMode,
   VendorEntry,
   VendorPageMeta,
+  VendorUploadHistoryBatch,
 } from '@/lib/types';
 import {
   UploadCloud,
@@ -319,6 +323,19 @@ export default function IngestionWizard({
     remainingFreeRFQs: storeRemaining,
     activeBuyerAccount,
   } = useApp();
+
+  const [uploadHistoryList, setUploadHistoryList] = useState<VendorUploadHistoryBatch[]>([]);
+
+  useEffect(() => {
+    const nextHistory = loadVendorUploadHistoryFromStorage();
+    setUploadHistoryList((prev) => (prev.length === 0 && nextHistory.length === 0 ? prev : nextHistory));
+    return subscribeVendorUploadHistory(setUploadHistoryList);
+  }, []);
+
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
+    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors || [], uploadHistoryList, activeBuyerAccount),
+    [buyerVendors, uploadHistoryList, activeBuyerAccount]
+  );
 
   const effectivePlan = forceSubscription ?? activeBuyerAccount?.subscriptionPlan ?? storeSubscription ?? 'free_trial';
   const effectiveRemaining =
@@ -1226,10 +1243,10 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(buyerVendors)) {
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(reconciledBuyerVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? buyerVendors.filter((v) => isBuyerUploaded(v))
-          : buyerVendors;
+          ? reconciledBuyerVendors.filter((v) => isBuyerUploaded(v))
+          : reconciledBuyerVendors;
         const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
@@ -2030,7 +2047,7 @@ export default function IngestionWizard({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                       <span className="badge badge-blue text-[10px] font-bold">
-                        {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                        {reconciledBuyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -2064,7 +2081,7 @@ export default function IngestionWizard({
               </div>
 
               {(() => {
-                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2376,7 +2393,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_2' && (
             <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2762,7 +2779,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_3' && (
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = buyerVendors.filter(isBuyerUploaded);
+                const allMyVendors = reconciledBuyerVendors.filter(isBuyerUploaded);
                 const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
                 const lineItemMinors = Array.from(
                   new Set(

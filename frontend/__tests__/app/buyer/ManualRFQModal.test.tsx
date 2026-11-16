@@ -1,7 +1,7 @@
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, VENDOR_UPLOAD_HISTORY_STORAGE_KEY } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
@@ -2559,5 +2559,70 @@ describe('ManualRFQModal: mandatory fields', () => {
 
     const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
     expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker))).toHaveLength(6);
+  });
+});
+
+describe('ManualRFQModal: upload history vendor reconciliation & ensureVendors', () => {
+  it('reconciles upload history vendors across Mode 1, Mode 2, Mode 3 and calls ensureVendors when buyerVendors is empty', async () => {
+    const mockEnsureVendors = jest.fn().mockResolvedValue(undefined);
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      ensureVendors: mockEnsureVendors,
+    });
+
+    const uploadBatches = [
+      {
+        id: 'batch-manual-1',
+        records: [
+          {
+            vendorName: 'Govardhan Solutions pvt LTD',
+            email: 'govardhan.kilari@procucev.com',
+            majorCategory: categoriesData[0].majorCategory,
+            minorCategories: [categoriesData[0].minorCategories[0]],
+          },
+          {
+            vendorName: 'Veera Local Vendor',
+            email: 'veera-local@test.com',
+            majorCategory: 'Vendor Master',
+            minorCategories: [],
+          },
+        ],
+      },
+    ];
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(uploadBatches));
+
+    try {
+      renderModal();
+
+      expect(mockEnsureVendors).toHaveBeenCalledTimes(1);
+
+      chooseMode('mode_1');
+      expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+      expect(screen.getByText(/Veera Local Vendor/)).toBeInTheDocument();
+
+      chooseMode('mode_2');
+      expect(await screen.findByText(/2 Approved Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+
+      chooseMode('mode_3');
+      expect(await screen.findByText(/2 Verified Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+
+      localStorage.setItem(
+        VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+        JSON.stringify([
+          ...uploadBatches,
+          {
+            id: 'batch-manual-2',
+            records: [{ vendorName: 'Synced Modal Vendor', email: 'synced@modal.test', majorCategory: categoriesData[0].majorCategory }],
+          },
+        ])
+      );
+      fireEvent(window, new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+      expect(await screen.findByText(/Synced Modal Vendor/)).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
   });
 });

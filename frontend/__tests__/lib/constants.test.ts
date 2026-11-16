@@ -878,4 +878,46 @@ describe('Indian address location extraction helpers', () => {
       rating: 0,
     });
   });
+
+  it('subscribes to cross-tab storage events for vendor upload history and handles unavailable window guards', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      subscribeVendorUploadHistory,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([{ id: 'batch-sub-1', records: [{ vendorName: 'Subscribed Co', email: 'sub@co.test' }] }])
+    );
+
+    const updates: unknown[] = [];
+    const unsubscribe = subscribeVendorUploadHistory((batches: unknown[]) => {
+      updates.push(batches);
+    });
+
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-key' }));
+    expect(updates).toHaveLength(0);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(1);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    expect(updates).toHaveLength(2);
+
+    unsubscribe();
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(2);
+
+    const addSpy = jest.spyOn(window, 'addEventListener');
+    const origAdd = window.addEventListener;
+    try {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: undefined });
+      const noop = subscribeVendorUploadHistory(() => {});
+      expect(() => noop()).not.toThrow();
+    } finally {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: origAdd });
+      addSpy.mockRestore();
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+  });
 });

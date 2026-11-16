@@ -6142,3 +6142,10 @@ After clicking Request Vendor Evaluation, the request should be sent to the vend
 After clicking the button, the popup should close automatically once the request is successfully submitted.
 ```
 ---
+
+### Prompt 249
+**Timestamp**: 2026-11-16T15:13:09+05:30
+```text
+ there are 11 vendors available in my Vendor Directory, but none of them are appearing in the Create RFQ page under Mode 1 – Internal Vendors , V2 and V3 also
+```
+---

@@ -382,4 +382,123 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
     expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
     expect(screen.queryByText('RFQ-PUBLIC-03')).not.toBeInTheDocument();
   });
+
+  test('covers pincode chip removal, checkbox deselect, Clear Pincodes, hidden select fallback, lineItems & address pincode matching', async () => {
+    const lineItemMode0Rfq: RFQItem = {
+      id: 'rfq-li-pin-06',
+      rfqNumber: 'RFQ-LI-PIN-06',
+      title: 'Structural Beams with Address Pincode',
+      buyerAccountId: 'buyer-other-999',
+      buyerAccountName: 'Metro Infra',
+      category: 'Civil Works',
+      sourcingMode: 'mode_0',
+      status: 'Quotes Pending',
+      quotesCount: 0,
+      budget: 500000,
+      createdAt: '2026-11-05',
+      targetDeliveryDate: '2026-12-01',
+      deliveryLocation: 'Andheri West, Mumbai - 400053',
+      chasingActive: false,
+      extractedEntities: [],
+      lineItems: [{ id: 'li-1', itemName: 'Beam', minorCategory: 'Structural Steel', category: 'Civil Works', quantity: 10, unit: 'Nos' }],
+      assignedVendors: [],
+      quotes: [
+        {
+          id: 'q-org-1',
+          rfqNumber: 'RFQ-LI-PIN-06',
+          vendorName: 'Vendor One Ltd',
+          totalPrice: 120000,
+        } as unknown as RFQItem['quotes'][number],
+      ],
+    };
+
+    const prevFetch = global.fetch as jest.Mock;
+    global.fetch = jest.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (url.includes('/api/bootstrap')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            success: true,
+            data: {
+              vendors: [
+                {
+                  ...VENDOR_PROFILE,
+                  email: 'buyer@procucev.com',
+                  pincode: '',
+                  address: 'Plot 7, Andheri, Mumbai 400053',
+                },
+              ],
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/api/vendors/')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            success: true,
+            data: {
+              ...VENDOR_PROFILE,
+              pincode: '',
+              address: 'Plot 7, Andheri, Mumbai 400053',
+            },
+          }),
+        } as Response);
+      }
+      if (url.includes('/api/rfqs')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: () => Promise.resolve({
+            success: true,
+            data: [RFQ_INVITED_DIFFERENT_CAT, RFQ_MODE_0_PUBLIC, RFQ_MODE_0_DIFF_PIN, lineItemMode0Rfq],
+          }),
+        } as Response);
+      }
+      return prevFetch(input, init);
+    }) as jest.Mock;
+
+    await act(async () => {
+      render(
+        <AppProvider>
+          <QuotationForm onBack={jest.fn()} />
+        </AppProvider>
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
+    });
+
+    // Switch to Public Enquiries to exercise all pincode controls
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    await waitFor(() => {
+      expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
+    });
+
+    // Hidden select programmatic filter + reset to 'all'
+    const hiddenPinSelect = screen.getByLabelText('Filter enquiries by pincode select');
+    fireEvent.change(hiddenPinSelect, { target: { value: '110001' } });
+    expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
+    fireEvent.change(hiddenPinSelect, { target: { value: 'all' } });
+
+    // Toggle checkboxes ON then OFF, remove chip, then Clear Pincodes
+    fireEvent.click(screen.getByRole('button', { name: /filter enquiries by pincode/i }));
+    const cb560 = screen.getByRole('checkbox', { name: '560001' });
+    const cb110 = screen.getByRole('checkbox', { name: '110001' });
+    fireEvent.click(cb560);
+    fireEvent.click(cb110);
+    fireEvent.click(cb110); // uncheck branch
+    expect(screen.getByText(/Selected Pincodes:/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for pincode 560001' }));
+    expect(screen.queryByText(/Selected Pincodes:/i)).not.toBeInTheDocument();
+
+    fireEvent.click(cb560);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pincodes' }));
+    expect(screen.queryByText(/Selected Pincodes:/i)).not.toBeInTheDocument();
+  });
 });
