@@ -1678,7 +1678,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       <Panel
         title={DETAILS.lineItemsHeading}
         count={lineItems.length}
-        subtitle={DETAILS.lineItemsSubtitle}
         toolbar={
           <div className="flex flex-col sm:flex-row sm:flex-wrap items-stretch sm:items-center gap-2">
             <div className="flex flex-col xs:flex-row sm:flex-row gap-2">

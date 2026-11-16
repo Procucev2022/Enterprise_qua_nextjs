@@ -1070,7 +1070,6 @@ sellerDirectory: {
 
     // Line items
     lineItemsHeading: 'Line Items',
-    lineItemsSubtitle: 'Package requirement specification',
     lineItemSearchPlaceholder: 'Search line items…',
     lineItemSearchAria: 'Search the line items of this RFQ',
     allMinorCategories: 'All Categories',
