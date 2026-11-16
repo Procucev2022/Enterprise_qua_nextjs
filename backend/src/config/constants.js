@@ -3491,6 +3491,26 @@ function exclusiveDigitPrefixUpperBound(prefix) {
 }
 
 /**
+ * Computes the exclusive upper bound for a SQLite `COLLATE NOCASE` prefix
+ * range scan (`col COLLATE NOCASE >= prefix AND col COLLATE NOCASE < upper`).
+ *
+ * SQLite's `COLLATE NOCASE` folds ASCII `A..Z` (65..90) down to `a..z`
+ * (97..122), so code point 91 (`'['`) immediately follows code point 64 (`'@'`).
+ */
+function exclusiveNocasePrefixUpperBound(prefix) {
+  const folded = String(prefix || '').replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+  if (!folded) return '';
+  for (let i = folded.length - 1; i >= 0; i -= 1) {
+    const code = folded.charCodeAt(i);
+    if (code < 0xFFFF) {
+      const nextCode = code === 64 ? 91 : code + 1;
+      return folded.slice(0, i) + String.fromCharCode(nextCode);
+    }
+  }
+  return `${folded}\uFFFF`;
+}
+
+/**
  * Counts shared leading digits between two numeric PIN strings.
  */
 function commonPincodePrefixLength(pinA, pinB) {
@@ -4230,6 +4250,7 @@ module.exports = {
   resolveVendorLocationFields,
   normalizePincodeDigits,
   exclusiveDigitPrefixUpperBound,
+  exclusiveNocasePrefixUpperBound,
   commonPincodePrefixLength,
   resolveVendorPinDigits,
   compareVendorPincodeProximity,

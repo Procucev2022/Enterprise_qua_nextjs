@@ -40,6 +40,7 @@ const {
   clearDummyPanFields,
   normalizePincodeDigits,
   exclusiveDigitPrefixUpperBound,
+  exclusiveNocasePrefixUpperBound,
   expandCategoryDashVariants,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
@@ -286,6 +287,8 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   // the exact same order, so one params array serves either query text.
   const conditions = [];
   const d1Conditions = [];
+  const d1ParamOverrides = new Map();
+  const d1ExtraParams = [];
   if (search) {
     const tokens = parseSearchTokens(search);
     if (tokens.length > 0) {
@@ -303,10 +306,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
         // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
         // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
         if (trimmed.includes('@')) {
-          // Discrete email search: match directly against the indexed email column without
-          // heavy unindexed JSON deserialization (which exceeds D1 CPU time limits on 600k+ rows).
+          // Discrete email search: match via D1's email/corporateEmail NOCASE B-tree indexes
+          // (prefix range UNION ALL subquery) instead of full-scanning 600k+ rows.
           tokenConditions.push(`(email ILIKE $${p} OR raw->>'email' ILIKE $${p} OR raw->>'corporateEmail' ILIKE $${p})`);
-          d1TokenConditions.push(`(lower(email) LIKE lower($${p}))`);
+          appendD1EmailCondition(trimmed, p, d1TokenConditions, d1ParamOverrides, d1ExtraParams);
           continue;
         }
 
@@ -404,7 +407,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (email) {
     params.push(`%${email.trim()}%`);
     conditions.push(`(email ILIKE $${params.length} OR raw->>'email' ILIKE $${params.length})`);
-    d1Conditions.push(`(lower(email) LIKE lower($${params.length}))`);
+    appendD1EmailCondition(email, params.length, d1Conditions, d1ParamOverrides, d1ExtraParams);
   }
   if (category) {
     // Case-insensitive exact category filter matching both table column and raw JSON:
@@ -540,7 +543,15 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     )`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+  const rawD1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+  const d1Where = rawD1Where.replace(/__D1_EXTRA_(\d+)__/g, (_, idx) => `$${params.length + 1 + Number(idx)}`);
+  const hasCustomD1Params = d1ParamOverrides.size > 0 || d1ExtraParams.length > 0;
+  const d1BaseParams = hasCustomD1Params
+    ? [
+        ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
+        ...d1ExtraParams,
+      ]
+    : null;
 
   let total = 0;
   // Set when the count query fails: the page is still returned, but the response must not be
@@ -566,6 +577,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           {
             d1: true,
             d1Text: d1CountSql,
+            ...(d1BaseParams ? { d1Params: d1BaseParams } : {}),
             useCache: true,
             tag: 'vendors',
             ttlMs: DATABASE_QUERY_CACHE.VENDOR_PAGE_COUNT_TTL_MS,
@@ -597,12 +609,16 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const dataParams = [...params, effectiveLimit, effectiveOffset];
   let dataResult;
   try {
+    const d1DataParams = d1BaseParams ? [...d1BaseParams, effectiveLimit, effectiveOffset] : null;
+    const d1LimitIdx = d1DataParams ? d1DataParams.length - 1 : dataParams.length - 1;
+    const d1OffsetIdx = d1DataParams ? d1DataParams.length : dataParams.length;
     dataResult = await pool.query(
       `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY ${pgOrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams,
       {
         d1: true,
-        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY ${d1OrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY ${d1OrderPrefix}created_at DESC LIMIT $${d1LimitIdx} OFFSET $${d1OffsetIdx}`,
+        ...(d1DataParams ? { d1Params: d1DataParams } : {}),
         useCache: true,
         tag: 'vendors',
         ttlMs: 120000,
@@ -753,6 +769,31 @@ function appendUniqueVendors(collected, seenKeys, rows, maxCount) {
     seenKeys.add(key);
     collected.push(vendor);
   }
+}
+
+/**
+ * Appends a D1-indexed case-insensitive email predicate that searches both the
+ * indexed `email` column (`idx_vendors_email_nocase`) and JSON `corporateEmail`
+ * (`idx_vendors_corp_email_nocase`) via a `UNION ALL` rowid subquery so lookups
+ * avoid scanning all vendor rows.
+ */
+function appendD1EmailCondition(rawTerm, paramIdx, targetConditions, d1ParamOverrides, d1ExtraParams) {
+  const term = String(rawTerm || '').trim();
+  if (!term || term.startsWith('@')) {
+    d1ParamOverrides.set(paramIdx, `%${term}%`);
+    targetConditions.push(
+      `(email COLLATE NOCASE LIKE $${paramIdx} OR json_extract(raw, '$.corporateEmail') COLLATE NOCASE LIKE $${paramIdx})`
+    );
+    return;
+  }
+  const upperBound = exclusiveNocasePrefixUpperBound(term);
+  const extraIdx = d1ExtraParams.length;
+  d1ParamOverrides.set(paramIdx, term);
+  d1ExtraParams.push(upperBound);
+  const upperPlaceholder = `__D1_EXTRA_${extraIdx}__`;
+  targetConditions.push(
+    `(rowid IN (SELECT rowid FROM vendors WHERE email COLLATE NOCASE >= $${paramIdx} AND email COLLATE NOCASE < ${upperPlaceholder} UNION ALL SELECT rowid FROM vendors WHERE json_extract(raw, '$.corporateEmail') COLLATE NOCASE >= $${paramIdx} AND json_extract(raw, '$.corporateEmail') COLLATE NOCASE < ${upperPlaceholder}))`
+  );
 }
 
 function appendTierCondition(tier, pgParams, d1Params) {

@@ -1824,8 +1824,9 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
 
       expect(capturedSql).toContain('email ILIKE');
       expect(capturedSql).toContain('OR');
-      expect(capturedD1).toContain('lower(email) LIKE');
-      expect(capturedD1).not.toContain('json_extract');
+      expect(capturedD1).toContain('email COLLATE NOCASE >=');
+      expect(capturedD1).toContain("json_extract(raw, '$.corporateEmail') COLLATE NOCASE >=");
+      expect(capturedD1).not.toContain("$.contact");
       expect(capturedD1).not.toContain('major_category');
       expect(capturedSql).toContain("raw->>'corporateEmail'");
       expect(capturedParams.length).toBeGreaterThanOrEqual(3);

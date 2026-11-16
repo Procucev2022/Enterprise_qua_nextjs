@@ -39,6 +39,16 @@ import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 // than all at once, which previously crashed the browser tab.
 const ALL_VENDORS_PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 350;
+const VENDOR_QUERY_TIMEOUT_PATTERN = /CPU time limit|D1_ERROR|timeout|temporarily unavailable/i;
+
+function resolveAllVendorsErrorMessage(
+  rawError: string | undefined,
+  fallbackMessage: string,
+  timeoutMessage: string
+): string {
+  const message = rawError || fallbackMessage;
+  return VENDOR_QUERY_TIMEOUT_PATTERN.test(message) ? timeoutMessage : message;
+}
 
 interface InviteVendorsModalProps {
   isOpen: boolean;
@@ -321,9 +331,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         setAllVendors(stampInvited(result.candidates));
         setAllVendorsPagination(result.pagination);
       } else {
-        const rawErr = result.error || S.allVendorsLoadFailed;
-        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
-        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
+        setAllVendorsError(resolveAllVendorsErrorMessage(result.error, S.allVendorsLoadFailed, S.dbQueryTimeout));
       }
       setAllVendorsLoading(false);
     });
@@ -354,9 +362,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         });
         setAllVendorsPagination(result.pagination);
       } else {
-        const rawErr = result.error || S.allVendorsLoadFailed;
-        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
-        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
+        setAllVendorsError(resolveAllVendorsErrorMessage(result.error, S.allVendorsLoadFailed, S.dbQueryTimeout));
       }
       setAllVendorsLoadingMore(false);
     });

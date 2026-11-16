@@ -2802,7 +2802,7 @@ describe('D1 streamlined vendor search queries', () => {
 
     expect(query.mock.calls.filter(([sql]) => sql.includes('sqlite_master'))).toHaveLength(0);
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries.some((sql) => sql.includes('lower(email) LIKE lower($1)'))).toBe(true);
+    expect(d1Queries.some((sql) => sql.includes('email COLLATE NOCASE >= $1 AND email COLLATE NOCASE < $2'))).toBe(true);
     expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
   });
 
@@ -2944,7 +2944,7 @@ describe('additional domainQueries branch coverage', () => {
   test('upsertCatalogueProductInDB logs and rethrows when transaction client fails', async () => {
     jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
     const origPool = pool.pool;
-    pool.pool = { connect: () => {} };
+    pool.pool = { connect: () => { } };
     jest.spyOn(pool, 'withTransaction').mockRejectedValue(new Error('lock deadlock'));
     try {
       await expect(

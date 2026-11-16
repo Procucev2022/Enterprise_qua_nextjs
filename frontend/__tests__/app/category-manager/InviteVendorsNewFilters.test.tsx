@@ -725,6 +725,25 @@ describe('InviteVendorsModal — Comprehensive Multi-Filter & 20-Vendor Limit Su
     });
   });
 
+  it('maps temporarily unavailable D1 overload errors to descriptive timeout message', async () => {
+    (rfqClient.fetchVendorCandidates as jest.Mock).mockResolvedValue({
+      success: true,
+      candidates: mockVendorsPool,
+    });
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'Database storage is temporarily unavailable. No operation completed. Please retry shortly.',
+    });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.inviteVendors.dbQueryTimeout)).toBeInTheDocument();
+    });
+  });
+
   it('filters candidates by Minor Category standalone and alongside Major Category, resetting incompatible Minor selections', async () => {
     const rfqWithLineItems: RFQItem = {
       ...RFQ,
