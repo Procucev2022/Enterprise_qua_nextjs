@@ -130,11 +130,18 @@ describe('vendor evaluation request: suppliers on the buyer roster', () => {
     });
     jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue({
       id: 'rec-master-1',
+      sessionId: 'sess-master-1',
       companyName: 'Govardhan Solutions pvt LTD',
       email: 'govardhan.kilari@procucev.com',
       contactPerson: 'Govardhan',
       phone: '9876543210',
       address: 'Bengaluru, Karnataka - 560001',
+    });
+    jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockResolvedValue({
+      vendorRecordId: 'rec-master-1',
+      buyerMajorCategory: 'Mechanical & Fluid Equipment',
+      buyerMinorCategories: ['Valves', 'Pumps'],
+      status: 'BUYER_APPROVED',
     });
     const promoted = storedVendor({ id: 'v-ingest-promoted-1', email: 'govardhan.kilari@procucev.com', buyerId: BUYER_ACCOUNT.id });
     const empanelSpy = jest.spyOn(storeService, 'empanelIngestedVendor').mockResolvedValue(promoted);
@@ -151,6 +158,8 @@ describe('vendor evaluation request: suppliers on the buyer roster', () => {
       expect.objectContaining({
         name: 'Govardhan Solutions pvt LTD',
         email: 'govardhan.kilari@procucev.com',
+        majorCategory: 'Mechanical & Fluid Equipment',
+        minorCategories: ['Valves', 'Pumps'],
         source: 'vendor_master_ingestion',
       }),
       BUYER.email
@@ -160,6 +169,32 @@ describe('vendor evaluation request: suppliers on the buyer roster', () => {
       expect.objectContaining({ buyerCompany: 'Acme Ltd' }),
       expect.arrayContaining([BUYER_ACCOUNT.id, 'org-profile-77'])
     );
+  });
+
+  test('returns 400 when a v-master-* supplier has no category assigned before evaluation request', async () => {
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: { organizationId: 'org-profile-77' },
+    });
+    jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue({
+      id: 'rec-no-cat',
+      companyName: 'No Category Master Supplier',
+      email: 'nocat@vendor.test',
+    });
+    const empanelSpy = jest.spyOn(storeService, 'empanelIngestedVendor');
+    const res = mockRes();
+
+    await vendorController.requestEvaluation(
+      { params: { id: 'v-master-rec-no-cat' }, body: { majorCategory: 'Vendor Master' }, user: BUYER },
+      res,
+      jest.fn()
+    );
+
+    expect(res.status).toHaveBeenCalledWith(400);
+    expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'VENDOR_CATEGORY_REQUIRED' }));
+    expect(empanelSpy).not.toHaveBeenCalled();
+    expect(dispatch).not.toHaveBeenCalled();
   });
 
   test('returns 400 when a v-master-* supplier has no email address', async () => {
@@ -190,7 +225,13 @@ describe('vendor evaluation request: suppliers on the buyer roster', () => {
     await vendorController.requestEvaluation(
       {
         params: { id: 'v-hist-local-batch-0' },
-        body: { vendorEmail: 'local-history@vendor.test', vendorName: 'Local History Supplier', contactPerson: 'Ravi' },
+        body: {
+          vendorEmail: 'local-history@vendor.test',
+          vendorName: 'Local History Supplier',
+          contactPerson: 'Ravi',
+          majorCategory: 'Electrical & Power Equipment',
+          minorCategories: ['Switchgear'],
+        },
         user: BUYER,
       },
       res,
@@ -220,12 +261,81 @@ describe('vendor evaluation request: suppliers on the buyer roster', () => {
     await vendorController.requestEvaluation(
       {
         params: { id: 'v-hist-local-foreign' },
-        body: { vendorEmail: 'other-buyer-vendor@test.com' },
+        body: { vendorEmail: 'other-buyer-vendor@test.com', majorCategory: 'Mechanical' },
         user: BUYER,
       },
       resForeign,
       jest.fn()
     );
     expect(resForeign.status).toHaveBeenCalledWith(404);
+  });
+
+  test('supports editing and updating categories for buyer-owned and synthetic fallback vendors', async () => {
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(null);
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: { organizationId: 'org-profile-77' },
+    });
+    jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue({
+      id: 'rec-master-edit',
+      companyName: 'Govardhan Solutions pvt LTD',
+      email: 'govardhan-edit@procucev.com',
+      contactPerson: 'Govardhan',
+    });
+    const promoted = storedVendor({
+      id: 'v-ingest-edited-1',
+      email: 'govardhan-edit@procucev.com',
+      majorCategory: 'Mechanical',
+      minorCategories: ['Valves'],
+      buyerId: 'org-profile-77',
+    });
+    const empanelSpy = jest.spyOn(storeService, 'empanelIngestedVendor').mockResolvedValue(promoted);
+
+    // Rejects placeholder category updates on synthetic fallback vendors
+    const resBadSynth = mockRes();
+    await vendorController.updateVendor(
+      { params: { id: 'v-master-rec-master-edit' }, body: { majorCategory: 'Vendor Master', minorCategories: [] }, user: BUYER },
+      resBadSynth,
+      jest.fn()
+    );
+    expect(resBadSynth.status).toHaveBeenCalledWith(400);
+
+    // Promotes synthetic vendor cleanly when valid categories are saved via PUT /api/vendors/:id
+    const resPromoteEdit = mockRes();
+    await vendorController.updateVendor(
+      {
+        params: { id: 'v-master-rec-master-edit' },
+        body: { name: 'Govardhan Solutions pvt LTD', majorCategory: 'Mechanical', minorCategories: ['Valves'] },
+        user: BUYER,
+      },
+      resPromoteEdit,
+      jest.fn()
+    );
+    expect(resPromoteEdit.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, data: expect.objectContaining({ id: 'v-ingest-edited-1' }) }));
+    expect(empanelSpy).toHaveBeenCalled();
+
+    // Buyer owning vendor via orgId passes checkVendorOwnership on PUT /api/vendors/:id/categories
+    jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(promoted);
+    const updateCatsSpy = jest.spyOn(storeService, 'updateVendorCategoriesDurably').mockResolvedValue({
+      ...promoted,
+      majorCategory: 'Electrical',
+      minorCategories: ['Switchgear'],
+      clientMappedCategories: ['Switchgear'],
+    });
+    const resUpdateCats = mockRes();
+    await vendorController.updateCategories(
+      {
+        params: { id: 'v-ingest-edited-1' },
+        body: { majorCategory: 'Electrical', minorCategories: ['Switchgear'] },
+        user: BUYER,
+      },
+      resUpdateCats,
+      jest.fn()
+    );
+    expect(resUpdateCats.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+    expect(updateCatsSpy).toHaveBeenCalledWith(
+      'v-ingest-edited-1',
+      expect.objectContaining({ majorCategory: 'Electrical', minorCategories: ['Switchgear'], clientMappedCategories: ['Switchgear'] })
+    );
   });
 });

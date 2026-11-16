@@ -60,9 +60,11 @@ import {
   STORE_MESSAGES,
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
-  removeVendorsFromUploadHistoryInStorage,
+  updateVendorInUploadHistoryStorage,
 } from './constants';
 
 function logApiResponseFailure(
@@ -2005,17 +2007,24 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       isSyntheticId && resolvedEmailLower
         ? buyerVendors.find(
           (v) =>
-            !v.id.startsWith('v-master-') &&
-            !v.id.startsWith('v-hist-local-') &&
+            !String(v.id || '').startsWith('v-master-') &&
+            !String(v.id || '').startsWith('v-hist-local-') &&
             String(v.email || '').trim().toLowerCase() === resolvedEmailLower
         )
         : undefined;
     const targetVendor = persistedByEmail || resolvedVendor;
-    const requestPayload: Record<string, string> = { notes: notes || '' };
+    const requestPayload: Record<string, unknown> = { notes: notes || '' };
     if (targetVendor.id.startsWith('v-master-') || targetVendor.id.startsWith('v-hist-local-')) {
       if (targetVendor.email) requestPayload.vendorEmail = targetVendor.email;
       if (targetVendor.name) requestPayload.vendorName = targetVendor.name;
       if (targetVendor.contactPerson) requestPayload.contactPerson = targetVendor.contactPerson;
+      if (!isPlaceholderVendorCategory(targetVendor.majorCategory)) {
+        requestPayload.majorCategory = String(targetVendor.majorCategory).trim();
+      }
+      const cleanMinors = normalizeVendorCategoryList(targetVendor.minorCategories);
+      if (cleanMinors.length > 0) {
+        requestPayload.minorCategories = cleanMinors;
+      }
     }
 
     try {
@@ -2035,7 +2044,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         const errMessage = data?.error || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback;
         showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, errMessage, 'warning');
-        return { success: false, message: errMessage };
+        return {
+          success: false,
+          code: typeof data?.code === 'string' ? data.code : undefined,
+          message: errMessage,
+        };
       }
 
       if (data.evaluationExists && data.data?.evaluation) {
@@ -2200,29 +2213,93 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // The local list changes only after the server confirms the write, and it takes the record the server returns.
   const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+    const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+    const directVendor = buyerVendors.find((v) => v.id === vendorId);
+    const matchedVendor =
+      directVendor ||
+      (isSyntheticId
+        ? reconcileBuyerVendorsWithUploadHistory(
+            buyerVendors,
+            loadVendorUploadHistoryFromStorage(),
+            activeBuyerAccount
+          ).find((v) => v.id === vendorId)
+        : undefined);
+    const resolvedEmailLower = String(matchedVendor?.email || updates.email || '').trim().toLowerCase();
+    const persistedByEmail =
+      isSyntheticId && resolvedEmailLower
+        ? buyerVendors.find(
+            (v) =>
+              !String(v.id || '').startsWith('v-master-') &&
+              !String(v.id || '').startsWith('v-hist-local-') &&
+              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+          )
+        : undefined;
+    const targetVendorId = persistedByEmail?.id || vendorId;
+    const payload: Record<string, unknown> = { ...updates };
+    if (isSyntheticId && !persistedByEmail && matchedVendor) {
+      if (matchedVendor.email && !payload.vendorEmail) payload.vendorEmail = matchedVendor.email;
+      if (matchedVendor.name && !payload.vendorName) payload.vendorName = matchedVendor.name;
+      if (matchedVendor.contactPerson && !payload.contactPerson) payload.contactPerson = matchedVendor.contactPerson;
+      if (matchedVendor.vendorCode && !payload.vendorCode) payload.vendorCode = matchedVendor.vendorCode;
+      if (matchedVendor.phone && !payload.phone) payload.phone = matchedVendor.phone;
+      if (matchedVendor.location && !payload.location) payload.location = matchedVendor.location;
+      if (matchedVendor.city && !payload.city) payload.city = matchedVendor.city;
+      if (matchedVendor.state && !payload.state) payload.state = matchedVendor.state;
+      if (matchedVendor.pincode && !payload.pincode) payload.pincode = matchedVendor.pincode;
+      if (matchedVendor.gstin && !payload.gstin) payload.gstin = matchedVendor.gstin;
+    }
+
     let res: Response;
     try {
-      res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendorId)}`, {
         method: 'PUT',
         headers: authFetchHeaders(),
-        body: JSON.stringify(updates),
+        body: JSON.stringify(payload),
       });
     } catch (err) {
-      logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
+      logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId: targetVendorId }, 'VENDOR_PROFILE');
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, STORE_MESSAGES.vendorUnreachable, 'warning');
       return false;
     }
 
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.success) {
-      logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId, responseError: json?.error });
+      logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId: targetVendorId, responseError: json?.error });
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, json?.error || STORE_MESSAGES.vendorUpdateFailed, 'warning');
       return false;
     }
 
     const saved: Partial<VendorEntry> = json.data && typeof json.data === 'object' ? json.data : updates;
-    setBuyerVendors((prev) => prev.map((v) => (v.id === vendorId ? { ...v, ...saved } : v)));
-    void addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
+    const savedId = typeof saved.id === 'string' && saved.id ? saved.id : targetVendorId;
+    setBuyerVendors((prev) => {
+      const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
+      const next = hasMatch
+        ? prev.map((v) =>
+            v.id === vendorId || v.id === targetVendorId || v.id === savedId
+              ? { ...v, ...updates, ...saved, id: savedId }
+              : v
+          )
+        : [{ ...(matchedVendor || {}), ...updates, ...saved, id: savedId } as VendorEntry, ...prev];
+      setSessionCache('vendors', next);
+      return next;
+    });
+    updateVendorInUploadHistoryStorage(
+      [vendorId, targetVendorId, savedId, String(saved.email || matchedVendor?.email || updates.email || ''), String(saved.name || matchedVendor?.name || updates.name || '')],
+      {
+        id: savedId,
+        name: saved.name || updates.name,
+        email: saved.email || updates.email,
+        majorCategory: saved.majorCategory || updates.majorCategory,
+        minorCategories: saved.minorCategories || updates.minorCategories,
+        contactPerson: saved.contactPerson || updates.contactPerson,
+        phone: saved.phone || updates.phone,
+        city: saved.city || updates.city,
+        state: saved.state || updates.state,
+        pincode: saved.pincode || updates.pincode,
+        location: saved.location || updates.location,
+      }
+    );
+    void addAuditLog(`Updated vendor profile record for ID ${savedId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
     return true;
   };
@@ -2253,9 +2330,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', updated);
       return updated;
     });
-
-    removeVendorsFromUploadHistoryInStorage([vendorId]);
-
     void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
     return true;
@@ -2287,16 +2361,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : vendorIds;
+    const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
     const deletedSet = new Set(deletedIds);
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => !deletedSet.has(v.id));
+      const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
       setSessionCache('vendors', updated);
       return updated;
     });
-
-    removeVendorsFromUploadHistoryInStorage(deletedIds);
-
     void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
     showToast(
       'Vendors Removed',

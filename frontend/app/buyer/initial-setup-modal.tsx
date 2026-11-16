@@ -1044,7 +1044,7 @@ export default function InitialSetupModal() {
                   email: v.email,
                   phone: v.phone,
                   gstin: v.gstNumber,
-                  category: 'Vendor Master',
+                  category: '',
                   address: loc.address || v.address,
                   city: loc.city,
                   ...(loc.state ? { state: loc.state } : {}),

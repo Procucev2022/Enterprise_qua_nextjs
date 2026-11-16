@@ -3470,5 +3470,213 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       });
       expect(ctx().rfqs.find((r: RFQItem) => r.rfqNumber === 'RFQ261611999999')?.status).toBe('Closed');
     });
+
+    it('promotes synthetic v-master/upload-history vendors in updateBuyerVendor and forwards VENDOR_CATEGORY_REQUIRED code on requestVendorEvaluation', async () => {
+      const ctx = await mountStore();
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-syn-1',
+            records: [
+              {
+                name: 'Govardhan Master Co',
+                email: 'govardhan@master.test',
+                phone: '9966766905',
+                contactPerson: 'Govardhan',
+                city: 'Bengaluru',
+                state: 'Karnataka',
+                pincode: '560037',
+                gstin: '27AAACA1928K1Z4',
+              },
+            ],
+          },
+        ])
+      );
+
+      try {
+        mockFetch.mockImplementationOnce(async () => ({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'vnd-promoted-001',
+              name: 'Govardhan Master Co',
+              email: 'govardhan@master.test',
+              majorCategory: 'IT Infrastructure',
+              minorCategories: ['Laptops'],
+            },
+          }),
+        }));
+
+        let saved = false;
+        await act(async () => {
+          saved = await ctx().updateBuyerVendor('v-hist-local-batch-syn-1-0', {
+            majorCategory: 'IT Infrastructure',
+            minorCategories: ['Laptops'],
+          });
+        });
+
+        expect(saved).toBe(true);
+        const putCall = mockFetch.mock.calls.find(([u]: [string]) =>
+          String(u).includes('/api/vendors/v-hist-local-batch-syn-1-0')
+        );
+        expect(putCall).toBeDefined();
+        const sentBody = JSON.parse(String((putCall?.[1] as RequestInit | undefined)?.body || '{}'));
+        expect(sentBody).toMatchObject({
+          vendorEmail: 'govardhan@master.test',
+          vendorName: 'Govardhan Master Co',
+          majorCategory: 'IT Infrastructure',
+          minorCategories: ['Laptops'],
+        });
+
+        // Route vendor update & evaluation fetch calls by URL so background addAuditLog fetches do not consume mocks
+        let updateMode: 'ok_empty' | 'http_fail' | 'network_fail' = 'ok_empty';
+        let evalMode: 'ok' | 'fail' = 'ok';
+        mockFetch.mockImplementation(async (url: string) => {
+          if (String(url).includes('/request-evaluation')) {
+            if (evalMode === 'fail') {
+              return { ok: false, status: 400, json: async () => ({ success: false, code: 'VENDOR_CATEGORY_REQUIRED', error: 'Assign category first' }) };
+            }
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                message: 'Sent',
+                data: { vendorId: 'vnd-eval-syn-2', evaluationRequestedAt: '2026-11-16T10:00:00.000Z', status: 'PENDING EVALUATION' },
+              }),
+            };
+          }
+          if (String(url).includes('/api/vendors/')) {
+            if (updateMode === 'network_fail') throw new Error('Network down');
+            if (updateMode === 'http_fail') return { ok: false, status: 400, json: async () => ({ success: false, error: 'Category required' }) };
+            return { ok: true, status: 200, json: async () => ({ success: true, data: {} }) };
+          }
+          if (String(url) === '/api/vendors') {
+            return {
+              ok: true,
+              status: 201,
+              json: async () => ({
+                success: true,
+                data: {
+                  id: 'v-unrelated-1',
+                  name: 'Unrelated Co',
+                  email: 'unrelated@vendor.test',
+                  onboardingEmailStatus: 'account_exists',
+                },
+              }),
+            };
+          }
+          return { ok: true, status: 200, json: async () => ({ success: true, data: {} }) };
+        });
+
+        // Synthetic v-master evaluation with explicit vendorDetails (non-placeholder categories)
+        let synEvalRes: { success: boolean } = { success: false };
+        await act(async () => {
+          synEvalRes = await ctx().requestVendorEvaluation('v-master-syn-eval', 'Need quote eval', {
+            id: 'v-master-syn-eval',
+            name: 'Synthetic Eval Master Co',
+            email: 'syneval@master.test',
+            contactPerson: 'Ravi',
+            majorCategory: 'Electrical',
+            minorCategories: ['Switchgear'],
+          });
+        });
+        expect(synEvalRes.success).toBe(true);
+
+        evalMode = 'fail';
+        let evalRes: { success: boolean; code?: string } = { success: true };
+        await act(async () => {
+          evalRes = await ctx().requestVendorEvaluation('vnd-promoted-001');
+        });
+        expect(evalRes).toMatchObject({ success: false, code: 'VENDOR_CATEGORY_REQUIRED' });
+        evalMode = 'ok';
+
+        // Second vendor without matching email tests non-matching branch + account_exists toast
+        await act(async () => {
+          await ctx().addBuyerVendor({
+            name: 'Unrelated Co',
+            email: 'unrelated@vendor.test',
+            majorCategory: 'Civil',
+            minorCategories: ['Cement'],
+            phone: '9876543211',
+            source: 'buyer_manual',
+            rating: 4,
+            score: 80,
+          });
+        });
+
+        // Synthetic v-master & v-hist-local with vendorCode + location in batch history
+        localStorage.setItem(
+          'procucev_vendor_upload_history',
+          JSON.stringify([
+            {
+              id: 'batch-syn-2',
+              records: [
+                {
+                  name: 'Second Master Co',
+                  vendorCode: 'VC-200',
+                  location: 'Indiranagar, Bengaluru',
+                  email: 'secondmaster@master.test',
+                  minorCategories: [],
+                },
+              ],
+            },
+          ])
+        );
+
+        let mergedUpdate = false;
+        await act(async () => {
+          mergedUpdate = await ctx().updateBuyerVendor('v-master-syn-2', {
+            name: 'Govardhan Updated',
+            email: 'govardhan@master.test',
+            majorCategory: 'IT Infrastructure',
+            minorCategories: ['Monitors'],
+            contactPerson: 'Govardhan K',
+            phone: '9966766905',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560037',
+            location: 'Bengaluru, Karnataka',
+          });
+        });
+        expect(mergedUpdate).toBe(true);
+
+        // Synthetic v-hist-local with vendorCode + location NOT in updates, then failure and network error
+        updateMode = 'http_fail';
+        let errUpdate = true;
+        await act(async () => {
+          errUpdate = await ctx().updateBuyerVendor('v-hist-local-batch-syn-2-0', {
+            majorCategory: 'Electrical',
+            minorCategories: ['Cables'],
+          });
+        });
+        expect(errUpdate).toBe(false);
+
+        updateMode = 'network_fail';
+        let netUpdate = true;
+        await act(async () => {
+          netUpdate = await ctx().updateBuyerVendor('v-hist-local-batch-syn-2-0', {
+            majorCategory: 'Electrical',
+            minorCategories: ['Cables'],
+          });
+        });
+        expect(netUpdate).toBe(false);
+
+        // Request evaluation via synthetic ID whose email matches an already-persisted vendor in buyerVendors
+        let persistedEvalRes: { success: boolean } = { success: false };
+        await act(async () => {
+          persistedEvalRes = await ctx().requestVendorEvaluation('v-master-by-email', undefined, {
+            email: 'govardhan@master.test',
+            name: 'Govardhan Updated',
+          });
+        });
+        expect(persistedEvalRes.success).toBe(true);
+      } finally {
+        localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
   });
 });

@@ -4012,6 +4012,81 @@ function expandCategoryDashVariants(values) {
   return Array.from(expanded);
 }
 
+/**
+ * Sentinel / placeholder labels that must never be persisted or treated as real procurement categories.
+ */
+const VENDOR_CATEGORY_PLACEHOLDERS = Object.freeze([
+  'vendor master',
+  'uncategorized',
+  'uncategorised',
+  'uncategorized (no past pos)',
+  'uncategorised (no past pos)',
+  'pending category',
+  'unassigned',
+  'none',
+  'na',
+  'n/a',
+  '-',
+  '—',
+]);
+
+const VENDOR_CATEGORY_PLACEHOLDER_SET = new Set(VENDOR_CATEGORY_PLACEHOLDERS);
+
+const VENDOR_CATEGORY_VALIDATION_MESSAGES = Object.freeze({
+  CATEGORY_REQUIRED:
+    'Every vendor must have a valid Division (majorCategory) and Category. Placeholder values such as "Vendor Master" or "Uncategorized" are not allowed.',
+  EVALUATION_REQUIRES_CATEGORY:
+    'Assign a Division and Category to this vendor before requesting an evaluation.',
+  BULK_BUYER_CATEGORY_REQUIRED:
+    'Category is required — a vendor cannot be imported without a category.',
+  UPDATE_REQUIRES_CATEGORY:
+    'Select a valid Division and at least one Category tag before saving.',
+});
+
+/** Returns true when a category value is empty or a non-category placeholder label. */
+function isPlaceholderVendorCategory(value) {
+  if (typeof value !== 'string') return !value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return VENDOR_CATEGORY_PLACEHOLDER_SET.has(normalized);
+}
+
+/** Trims, removes blank/placeholder labels, and deduplicates category tags case-insensitively. */
+function normalizeVendorCategoryList(values) {
+  const sourceList = Array.isArray(values) ? values : [];
+  const seen = new Set();
+  const cleaned = [];
+  for (const raw of sourceList) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed || isPlaceholderVendorCategory(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+  }
+  return cleaned;
+}
+
+/** Resolves valid major/minor category fields across incoming vendor payloads and fallback fields. */
+function resolveValidVendorCategories(payload = {}) {
+  const safePayload = payload && typeof payload === 'object' ? payload : {};
+  const rawMajor = [safePayload.majorCategory, safePayload.category]
+    .find((candidate) => typeof candidate === 'string' && !isPlaceholderVendorCategory(candidate));
+  const cleanMajor = rawMajor ? rawMajor.trim() : '';
+  const cleanMinors = normalizeVendorCategoryList([
+    ...(Array.isArray(safePayload.minorCategories) ? safePayload.minorCategories : []),
+    ...(Array.isArray(safePayload.categories) ? safePayload.categories : []),
+    ...(Array.isArray(safePayload.clientMappedCategories) ? safePayload.clientMappedCategories : []),
+    ...(Array.isArray(safePayload.vendorSelectedCategories) ? safePayload.vendorSelectedCategories : []),
+  ]);
+  return {
+    majorCategory: cleanMajor,
+    minorCategories: cleanMinors,
+    hasCategory: Boolean(cleanMajor || cleanMinors.length > 0),
+  };
+}
+
 module.exports = {
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
@@ -4272,6 +4347,11 @@ module.exports = {
   compareVendorPincodeProximity,
   foldCategoryDashes,
   expandCategoryDashVariants,
+  VENDOR_CATEGORY_PLACEHOLDERS,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
   parseSearchTokens,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,

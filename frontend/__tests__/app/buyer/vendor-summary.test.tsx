@@ -265,11 +265,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const q = (opts.search || '').toLowerCase();
       const candidates = q
         ? mockProcucevVendors.filter(
-            (v) =>
-              v.name.toLowerCase().includes(q) ||
-              (v.majorCategory || '').toLowerCase().includes(q) ||
-              (v.email || '').toLowerCase().includes(q)
-          )
+          (v) =>
+            v.name.toLowerCase().includes(q) ||
+            (v.majorCategory || '').toLowerCase().includes(q) ||
+            (v.email || '').toLowerCase().includes(q)
+        )
         : mockProcucevVendors;
       return {
         success: true,
@@ -665,6 +665,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'new-direct@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Switchgear' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
@@ -732,6 +734,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'offline-pin@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Cables' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
@@ -921,6 +925,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'rejected@vendor.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Switchgear' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
@@ -967,7 +973,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockAddBuyerVendor).not.toHaveBeenCalled();
     });
 
-    it('handles Edit Vendor modal workflow (open, update fields, save changes)', () => {
+    it('handles Edit Vendor modal workflow (open, update fields, save changes)', async () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -988,12 +994,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Save changes
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
 
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
-        'v-1',
-        expect.objectContaining({
-          contactPerson: 'Rajesh Nair Updated',
-        })
-      );
+      await waitFor(() => {
+        expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+          'v-1',
+          expect.objectContaining({
+            contactPerson: 'Rajesh Nair Updated',
+          })
+        );
+      });
     });
 
     it('keeps the statutory identifiers locked in the Edit Vendor modal, with no edit controls', () => {
@@ -1077,7 +1085,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.queryByTestId('view-modal-edit-statutory-button')).not.toBeInTheDocument();
     });
 
-    it('saves the profile without sending any statutory identifier', () => {
+    it('saves the profile without sending any statutory identifier', async () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -1089,7 +1097,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByDisplayValue('Rajesh Nair'), { target: { value: 'Rajesh Nair Updated' } });
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
 
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledTimes(1);
+      await waitFor(() => expect(mockUpdateBuyerVendor).toHaveBeenCalledTimes(1));
       const [, payload] = mockUpdateBuyerVendor.mock.calls[0];
       expect(payload).toEqual(expect.objectContaining({ contactPerson: 'Rajesh Nair Updated' }));
       for (const field of ['gst', 'gstin', 'pan', 'msme', 'annualTurnover']) {
@@ -1255,14 +1263,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
       expect(mockShowToast).toHaveBeenCalledWith(
-        'Validation Error',
-        'Please complete all required fields.',
+        UI_STRINGS.addVendorModal.validationErrorTitle,
+        UI_STRINGS.addVendorModal.editRequiredFieldsError,
         'warning'
       );
       expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
     });
 
-    it('fills out and edits every field of the Edit Vendor form before saving', () => {
+    it('fills out and edits every field of the Edit Vendor form before saving', async () => {
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -1302,15 +1310,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       });
 
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
-        'v-1',
-        expect.objectContaining({
-          name: 'Apex Supplies Pvt Ltd.',
-          majorCategory: 'Electrical',
-          email: 'rajesh.new@apex.in',
-          phone: '9000000000',
-        })
-      );
+      await waitFor(() => {
+        expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+          'v-1',
+          expect.objectContaining({
+            name: 'Apex Supplies Pvt Ltd.',
+            majorCategory: 'Electrical',
+            email: 'rajesh.new@apex.in',
+            phone: '9000000000',
+          })
+        );
+      });
     });
 
     it('closes the Edit Vendor modal via its X icon button', () => {
@@ -1379,7 +1389,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         ],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1562,7 +1572,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         ],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1612,7 +1622,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -1636,7 +1646,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText(NOT_APPLICABLE)).toHaveLength(4);
     });
 
-    it('opens the Edit modal with vendor default fallbacks when most fields are missing', () => {
+    it('opens the Edit modal with vendor default fallbacks when most fields are missing', async () => {
       const sparseVendor = {
         id: 'sparse-1',
         name: 'Sparse Co',
@@ -1656,7 +1666,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -1670,12 +1680,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
-      // The major category is required, so the sparse vendor's blank one is chosen from the master.
+      // The major and minor category are required, so the sparse vendor's blank ones are supplied.
       const selects = screen.getAllByRole('combobox');
       fireEvent.change(selects[selects.length - 1], { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
 
       // Fill only the truly-required fields left blank by the sparse vendor; leave the rest
-      // (brand name, minor categories, location, country, etc.) blank to hit their fallback defaults.
+      // (brand name, location, country, etc.) blank to hit their fallback defaults.
       const requiredInputs = screen.getAllByRole('textbox').filter((i) => i.hasAttribute('required'));
       requiredInputs.forEach((input) => {
         if ((input as HTMLInputElement).value === '') {
@@ -1685,15 +1697,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       });
 
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
-        'sparse-1',
-        expect.objectContaining({
-          brandName: 'Sparse Co',
-          minorCategories: expect.any(Array),
-          location: ',',
-          country: 'India',
-        })
-      );
+      await waitFor(() => {
+        expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+          'sparse-1',
+          expect.objectContaining({
+            brandName: 'Sparse Co',
+            minorCategories: ['Valves'],
+            location: ',',
+            country: 'India',
+          })
+        );
+      });
     });
   });
 
@@ -1715,7 +1729,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -1767,7 +1781,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited', pincode: '411001' },
       });
 
@@ -1931,7 +1945,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2066,7 +2080,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2203,7 +2217,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2246,7 +2260,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2290,7 +2304,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2411,7 +2425,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         ],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -2900,7 +2914,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
       });
 
@@ -3310,7 +3324,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3345,7 +3359,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('Edit vendor with minimal/missing fields exercises fallback branches', () => {
-    it('exercises Edit form fallbacks for vendor with no brandName, contactDesignation, country, rating, status', () => {
+    it('exercises Edit form fallbacks for vendor with no brandName, contactDesignation, country, rating, status', async () => {
       const minimalVendor = {
         id: 'v-buyer-minimal-edit',
         name: 'Minimal Edit Vendor',
@@ -3368,7 +3382,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3383,14 +3397,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const editBtns = screen.getAllByRole('button', { name: /Edit/i });
       fireEvent.click(editBtns[0]);
 
-      // Save with all fields filled (the form was pre-populated with fallback defaults)
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
+
+      // Save with all fields filled
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
-      expect(mockUpdateBuyerVendor).toHaveBeenCalled();
+      await waitFor(() => expect(mockUpdateBuyerVendor).toHaveBeenCalled());
     });
   });
 
   describe('Add vendor form exercises rating/minorCategories/location/country fallback branches', () => {
-    it('submits Add Vendor with empty brandName, no minorCategories, empty location, empty country', async () => {
+    it('submits Add Vendor with empty brandName, empty location, empty country and valid category', async () => {
       mockAddBuyerVendor.mockResolvedValue(true);
 
       render(
@@ -3402,12 +3419,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
 
-      // Fill the required fields by label. No minor category, brand, location or country is entered.
+      // Fill the required fields by label. No brand, location or country is entered.
       fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Fallback Test Co' } });
       fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'John Doe' } });
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'john@fallback.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 11111' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
@@ -3415,7 +3434,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4' } });
 
       // Wait for debounce on pincode validation
-      await waitFor(() => {}, { timeout: 600 });
+      await waitFor(() => { }, { timeout: 600 });
 
       // Submit via testid
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
@@ -3425,7 +3444,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
           expect.objectContaining({
             name: 'Fallback Test Co',
             brandName: 'Fallback Test Co',
-            minorCategories: [],
+            minorCategories: ['Valves'],
             country: 'India',
             location: 'Mumbai, Maharashtra',
           })
@@ -3450,13 +3469,15 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'fail@add.test' } });
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '+91 99999 22222' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Delhi' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Delhi' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '800001' } });
       fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '07AAACA1928K1Z4' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4' } });
 
-      await waitFor(() => {}, { timeout: 600 });
+      await waitFor(() => { }, { timeout: 600 });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
@@ -3589,7 +3610,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3619,7 +3640,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3651,7 +3672,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3680,7 +3701,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3719,7 +3740,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('Edit Vendor submit fallbacks', () => {
-    it('submits edit with empty brandName, location, country, and no minor categories (lines 455, 457, 462, 465, 472)', () => {
+    it('submits edit with empty brandName, location, country and required category', async () => {
       const editVendor = {
         id: 'v-buyer-edit-fallbacks',
         name: 'Edit Fallback Co',
@@ -3753,7 +3774,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3765,6 +3786,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+
+      // Add a category tag since every saved vendor must have at least one category
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
 
       // Clear brandName, location, country
       const brandInput = screen.getByDisplayValue('Old Brand');
@@ -3779,15 +3804,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Save changes
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
 
-      expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
-        'v-buyer-edit-fallbacks',
-        expect.objectContaining({
-          brandName: 'Edit Fallback Co',
-          location: 'Nagpur, Maharashtra',
-          country: 'India',
-          minorCategories: [],
-        })
-      );
+      await waitFor(() => {
+        expect(mockUpdateBuyerVendor).toHaveBeenCalledWith(
+          'v-buyer-edit-fallbacks',
+          expect.objectContaining({
+            brandName: 'Edit Fallback Co',
+            location: 'Nagpur, Maharashtra',
+            country: 'India',
+            minorCategories: ['Valves'],
+          })
+        );
+      });
     });
   });
 
@@ -3816,7 +3843,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: null,
       });
 
@@ -3860,7 +3887,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3904,7 +3931,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -3994,7 +4021,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         categoryTaxonomy: [],
         reviseVendorRating: mockReviseVendorRating,
         requestVendorEvaluation: mockRequestVendorEvaluation,
-      openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
         activeBuyerAccount: { organizationName: 'Test Corp' },
       });
 
@@ -4467,6 +4494,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         target: { value: '98765' },
       });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Cables' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
@@ -4622,6 +4651,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         target: { value: '9876543210' },
       });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
+      fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Cables' } });
+      fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '111111' } });
@@ -4655,6 +4686,324 @@ describe('app/buyer/vendor-summary.tsx', () => {
           })
         )
       );
+    });
+  });
+
+  describe('Vendor category enforcement and quick Category Editor modal', () => {
+    it('displays unassigned division indicator and + Add Category / Update Category actions for buyer vendors', () => {
+      const uncategorizedMasterVendor = {
+        id: 'v-master-govardhan',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        phone: '+91 9966766905',
+        contactPerson: 'Govardhan',
+        majorCategory: 'Vendor Master',
+        minorCategories: ['Uncategorized'],
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        source: 'vendor_master_ingestion',
+        status: 'REGISTERED / NOT EVALUATED',
+      };
+      const categorizedBuyerVendor = {
+        id: 'v-cat-buyer-1',
+        name: 'Categorized Buyer Supplier',
+        email: 'cat@supplier.test',
+        phone: '9876543210',
+        contactPerson: 'Anil',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+        source: 'buyer_uploaded',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [uncategorizedMasterVendor, categorizedBuyerVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [
+          { majorCategory: 'Vendor Master', minorCategories: [] },
+          { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
+        ],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getByText(UI_STRINGS.vendorCategoryEditor.unassignedDivision)).toBeInTheDocument();
+      expect(screen.getByTestId('add-category-vendor-v-master-govardhan')).toHaveTextContent(
+        UI_STRINGS.vendorCategoryEditor.addCategoryButton
+      );
+      expect(screen.getByTestId('edit-category-vendor-v-cat-buyer-1')).toHaveTextContent(
+        UI_STRINGS.vendorCategoryEditor.editCategoryButton
+      );
+
+      const categoryFilter = screen.getAllByRole('combobox')[0];
+      expect(within(categoryFilter).queryByRole('option', { name: 'Vendor Master' })).not.toBeInTheDocument();
+      expect(within(categoryFilter).getByRole('option', { name: 'Mechanical' })).toBeInTheDocument();
+
+      fireEvent.click(screen.getAllByRole('button', { name: /View Profile/i })[0]);
+      expect(screen.getByTestId('view-profile-edit-category-button')).toHaveTextContent(
+        UI_STRINGS.vendorCategoryEditor.addCategoryButton
+      );
+    });
+
+    it('opens Category Editor from table or View Profile, validates categories, and saves updates via updateBuyerVendor', async () => {
+      mockUpdateBuyerVendor.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+      const targetVendor = {
+        id: 'v-master-99',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan@vendor.test',
+        phone: '9966766905',
+        contactPerson: 'Govardhan',
+        majorCategory: '',
+        minorCategories: [],
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        source: 'vendor_master_ingestion',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [targetVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [
+          { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
+          { majorCategory: 'IT Infrastructure', minorCategories: ['Laptops'] },
+        ],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Buyer' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('add-category-vendor-v-master-99'));
+      expect(screen.getByTestId('vendor-category-modal')).toBeInTheDocument();
+
+      // Submitting without any category or division shows an actionable error above the form
+      fireEvent.click(screen.getByTestId('submit-vendor-category-modal'));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.categoryRequiredError
+      );
+      expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
+
+      // Close modal with X and reopen from View Profile modal
+      fireEvent.click(screen.getByTestId('close-vendor-category-modal'));
+      expect(screen.queryByTestId('vendor-category-modal')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
+      fireEvent.click(screen.getByTestId('view-profile-edit-category-button'));
+      expect(screen.getByTestId('vendor-category-modal')).toBeInTheDocument();
+
+      // Reject adding placeholder category tags directly
+      const modal = screen.getByTestId('vendor-category-modal');
+      const catInput = within(modal).getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
+      fireEvent.change(catInput, { target: { value: 'Vendor Master' } });
+      fireEvent.click(within(modal).getByRole('button', { name: 'Add Tag' }));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.invalidDivisionError
+      );
+
+      // Type a valid category without pressing Enter (auto-committed on submit & infers Division)
+      fireEvent.change(catInput, { target: { value: 'Laptops' } });
+      fireEvent.click(screen.getByTestId('submit-vendor-category-modal'));
+
+      // First call resolves false -> modal stays open
+      await waitFor(() => expect(mockUpdateBuyerVendor).toHaveBeenCalledTimes(1));
+      expect(screen.getByTestId('vendor-category-modal')).toBeInTheDocument();
+
+      // Second call resolves true -> modal closes
+      fireEvent.click(screen.getByTestId('submit-vendor-category-modal'));
+      await waitFor(() =>
+        expect(mockUpdateBuyerVendor).toHaveBeenLastCalledWith(
+          'v-master-99',
+          expect.objectContaining({
+            majorCategory: 'IT Infrastructure',
+            minorCategories: ['Laptops'],
+          })
+        )
+      );
+      await waitFor(() => expect(screen.queryByTestId('vendor-category-modal')).not.toBeInTheDocument());
+    });
+
+    it('blocks Add Vendor and Edit Vendor when no valid category tag is assigned, and opens Category Editor on VENDOR_CATEGORY_REQUIRED during evaluation request', async () => {
+      const vendorWithoutCategory = {
+        id: 'v-eval-no-cat',
+        name: 'No Cat Eval Vendor',
+        email: 'nocat@vendor.test',
+        phone: '9876543210',
+        contactPerson: 'Suresh',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+        source: 'buyer_uploaded',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorWithoutCategory],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves'] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Buyer' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // 1. Add Vendor blocked when Division is selected without a Category tag
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      fireEvent.change(screen.getByLabelText(/Company Name/i), { target: { value: 'Categoryless Co' } });
+      fireEvent.change(screen.getByLabelText(/Contact Person/i), { target: { value: 'Kiran' } });
+      fireEvent.change(screen.getByLabelText(/Email/i), { target: { value: 'kiran@catless.test' } });
+      fireEvent.change(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.phoneLabel, 'i')), {
+        target: { value: '9876543210' },
+      });
+      fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Mechanical' } });
+      fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
+      fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
+      fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAACA1928K1Z4' } });
+      fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.5' } });
+      fireEvent.click(screen.getByTestId('submit-add-vendor'));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.categoryRequiredError
+      );
+      expect(mockAddBuyerVendor).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
+
+      // 2. Edit Vendor blocked when existing Category tag is removed and not replaced
+      fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Remove Valves' }));
+      fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.categoryRequiredError
+      );
+      expect(mockUpdateBuyerVendor).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+      // 3. Evaluation request returning VENDOR_CATEGORY_REQUIRED guides buyer to Category Editor
+      mockRequestVendorEvaluation.mockResolvedValueOnce({
+        success: false,
+        code: 'VENDOR_CATEGORY_REQUIRED',
+        message: 'Assign a category first.',
+      });
+      fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorEvaluationRequest.buttonLabel }));
+      await waitFor(() => expect(screen.getByTestId('vendor-category-modal')).toBeInTheDocument());
+      fireEvent.click(within(screen.getByTestId('vendor-category-modal')).getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByTestId('vendor-category-modal')).not.toBeInTheDocument();
+    });
+
+    it('infers Division when opening Category Editor from minor tag, blocks pending placeholder text, and clears minors when Division changes in Add Vendor', async () => {
+      const inferredVendor = {
+        id: 'v-infer-1',
+        name: 'Inferred Division Vendor',
+        email: 'infer@vendor.test',
+        phone: '9876543210',
+        contactPerson: 'Deepak',
+        majorCategory: 'Vendor Master',
+        minorCategories: ['Laptops'],
+        source: 'buyer_uploaded',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [inferredVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [
+          { majorCategory: 'Mechanical', minorCategories: ['Valves'] },
+          { majorCategory: 'IT Infrastructure', minorCategories: ['Laptops'] },
+        ],
+        ensureCategoryTaxonomy: undefined,
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Test Buyer' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // View Profile on categorized row displays Update Category button
+      fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
+      expect(screen.getByTestId('view-profile-edit-category-button')).toHaveTextContent(
+        UI_STRINGS.vendorCategoryEditor.editCategoryButton
+      );
+      fireEvent.click(screen.getByTestId('view-profile-edit-category-button'));
+
+      const catModal = screen.getByTestId('vendor-category-modal');
+      expect(within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.divisionLabel)).toHaveValue(
+        'IT Infrastructure'
+      );
+
+      // Empty Add Tag input resets gracefully; removing tag then typing placeholder and submitting is blocked
+      const modalInput = within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
+      fireEvent.change(modalInput, { target: { value: '   ' } });
+      fireEvent.click(within(catModal).getByRole('button', { name: 'Add Tag' }));
+      fireEvent.click(within(catModal).getByRole('button', { name: 'Remove Laptops' }));
+      fireEvent.change(modalInput, { target: { value: 'Uncategorized' } });
+      fireEvent.click(screen.getByTestId('submit-vendor-category-modal'));
+      expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
+        UI_STRINGS.addVendorModal.invalidDivisionError
+      );
+      fireEvent.click(within(catModal).getByRole('button', { name: 'Cancel' }));
+
+      // Add Vendor clears selected minor tags when switching Division
+      fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+      const addInput = screen.getByPlaceholderText(/search category/i);
+      fireEvent.change(addInput, { target: { value: 'Valves' } });
+      fireEvent.keyDown(addInput, { key: 'Enter' });
+      expect(screen.getByRole('button', { name: 'Remove Valves' })).toBeInTheDocument();
+      fireEvent.change(
+        screen.getByRole('combobox', { name: UI_STRINGS.vendorCategorySelect.divisionLabel }),
+        { target: { value: 'IT Infrastructure' } }
+      );
+      expect(screen.queryByRole('button', { name: 'Remove Valves' })).not.toBeInTheDocument();
     });
   });
 });

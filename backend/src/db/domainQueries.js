@@ -1378,6 +1378,9 @@ async function updateVendorIfUnchangedInDB(snapshot, vendor) {
   );
   if (!result.rows[0]) return null;
   queryCache.invalidate('vendors');
+  if (normalizedVendor.id) {
+    void syncVendorCategoriesIndexed(normalizedVendor.id, normalizedVendor);
+  }
   return parseVendorRaw(result.rows[0].raw);
 }
 

@@ -3278,8 +3278,13 @@ export const UI_STRINGS = {
     phonePlaceholder: '10-digit mobile number (e.g. 9876543210)',
     validationErrorTitle: 'Validation Error',
     requiredFieldsError:
-      'Please complete all required fields including Division, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
-    editRequiredFieldsError: 'Please complete all required fields.',
+      'Please complete all required fields including Division, Category, City, State, Pincode, GSTIN and Rating (1.0 - 5.0).',
+    editRequiredFieldsError: 'Please complete all required fields including Division and Category.',
+    categoryRequiredTitle: 'Category Required',
+    categoryRequiredError:
+      'Select a valid Division and add at least one Category tag before saving this vendor.',
+    invalidDivisionError:
+      'Select a valid procurement Division. Placeholder labels such as "Vendor Master" or "Uncategorized" are not allowed.',
     invalidPhoneTitle: 'Invalid Phone Number',
     invalidPhoneError: 'Enter a valid 10-digit Indian mobile number using digits only (starting with 6–9).',
     invalidRatingTitle: 'Invalid Rating',
@@ -3303,6 +3308,19 @@ export const UI_STRINGS = {
     masterCountBadge: '305+ in Master',
     addCustomTag: 'Add as custom category tag',
     selectCategory: 'Select category',
+  },
+
+  vendorCategoryEditor: {
+    unassignedDivision: 'Division Unassigned',
+    unassignedBadge: 'Category Required',
+    addCategoryButton: '+ Add Category',
+    editCategoryButton: 'Update Category',
+    modalTitle: 'Assign / Update Vendor Category',
+    modalSubtitle: 'Manage the procurement division and product categories for {vendorName}.',
+    saveCategoriesButton: 'Save Categories',
+    savingButton: 'Saving...',
+    evaluationNeedsCategoryTitle: 'Category Required Before Evaluation',
+    evaluationNeedsCategoryBody: 'Assign a Division and Category to this vendor before requesting an evaluation.',
   },
 
   /** The category search field in the RFQ line item tables. It lists the categories of the chosen division. */

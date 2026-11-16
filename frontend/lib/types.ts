@@ -1028,6 +1028,7 @@ export interface VendorEvaluationRecord {
 /** Outcome of asking the server for a vendor evaluation. */
 export interface VendorEvaluationRequestResult {
   success: boolean;
+  code?: string;
   message?: string;
   /** True when a saved evaluation already existed, so no request was sent to the vendor. */
   evaluationExists?: boolean;
@@ -1260,6 +1261,7 @@ export interface VendorEntry {
   // self-service profile edit; optional everywhere else.
   gstin?: string;
   gst?: string;
+  vendorCode?: string;
   pan?: string;
   msme?: string;
   annualTurnover?: string;
@@ -1294,6 +1296,7 @@ export interface VendorUploadRow {
     state?: string;
     pincode?: string;
     majorCategory?: string;
+    minorCategories?: string[];
     products?: string;
   };
   isValid: boolean;

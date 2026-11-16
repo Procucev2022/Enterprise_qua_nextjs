@@ -2756,6 +2756,31 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       }]);
     });
 
+    test('updateVendorIfUnchangedInDB synchronizes vendor_categories_indexed when compare-and-swap succeeds', async () => {
+      const binding = {};
+      const before = { id: 'vendor-cas-cat', email: 'old@example.test', majorCategory: 'Mechanical', minorCategories: ['Valves'] };
+      const after = { ...before, minorCategories: ['Ball Valves', 'Pumps'] };
+      pool.pool = {
+        query: jest.fn().mockResolvedValue({ rows: [{ raw: after }] }),
+      };
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(binding);
+      const batchSpy = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValue([]);
+
+      const updated = await domainQueries.updateVendorIfUnchangedInDB(
+        { id: before.id, vendor: before, raw: JSON.stringify(before) },
+        after
+      );
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(updated).toEqual(after);
+      expect(batchSpy).toHaveBeenCalledTimes(1);
+      expect(batchSpy.mock.calls[0][1][0]).toEqual({
+        text: 'DELETE FROM vendor_categories_indexed WHERE vendor_id = $1',
+        params: [before.id],
+      });
+      expect(batchSpy.mock.calls[0][1]).toHaveLength(4);
+    });
+
     test('replaces the PostgreSQL vendor category index in one transaction', async () => {
       const vendor = { id: 'v-category-transaction', majorCategory: 'Industrial', minorCategories: ['Valves'] };
       const clientQuery = jest.fn().mockResolvedValue({ rows: [] });

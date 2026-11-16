@@ -978,4 +978,77 @@ describe('Indian address location extraction helpers', () => {
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
   });
+
+  it('normalizes vendor categories, strips placeholders, and updates stored upload history batches', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      isPlaceholderVendorCategory,
+      normalizeVendorCategoryList,
+      reconcileBuyerVendorsWithUploadHistory,
+      updateVendorInUploadHistoryStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    expect(isPlaceholderVendorCategory('')).toBe(true);
+    expect(isPlaceholderVendorCategory(null)).toBe(true);
+    expect(isPlaceholderVendorCategory('Vendor Master')).toBe(true);
+    expect(isPlaceholderVendorCategory('Uncategorized (No Past POs)')).toBe(true);
+    expect(isPlaceholderVendorCategory('Mechanical')).toBe(false);
+
+    expect(
+      normalizeVendorCategoryList(['Valves', 'Vendor Master', 'valves', 'Pumps', '', null, 'None'])
+    ).toEqual(['Valves', 'Pumps']);
+    expect(normalizeVendorCategoryList(null)).toEqual([]);
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory(
+      [],
+      [
+        {
+          id: 'batch-placeholder',
+          majorCategory: 'Vendor Master',
+          records: [
+            {
+              name: 'Placeholder Vendor Co',
+              email: 'placeholder@vendor.test',
+              category: 'Uncategorised',
+              minorCategories: ['Vendor Master', 'Bearings'],
+            },
+          ],
+        },
+      ]
+    );
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0].majorCategory).toBe('');
+    expect(reconciled[0].minorCategories).toEqual(['Bearings']);
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-upd-1',
+          records: [
+            { id: 'v-master-1', vendorName: 'Govardhan Co', email: 'gov@co.test', category: 'Vendor Master' },
+            { id: 'v-other', vendorName: 'Other Co', email: 'other@co.test', category: 'Electrical' },
+          ],
+        },
+      ])
+    );
+
+    updateVendorInUploadHistoryStorage(['v-master-1', 'gov@co.test'], {
+      id: 'v-promoted-1',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops', 'Vendor Master'],
+    });
+
+    const updated = loadVendorUploadHistoryFromStorage();
+    expect(updated[0].records[0]).toMatchObject({
+      id: 'v-promoted-1',
+      category: 'IT Infrastructure',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops'],
+    });
+    expect(updated[0].records[1]).toMatchObject({ id: 'v-other', category: 'Electrical' });
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
 });

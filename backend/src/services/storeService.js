@@ -47,6 +47,10 @@ const {
   resolveVendorPinDigits,
   compareVendorPincodeProximity,
   foldCategoryDashes,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -1167,12 +1171,28 @@ class StoreService {
       created_at: _createdAtRaw,
       ...claimable
     } = details || {};
+    const cleanCategories = resolveValidVendorCategories(claimable);
+    const cleanedClaimable = { ...claimable };
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'majorCategory')) {
+      if (cleanCategories.majorCategory) {
+        cleanedClaimable.majorCategory = cleanCategories.majorCategory;
+      } else {
+        delete cleanedClaimable.majorCategory;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'minorCategories')) {
+      if (cleanCategories.minorCategories.length > 0) {
+        cleanedClaimable.minorCategories = cleanCategories.minorCategories;
+      } else {
+        delete cleanedClaimable.minorCategories;
+      }
+    }
     const updates = {
-      ...claimable,
+      ...cleanedClaimable,
       buyerId: buyerId || null,
       buyerAccountId: buyerId || null,
-      source: claimable.source || (buyerId || claimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
-      isCategoryAligned: claimable.isCategoryAligned !== undefined ? claimable.isCategoryAligned : true,
+      source: cleanedClaimable.source || (buyerId || cleanedClaimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
+      isCategoryAligned: cleanedClaimable.isCategoryAligned !== undefined ? cleanedClaimable.isCategoryAligned : true,
       onboardingEmailStatus: 'account_exists',
     };
 
@@ -1801,8 +1821,22 @@ class StoreService {
           pincode: safeVendorData.pincode,
         })
       : null;
+    const cleanCategories = resolveValidVendorCategories(safeVendorData);
+    const resolvedMajorCategory = cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || ''
+        : '');
+    const resolvedMinorCategories = cleanCategories.minorCategories;
+    const shouldSyncClientMapped =
+      resolvedMinorCategories.length > 0 && safeVendorData.clientMappedCategories === undefined;
+
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedMajorCategory ? { majorCategory: resolvedMajorCategory } : safeVendorData.majorCategory !== undefined ? { majorCategory: '' } : {}),
+      ...(safeVendorData.minorCategories !== undefined || resolvedMinorCategories.length > 0
+        ? { minorCategories: resolvedMinorCategories }
+        : {}),
+      ...(shouldSyncClientMapped ? { clientMappedCategories: [...resolvedMinorCategories] } : {}),
       ...(resolvedLocation?.location ? { location: resolvedLocation.location } : {}),
       ...(resolvedLocation?.city ? { city: resolvedLocation.city } : {}),
       ...(resolvedLocation?.state ? { state: resolvedLocation.state } : {}),
@@ -2132,6 +2166,14 @@ class StoreService {
       state: row.state,
       pincode: row.pincode,
     });
+    const cleanCategories = resolveValidVendorCategories(row);
+    const inferredMajor =
+      cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || cleanCategories.minorCategories[0]
+        : '');
+    const resolvedMajor = inferredMajor || (row.buyerId ? '' : 'Uncategorised');
+
     return {
       id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       vendorCode: row.vendorCode || '',
@@ -2139,8 +2181,9 @@ class StoreService {
       contactPerson: row.contactPerson || '',
       phone: row.phone,
       email: row.email || null,
-      majorCategory: row.majorCategory || 'Uncategorised',
-      minorCategories: row.minorCategories || [],
+      majorCategory: resolvedMajor,
+      minorCategories: cleanCategories.minorCategories,
+      ...(cleanCategories.minorCategories.length > 0 ? { clientMappedCategories: [...cleanCategories.minorCategories] } : {}),
       location: resolvedLocation.location || '',
       city: resolvedLocation.city || '',
       state: resolvedLocation.state || '',
@@ -10725,7 +10768,19 @@ class StoreService {
    * evaluation produces them.
    */
   async empanelIngestedVendor(vendorData, actorEmail = null) {
-    const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
+    const cleanCategories = resolveValidVendorCategories(vendorData);
+    if (!cleanCategories.hasCategory) {
+      const categoryError = new Error(VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED);
+      categoryError.statusCode = 400;
+      categoryError.code = 'VENDOR_CATEGORY_REQUIRED';
+      throw categoryError;
+    }
+    const minorCategories = cleanCategories.minorCategories;
+    const majorCategory =
+      cleanCategories.majorCategory ||
+      (minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([minorCategories[0]])?.[0] || minorCategories[0]
+        : '');
     const loc = resolveVendorLocationFields({
       location: vendorData.location,
       factoryAddress: vendorData.factoryAddress,
@@ -10745,12 +10800,12 @@ class StoreService {
       pincode: loc.pincode || null,
       gstin: vendorData.gstin || null,
       vendorCode: vendorData.vendorCode || null,
-      majorCategory: vendorData.majorCategory || null,
+      majorCategory,
       minorCategories,
       // The buyer mapped these from PO history; the vendor has not confirmed
       // them yet, so there is nothing to align against.
       clientMappedCategories: Array.isArray(vendorData.clientMappedCategories)
-        ? vendorData.clientMappedCategories
+        ? normalizeVendorCategoryList(vendorData.clientMappedCategories)
         : minorCategories,
       vendorSelectedCategories: [],
       isCategoryAligned: false,
@@ -10838,23 +10893,43 @@ class StoreService {
     return updated;
   }
 
-  async updateVendorCategoriesDurably(vendorId, { clientMappedCategories = [], vendorSelectedCategories = [] }) {
-    const vendor = this.getVendorById(vendorId, 'all');
+  async updateVendorCategoriesDurably(
+    vendorId,
+    { majorCategory, minorCategories, clientMappedCategories = [], vendorSelectedCategories = [] } = {}
+  ) {
+    const vendor =
+      this.getVendorById(vendorId, 'all') ||
+      (await this.getVendorByIdWithDBFallback(vendorId, 'all'));
     if (!vendor) return null;
 
+    const cleanedClientMapped = normalizeVendorCategoryList(clientMappedCategories);
+    const cleanedVendorSelected = normalizeVendorCategoryList(vendorSelectedCategories).slice(0, 10);
+    const cleanedMinors = Array.isArray(minorCategories) ? normalizeVendorCategoryList(minorCategories) : null;
+    const cleanedMajor =
+      typeof majorCategory === 'string' && !isPlaceholderVendorCategory(majorCategory)
+        ? majorCategory.trim()
+        : '';
+
     const isCategoryAligned =
-      clientMappedCategories.length === 0 ||
-      clientMappedCategories.every((category) => vendorSelectedCategories.includes(category));
-    const updated = await this.updateVendorDurably(vendor.id, {
-      clientMappedCategories,
-      vendorSelectedCategories: vendorSelectedCategories.slice(0, 10),
+      cleanedClientMapped.length === 0 ||
+      cleanedClientMapped.every((category) => cleanedVendorSelected.includes(category));
+    const categoryUpdates = {
+      clientMappedCategories: cleanedClientMapped,
+      vendorSelectedCategories: cleanedVendorSelected,
       isCategoryAligned,
-    });
+      ...(cleanedMajor ? { majorCategory: cleanedMajor } : {}),
+      ...(cleanedMinors !== null
+        ? { minorCategories: cleanedMinors }
+        : cleanedClientMapped.length > 0 && (!Array.isArray(vendor.minorCategories) || vendor.minorCategories.length === 0)
+          ? { minorCategories: cleanedClientMapped }
+          : {}),
+    };
+    const updated = await this.updateVendorDurably(vendor.id, categoryUpdates);
     if (!updated) return null;
 
     this.addAuditLog({
       userEmail: vendor.email,
-      action: `Reconciled categories for ${vendor.name}: ${vendorSelectedCategories.length} categories active (Aligned: ${isCategoryAligned})`,
+      action: `Reconciled categories for ${vendor.name}: ${(cleanedMinors || cleanedVendorSelected).length} categories active (Aligned: ${isCategoryAligned})`,
     });
     return updated;
   }

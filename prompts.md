@@ -6187,3 +6187,10 @@ Please check the errors & fix them
 Also check warnings in logs file, & fix them
 ```
 ---
+
+### Prompt 254
+**Timestamp**: 2026-11-16T18:25:17+05:30
+```text
+in the Buyer's Vendor Directory, Some vendors do not have categories assigned. Ideally all vendors should have a category, without a category a vendor can't exist. please check & fix this, why the vendor got created without category, also make sure to give an option to edit or add or update category for a vendor for buyer's own vendor.
+```
+---

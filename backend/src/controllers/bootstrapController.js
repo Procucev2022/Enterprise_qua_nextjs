@@ -5,7 +5,11 @@ const { isRetryableD1Error } = require('../db/d1Bridge');
 const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { resolveVendorLocationFields } = require('../config/constants');
+const {
+  resolveVendorLocationFields,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+} = require('../config/constants');
 
 /**
  * Load vendor_master_records from the buyer's latest ingestion session when those uploaded
@@ -29,6 +33,16 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     const masterRecords = await vendorIngestionQueries.findVendorMasterRecords(session.id, orgId, 500);
     if (!Array.isArray(masterRecords) || masterRecords.length === 0) return [];
 
+    const categoryMappings =
+      typeof vendorIngestionQueries.findCategoryMappings === 'function'
+        ? await vendorIngestionQueries.findCategoryMappings(session.id, orgId).catch(() => [])
+        : [];
+    const mappingByRecordId = new Map(
+      (Array.isArray(categoryMappings) ? categoryMappings : [])
+        .filter((m) => m && m.vendorRecordId)
+        .map((m) => [m.vendorRecordId, m])
+    );
+
     const seenEmails = new Set(
       existingVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
     );
@@ -46,6 +60,24 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
       }
       if (normalizedEmail) seenEmails.add(normalizedEmail);
       if (normalizedCode) seenCodes.add(normalizedCode);
+
+      const mapping = mappingByRecordId.get(rec.id);
+      const isRejectedMapping =
+        mapping?.status === 'SELF_MAP_REQUIRED' || mapping?.reviewAction === 'REJECTED';
+      const rawMajorCandidates = [
+        mapping?.buyerMajorCategory,
+        !isRejectedMapping ? mapping?.aiSuggestion?.majorCategory : null,
+        rec.majorCategory,
+      ];
+      const resolvedMajor =
+        rawMajorCandidates.find((candidate) => typeof candidate === 'string' && !isPlaceholderVendorCategory(candidate)) || '';
+      const rawMinors =
+        Array.isArray(mapping?.buyerMinorCategories) && mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : !isRejectedMapping && Array.isArray(mapping?.aiSuggestion?.minorCategories) && mapping.aiSuggestion.minorCategories.length > 0
+            ? mapping.aiSuggestion.minorCategories
+            : rec.minorCategories;
+      const resolvedMinors = normalizeVendorCategoryList(rawMinors);
 
       const parsedRating = Number(rec.rating);
       const loc = resolveVendorLocationFields({
@@ -66,9 +98,9 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         state: loc.state || null,
         pincode: loc.pincode || null,
         gstin: rec.gstin || null,
-        majorCategory: 'Vendor Master',
-        minorCategories: [],
-        clientMappedCategories: [],
+        majorCategory: resolvedMajor.trim(),
+        minorCategories: resolvedMinors,
+        clientMappedCategories: [...resolvedMinors],
         vendorSelectedCategories: [],
         rating:
           rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(parsedRating)

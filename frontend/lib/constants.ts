@@ -1735,6 +1735,46 @@ export function resolveVendorLocationFields(input?: {
 
 export const VENDOR_UPLOAD_HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
+export const VENDOR_CATEGORY_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'vendor master',
+  'uncategorized',
+  'uncategorised',
+  'uncategorized (no past pos)',
+  'uncategorised (no past pos)',
+  'pending category',
+  'unassigned',
+  'none',
+  'na',
+  'n/a',
+  '-',
+  '—',
+]);
+
+/** Returns true when a category string is empty or a synthetic placeholder value. */
+export function isPlaceholderVendorCategory(value: unknown): boolean {
+  if (typeof value !== 'string') return !value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return VENDOR_CATEGORY_PLACEHOLDERS.has(normalized);
+}
+
+/** Normalizes a list of category names by trimming, stripping placeholders, and deduplicating. */
+export function normalizeVendorCategoryList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of values) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || isPlaceholderVendorCategory(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+  }
+  return cleaned;
+}
+
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
 export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
   if (!v) return false;
@@ -1835,6 +1875,92 @@ export function removeVendorsFromUploadHistoryInStorage(
 }
 
 /**
+ * Updates matching vendor records inside `procucev_vendor_upload_history` in browser
+ * localStorage after a buyer edits or promotes a synthetic fallback vendor.
+ */
+export function updateVendorInUploadHistoryStorage(
+  vendorIdentifiers: readonly string[],
+  updates: {
+    id?: string;
+    name?: string;
+    email?: string;
+    majorCategory?: string;
+    minorCategories?: string[];
+    contactPerson?: string;
+    phone?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    location?: string;
+  }
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  const lookupSet = new Set(
+    (vendorIdentifiers || [])
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+  if (lookupSet.size === 0) return loadVendorUploadHistoryFromStorage();
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    let changed = false;
+    const updatedBatches = (batches as VendorUploadHistoryBatch[]).map((batch) => {
+      if (!Array.isArray(batch?.records)) return batch;
+      const nextRecords = batch.records.map((rec: Record<string, unknown>, recIdx: number) => {
+        const syntheticId = `v-hist-local-${String(batch.id || '')}-${recIdx}`.toLowerCase();
+        const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+        const recEmail = String(rec.email || '').trim().toLowerCase();
+        const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+        const matches =
+          lookupSet.has(syntheticId) ||
+          (recId && lookupSet.has(recId)) ||
+          (recEmail && lookupSet.has(recEmail)) ||
+          (recName && lookupSet.has(recName));
+        if (!matches) return rec;
+        changed = true;
+        return {
+          ...rec,
+          ...(updates.id ? { vendorId: updates.id, id: updates.id } : {}),
+          ...(updates.name ? { name: updates.name } : {}),
+          ...(updates.email ? { email: updates.email } : {}),
+          ...(updates.majorCategory !== undefined
+            ? {
+                category: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+                majorCategory: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+              }
+            : {}),
+          ...(updates.minorCategories !== undefined
+            ? { minorCategories: normalizeVendorCategoryList(updates.minorCategories) }
+            : {}),
+          ...(updates.contactPerson !== undefined ? { contactPerson: updates.contactPerson } : {}),
+          ...(updates.phone !== undefined ? { phone: updates.phone } : {}),
+          ...(updates.city !== undefined ? { city: updates.city } : {}),
+          ...(updates.state !== undefined ? { state: updates.state } : {}),
+          ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
+          ...(updates.location !== undefined ? { location: updates.location } : {}),
+        };
+      });
+      return { ...batch, records: nextRecords };
+    });
+
+    if (changed) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+      if (typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      }
+    }
+    return updatedBatches;
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Merges buyer vendor upload batches stored in localStorage with store buyerVendors,
  * deduplicating by email and vendor name so Vendor Directory and Evaluation Summary stay consistent.
  */
@@ -1884,7 +2010,9 @@ export function reconcileBuyerVendorsWithUploadHistory(
       });
       const city = loc.city;
       const state = loc.state;
-      const rawCategory = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategoryCandidate = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategory = isPlaceholderVendorCategory(rawCategoryCandidate) ? '' : rawCategoryCandidate;
+      const minorCategories = normalizeVendorCategoryList(rec.minorCategories);
       const numericRating = Number(rec.rating);
       const rating =
         rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
@@ -1898,7 +2026,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
         phone: String(rec.phone || ''),
         email: rawEmail,
         majorCategory: rawCategory,
-        minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
+        minorCategories,
         location: loc.location || [city, state].filter(Boolean).join(', '),
         rating,
         source: 'buyer_uploaded',
