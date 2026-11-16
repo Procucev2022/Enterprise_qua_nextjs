@@ -213,6 +213,38 @@ describe('largeFileIngestionService unit tests', () => {
       expect(mapped.phone).toBe('+919800011122');
     });
 
+    it('extracts city, state, and pincode from explicit columns and combined address strings', () => {
+      const explicitHeaders = ['Company Name', 'Address', 'City', 'State', 'Pincode'];
+      const explicitMap = largeFileIngestionService.extractHeaderIndices(explicitHeaders, 'VENDOR_MASTER');
+      const explicitMapped = largeFileIngestionService.mapRowValues(
+        ['Explicit Mfg', 'Plot 5, Whitefield', 'Bengaluru', 'KA', '560066'],
+        explicitMap,
+        'VENDOR_MASTER',
+        0
+      );
+      expect(explicitMapped).toMatchObject({
+        address: 'Plot 5, Whitefield',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560066',
+      });
+
+      const combinedHeaders = ['Company Name', 'Address'];
+      const combinedMap = largeFileIngestionService.extractHeaderIndices(combinedHeaders, 'VENDOR_MASTER');
+      const combinedMapped = largeFileIngestionService.mapRowValues(
+        ['Veera Solutions', '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037'],
+        combinedMap,
+        'VENDOR_MASTER',
+        1
+      );
+      expect(combinedMapped).toMatchObject({
+        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      });
+    });
+
     it('extracts po dump header mapping and maps row values with unit price calculation', () => {
       const headers = ['PO Number', 'PO Date', 'Vendor Name', 'Line Item Description', 'Specs', 'Quantity', 'Unit', 'Unit Price', 'Total Spend', 'Department'];
       const headerMap = largeFileIngestionService.extractHeaderIndices(headers, 'PO_DUMP');

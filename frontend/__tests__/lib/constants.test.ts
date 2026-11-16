@@ -654,3 +654,228 @@ describe('parseRfqTimestamp', () => {
     expect(parseRfqTimestamp(value)).toBeNull();
   });
 });
+
+describe('Indian address location extraction helpers', () => {
+  const {
+    looksLikeCombinedAddress,
+    extractIndianAddressLocation,
+    resolveVendorLocationFields,
+  } = require('@/lib/constants');
+
+  it('detects combined address strings vs plain city names', () => {
+    expect(looksLikeCombinedAddress('')).toBe(false);
+    expect(looksLikeCombinedAddress(null)).toBe(false);
+    expect(looksLikeCombinedAddress('Bengaluru')).toBe(false);
+    expect(looksLikeCombinedAddress('Kolkata, WB')).toBe(true);
+    expect(looksLikeCombinedAddress('Bengaluru 560037')).toBe(true);
+    expect(looksLikeCombinedAddress('12 MG Road')).toBe(true);
+    expect(looksLikeCombinedAddress('Navi Mumbai')).toBe(false);
+    expect(looksLikeCombinedAddress('AECS Layout')).toBe(true);
+  });
+
+  it('extracts city, state, and pincode from full Indian street addresses and aliases', () => {
+    expect(extractIndianAddressLocation(null)).toEqual({ city: '', state: '', pincode: '' });
+    expect(
+      extractIndianAddressLocation('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
+    ).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      extractIndianAddressLocation('Plot 18, Chakan MIDC, Pune, Maharashtra - 410501, India')
+    ).toEqual({
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '410501',
+    });
+    expect(extractIndianAddressLocation('Bangalore - 560038')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560038',
+    });
+    expect(extractIndianAddressLocation('Sector 17, Chandigarh - 160017')).toEqual({
+      city: 'Chandigarh',
+      state: 'Chandigarh',
+      pincode: '160017',
+    });
+    expect(extractIndianAddressLocation('New Delhi - 110001')).toEqual({
+      city: 'New Delhi',
+      state: 'Delhi',
+      pincode: '110001',
+    });
+    expect(extractIndianAddressLocation('Kundalahalli Bengaluru 560037')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(extractIndianAddressLocation('Gujarat')).toEqual({
+      city: '',
+      state: 'Gujarat',
+      pincode: '',
+    });
+    expect(extractIndianAddressLocation('12345, CustomTown, MH')).toEqual({
+      city: 'CustomTown',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(extractIndianAddressLocation('302, Sharada, AECS Layout')).toEqual({
+      city: '',
+      state: '',
+      pincode: '',
+    });
+  });
+
+  it('reconciles stuffed city values and explicit address/city/state/pincode inputs', () => {
+    expect(resolveVendorLocationFields(null)).toEqual({
+      location: '',
+      address: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+    expect(
+      resolveVendorLocationFields({
+        city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      })
+    ).toEqual({
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      resolveVendorLocationFields({
+        address: 'Plot 5, Whitefield',
+        city: 'Bengaluru',
+        state: 'ka',
+        pincode: '560 066',
+      })
+    ).toEqual({
+      location: 'Plot 5, Whitefield',
+      address: 'Plot 5, Whitefield',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560066',
+    });
+    expect(resolveVendorLocationFields({ city: 'Nagpur' })).toEqual({
+      location: 'Nagpur, Maharashtra',
+      address: '',
+      city: 'Nagpur',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(resolveVendorLocationFields({ state: 'Texas', pincode: '78701' })).toEqual({
+      location: 'Texas',
+      address: '',
+      city: '',
+      state: 'Texas',
+      pincode: '78701',
+    });
+  });
+
+  it('defines PO_DUMP_TEMPLATE_HEADERS matching the Step 3 upload screen fields without legacy PO columns', () => {
+    const { PO_DUMP_TEMPLATE_HEADERS } = require('@/lib/constants');
+    const { UI_STRINGS } = require('@/lib/uiStrings');
+    expect(PO_DUMP_TEMPLATE_HEADERS).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+    ]);
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('PO Number');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('PO Date');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Quantity');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Unit Price (INR)');
+    expect(PO_DUMP_TEMPLATE_HEADERS).not.toContain('Total Spend (INR)');
+  });
+
+  it('reconciles buyer vendors from local upload history with deduplication and storage guards', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      isBuyerUploadedVendor,
+      isProcucevNetworkVendor,
+      loadVendorUploadHistoryFromStorage,
+      reconcileBuyerVendorsWithUploadHistory,
+    } = require('@/lib/constants');
+
+    expect(isBuyerUploadedVendor(null)).toBe(false);
+    expect(isBuyerUploadedVendor({ source: 'buyer_uploaded' })).toBe(true);
+    expect(isProcucevNetworkVendor({ source: 'procucev_network' })).toBe(true);
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, '{bad-json');
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify({ notArray: true }));
+    expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([{ id: 'b-1', records: [{ vendorName: 'Uploaded Co', email: 'up@co.test' }] }])
+    );
+    expect(loadVendorUploadHistoryFromStorage()).toHaveLength(1);
+
+    const existing = [
+      {
+        id: 'v-existing',
+        name: 'Existing Vendor',
+        contactPerson: 'Owner',
+        phone: '9999999999',
+        email: 'existing@co.test',
+        majorCategory: 'Mechanical',
+        minorCategories: [],
+        location: 'Pune',
+        rating: 4,
+        source: 'buyer_manual',
+      },
+    ];
+    expect(reconcileBuyerVendorsWithUploadHistory(existing, [])).toEqual(existing);
+
+    const merged = reconcileBuyerVendorsWithUploadHistory(
+      existing,
+      [
+        {
+          id: 'batch-1',
+          records: [
+            { name: 'Dup Email', email: 'EXISTING@CO.TEST' },
+            { name: 'Failed Row', email: 'fail@co.test', status: 'FAILED' },
+            { name: '', email: '' },
+            {
+              vendorName: 'Veera Solutions Pvt LTD',
+              email: 'veerababu@procucev.com',
+              contactPerson: 'Veera',
+              phone: '9381877013',
+              city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+              majorCategory: 'Vendor Master',
+              minorCategories: ['Valves'],
+              gstin: '27AAACK3921P1Z9',
+              rating: 85,
+            },
+            {
+              email: 'emailonly@co.test',
+              status: 'IMPORTED',
+            },
+          ],
+        },
+        { records: null },
+      ],
+      { id: 'ba-1', organizationName: 'Buyer Org' }
+    );
+
+    expect(merged).toHaveLength(3);
+    expect(merged[1]).toMatchObject({
+      name: 'Veera Solutions Pvt LTD',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+      source: 'buyer_uploaded',
+      addedByBuyerCompany: 'Buyer Org',
+      buyerId: 'ba-1',
+      rating: 85,
+    });
+    expect(merged[2]).toMatchObject({
+      name: 'emailonly@co.test',
+      rating: 0,
+    });
+  });
+});

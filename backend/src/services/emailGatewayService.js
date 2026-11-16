@@ -49,6 +49,8 @@ const {
   hasUnlimitedRfqAccess,
   SYSTEM_ACTOR_EMAIL,
   VENDOR_QUOTE_SUPPORT_CC,
+  QUOTE_FAILURE_ALERT,
+  EXCLUDED_NOTIFICATION_RECIPIENTS,
   RFQ_MODES,
   RFQ_MODE_MAP,
   EMAIL_REGEX,
@@ -1773,13 +1775,18 @@ async function retryPendingAcknowledgements({
           cc: saved.cc,
         }), 'Vendor credits exhausted notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE) {
+        const cleanedSavedCc = String(saved.cc || '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s && !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(s.toLowerCase()))
+          .join(', ');
         ensureMailDeliveryAccepted(await mailerService.sendQuoteFailureEmail(row.from_address, {
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           vendorName: saved.vendorName,
           reason: saved.reason,
           missingFields: Array.isArray(saved.missingFields) ? saved.missingFields : [],
-          cc: saved.cc,
+          cc: cleanedSavedCc || QUOTE_FAILURE_ALERT.CC_RECIPIENTS.join(', '),
         }), 'Vendor quote failure notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT) {
         ensureMailDeliveryAccepted(await mailerService.sendComplexRfqPortalRedirectEmail(row.from_address, {
@@ -2220,18 +2227,21 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   const incomingCc = Array.isArray(message.cc) ? message.cc : (message.cc ? [message.cc] : []);
   const buyerNormalized = buyerEmail ? String(buyerEmail).toLowerCase().trim() : null;
 
-  // Sanitize incoming CC: If not V1 or V3, exclude buyer from CC on failure notifications
+  // Sanitize incoming CC: strip excluded addresses and, if not V1 or V3, exclude buyer from CC
   const sanitizedIncomingCc = incomingCc.filter((c) => {
     if (!c) return false;
-    if (!isV1OrV3 && buyerNormalized && String(c).toLowerCase().trim() === buyerNormalized) {
+    const normalized = String(c).toLowerCase().trim();
+    if (EXCLUDED_NOTIFICATION_RECIPIENTS.includes(normalized)) {
+      return false;
+    }
+    if (!isV1OrV3 && buyerNormalized && normalized === buyerNormalized) {
       return false;
     }
     return true;
   });
 
-  // For failure notifications:
-  // For V1 and V3, if a vendor submits a quotation via email and the submission fails, send failure notification with buyer in CC.
-  // For V0 and V2, do NOT add buyer in CC.
+  // General failure notifications (credits exhausted, portal redirect, issue/clarification):
+  // V1/V3 include buyer CC; V0/V2 omit buyer CC.
   const failureCcList = Array.from(
     new Set([
       isV1OrV3 ? buyerEmail : null,
@@ -2240,6 +2250,10 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     ].filter(Boolean))
   );
   const failureCc = failureCcList.length > 0 ? failureCcList.join(', ') : undefined;
+
+  // "Action Required – Quotation Could Not Be Processed" goes To the replying sender and CCs only the
+  // active internal alert recipients (ignoring other incoming CCs).
+  const quoteFailureCc = QUOTE_FAILURE_ALERT.CC_RECIPIENTS.join(', ');
 
   // Validate vendor quotation eligibility: buyer-mapped vendors get unlimited quotations on their buyer's RFQs;
   // otherwise 5 free quotation credits, then active subscription required
@@ -2336,7 +2350,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
           missingFields: ['Quotation Details / AI Extraction'],
-          cc: failureCc,
+          cc: quoteFailureCc,
         }),
       {
         rfqNumber: targetRfq.rfqNumber,
@@ -2349,7 +2363,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
             vendorName: vendorRecord.name,
             reason: 'Quotation parsing failed due to AI extraction errors. Please ensure all quotation parameters are clearly stated.',
             missingFields: ['Quotation Details / AI Extraction'],
-            cc: failureCc,
+            cc: quoteFailureCc,
           },
         },
       }
@@ -2523,7 +2537,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
           vendorName: vendorRecord.name,
           reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
           missingFields: ['Unit Price (₹)'],
-          cc: failureCc,
+          cc: quoteFailureCc,
         }),
       {
         rfqNumber: targetRfq.rfqNumber,
@@ -2536,7 +2550,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
             vendorName: vendorRecord.name,
             reason: 'Unit Price (₹) is mandatory and must be greater than 0.',
             missingFields: ['Unit Price (₹)'],
-            cc: failureCc,
+            cc: quoteFailureCc,
           },
         },
       }

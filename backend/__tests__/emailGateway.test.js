@@ -3724,15 +3724,13 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     const message = { fromAddress: vendor.email, subject: 'Re: RFQ-DIRECT-5', bodyText: 'Please find our proposal attached.' };
     const result = await emailGatewayService.processVendorQuoteMessage(message, rfq, vendor);
 
+    const expectedQuoteFailureCc = 'gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com';
+
     expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
-    expect(failSpy).toHaveBeenCalled();
-    const buyerEmail = storeService.resolveBuyerEmailForRFQ(rfq);
-    if (buyerEmail) {
-      expect(failSpy.mock.calls[0][1].cc).toContain(buyerEmail);
-    }
+    expect(failSpy).toHaveBeenCalledWith(vendor.email, expect.objectContaining({ cc: expectedQuoteFailureCc }));
   });
 
-  test('sends quote failure email with buyer CC when AI extraction throws an error', async () => {
+  test('sends quote failure email to vendor with standard internal CC list when AI extraction throws an error', async () => {
     const rfq = simpleRfq({ id: 'rfq-direct-extract-err', rfqNumber: 'RFQ-DIRECT-ERR', raisedByEmail: 'buyer-lead@corp.com' });
     storeService.rfqs = [rfq];
     const vendor = { id: 'vd-extract-err', name: 'Err Vendor', email: 'err@suppliers.com', freeQuotationCredits: 5, quotedRfqIds: [] };
@@ -3741,12 +3739,21 @@ describe('emailGatewayService.processVendorQuoteMessage branch coverage', () => 
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockRejectedValue(new Error('AI extraction failed'));
     const failSpy = jest.spyOn(mailerService, 'sendQuoteFailureEmail').mockResolvedValue({ sent: true });
 
-    const message = { fromAddress: vendor.email, subject: 'Re: RFQ-DIRECT-ERR', bodyText: 'Here is bid' };
+    const message = {
+      fromAddress: vendor.email,
+      subject: 'Re: RFQ-DIRECT-ERR',
+      bodyText: 'Here is bid',
+      cc: ['quateam@procucev.com', 'stranger@external.test'],
+    };
     const result = await emailGatewayService.processVendorQuoteMessage(message, rfq, vendor);
 
     expect(result.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
-    expect(failSpy).toHaveBeenCalled();
-    expect(failSpy.mock.calls[0][1].cc).toContain('buyer.direct@corp.com');
+    expect(failSpy).toHaveBeenCalledWith(
+      vendor.email,
+      expect.objectContaining({
+        cc: 'gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com',
+      })
+    );
   });
 });
 
@@ -3913,8 +3920,8 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     jest.restoreAllMocks();
   });
 
-  // V1 and V3 failure scenarios: Buyer MUST be in CC
-  test('V1 RFQ (mode_1): failed quote email submission sends failure email WITH buyer in CC', async () => {
+  // Quotation failure notices go strictly to the replying vendor with fixed team CC (ignoring buyer & incoming CCs)
+  test('V1 RFQ (mode_1): Quotation Could Not Be Processed uses fixed team CC and ignores incoming/buyer CC', async () => {
     const rfqV1 = createTestRfq('rfq-v1', 'RFQ-V1-FAIL', 'mode_1', buyerEmailV1);
     jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV1);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue(null);
@@ -3924,6 +3931,7 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
       fromAddress: vendorEmail,
       subject: 'Quotation for RFQ-V1-FAIL',
       bodyText: 'Attached our proposal but extraction fails',
+      cc: ['quateam@procucev.com', buyerEmailV1],
       messageId: '<v1-fail@industrial.com>',
     };
 
@@ -3932,11 +3940,12 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
     expect(failMailSpy).toHaveBeenCalledTimes(1);
     const failurePayload = failMailSpy.mock.calls[0][1];
-    expect(failurePayload.cc).toBeDefined();
-    expect(failurePayload.cc).toContain(buyerEmailV1);
+    expect(failurePayload.cc).toBe('gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com');
+    expect(failurePayload.cc).not.toContain('quateam@procucev.com');
+    expect(failurePayload.cc).not.toContain(buyerEmailV1);
   });
 
-  test('V3 RFQ (mode_3): failed quote email submission sends failure email WITH buyer in CC', async () => {
+  test('V3 RFQ (mode_3): Quotation Could Not Be Processed uses fixed team CC and V3 credits-exhausted still CCs buyer while stripping quateam', async () => {
     const rfqV3 = createTestRfq('rfq-v3', 'RFQ-V3-FAIL', 'mode_3', buyerEmailV3);
     jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV3);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({
@@ -3949,6 +3958,7 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
       fromAddress: vendorEmail,
       subject: 'Quotation for RFQ-V3-FAIL',
       bodyText: 'Price is zero',
+      cc: ['quateam@procucev.com', 'other.cc@external.com'],
       messageId: '<v3-fail@industrial.com>',
     };
 
@@ -3957,12 +3967,18 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
     expect(failMailSpy).toHaveBeenCalledTimes(1);
     const failurePayload = failMailSpy.mock.calls[0][1];
-    expect(failurePayload.cc).toBeDefined();
-    expect(failurePayload.cc).toContain(buyerEmailV3);
+    expect(failurePayload.cc).toBe('gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com');
+
+    // Non-quote-failure failure notices (credits exhausted) preserve V3 buyer CC while stripping quateam
+    jest.spyOn(storeService, 'checkVendorQuotationEligibility').mockReturnValueOnce({ eligible: false, subscriptionPlan: 'free_trial' });
+    const creditsSpy = jest.spyOn(mailerService, 'sendVendorCreditsExhaustedEmail').mockResolvedValue({ sent: true });
+    await emailGatewayService.processVendorQuoteMessage(message, rfqV3, vendorRecord);
+    expect(creditsSpy.mock.calls[0][1].cc).toContain(buyerEmailV3);
+    expect(creditsSpy.mock.calls[0][1].cc).not.toContain('quateam@procucev.com');
   });
 
-  // V0 and V2 failure scenarios: Buyer must NOT be in CC
-  test('V0 RFQ (mode_0): failed quote email submission sends failure email WITHOUT buyer in CC', async () => {
+  // V0 and V2 failure scenarios: Buyer must NOT be in CC and incoming CCs are ignored
+  test('V0 RFQ (mode_0): failed quote email submission sends failure email WITHOUT buyer or incoming CCs in CC', async () => {
     const rfqV0 = createTestRfq('rfq-v0', 'RFQ-V0-FAIL', 'mode_0', buyerEmailV0);
     jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV0);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue(null);
@@ -3972,7 +3988,7 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
       fromAddress: vendorEmail,
       subject: 'Quotation for RFQ-V0-FAIL',
       bodyText: 'Proposal for RFQ-V0-FAIL',
-      cc: [buyerEmailV0],
+      cc: [buyerEmailV0, 'quateam@procucev.com'],
       messageId: '<v0-fail@industrial.com>',
     };
 
@@ -3981,14 +3997,11 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
     expect(failMailSpy).toHaveBeenCalledTimes(1);
     const failurePayload = failMailSpy.mock.calls[0][1];
-    if (failurePayload.cc) {
-      expect(failurePayload.cc).not.toContain(buyerEmailV0);
-    } else {
-      expect(failurePayload.cc).toBeUndefined();
-    }
+    expect(failurePayload.cc).toBe('gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com');
+    expect(failurePayload.cc).not.toContain(buyerEmailV0);
   });
 
-  test('V2 RFQ (mode_2): failed quote email submission sends failure email WITHOUT buyer in CC', async () => {
+  test('V2 RFQ (mode_2): failed quote email submission sends failure email WITHOUT buyer or incoming CCs in CC', async () => {
     const rfqV2 = createTestRfq('rfq-v2', 'RFQ-V2-FAIL', 'mode_2', buyerEmailV2);
     jest.spyOn(storeService, 'resolveBuyerEmailForRFQ').mockReturnValue(buyerEmailV2);
     jest.spyOn(geminiService, 'extractQuotationFromEmail').mockResolvedValue({ unitPrice: 0, totalPrice: 0 });
@@ -3998,7 +4011,7 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
       fromAddress: vendorEmail,
       subject: 'Quotation for RFQ-V2-FAIL',
       bodyText: 'Zero price proposal',
-      cc: [buyerEmailV2],
+      cc: [buyerEmailV2, 'quateam@procucev.com'],
       messageId: '<v2-fail@industrial.com>',
     };
 
@@ -4007,11 +4020,8 @@ describe('Vendor Quotation Email Submission & Sourcing Mode CC Verification', ()
     expect(outcome.status).toBe(INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED);
     expect(failMailSpy).toHaveBeenCalledTimes(1);
     const failurePayload = failMailSpy.mock.calls[0][1];
-    if (failurePayload.cc) {
-      expect(failurePayload.cc).not.toContain(buyerEmailV2);
-    } else {
-      expect(failurePayload.cc).toBeUndefined();
-    }
+    expect(failurePayload.cc).toBe('gmtrfq@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com');
+    expect(failurePayload.cc).not.toContain(buyerEmailV2);
   });
 
   // Successful quotation submission scenarios: Buyer must NEVER be in CC

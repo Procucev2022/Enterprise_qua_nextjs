@@ -938,5 +938,127 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     for (const key of keyMatches) counts.set(key, (counts.get(key) || 0) + 1);
     const duplicates = [...counts.entries()].filter(([, c]) => c > 1);
     expect(duplicates).toEqual([]);
+    expect(rawWrangler).not.toContain('quateam@procucev.com');
+  });
+
+  test('QUOTE_FAILURE_ALERT and VENDOR_QUOTE_SUPPORT_CC exclude quateam@procucev.com and default to gmtrfq, anshul, veerababu', () => {
+    const savedCc = process.env.QUOTE_FAILURE_CC_EMAILS;
+    const savedSupport = process.env.VENDOR_QUOTE_SUPPORT_CC;
+    try {
+      delete process.env.QUOTE_FAILURE_CC_EMAILS;
+      process.env.VENDOR_QUOTE_SUPPORT_CC = 'quateam@procucev.com, support@procucev.com';
+      const constants = loadConstants();
+      expect(constants.QUOTE_FAILURE_ALERT.CC_RECIPIENTS).toEqual([
+        'gmtrfq@procucev.com',
+        'anshul.goel@procucev.com',
+        'veerababu.v@procucev.com',
+      ]);
+      expect(constants.VENDOR_QUOTE_SUPPORT_CC).toBe('support@procucev.com');
+
+      process.env.QUOTE_FAILURE_CC_EMAILS = 'quateam@procucev.com';
+      expect(constants.QUOTE_FAILURE_ALERT.CC_RECIPIENTS).toEqual([
+        'gmtrfq@procucev.com',
+        'anshul.goel@procucev.com',
+        'veerababu.v@procucev.com',
+      ]);
+    } finally {
+      if (savedCc === undefined) delete process.env.QUOTE_FAILURE_CC_EMAILS;
+      else process.env.QUOTE_FAILURE_CC_EMAILS = savedCc;
+      if (savedSupport === undefined) delete process.env.VENDOR_QUOTE_SUPPORT_CC;
+      else process.env.VENDOR_QUOTE_SUPPORT_CC = savedSupport;
+    }
+  });
+
+  test('looksLikeCombinedAddress, extractIndianAddressLocation, and resolveVendorLocationFields extract city, state, and pincode', () => {
+    const constants = loadConstants();
+    expect(constants.looksLikeCombinedAddress('')).toBe(false);
+    expect(constants.looksLikeCombinedAddress('Hyderabad')).toBe(false);
+    expect(constants.looksLikeCombinedAddress('Kolkata, WB')).toBe(true);
+    expect(constants.looksLikeCombinedAddress('Bengaluru 560037')).toBe(true);
+    expect(constants.looksLikeCombinedAddress('42 Industrial Ave')).toBe(true);
+    expect(constants.looksLikeCombinedAddress('Main Road')).toBe(true);
+
+    expect(constants.extractIndianAddressLocation(null)).toEqual({ city: '', state: '', pincode: '' });
+    expect(
+      constants.extractIndianAddressLocation('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
+    ).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      constants.extractIndianAddressLocation('Plot 18, Chakan MIDC, Pune, Maharashtra - 410501, India')
+    ).toEqual({
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '410501',
+    });
+    expect(constants.extractIndianAddressLocation('Bangalore - 560038')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560038',
+    });
+    expect(constants.extractIndianAddressLocation('Sector 17, Chandigarh - 160017')).toEqual({
+      city: 'Chandigarh',
+      state: 'Chandigarh',
+      pincode: '160017',
+    });
+    expect(constants.extractIndianAddressLocation('Kundalahalli Bengaluru 560037')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(constants.extractIndianAddressLocation('12345, CustomTown, MH')).toEqual({
+      city: 'CustomTown',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(constants.extractIndianAddressLocation('302, Sharada, AECS Layout')).toEqual({
+      city: '',
+      state: '',
+      pincode: '',
+    });
+    // Repeat call hits cached index map cleanly
+    expect(constants.getCitiesForState('Karnataka')).toContain('Bengaluru');
+
+    expect(constants.resolveVendorLocationFields(null)).toEqual({
+      location: '',
+      address: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+    expect(
+      constants.resolveVendorLocationFields({
+        city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      })
+    ).toEqual({
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(
+      constants.resolveVendorLocationFields({
+        factoryAddress: 'Plot 5, Whitefield',
+        city: 'Bengaluru',
+        state: 'ka',
+        pincode: '560 066',
+      })
+    ).toEqual({
+      location: 'Plot 5, Whitefield',
+      address: 'Plot 5, Whitefield',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560066',
+    });
+    expect(constants.resolveVendorLocationFields({ state: 'Texas', pincode: '78701' })).toEqual({
+      location: 'Texas',
+      address: '',
+      city: '',
+      state: 'Texas',
+      pincode: '78701',
+    });
   });
 });

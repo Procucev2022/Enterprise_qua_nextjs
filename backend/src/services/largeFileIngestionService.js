@@ -32,6 +32,7 @@ const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
   VENDOR_INGESTION_CONFIG,
+  resolveVendorLocationFields,
 } = require('../config/constants');
 
 /** Same buffering pattern rfqAttachmentService.js already uses against this SDK. */
@@ -209,7 +210,10 @@ function extractHeaderIndices(headers, type) {
     map.contactPerson = findIndex(['contactperson', 'contact person', 'contact', 'person', 'representative', 'contact person name']);
     map.email = findIndex(['email', 'email id', 'email_id', 'mail', 'corporate email']);
     map.phone = findIndex(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number']);
-    map.address = findIndex(['address', 'location', 'city', 'plant location', 'street', 'office address']);
+    map.address = findIndex(['address', 'location', 'plant location', 'street', 'office address', 'city']);
+    map.city = findIndex(['city', 'town', 'district']);
+    map.state = findIndex(['state', 'province', 'region']);
+    map.pincode = findIndex(['pincode', 'pin code', 'pin', 'zip', 'zipcode', 'zip code', 'postal code']);
     map.gstin = findIndex(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no']);
     map.rating = findIndex(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score']);
   } else {
@@ -372,7 +376,17 @@ function mapRowValues(values, headerMap, type, rowIdx) {
     const contactPerson = get('contactPerson') || null;
     const email = normalizeEmail(get('email')) || null;
     const phone = normalizePhone(get('phone')) || null;
-    const address = get('address') || null;
+    const explicitAddress = get('address');
+    const explicitCity = get('city');
+    const explicitState = get('state');
+    const explicitPincode = get('pincode');
+    const resolvedLoc = resolveVendorLocationFields({
+      address: explicitAddress || explicitCity || explicitState || explicitPincode,
+      city: explicitCity,
+      state: explicitState,
+      pincode: explicitPincode,
+    });
+    const address = resolvedLoc.location || null;
     const gstin = get('gstin') || null;
     const ratingRaw = get('rating');
     const rating = ratingRaw && !isNaN(Number(ratingRaw)) ? Math.min(100, Math.max(0, Math.round(Number(ratingRaw)))) : null;
@@ -385,6 +399,9 @@ function mapRowValues(values, headerMap, type, rowIdx) {
       email,
       phone,
       address,
+      city: resolvedLoc.city || null,
+      state: resolvedLoc.state || null,
+      pincode: resolvedLoc.pincode || null,
       gstNumber: gstin,
       rating,
     };

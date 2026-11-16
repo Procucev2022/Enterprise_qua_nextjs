@@ -5,6 +5,7 @@ const { isRetryableD1Error } = require('../db/d1Bridge');
 const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const { resolveVendorLocationFields } = require('../config/constants');
 
 /**
  * Load vendor_master_records from the buyer's latest ingestion session when those uploaded
@@ -47,6 +48,12 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
       if (normalizedCode) seenCodes.add(normalizedCode);
 
       const parsedRating = Number(rec.rating);
+      const loc = resolveVendorLocationFields({
+        address: rec.address,
+        city: rec.city,
+        state: rec.state,
+        pincode: rec.pincode,
+      });
       fallbackVendors.push({
         id: `v-master-${rec.id}`,
         vendorCode: rec.vendorCode || null,
@@ -54,7 +61,10 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         email: rec.email || null,
         contactPerson: rec.contactPerson || null,
         phone: rec.phone || null,
-        location: rec.address || null,
+        location: loc.location || null,
+        city: loc.city || null,
+        state: loc.state || null,
+        pincode: loc.pincode || null,
         gstin: rec.gstin || null,
         majorCategory: 'Vendor Master',
         minorCategories: [],

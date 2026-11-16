@@ -18,6 +18,7 @@ const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   DAILY_RFQ_REPORT_CONFIG,
+  EXCLUDED_NOTIFICATION_RECIPIENTS,
   EVENT_OUTBOX_TYPES,
   RFQ_MODE_LABELS,
   RFQ_MODES,
@@ -133,20 +134,25 @@ function formatDateLabel(dateStr) {
  * Returns an empty list when neither provides an address, so no report is sent.
  */
 function resolveRecipients(overrideRecipients) {
+  const filterExcluded = (list) =>
+    list.filter((e) => !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(e.toLowerCase()));
+
   if (Array.isArray(overrideRecipients) && overrideRecipients.length > 0) {
-    const list = overrideRecipients.map((e) => String(e || '').trim()).filter(Boolean);
+    const list = filterExcluded(overrideRecipients.map((e) => String(e || '').trim()).filter(Boolean));
     if (list.length > 0) return list;
   }
   if (typeof overrideRecipients === 'string' && overrideRecipients.trim()) {
-    const list = overrideRecipients.split(',').map((e) => e.trim()).filter(Boolean);
+    const list = filterExcluded(overrideRecipients.split(',').map((e) => e.trim()).filter(Boolean));
     if (list.length > 0) return list;
   }
 
   // An unset or blank DAILY_RFQ_REPORT_EMAILS yields [], so the report is not sent.
-  return (process.env.DAILY_RFQ_REPORT_EMAILS || '')
-    .split(',')
-    .map((e) => e.trim())
-    .filter(Boolean);
+  return filterExcluded(
+    (process.env.DAILY_RFQ_REPORT_EMAILS || '')
+      .split(',')
+      .map((e) => e.trim())
+      .filter(Boolean)
+  );
 }
 
 /**

@@ -1386,6 +1386,9 @@ export interface VendorMasterUploadRecord {
   email: string;
   phone: string;
   address: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   gstNumber: string;
   vendorRatingScore?: number; // 0 to 100 (Optional)
 }
@@ -1415,6 +1418,9 @@ export interface HistoricalPurchaseVendorRecord {
   contactPerson?: string;
   phone: string;
   address: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
   gstNumber: string;
   vendorRatingScore?: number; // 0 to 100 (Optional)
   hasPoHistory: boolean; // True if PO line items were found in PO dump
@@ -1426,6 +1432,21 @@ export interface HistoricalPurchaseVendorRecord {
   secondSetMinorCategories: string[]; // 2nd Set: Minor Categories
   secondSetSecondaryMajors?: string[]; // 2nd Set: Secondary Major Categories
   isExistingInDatabase?: boolean;
+}
+
+export interface VendorUploadHistoryBatch {
+  id?: string | number;
+  fileName?: string;
+  uploadedAt?: string;
+  records?: Array<Record<string, unknown>> | null;
+}
+
+export interface VendorOwnershipShape {
+  id?: string | null;
+  source?: string | null;
+  buyerId?: string | null;
+  buyerAccountId?: string | null;
+  addedByBuyerCompany?: string | boolean | null;
 }
 
 export interface IngestionFailedEmail {

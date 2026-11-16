@@ -6036,3 +6036,32 @@ Why is production deployment having multiple unneccessary CI-CD actions are happ
 Can you please check these warnings.
 ```
 ---
+
+### Prompt 235
+**Timestamp**: 2026-11-16T08:13:04+05:30
+```text
+This email should go to 	
+gmtrfq@procucev.com, anshul , veerababu, remove quateam
+```
+---
+
+### Prompt 236
+**Timestamp**: 2026-11-16T10:12:44+05:30
+```text
+the Buyer Uploaded Vendor section, the City, State, and Pincode fields are not being populated. Please check and fix this issue.
+```
+---
+
+### Prompt 237
+**Timestamp**: 2026-11-16T10:13:19+05:30
+```text
+the downloaded sample PO Dump Excel template still contains the old columns (PO Number, PO Date, Quantity, Unit Price, Total Spend, etc.). The upload screen says only Vendor/Supplier Name and Item Description are mandatory. Please update the sample downloadable template to match the fields displayed on the upload screen.
+```
+---
+
+### Prompt 238
+**Timestamp**: 2026-11-16T10:14:31+05:30
+```text
+there are currently in my buyer account 11 vendors in the Vendor Directory, but the Evaluation Summary is showing only 1 vendor. When I try to search for or select another vendor, it shows "No vendors found."
+```
+---

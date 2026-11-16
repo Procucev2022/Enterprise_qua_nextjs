@@ -4901,4 +4901,68 @@ describe('Honest store state (no invented counts, ratings, outcomes or health ro
     expect(updatedVendor).toMatchObject({ score: 70, rating: 3.5 });
     expect(storeService.getAuditLogs()[0].action).toContain('not rated -> 3.5 (Score: 70)');
   });
+
+  test('extracts and persists city, state, and pincode across uploaded, historical, and empanelled buyer vendors', async () => {
+    const manualWithCombinedLoc = storeService.addVendor({
+      name: 'Combined Loc Vendor',
+      email: 'combined-loc@example.test',
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      majorCategory: 'Mechanical',
+    });
+    expect(manualWithCombinedLoc).toMatchObject({
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+
+    const empanelled = await storeService.empanelIngestedVendor({
+      name: 'Ingested Loc Vendor',
+      email: 'ingested-loc@example.test',
+      location: 'Plot 18, Chakan MIDC, Pune, Maharashtra - 410501',
+      majorCategory: 'Mechanical',
+    });
+    expect(empanelled).toMatchObject({
+      location: 'Plot 18, Chakan MIDC, Pune, Maharashtra - 410501',
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '410501',
+    });
+
+    const bulk = storeService._buildBulkVendor(
+      {
+        name: 'Bulk Loc Vendor',
+        email: 'bulk-loc@example.test',
+        city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        phone: '9888877777',
+      },
+      0
+    );
+    expect(bulk).toMatchObject({
+      location: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+
+    await storeService.processHistoricalPurchaseData('3_years', [
+      {
+        companyName: 'Ingested Loc Vendor',
+        email: 'ingested-loc@example.test',
+        address: 'Sector 17, Chandigarh - 160017',
+        firstSetMajorCategory: 'Mechanical',
+      },
+      {
+        companyName: 'Brand New Historical Vendor',
+        email: 'brand-new-hist@example.test',
+        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        firstSetMajorCategory: 'Electrical',
+      },
+    ]);
+
+    const updatedHist = (await storeService.getVendors()).find((v) => v.email === 'ingested-loc@example.test');
+    const createdHist = (await storeService.getVendors()).find((v) => v.email === 'brand-new-hist@example.test');
+    expect(updatedHist).toMatchObject({ city: 'Chandigarh', state: 'Chandigarh', pincode: '160017' });
+    expect(createdHist).toMatchObject({ city: 'Bengaluru', state: 'Karnataka', pincode: '560037' });
+  });
 });

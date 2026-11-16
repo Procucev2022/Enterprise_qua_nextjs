@@ -4,6 +4,7 @@ import * as XLSX from 'xlsx';
 import InitialSetupModal, { IngestionProgressCard, parseVendorMobile } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { PO_DUMP_TEMPLATE_HEADERS } from '@/lib/constants';
 import { logger } from '@/lib/logger';
 
 const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
@@ -3851,15 +3852,15 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     // The required columns banner lists the two mandatory columns
     expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
 
-    // The template lists the PO columns without a Category column: categories come from the AI job
+    // The template lists only the upload-screen fields (mandatory 2 columns + optional Specifications) without legacy columns
     const aoaSpy = jest.spyOn(XLSX.utils, 'aoa_to_sheet');
     const origCreateObjectURL = global.URL.createObjectURL;
     global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
     fireEvent.click(screen.getByText(/Download PO Dump Template/i));
     expect(mockShowToast).toHaveBeenCalledWith('Template Downloaded', expect.any(String), 'success');
-    expect(aoaSpy).toHaveBeenLastCalledWith([
-      ['PO Number', 'PO Date', 'Vendor Name', 'Item Description', 'Specifications', 'Quantity', 'Unit', 'Unit Price (INR)', 'Total Spend (INR)'],
-    ]);
+    expect(aoaSpy).toHaveBeenLastCalledWith([[...PO_DUMP_TEMPLATE_HEADERS]]);
+    const createdWorksheet = aoaSpy.mock.results[aoaSpy.mock.results.length - 1]?.value;
+    expect(createdWorksheet['!cols']).toHaveLength(PO_DUMP_TEMPLATE_HEADERS.length);
     aoaSpy.mockRestore();
     global.URL.createObjectURL = origCreateObjectURL;
 
@@ -4369,6 +4370,113 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
     render(<InitialSetupModal />);
     await settleOpeningRequests();
+  });
+
+  it('extracts and persists city, state, and pincode from combined addresses and explicit columns during upload and inline edits', async () => {
+    installIngestionServer();
+    localStorage.removeItem('procucev_vendor_upload_history');
+
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'VC-VEERA',
+        'Company Name': 'Veera Solutions Pvt LTD',
+        'Contact Person': 'veerababu',
+        Email: 'veerababu.v@procucev.com',
+        Phone: '9381877013',
+        GSTIN: '27AAACK3921P1Z9',
+        Address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+      },
+      {
+        'Vendor Code': 'VC-EXPL',
+        'Company Name': 'Explicit Address Supplier',
+        'Contact Person': 'Ravi',
+        Email: 'ravi@explicit.test',
+        Phone: '9888877777',
+        GSTIN: '27AAACE1234F1Z2',
+        Address: 'Plot 12, Chakan MIDC',
+        City: 'Pune',
+        State: 'MH',
+        Pincode: '410501',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'location-vendors.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(vInput, { target: { files: [file] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    await waitFor(() => {
+      const history = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+      expect(history).toHaveLength(1);
+      expect(history[0].records[0]).toMatchObject({
+        name: 'Veera Solutions Pvt LTD',
+        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      });
+      expect(history[0].records[1]).toMatchObject({
+        name: 'Explicit Address Supplier',
+        address: 'Plot 12, Chakan MIDC',
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '410501',
+      });
+    });
+
+    // Inline edit address row and confirm address update handler updates without error
+    fireEvent.click(screen.getByRole('button', { name: /Edit Data/i }));
+    const addressInput = screen.getByDisplayValue('Plot 12, Chakan MIDC');
+    fireEvent.change(addressInput, { target: { value: 'Sector 17, Chandigarh - 160017' } });
+    expect(addressInput).toHaveValue('Sector 17, Chandigarh - 160017');
+  });
+
+  it('downloads and round-trip parses a PO Dump workbook built strictly from PO_DUMP_TEMPLATE_HEADERS', async () => {
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+    fireEvent.click(screen.getByText('3. PO Dump'));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        [UI_STRINGS.vendorPoIngestion.poDump.fieldVendor]: 'Veera Solutions Pvt LTD',
+        [UI_STRINGS.vendorPoIngestion.poDump.fieldDescription]: 'Industrial Ball Valve 2 Inch',
+        [UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional]: 'SS316 PN40',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'PO Purchase Dump');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'po-template-roundtrip.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = poInputs[poInputs.length - 1] as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(poInput, { target: { files: [file] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(await screen.findByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
+    expect(screen.getByText('Industrial Ball Valve 2 Inch')).toBeInTheDocument();
+    expect(screen.getByText('SS316 PN40')).toBeInTheDocument();
   });
 });
 

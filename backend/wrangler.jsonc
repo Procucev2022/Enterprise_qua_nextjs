@@ -62,8 +62,8 @@
   },
   "env": {
     "stage": {
-      "name": "procucev-enterprise-backend-test",
-      "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
+      "name": "procucev-enterprise-backend-stage",
+      "account_id": "0f0b77c43d76a2c5c5282e7e0f80b607",
       "d1_databases": [
         {
           "binding": "DB",
@@ -82,7 +82,7 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "DAILY_RFQ_REPORT_EMAILS": "quateam@procucev.com,veerababu.v@procucev.com",
+        "DAILY_RFQ_REPORT_EMAILS": "gmtrfq@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
@@ -152,7 +152,7 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "DAILY_RFQ_REPORT_EMAILS": "quateam@procucev.com,veerababu.v@procucev.com",
+        "DAILY_RFQ_REPORT_EMAILS": "gmtrfq@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",

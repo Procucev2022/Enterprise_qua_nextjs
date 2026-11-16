@@ -1438,18 +1438,26 @@ const RFQ_MINOR_INVITE_LOOKUP = Object.freeze({
   MAX_ROWS: PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT,
 });
 
-// Recipients of the alert sent when an RFQ's minor category has fewer network vendors than the target.
-// RFQ_MINOR_SHORTFALL_ALERT_EMAILS (comma-separated) replaces the default list. A blank value keeps it.
-const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = Object.freeze([
+// Recipients for internal team alerts & failure CCs. RFQ_MINOR_SHORTFALL_ALERT_EMAILS /
+// QUOTE_FAILURE_CC_EMAILS (comma-separated) override the default list; excluded addresses are always stripped.
+const INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS = Object.freeze([
   'gmtrfq@procucev.com',
-  'quateam@procucev.com',
   'anshul.goel@procucev.com',
   'veerababu.v@procucev.com',
 ]);
+const EXCLUDED_NOTIFICATION_RECIPIENTS = Object.freeze(['quateam@procucev.com']);
+
+function resolveActiveNotificationRecipients(envKey) {
+  const filtered = getEnvList(envKey, INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS)
+    .filter((email) => !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(email.toLowerCase()));
+  return filtered.length > 0 ? filtered : [...INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS];
+}
+
+const RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS = INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS;
 
 const RFQ_MINOR_SHORTFALL_ALERT = Object.freeze({
   get RECIPIENTS() {
-    return getEnvList('RFQ_MINOR_SHORTFALL_ALERT_EMAILS', RFQ_MINOR_SHORTFALL_DEFAULT_RECIPIENTS);
+    return resolveActiveNotificationRecipients('RFQ_MINOR_SHORTFALL_ALERT_EMAILS');
   },
   MESSAGES: Object.freeze({
     SUBJECT: '[Action Required] RFQ {rfqNumber}: minor category vendor shortfall',
@@ -2535,7 +2543,17 @@ const QUA_AI_EMAIL_SUPPORT = {
   COMPANY_NAME: 'Procucev Enterprise Solutions',
 };
 
-const VENDOR_QUOTE_SUPPORT_CC = process.env.VENDOR_QUOTE_SUPPORT_CC || '';
+const VENDOR_QUOTE_SUPPORT_CC = (process.env.VENDOR_QUOTE_SUPPORT_CC || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter((s) => s && !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(s.toLowerCase()))
+  .join(', ');
+
+const QUOTE_FAILURE_ALERT = Object.freeze({
+  get CC_RECIPIENTS() {
+    return resolveActiveNotificationRecipients('QUOTE_FAILURE_CC_EMAILS');
+  },
+});
 
 const PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES = [
   'Not Notified',
@@ -3197,6 +3215,249 @@ function getCitiesForState(state) {
   return key ? [...INDIAN_STATES_AND_CITIES[key]].sort((a, b) => a.localeCompare(b)) : [];
 }
 
+const INDIAN_STATE_CODE_ABBREVIATIONS = {
+  ap: 'Andhra Pradesh',
+  ar: 'Arunachal Pradesh',
+  as: 'Assam',
+  br: 'Bihar',
+  cg: 'Chhattisgarh',
+  ct: 'Chhattisgarh',
+  ga: 'Goa',
+  gj: 'Gujarat',
+  hr: 'Haryana',
+  hp: 'Himachal Pradesh',
+  jh: 'Jharkhand',
+  jk: 'Jammu and Kashmir',
+  ka: 'Karnataka',
+  kl: 'Kerala',
+  la: 'Ladakh',
+  ld: 'Lakshadweep',
+  mp: 'Madhya Pradesh',
+  mh: 'Maharashtra',
+  mn: 'Manipur',
+  ml: 'Meghalaya',
+  mz: 'Mizoram',
+  nl: 'Nagaland',
+  od: 'Odisha',
+  or: 'Odisha',
+  pb: 'Punjab',
+  py: 'Puducherry',
+  rj: 'Rajasthan',
+  sk: 'Sikkim',
+  tn: 'Tamil Nadu',
+  ts: 'Telangana',
+  tg: 'Telangana',
+  tr: 'Tripura',
+  up: 'Uttar Pradesh',
+  uk: 'Uttarakhand',
+  ua: 'Uttarakhand',
+  wb: 'West Bengal',
+  dl: 'Delhi',
+  ch: 'Chandigarh',
+  an: 'Andaman and Nicobar Islands',
+};
+
+const INDIAN_STATE_SPELLING_ALIASES = {
+  orissa: 'Odisha',
+  pondicherry: 'Puducherry',
+  uttaranchal: 'Uttarakhand',
+  tamilnadu: 'Tamil Nadu',
+  maharastra: 'Maharashtra',
+  karnatka: 'Karnataka',
+  telengana: 'Telangana',
+  'nct of delhi': 'Delhi',
+};
+
+const INDIAN_CITY_SPELLING_ALIASES = [
+  ['bangalore', 'Bengaluru', 'Karnataka'],
+  ['gurgaon', 'Gurugram', 'Haryana'],
+  ['bombay', 'Mumbai', 'Maharashtra'],
+  ['calcutta', 'Kolkata', 'West Bengal'],
+  ['madras', 'Chennai', 'Tamil Nadu'],
+  ['cochin', 'Kochi', 'Kerala'],
+  ['trivandrum', 'Thiruvananthapuram', 'Kerala'],
+  ['calicut', 'Kozhikode', 'Kerala'],
+  ['mysore', 'Mysuru', 'Karnataka'],
+  ['mangalore', 'Mangaluru', 'Karnataka'],
+  ['hubli', 'Hubballi', 'Karnataka'],
+  ['belgaum', 'Belagavi', 'Karnataka'],
+  ['baroda', 'Vadodara', 'Gujarat'],
+  ['poona', 'Pune', 'Maharashtra'],
+  ['allahabad', 'Prayagraj', 'Uttar Pradesh'],
+  ['benares', 'Varanasi', 'Uttar Pradesh'],
+  ['vizag', 'Visakhapatnam', 'Andhra Pradesh'],
+];
+
+const CITY_STATE_TERRITORIES = new Set(['Delhi', 'Chandigarh', 'Puducherry']);
+const STREET_FRAGMENT_PATTERN = /\b(plot|flat|floor|flr|door|no\.?|street|st|road|rd|lane|cross|main|sector|sec|phase|layout|colony|enclave|estate|midc|gidc|sez|park|tower|building|bldg|complex|near|opp|behind|beside)\b/i;
+const INDIAN_PINCODE_TOKEN_REGEX = /\b([1-9]\d{5})\b/g;
+
+let cachedAddressIndexes = null;
+
+function getIndianAddressIndexes() {
+  if (cachedAddressIndexes) return cachedAddressIndexes;
+  const stateByLower = new Map();
+  const cityToInfo = new Map();
+
+  for (const [stateName, cities] of Object.entries(INDIAN_STATES_AND_CITIES)) {
+    stateByLower.set(stateName.toLowerCase(), stateName);
+    for (const rawCity of cities) {
+      const lower = rawCity.toLowerCase();
+      if (!cityToInfo.has(lower)) {
+        cityToInfo.set(lower, { city: rawCity, state: stateName });
+      }
+      const baseName = rawCity.replace(/\s*\([^)]+\)\s*$/, '').trim();
+      const baseLower = baseName.toLowerCase();
+      if (baseName && baseLower !== lower && !cityToInfo.has(baseLower)) {
+        cityToInfo.set(baseLower, { city: baseName, state: stateName });
+      }
+    }
+  }
+
+  for (const [alias, canonical] of Object.entries(INDIAN_STATE_SPELLING_ALIASES)) {
+    stateByLower.set(alias, canonical);
+  }
+  for (const [abbr, canonical] of Object.entries(INDIAN_STATE_CODE_ABBREVIATIONS)) {
+    stateByLower.set(abbr, canonical);
+  }
+  for (const [alias, canonicalCity, canonicalState] of INDIAN_CITY_SPELLING_ALIASES) {
+    if (!cityToInfo.has(alias)) {
+      cityToInfo.set(alias, { city: canonicalCity, state: canonicalState });
+    }
+  }
+
+  cachedAddressIndexes = { stateByLower, cityToInfo };
+  return cachedAddressIndexes;
+}
+
+/**
+ * Returns true when a single field appears to hold a full multi-segment address
+ * rather than a plain city name.
+ */
+function looksLikeCombinedAddress(value) {
+  const trimmed = String(value || '').trim();
+  if (!trimmed) return false;
+  if (/[,;]/.test(trimmed)) return true;
+  if (/\b[1-9]\d{5}\b/.test(trimmed)) return true;
+  if (/^\d+[\s,/-]/.test(trimmed)) return true;
+  return STREET_FRAGMENT_PATTERN.test(trimmed);
+}
+
+/**
+ * Extracts structured city, state, and 6-digit PIN code from a free-form Indian
+ * street address or combined location string.
+ */
+function extractIndianAddressLocation(rawInput) {
+  const raw = String(rawInput || '').trim();
+  if (!raw) return { city: '', state: '', pincode: '' };
+
+  const { stateByLower, cityToInfo } = getIndianAddressIndexes();
+  const pinMatches = raw.match(INDIAN_PINCODE_TOKEN_REGEX);
+  const pincode = pinMatches ? pinMatches[pinMatches.length - 1] : '';
+
+  const withoutPins = raw
+    .replace(/[-–—,()\s]*\b[1-9]\d{5}\b[-–—,()\s]*/g, ', ')
+    .replace(/(?:[,;\s]+)(?:india|bharat)\.?$/i, '')
+    .trim();
+
+  const rawSegments = withoutPins
+    .split(/[,;]+/)
+    .flatMap((part) => part.split(/\s+[-–—]\s+/))
+    .map((part) => part.trim())
+    .filter((part) => Boolean(part) && !/^(?:india|bharat)$/i.test(part));
+
+  let city = '';
+  let state = '';
+  let matchedCityState = '';
+  let fallbackCandidate = '';
+
+  for (let i = rawSegments.length - 1; i >= 0; i--) {
+    const segment = rawSegments[i];
+    if (!/[a-z]/i.test(segment)) continue;
+    const lower = segment.toLowerCase();
+
+    const matchedState = stateByLower.get(lower);
+    if (matchedState) {
+      if (!state) state = matchedState;
+      if (CITY_STATE_TERRITORIES.has(matchedState) && lower.length > 2) {
+        matchedCityState = matchedState;
+      }
+      continue;
+    }
+
+    if (!city) {
+      const exactCity = cityToInfo.get(lower);
+      if (exactCity) {
+        city = exactCity.city;
+        if (!state) state = exactCity.state;
+        continue;
+      }
+
+      const words = segment.split(/\s+/).filter(Boolean);
+      for (const size of [2, 1]) {
+        if (words.length > size) {
+          const suffix = words.slice(-size).join(' ').toLowerCase();
+          if (suffix.length >= 4) {
+            const suffixCity = cityToInfo.get(suffix);
+            if (suffixCity) {
+              city = suffixCity.city;
+              if (!state) state = suffixCity.state;
+              break;
+            }
+          }
+        }
+      }
+
+      if (!city && !fallbackCandidate && !/^\d/.test(segment) && !STREET_FRAGMENT_PATTERN.test(segment)) {
+        fallbackCandidate = segment;
+      }
+    }
+  }
+
+  if (!city && matchedCityState) {
+    city = matchedCityState;
+  }
+  if (!city && fallbackCandidate && (state || pincode || (rawSegments.length <= 2 && !/\d/.test(raw)))) {
+    city = fallbackCandidate;
+  }
+
+  return { city, state, pincode };
+}
+
+/**
+ * Reconciles supplier location fields across address, location, factoryAddress, city, state, and pincode.
+ */
+function resolveVendorLocationFields(input) {
+  if (!input) {
+    return { location: '', address: '', city: '', state: '', pincode: '' };
+  }
+  const clean = (val) => String(val || '').trim();
+  const rawAddress = clean(input.address || input.location || input.factoryAddress);
+  const rawCity = clean(input.city);
+  const rawState = clean(input.state);
+  const rawPincode = clean(input.pincode).replace(/\s+/g, '');
+
+  const cityIsCombined = looksLikeCombinedAddress(rawCity);
+  const combinedSource = rawAddress || (cityIsCombined ? rawCity : '');
+  const extracted = extractIndianAddressLocation(combinedSource);
+  const cityInfo = rawCity && !cityIsCombined ? extractIndianAddressLocation(rawCity) : { city: '', state: '', pincode: '' };
+
+  let state = '';
+  if (rawState) {
+    const { stateByLower } = getIndianAddressIndexes();
+    state = stateByLower.get(rawState.toLowerCase()) || rawState;
+  } else {
+    state = extracted.state || cityInfo.state || '';
+  }
+
+  const city = !cityIsCombined && rawCity ? rawCity : extracted.city || '';
+  const pincode = rawPincode || extracted.pincode || '';
+  const address = rawAddress || (cityIsCombined ? rawCity : '');
+  const location = address || [city, state].filter(Boolean).join(', ');
+
+  return { location, address, city, state, pincode };
+}
+
 
 
 
@@ -3809,7 +4070,10 @@ module.exports = {
   VENDOR_ASSIGNMENT_LIMITS,
   VENDOR_DIRECTORY_QUERY_CONFIG,
   RFQ_MINOR_INVITE_LOOKUP,
+  INTERNAL_NOTIFICATION_DEFAULT_RECIPIENTS,
+  EXCLUDED_NOTIFICATION_RECIPIENTS,
   RFQ_MINOR_SHORTFALL_ALERT,
+  QUOTE_FAILURE_ALERT,
   MAX_INVITE_VENDORS_PER_REQUEST,
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -3863,6 +4127,9 @@ module.exports = {
   INDIAN_STATES_AND_CITIES,
   getIndianStates,
   getCitiesForState,
+  looksLikeCombinedAddress,
+  extractIndianAddressLocation,
+  resolveVendorLocationFields,
   parseSearchTokens,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,

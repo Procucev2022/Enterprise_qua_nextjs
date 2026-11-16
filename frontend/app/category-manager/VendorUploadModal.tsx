@@ -19,6 +19,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { resolveVendorLocationFields } from '@/lib/constants';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
@@ -57,6 +58,8 @@ interface UploadHistoryEntry {
     gstin?: string;
     category?: string;
     city?: string;
+    state?: string;
+    pincode?: string;
     rating?: number;
   }>;
 }
@@ -193,16 +196,25 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       failed: result.failed,
       onboardingFailed: result.onboardingFailed,
       onboardingSkipped: result.onboardingSkipped,
-      records: rows.slice(0, 100).map((r) => ({
-        vendorCode: r.vendor.vendorCode,
-        name: r.vendor.name,
-        contactPerson: r.vendor.contactPerson,
-        email: r.vendor.email,
-        phone: r.vendor.phone,
-        gstin: r.vendor.gstin,
-        category: r.vendor.majorCategory,
-        city: r.vendor.city,
-      })),
+      records: rows.slice(0, 100).map((r) => {
+        const loc = resolveVendorLocationFields({
+          city: r.vendor.city,
+          state: r.vendor.state,
+          pincode: r.vendor.pincode,
+        });
+        return {
+          vendorCode: r.vendor.vendorCode,
+          name: r.vendor.name,
+          contactPerson: r.vendor.contactPerson,
+          email: r.vendor.email,
+          phone: r.vendor.phone,
+          gstin: r.vendor.gstin,
+          category: r.vendor.majorCategory,
+          city: loc.city,
+          ...(loc.state ? { state: loc.state } : {}),
+          ...(loc.pincode ? { pincode: loc.pincode } : {}),
+        };
+      }),
     };
     try {
       const nextHistory = [historyEntry, ...historyList].slice(0, 30);

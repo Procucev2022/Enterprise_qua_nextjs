@@ -704,15 +704,19 @@ export async function fetchAllVendors(
     pincode = '',
   } = options;
 
+  // The database stores category names with a plain hyphen ("Others - New Product"), while some
+  // UI labels use an en/em dash ("Others – New Product"). Send the stored form so the filter matches.
+  const toStoredCategory = (value: string): string => String(value || '').replace(/[–—]/g, '-').trim();
   const cleanFilterValues = (values: string[]): string[] =>
-    Array.from(new Set(values.map((v) => String(v || '').trim()).filter(Boolean)));
+    Array.from(new Set(values.map(toStoredCategory).filter(Boolean)));
   const cleanMajors = cleanFilterValues(majors);
   const cleanMinors = cleanFilterValues(minors);
+  const cleanCategory = toStoredCategory(category);
 
   const params = new URLSearchParams({ buyerId: 'all', page: String(page), pageSize: String(pageSize) });
   if (publicOnly) params.set('publicOnly', 'true');
   if (search.trim()) params.set('search', search.trim());
-  if (category.trim()) params.set('category', category.trim());
+  if (cleanCategory) params.set('category', cleanCategory);
   if (cleanMajors.length > 0) params.set('majors', cleanMajors.join(','));
   if (cleanMinors.length > 0) params.set('minors', cleanMinors.join(','));
   if (state.trim()) params.set('state', state.trim());

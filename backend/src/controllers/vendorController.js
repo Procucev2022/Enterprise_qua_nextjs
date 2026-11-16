@@ -377,7 +377,7 @@ function parseCategoryFilterList(rawValue) {
   const seen = new Set();
   const parsed = [];
   for (const part of joined.split(',')) {
-    const trimmed = part.trim();
+    const trimmed = normalizeCategoryDashes(part).trim();
     const norm = trimmed.toLowerCase();
     if (!trimmed || norm === allLabel || seen.has(norm)) continue;
     seen.add(norm);
@@ -385,6 +385,15 @@ function parseCategoryFilterList(rawValue) {
     if (parsed.length >= VENDOR_DIRECTORY_QUERY_CONFIG.MAX_CATEGORY_FILTERS) break;
   }
   return parsed;
+}
+
+/**
+ * Category names are stored with a plain hyphen ("Others - New Product"), but UI labels and
+ * pasted text often carry an en dash (–) or em dash (—). Folding them to "-" keeps a stray
+ * dash from turning a valid category filter into an empty result.
+ */
+function normalizeCategoryDashes(value) {
+  return String(value ?? '').replace(/[–—]/g, '-');
 }
 
 /**
@@ -520,9 +529,9 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
 }
 
 function matchesMajorInMemory(vendor, rawMajor) {
-  const normTarget = String(rawMajor || '').toLowerCase().trim();
+  const normTarget = normalizeCategoryDashes(rawMajor || '').toLowerCase().trim();
   if (!normTarget) return false;
-  if (String(vendor.majorCategory || vendor.category || '').toLowerCase().trim() === normTarget) {
+  if (normalizeCategoryDashes(vendor.majorCategory || vendor.category || '').toLowerCase().trim() === normTarget) {
     return true;
   }
   for (const list of [vendor.categories, vendor.vendorSelectedCategories, vendor.clientMappedCategories]) {
