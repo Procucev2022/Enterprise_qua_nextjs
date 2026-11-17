@@ -2648,7 +2648,7 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(res).toBeNull();
     });
 
-    test('requestVendorEvaluationDurably handles mailer error gracefully', async () => {
+    test('requestVendorEvaluationDurably awaits mailer delivery and handles both not_configured and rejected sends', async () => {
       const vendorWithEmail = {
         id: 'v-eval-durable-err',
         name: 'Durable Error Vendor',
@@ -2659,15 +2659,22 @@ describe('storeService comprehensive branch boost tests', () => {
       jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updater) => {
         return { ...vendorWithEmail, ...updater(vendorWithEmail) };
       });
-      jest.spyOn(mailerService, 'sendVendorEvaluationRequestEmail').mockImplementationOnce(() => {
-        throw new Error('Durable mailer dispatch failure');
-      });
+      jest
+        .spyOn(mailerService, 'sendVendorEvaluationRequestEmail')
+        .mockResolvedValueOnce({ sent: false, status: 'not_configured', reason: 'SMTP not configured' })
+        .mockRejectedValueOnce(new Error('Durable mailer async rejection'));
 
-      const res = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
+      const warnRes = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
         buyerCompany: 'Durable Buyer',
       });
-      expect(res).toBeDefined();
-      expect(res.status).toBe('PREFERRED');
+      expect(warnRes).toBeDefined();
+      expect(warnRes.status).toBe('PREFERRED');
+
+      const errRes = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
+        buyerCompany: 'Durable Buyer',
+      });
+      expect(errRes).toBeDefined();
+      expect(errRes.status).toBe('PREFERRED');
     });
 
     test('_sendVendorRatingRevisionEmail handles build error and empty remarks', () => {

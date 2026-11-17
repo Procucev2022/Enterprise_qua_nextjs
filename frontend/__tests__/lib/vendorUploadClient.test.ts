@@ -561,5 +561,47 @@ describe('vendorUploadClient', () => {
       const incompleteResult = await sendBulkVendorInvitations(['v-2']);
       expect(incompleteResult.results).toEqual([{ vendorId: 'v-2', status: 'failed' }]);
     });
+
+    test('parses Cate-1..5 columns, strips placeholder categories, and enforces requireCategory when requested', async () => {
+      const { parseVendorUploadFile } = require('@/lib/vendorUploadClient');
+      const XLSX = require('xlsx');
+      const makeXlsx = (rows: Record<string, unknown>[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = { Sheets: { Sheet1: ws }, SheetNames: ['Sheet1'] };
+        const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const f = new File([buffer], 'cat-check.xlsx');
+        (f as File & { __buffer: ArrayBuffer }).__buffer = buffer;
+        return f;
+      };
+
+      const file = makeXlsx([
+        {
+          'Company Name': 'Multi Cat Co',
+          'Email Id': 'multi@vendor.test',
+          'Mobile No': '9876543210',
+          Category: 'Vendor Master',
+          'Cate-1': 'Valves',
+          'Cate-2': 'Pumps',
+          'Cate-3': 'None',
+        },
+        {
+          'Company Name': 'No Cat Co',
+          'Email Id': 'nocat@vendor.test',
+          'Mobile No': '9876543211',
+          Category: 'Uncategorized',
+        },
+      ]);
+
+      const parsedStrict = await parseVendorUploadFile(file, { requireCategory: true });
+      expect(parsedStrict.success).toBe(true);
+      if (!parsedStrict.success) return;
+
+      expect(parsedStrict.data.rows[0].isValid).toBe(true);
+      expect(parsedStrict.data.rows[0].vendor.majorCategory).toBe('Valves');
+      expect(parsedStrict.data.rows[0].vendor.minorCategories).toEqual(['Valves', 'Pumps']);
+
+      expect(parsedStrict.data.rows[1].isValid).toBe(false);
+      expect(parsedStrict.data.rows[1].errors.some((e: string) => /category/i.test(e))).toBe(true);
+    });
   });
 });

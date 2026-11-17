@@ -753,7 +753,7 @@ describe('VendorUploadModal', () => {
     fireEvent.drop(dropzone, { dataTransfer: { files: [file] } });
 
     await screen.findByText('dropped.xlsx');
-    expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
+    expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file, { requireCategory: true });
   });
 
   test('displays accurate upload counts and on-screen error messages for failed and duplicate vendor records', async () => {
@@ -842,6 +842,33 @@ describe('VendorUploadModal', () => {
       city: 'Bengaluru',
       state: 'Karnataka',
       pincode: '560037',
+      category: '',
     });
+  });
+
+  test('omits requireCategory when uploaded by a non-buyer category manager session', async () => {
+    const { authClient } = require('@/lib/authClient');
+    const sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'cm-1',
+      email: 'cm@procucev.com',
+      name: 'CM',
+      role: 'category_manager',
+      orgId: 'org-cm',
+      orgName: 'CM Org',
+    });
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+
+    try {
+      render(<VendorUploadModal isOpen onClose={onClose} />);
+      const file = new File(['x'], 'cm-vendors.xlsx');
+      pickFile(file);
+      await screen.findByText('cm-vendors.xlsx');
+      expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
+    } finally {
+      sessionSpy.mockRestore();
+    }
   });
 });

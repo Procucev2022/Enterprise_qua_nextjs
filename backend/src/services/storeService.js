@@ -47,6 +47,10 @@ const {
   resolveVendorPinDigits,
   compareVendorPincodeProximity,
   foldCategoryDashes,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -996,6 +1000,27 @@ class StoreService {
           country: profile.country || existing.country,
           categories: profile.categories || existing.categories,
         };
+        const hasNewFieldData =
+          enriched.organizationName !== existing.organizationName ||
+          enriched.brandName !== existing.brandName ||
+          enriched.organizationType !== existing.organizationType ||
+          enriched.contactPerson !== existing.contactPerson ||
+          enriched.contactDesignation !== existing.contactDesignation ||
+          enriched.mobileNumber !== existing.mobileNumber ||
+          enriched.corporateEmail !== existing.corporateEmail ||
+          enriched.gstin !== existing.gstin ||
+          enriched.pan !== existing.pan ||
+          enriched.cinNumber !== existing.cinNumber ||
+          enriched.website !== existing.website ||
+          enriched.street !== existing.street ||
+          enriched.city !== existing.city ||
+          enriched.state !== existing.state ||
+          enriched.pincode !== existing.pincode ||
+          enriched.country !== existing.country ||
+          (Array.isArray(profile.categories) && profile.categories.length > 0 && (!Array.isArray(existing.categories) || existing.categories.length === 0));
+        if (!hasNewFieldData) {
+          return existing;
+        }
         const saved = await this.updateBuyerAccountDurably(existing.id, enriched);
         if (!saved && pool.hasStorage()) {
           throw new Error('Buyer profile enrichment did not find a durable account row.');
@@ -1146,12 +1171,28 @@ class StoreService {
       created_at: _createdAtRaw,
       ...claimable
     } = details || {};
+    const cleanCategories = resolveValidVendorCategories(claimable);
+    const cleanedClaimable = { ...claimable };
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'majorCategory')) {
+      if (cleanCategories.majorCategory) {
+        cleanedClaimable.majorCategory = cleanCategories.majorCategory;
+      } else {
+        delete cleanedClaimable.majorCategory;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'minorCategories')) {
+      if (cleanCategories.minorCategories.length > 0) {
+        cleanedClaimable.minorCategories = cleanCategories.minorCategories;
+      } else {
+        delete cleanedClaimable.minorCategories;
+      }
+    }
     const updates = {
-      ...claimable,
+      ...cleanedClaimable,
       buyerId: buyerId || null,
       buyerAccountId: buyerId || null,
-      source: claimable.source || (buyerId || claimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
-      isCategoryAligned: claimable.isCategoryAligned !== undefined ? claimable.isCategoryAligned : true,
+      source: cleanedClaimable.source || (buyerId || cleanedClaimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
+      isCategoryAligned: cleanedClaimable.isCategoryAligned !== undefined ? cleanedClaimable.isCategoryAligned : true,
       onboardingEmailStatus: 'account_exists',
     };
 
@@ -1780,8 +1821,22 @@ class StoreService {
           pincode: safeVendorData.pincode,
         })
       : null;
+    const cleanCategories = resolveValidVendorCategories(safeVendorData);
+    const resolvedMajorCategory = cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || ''
+        : '');
+    const resolvedMinorCategories = cleanCategories.minorCategories;
+    const shouldSyncClientMapped =
+      resolvedMinorCategories.length > 0 && safeVendorData.clientMappedCategories === undefined;
+
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedMajorCategory ? { majorCategory: resolvedMajorCategory } : safeVendorData.majorCategory !== undefined ? { majorCategory: '' } : {}),
+      ...(safeVendorData.minorCategories !== undefined || resolvedMinorCategories.length > 0
+        ? { minorCategories: resolvedMinorCategories }
+        : {}),
+      ...(shouldSyncClientMapped ? { clientMappedCategories: [...resolvedMinorCategories] } : {}),
       ...(resolvedLocation?.location ? { location: resolvedLocation.location } : {}),
       ...(resolvedLocation?.city ? { city: resolvedLocation.city } : {}),
       ...(resolvedLocation?.state ? { state: resolvedLocation.state } : {}),
@@ -2111,6 +2166,14 @@ class StoreService {
       state: row.state,
       pincode: row.pincode,
     });
+    const cleanCategories = resolveValidVendorCategories(row);
+    const inferredMajor =
+      cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || cleanCategories.minorCategories[0]
+        : '');
+    const resolvedMajor = inferredMajor || (row.buyerId ? '' : 'Uncategorised');
+
     return {
       id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       vendorCode: row.vendorCode || '',
@@ -2118,8 +2181,9 @@ class StoreService {
       contactPerson: row.contactPerson || '',
       phone: row.phone,
       email: row.email || null,
-      majorCategory: row.majorCategory || 'Uncategorised',
-      minorCategories: row.minorCategories || [],
+      majorCategory: resolvedMajor,
+      minorCategories: cleanCategories.minorCategories,
+      ...(cleanCategories.minorCategories.length > 0 ? { clientMappedCategories: [...cleanCategories.minorCategories] } : {}),
       location: resolvedLocation.location || '',
       city: resolvedLocation.city || '',
       state: resolvedLocation.state || '',
@@ -2527,6 +2591,31 @@ class StoreService {
       action: `Removed vendor ${target.name || id} (${target.email || 'no email on record'}) from the vendor master`,
     });
     return true;
+  }
+
+  async deleteVendorsDurably(ids, actorEmail = null) {
+    const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return [];
+
+    if (pool.hasStorage() && typeof domainQueries.deleteVendorsInDB === 'function') {
+      try {
+        await domainQueries.deleteVendorsInDB(uniqueIds);
+      } catch (error) {
+        logger.error('Failed to persist bulk vendor deletion', error, 'STORE_SERVICE');
+        const persistError = new Error('The selected vendors could not be deleted from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+    }
+
+    const removedSet = new Set(uniqueIds);
+    this.vendors = this.vendors.filter((vendor) => !removedSet.has(vendor.id));
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Removed ${uniqueIds.length} vendor${uniqueIds.length === 1 ? '' : 's'} from the vendor master`,
+    });
+    return uniqueIds;
   }
 
 
@@ -3854,7 +3943,8 @@ class StoreService {
 
     if (vendor.email) {
       try {
-        void mailerService.sendVendorEvaluationRequestEmail({
+        // Await delivery so serverless runtimes (Cloudflare Workers) complete the outbound mail request before closing the response.
+        const deliveryResult = await mailerService.sendVendorEvaluationRequestEmail({
           to: vendor.email,
           recipientName: vendor.contactPerson || vendor.name,
           vendorName: vendor.name,
@@ -3863,6 +3953,13 @@ class StoreService {
           buyerEmail,
           notes,
         });
+        if (deliveryResult && deliveryResult.sent === false && deliveryResult.status !== 'skipped') {
+          logger.warn('Evaluation request email was not dispatched by mail provider', {
+            vendorId: vendor.id,
+            status: deliveryResult.status,
+            reason: deliveryResult.reason,
+          }, 'STORE_SERVICE');
+        }
       } catch (emailErr) {
         logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
       }
@@ -4507,10 +4604,12 @@ class StoreService {
       const shortlisted = [];
       const matchesRfq = this._rfqVendorMatcher(newRFQ);
       const mismatched = [];
+      const rfqWithoutInvitations = { ...newRFQ, assignedVendors: [], followUpData: null };
 
       for (const v of newRFQ.assignedVendors) {
         const full = (v.id ? this.getVendorById(v.id, 'all') : null);
         const resolved = full ? { ...v, ...full } : v;
+        const isBuyerVendor = this.isBuyerUploaded(resolved) || this.isVendorMappedToRfqBuyer(resolved, rfqWithoutInvitations);
         const hasCategory = Boolean(
           resolved.majorCategory ||
           extractCategories(resolved.minorCategories).length > 0 ||
@@ -4518,7 +4617,8 @@ class StoreService {
           extractCategories(resolved.clientMappedCategories).length > 0 ||
           extractCategories(resolved.categories).length > 0
         );
-        const isMatch = !hasCategory || matchesRfq(resolved);
+        // Buyer-uploaded or buyer-mapped vendors are preserved regardless of registered category
+        const isMatch = isBuyerVendor || !hasCategory || matchesRfq(resolved);
         if (isMatch) {
           shortlisted.push(resolved);
         } else {
@@ -4537,7 +4637,9 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
+        const selectedSet = new Set((selected || []).map((v) => v.id || v.email || v.name));
+        const nonCategoryVendors = shortlisted.filter((v) => !selectedSet.has(v.id || v.email || v.name) && (this.isBuyerUploaded(v) || this.isVendorMappedToRfqBuyer(v, rfqWithoutInvitations)) && !matchesRfq(v));
+        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? [...selected, ...nonCategoryVendors] : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -4575,7 +4677,7 @@ class StoreService {
         let clientMatches = minorScoped
           ? this.planMinorInvites(newRFQ, { candidatePool: clientCandidates, targetLocation: v1Location, limit: maxClientPerCat }).selected
           : this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, v1Location);
-        if (clientMatches.length === 0 && clientCandidates.length > 0 && !minorScoped) {
+        if (clientMatches.length === 0 && clientCandidates.length > 0) {
           clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
         }
         if (clientMatches.length > 0) {
@@ -4657,6 +4759,8 @@ class StoreService {
             phone: v.phone || null,
             pincode: v.pincode || null,
             source: v.source || 'procucev_network',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
           }));
 
         if (additions.length > 0) {
@@ -5156,6 +5260,8 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     if (persist) this._persistRFQ(updated);
 
     if (notify) this._notifyRFQUpdate(updated, oldStatus, updates);
@@ -5243,6 +5349,8 @@ class StoreService {
     const updatedIndex = this.rfqs.findIndex((rfq) => rfq.id === publicUpdated.id);
     if (updatedIndex >= 0) this.rfqs[updatedIndex] = publicUpdated;
     else this.rfqs.unshift(publicUpdated);
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     this._notifyRFQUpdate(publicUpdated, previous.status, appliedUpdates);
     return publicUpdated;
   }
@@ -5343,16 +5451,28 @@ class StoreService {
     let committedAdditions = [];
     let invitationTargets = [];
     const updatedRFQ = await this.updateRFQDurably(id, (current) => {
-      const existing = Array.isArray(current.assignedVendors) ? current.assignedVendors : [];
-      const assignedIds = new Set(existing.map((vendor) => vendor.id));
+      const existing = Array.isArray(current.assignedVendors) ? [...current.assignedVendors] : [];
+      const existingIndexById = new Map();
+      existing.forEach((vendor, idx) => {
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, idx);
+      });
       committedAdditions = [];
       for (const vendor of additions) {
-        if (assignedIds.has(vendor.id)) continue;
-        assignedIds.add(vendor.id);
+        const existingIdx = vendor && vendor.id ? existingIndexById.get(vendor.id) : undefined;
+        if (existingIdx !== undefined) {
+          const prev = existing[existingIdx];
+          if (!resolveVendorEmail(prev) && resolveVendorEmail(vendor)) {
+            existing[existingIdx] = { ...prev, ...vendor };
+            committedAdditions.push(existing[existingIdx]);
+          }
+          continue;
+        }
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, existing.length);
+        existing.push(vendor);
         committedAdditions.push(vendor);
       }
 
-      const assignedVendors = [...existing, ...committedAdditions];
+      const assignedVendors = existing;
       const isV1 = current.sourcingMode === 'mode_1' || current.sourcingMode === 'v1' || current.sourcingMode === 'version_1';
       const procucevCount = isV1
         ? 0
@@ -7080,7 +7200,7 @@ class StoreService {
    * @param {string} minorCategory
    * @returns {boolean}
    */
-  vendorCoversMinorCategory(vendor, minorCategory) {
+  _vendorHasExplicitMinorTag(vendor, minorCategory) {
     if (!vendor || !minorCategory) return false;
     const target = minorCategoryKey(minorCategory);
     if (!target) return false;
@@ -7092,12 +7212,55 @@ class StoreService {
       ...extractCategories(vendor.clientMappedCategories),
       ...extractCategories(vendor.categories),
       ...extractCategories(vendor.category),
+      ...extractCategories(vendor.products),
     ];
 
     return pools.some((category) => {
       const key = minorCategoryKey(category);
       return Boolean(key) && minorKeysMatch(key, target);
     });
+  }
+
+  vendorCoversMinorCategory(vendor, minorCategory) {
+    if (!vendor || !minorCategory) return false;
+    if (this._vendorHasExplicitMinorTag(vendor, minorCategory)) return true;
+
+    const target = minorCategoryKey(minorCategory);
+    if (!target || target.length < 4) return false;
+
+    // Mirror getVendorsPageFromDB's minor matching rule (domainQueries.js):
+    // When a vendor sits under the minor's parent major category (e.g. IT > Laptop, where the
+    // bulk catalogue filed suppliers under a broader minor such as Hardware while their company
+    // name or products field carries the minor product), match whole-word occurrences of the minor
+    // search terms in the vendor's name or products.
+    const majorKeys = new Set(this._majorCategoriesForMinors([minorCategory], { allMajors: true }));
+    if (majorKeys.size === 0 || !vendorMajorKeys(vendor).some((key) => majorKeys.has(key))) {
+      return false;
+    }
+
+    const searchTerms = minorSearchTerms([minorCategory])
+      .map((term) => minorCategoryKey(term))
+      .filter((term) => term.length >= 4);
+    if (searchTerms.length === 0) return false;
+
+    const nonTaxonomyCategoryLabels = [
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
+    ].filter((label) => !MINOR_TO_MAJOR_MAP.has(taxonomyKeyOf(label)));
+
+    const candidateTexts = [vendor.name, vendor.products, ...nonTaxonomyCategoryLabels]
+      .map((text) => minorCategoryKey(text))
+      .filter(Boolean);
+
+    return candidateTexts.some((normalizedText) =>
+      searchTerms.some((term) => {
+        if (normalizedText === term) return true;
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|\\s)${escaped}s?(?:\\s|$)`).test(normalizedText);
+      })
+    );
   }
 
   /**
@@ -7325,7 +7488,47 @@ class StoreService {
     }
     for (const candidate of Array.isArray(candidatePool) ? candidatePool : []) {
       const key = vendorKey(candidate);
-      if (key && !seeds.has(key) && !pool.has(key)) pool.set(key, { vendor: candidate, view: candidate });
+      if (!key) continue;
+      if (seeds.has(key)) {
+        const seedEntry = seeds.get(key);
+        const mergedMinors = Array.from(
+          new Set([
+            ...extractCategories(seedEntry.view.minorCategories),
+            ...extractCategories(candidate.minorCategories),
+          ])
+        );
+        seedEntry.view = {
+          ...candidate,
+          ...seedEntry.view,
+          majorCategory: seedEntry.view.majorCategory || candidate.majorCategory || candidate.category,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : candidate.minorCategories,
+          vendorSelectedCategories:
+            Array.isArray(seedEntry.view.vendorSelectedCategories) && seedEntry.view.vendorSelectedCategories.length > 0
+              ? seedEntry.view.vendorSelectedCategories
+              : candidate.vendorSelectedCategories,
+          clientMappedCategories:
+            Array.isArray(seedEntry.view.clientMappedCategories) && seedEntry.view.clientMappedCategories.length > 0
+              ? seedEntry.view.clientMappedCategories
+              : candidate.clientMappedCategories,
+          categories:
+            Array.isArray(seedEntry.view.categories) && seedEntry.view.categories.length > 0
+              ? seedEntry.view.categories
+              : candidate.categories,
+          products: seedEntry.view.products || candidate.products,
+        };
+        seedEntry.vendor = {
+          ...candidate,
+          ...seedEntry.vendor,
+          email: resolveVendorEmail(seedEntry.vendor) || resolveVendorEmail(candidate) || null,
+          phone: seedEntry.vendor.phone || candidate.phone || candidate.mobile || candidate.mobileNumber || null,
+          contactPerson: seedEntry.vendor.contactPerson || candidate.contactPerson || null,
+          pincode: seedEntry.vendor.pincode || candidate.pincode || null,
+          majorCategory: seedEntry.vendor.majorCategory || candidate.majorCategory || candidate.category || null,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : (Array.isArray(candidate.minorCategories) ? candidate.minorCategories : []),
+        };
+      } else if (!pool.has(key)) {
+        pool.set(key, { vendor: candidate, view: candidate });
+      }
     }
 
     const rank = (a, b) => this._compareVendorsByLocationAndRating(a.view, b.view, targetLocation);
@@ -7982,11 +8185,15 @@ class StoreService {
       return updated || rfq;
     }
 
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = sorted
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => ({
         id: v.id,
         name: v.name,
@@ -8334,11 +8541,15 @@ class StoreService {
     }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = candidatePool
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => {
         const isProc = this.isProcucevVendor(v);
         return {
@@ -8563,9 +8774,18 @@ class StoreService {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
 
-    // Buyer-specific vendor access rule:
-    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view and cover
-    // RFQs created by that respective buyer across all modes.
+    // Explicitly invited vendor always covers the RFQ regardless of registered category
+    if (this._isInvitedVendor(vendor, rfq)) {
+      return true;
+    }
+
+    // When an RFQ has an explicit assigned vendors list, only invited vendors cover it
+    const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+    if (hasExplicitAssigned) {
+      return false;
+    }
+
+    // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists
     if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
@@ -8581,17 +8801,29 @@ class StoreService {
     return this._isInvitedVendor(vendor, rfq);
   }
 
-  /** Whether a vendor is on the RFQ's assignedVendors invite list. */
+  /** Whether a vendor is on the RFQ's assignedVendors or followUpData.vendors invite list. */
   _isInvitedVendor(vendor, rfq) {
-    const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    const targetEmail = resolveVendorEmail(vendor).toLowerCase();
-    return invited.some(
-      (v) =>
-        v &&
-        ((v.id && v.id === vendor.id) ||
-          (targetEmail && resolveVendorEmail(v).toLowerCase() === targetEmail) ||
-          (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
-    );
+    if (!vendor || !rfq) return false;
+    const vId = String(vendor.id || vendor.vendorId || '').toLowerCase().trim();
+    const targetEmail = resolveVendorEmail(vendor).toLowerCase().trim();
+    const vName = String(vendor.name || '').toLowerCase().trim();
+
+    const checkList = (list) => {
+      if (!Array.isArray(list)) return false;
+      return list.some((v) => {
+        if (!v) return false;
+        const targetId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        const candEmail = resolveVendorEmail(v).toLowerCase().trim();
+        const targetName = String(v.name || '').toLowerCase().trim();
+        return Boolean(
+          (vId && targetId && vId === targetId) ||
+          (targetEmail && candEmail && targetEmail === candEmail) ||
+          (vName && targetName && vName === targetName)
+        );
+      });
+    };
+
+    return checkList(rfq.assignedVendors) || checkList(rfq.followUpData && rfq.followUpData.vendors);
   }
 
   /**
@@ -10669,7 +10901,19 @@ class StoreService {
    * evaluation produces them.
    */
   async empanelIngestedVendor(vendorData, actorEmail = null) {
-    const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
+    const cleanCategories = resolveValidVendorCategories(vendorData);
+    if (!cleanCategories.hasCategory) {
+      const categoryError = new Error(VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED);
+      categoryError.statusCode = 400;
+      categoryError.code = 'VENDOR_CATEGORY_REQUIRED';
+      throw categoryError;
+    }
+    const minorCategories = cleanCategories.minorCategories;
+    const majorCategory =
+      cleanCategories.majorCategory ||
+      (minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([minorCategories[0]])?.[0] || minorCategories[0]
+        : '');
     const loc = resolveVendorLocationFields({
       location: vendorData.location,
       factoryAddress: vendorData.factoryAddress,
@@ -10689,12 +10933,12 @@ class StoreService {
       pincode: loc.pincode || null,
       gstin: vendorData.gstin || null,
       vendorCode: vendorData.vendorCode || null,
-      majorCategory: vendorData.majorCategory || null,
+      majorCategory,
       minorCategories,
       // The buyer mapped these from PO history; the vendor has not confirmed
       // them yet, so there is nothing to align against.
       clientMappedCategories: Array.isArray(vendorData.clientMappedCategories)
-        ? vendorData.clientMappedCategories
+        ? normalizeVendorCategoryList(vendorData.clientMappedCategories)
         : minorCategories,
       vendorSelectedCategories: [],
       isCategoryAligned: false,
@@ -10782,23 +11026,43 @@ class StoreService {
     return updated;
   }
 
-  async updateVendorCategoriesDurably(vendorId, { clientMappedCategories = [], vendorSelectedCategories = [] }) {
-    const vendor = this.getVendorById(vendorId, 'all');
+  async updateVendorCategoriesDurably(
+    vendorId,
+    { majorCategory, minorCategories, clientMappedCategories = [], vendorSelectedCategories = [] } = {}
+  ) {
+    const vendor =
+      this.getVendorById(vendorId, 'all') ||
+      (await this.getVendorByIdWithDBFallback(vendorId, 'all'));
     if (!vendor) return null;
 
+    const cleanedClientMapped = normalizeVendorCategoryList(clientMappedCategories);
+    const cleanedVendorSelected = normalizeVendorCategoryList(vendorSelectedCategories).slice(0, 10);
+    const cleanedMinors = Array.isArray(minorCategories) ? normalizeVendorCategoryList(minorCategories) : null;
+    const cleanedMajor =
+      typeof majorCategory === 'string' && !isPlaceholderVendorCategory(majorCategory)
+        ? majorCategory.trim()
+        : '';
+
     const isCategoryAligned =
-      clientMappedCategories.length === 0 ||
-      clientMappedCategories.every((category) => vendorSelectedCategories.includes(category));
-    const updated = await this.updateVendorDurably(vendor.id, {
-      clientMappedCategories,
-      vendorSelectedCategories: vendorSelectedCategories.slice(0, 10),
+      cleanedClientMapped.length === 0 ||
+      cleanedClientMapped.every((category) => cleanedVendorSelected.includes(category));
+    const categoryUpdates = {
+      clientMappedCategories: cleanedClientMapped,
+      vendorSelectedCategories: cleanedVendorSelected,
       isCategoryAligned,
-    });
+      ...(cleanedMajor ? { majorCategory: cleanedMajor } : {}),
+      ...(cleanedMinors !== null
+        ? { minorCategories: cleanedMinors }
+        : cleanedClientMapped.length > 0 && (!Array.isArray(vendor.minorCategories) || vendor.minorCategories.length === 0)
+          ? { minorCategories: cleanedClientMapped }
+          : {}),
+    };
+    const updated = await this.updateVendorDurably(vendor.id, categoryUpdates);
     if (!updated) return null;
 
     this.addAuditLog({
       userEmail: vendor.email,
-      action: `Reconciled categories for ${vendor.name}: ${vendorSelectedCategories.length} categories active (Aligned: ${isCategoryAligned})`,
+      action: `Reconciled categories for ${vendor.name}: ${(cleanedMinors || cleanedVendorSelected).length} categories active (Aligned: ${isCategoryAligned})`,
     });
     return updated;
   }

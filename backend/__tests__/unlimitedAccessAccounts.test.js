@@ -145,11 +145,11 @@ describe('Unlimited Access Buyer & Vendor Accounts', () => {
       expect(stdResult.remaining).toBe(0);
     });
 
-    test('RFQ creation controller allows unlimited buyer to create V0, V1, V2, V3 without credit exhaustion', async () => {
-      storeService.alignActiveBuyerAccount(unlimitedBuyer.id);
+    test.each(['mode_0', 'mode_1', 'mode_2', 'mode_3'])(
+      'RFQ creation controller allows unlimited buyer to create %s without credit exhaustion',
+      async (mode) => {
+        storeService.alignActiveBuyerAccount(unlimitedBuyer.id);
 
-      const modes = ['mode_0', 'mode_1', 'mode_2', 'mode_3'];
-      for (const mode of modes) {
         const response = await request(app)
           .post('/api/rfqs')
           .set(buyerAuthHeader)
@@ -175,12 +175,12 @@ describe('Unlimited Access Buyer & Vendor Accounts', () => {
 
         expect([200, 201]).toContain(response.status);
         expect(response.body.success).toBe(true);
-      }
 
-      // Verify credits are still 5
-      const current = storeService.buyerAccounts.find((a) => a.id === unlimitedBuyer.id);
-      expect(current.remainingFreeRFQs).toBe(5);
-    });
+        // Verify credits are still 5
+        const current = storeService.buyerAccounts.find((a) => a.id === unlimitedBuyer.id);
+        expect(current.remainingFreeRFQs).toBe(5);
+      }
+    );
   });
 
   describe('Vendor Account - Unlimited Quote Submissions & RFQ Downloads', () => {

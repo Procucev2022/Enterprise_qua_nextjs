@@ -2099,4 +2099,258 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
       fireEvent.click(clearCatBtn);
     }
   });
+
+  test('covers section-wise pincode popovers, chips, status filters, search, and resets for Direct and Network sections', async () => {
+    const directPin1: RFQFixture = {
+      ...DIRECT_OWN,
+      id: 'rfq-pin-d1',
+      rfqNumber: 'RFQ-DIRECT-PIN-400001',
+      deliveryLocation: 'Andheri West, Mumbai 400001',
+    };
+    const directPin2: RFQFixture = {
+      ...DIRECT_STEEL,
+      id: 'rfq-pin-d2',
+      rfqNumber: 'RFQ-DIRECT-PIN-411001',
+      buyerAccountName: OWN_ROSTER_BUYER,
+      deliveryLocation: 'Hinjewadi, Pune 411001',
+    };
+    const netPin1: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-pin-n1',
+      rfqNumber: 'RFQ-NET-PIN-560001',
+      deliveryLocation: 'Whitefield, Bengaluru 560001',
+    };
+    const netPin2: RFQFixture = {
+      ...NETWORK_HVAC_QUOTED,
+      id: 'rfq-pin-n2',
+      rfqNumber: 'RFQ-NET-PIN-110001',
+      deliveryLocation: 'Connaught Place, Delhi 110001',
+    };
+
+    serveRFQs([directPin1, directPin2, netPin1, netPin2]);
+    await renderFeed();
+
+    // Direct Pincode Filter popover: select, unselect, Clear, remove chip, Clear Pincodes
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+    const dPin400 = screen.getByRole('checkbox', { name: '400001' });
+    const dPin411 = screen.getByRole('checkbox', { name: '411001' });
+    fireEvent.click(dPin400);
+    fireEvent.click(dPin411);
+    expect(screen.getByText('Selected Pincodes:')).toBeInTheDocument();
+    fireEvent.click(dPin411); // uncheck branch
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for pincode 400001' }));
+    expect(screen.queryByText('Selected Pincodes:')).not.toBeInTheDocument();
+
+    fireEvent.click(dPin400);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(dPin400);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pincodes' }));
+
+    // Direct status & search & Reset
+    const directStatusSelect = screen.getByRole('listbox', { name: 'Status' });
+    fireEvent.change(directStatusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'closed' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'open' } });
+    fireEvent.change(directStatusSelect, { target: { value: 'all' } });
+
+    const directSearchInput = screen.getByPlaceholderText(/Search RFQ ID, Buyer\.\.\. Specs, location, keywords/i);
+    fireEvent.change(directSearchInput, { target: { value: 'Pumps' } });
+    fireEvent.click(screen.getByRole('button', { name: /^Reset$/i }));
+
+    // Switch to Public Enquiries tab and exercise Network filters
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+    const nPin560 = screen.getByRole('checkbox', { name: '560001' });
+    const nPin110 = screen.getByRole('checkbox', { name: '110001' });
+    fireEvent.click(nPin560);
+    fireEvent.click(nPin110);
+    fireEvent.click(nPin110); // uncheck branch
+    fireEvent.click(screen.getByRole('button', { name: 'Remove filter for pincode 560001' }));
+
+    fireEvent.click(nPin560);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear' }));
+    fireEvent.click(nPin560);
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Pincodes' }));
+
+    const netStatusSelect = screen.getByRole('listbox', { name: 'Network Status' });
+    fireEvent.change(netStatusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'closed' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'open' } });
+    fireEvent.change(netStatusSelect, { target: { value: 'all' } });
+
+    const netSearchInput = screen.getByPlaceholderText(/Specs, location, keywords\.\.\./i);
+    fireEvent.change(netSearchInput, { target: { value: 'Plate' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Clear Filters' }));
+  });
+
+  test('routes Mode 0 RFQs matching vendor line-item category and address pincode into Direct Invitations and Public Enquiries', async () => {
+    const mode0Matched: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-m0-pin-cat',
+      rfqNumber: 'RFQ-MODE0-MATCHED-400001',
+      sourcingMode: 'mode_0',
+      category: 'Engineering Spares - Mechanical',
+      deliveryLocation: 'Andheri East, Mumbai 400001',
+      extractedEntities: [],
+      lineItems: [
+        {
+          id: 'li-m0-1',
+          itemName: 'Steel Beam',
+          description: 'Structural Steel & Beams section',
+          minorCategory: 'Structural Steel & Beams',
+          category: 'Structural Steel & Beams',
+          quantity: 4,
+          unit: 'Nos',
+        } as unknown as NonNullable<RFQItem['lineItems']>[number],
+      ],
+    };
+
+    (global.fetch as jest.Mock).mockImplementation((url: string) =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        json: async () =>
+          /\/api\/rfqs(\?|$)/.test(String(url))
+            ? {
+                success: true,
+                data: [mode0Matched],
+              }
+            : /\/api\/bootstrap/.test(String(url))
+              ? {
+                  success: true,
+                  data: {
+                    vendors: [
+                      {
+                        ...SELF_VENDOR_RECORD,
+                        address: 'Plot 12, MIDC, Mumbai 400001',
+                        majorCategory: 'Engineering Spares - Mechanical',
+                        minorCategories: ['Structural Steel & Beams'],
+                      },
+                    ],
+                  },
+                }
+              : { success: true, data: {} },
+      })
+    );
+
+    await renderFeed();
+
+    expect(screen.getAllByText('RFQ-MODE0-MATCHED-400001').length).toBeGreaterThanOrEqual(1);
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    expect(screen.getAllByText('RFQ-MODE0-MATCHED-400001').length).toBeGreaterThanOrEqual(1);
+  });
+
+  test('covers edge branches: empty pincodes, due today stat card, modal dismissals, and bid statuses', async () => {
+    const noPinDirect: RFQFixture = {
+      ...DIRECT_OWN,
+      id: 'rfq-no-pin-d',
+      rfqNumber: 'RFQ-NO-PIN-D',
+      deliveryLocation: 'Warehouse Only',
+    };
+    const noPinNet: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-no-pin-n',
+      rfqNumber: 'RFQ-NO-PIN-N',
+      deliveryLocation: 'Site Office',
+    };
+    const rfqConcluded: any = {
+      id: 'rfq-concluded-1',
+      rfqNumber: 'RFQ-CONCLUDED-1',
+      title: 'Concluded RFQ',
+      buyerCompany: 'Steel Corp',
+      status: 'PO Generated',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        awarded: false,
+        totalPrice: 1000,
+        attachments: [{ id: 'att-x' }, { name: 'OnlyName.txt' }, {}],
+      }],
+    };
+    const rfqClosed: any = {
+      id: 'rfq-closed-sub-1',
+      rfqNumber: 'RFQ-CLOSED-SUB-1',
+      title: 'Closed Sub RFQ',
+      status: 'Closed',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        status: 'CustomStatus',
+        totalPrice: 2000,
+      }],
+    };
+    const rfqShortlisted: any = {
+      id: 'rfq-shortlisted-1',
+      rfqNumber: 'RFQ-SHORTLISTED-1',
+      title: 'Shortlisted RFQ',
+      status: 'Draft',
+      quotes: [{
+        vendorEmail: 'buyer@procucev.com',
+        status: 'Shortlisted',
+        totalPrice: 3000,
+      }],
+    };
+
+    serveRFQs([noPinDirect, noPinNet, rfqConcluded, rfqClosed, rfqShortlisted]);
+
+    const priorFetch = (global.fetch as jest.Mock).getMockImplementation();
+    (global.fetch as jest.Mock).mockImplementation((url: string, init?: unknown) => {
+      if (typeof url === 'string' && url.includes('/api/vendor-plans/pricing')) {
+        return Promise.resolve({ ok: false, status: 500 });
+      }
+      return priorFetch ? priorFetch(url, init) : Promise.resolve({ ok: true, json: async () => ({}) });
+    });
+
+    await renderFeed({
+      downloadsUsed: 5,
+    });
+
+    // Pincode dropdowns when empty
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+    expect(screen.getByText('No pincodes available')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Direct Pincode Filter' }));
+
+    fireEvent.click(screen.getByRole('button', { name: /Public Enquiries/i }));
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+    expect(screen.getByText('No pincodes available')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Network Pincode Filter' }));
+
+    // Click Due Today Deadline RFQ stat card
+    const dueTodayCard = screen.getByText(/Due Today Deadline RFQ/i).closest('div');
+    if (dueTodayCard) {
+      fireEvent.click(dueTodayCard);
+      const closeStatBtns = screen.queryAllByRole('button', { name: /Close|✕/i });
+      if (closeStatBtns.length > 0) fireEvent.click(closeStatBtns[0]);
+    }
+
+    // Open upgrade modal to exercise planPricingFailed notice and Dismiss
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade|Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      expect(screen.getByText(/Your vendor profile was uploaded by/i)).toBeInTheDocument();
+      const dismissBtn = screen.queryByRole('button', { name: /Dismiss/i });
+      if (dismissBtn) fireEvent.click(dismissBtn);
+
+      const premBtn = screen.queryByRole('button', { name: /^Select$/i });
+      if (premBtn) fireEvent.click(premBtn);
+
+      // Try clicking Connect upgrade when pricing is unavailable
+      const upgradeConnectBtns = screen.queryAllByRole('button', { name: /^Upgrade$/i });
+      if (upgradeConnectBtns.length > 0) fireEvent.click(upgradeConnectBtns[0]);
+
+      const closeUpgrade = screen.queryAllByRole('button', { name: /^Close$/i });
+      if (closeUpgrade.length > 0) fireEvent.click(closeUpgrade[0]);
+    }
+
+    // Switch to Submitted Bids tab
+    fireEvent.click(screen.getByRole('button', { name: /Submitted Bids/i }));
+    expect(screen.getByText('RFQ-CONCLUDED-1')).toBeInTheDocument();
+
+    // View submitted bid modal and close it
+    const viewBidBtns = screen.getAllByRole('button', { name: /View Details/i });
+    if (viewBidBtns.length > 0) {
+      fireEvent.click(viewBidBtns[0]);
+      expect(screen.getByText(/Attached Bid Documents/i)).toBeInTheDocument();
+      const closeBidBtns = screen.getAllByRole('button', { name: /^Close$/i });
+      if (closeBidBtns.length > 0) fireEvent.click(closeBidBtns[closeBidBtns.length - 1]);
+    }
+  });
 });

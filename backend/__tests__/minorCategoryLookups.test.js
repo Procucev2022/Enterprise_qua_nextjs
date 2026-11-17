@@ -101,4 +101,37 @@ describe('getPublicVendorsByMinorCategoryFromDB', () => {
     expect(rows).toHaveLength(1);
     expect(rows[0].id).toBe('v-laptop-json');
   });
+
+  test('tops up with broad name/products substring lookup when primary quoted-prefix lookup returns unverified or fewer rows than limit, and skips broad lookup for short terms', async () => {
+    const emailNoiseVendor = {
+      id: 'v-email-noise',
+      name: 'Generic Hardware Co',
+      email: 'laptop- enquiries@noise.test',
+      majorCategory: 'IT',
+      minorCategories: ['Hardware'],
+    };
+    const nameMatchedVendor = {
+      id: 'v-name-laptop',
+      name: 'Sri Sai Laptop Service Center',
+      email: 'contact@srisai.test',
+      majorCategory: 'IT',
+      minorCategories: ['Hardware'],
+    };
+    const query = jest.fn()
+      .mockResolvedValueOnce({ rows: [{ raw: JSON.stringify(emailNoiseVendor) }] })
+      .mockResolvedValueOnce({ rows: [{ raw: JSON.stringify(nameMatchedVendor) }] });
+    pool.pool = { query };
+
+    const rows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['laptop'], ['it'], 2);
+
+    expect(query).toHaveBeenCalledTimes(2);
+    expect(rows.map((r) => r.id)).toEqual(['v-email-noise', 'v-name-laptop']);
+
+    // Short terms (< 4 chars, e.g. "ups") skip the broad substring pass
+    query.mockClear();
+    query.mockResolvedValueOnce({ rows: [] });
+    const shortRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['ups'], ['it'], 5);
+    expect(shortRows).toEqual([]);
+    expect(query).toHaveBeenCalledTimes(1);
+  });
 });

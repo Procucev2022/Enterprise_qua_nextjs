@@ -1735,6 +1735,51 @@ export function resolveVendorLocationFields(input?: {
 
 export const VENDOR_UPLOAD_HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
+export const VENDOR_CATEGORY_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'vendor master',
+  'uncategorized',
+  'uncategorised',
+  'uncategorized (no past pos)',
+  'uncategorised (no past pos)',
+  'pending category',
+  'unassigned',
+  'none',
+  'na',
+  'n/a',
+  '-',
+  '—',
+  'category not assigned',
+  'not assigned',
+  'category unassigned',
+  'division unassigned',
+  'category required',
+]);
+
+/** Returns true when a category string is empty or a synthetic placeholder value. */
+export function isPlaceholderVendorCategory(value: unknown): boolean {
+  if (typeof value !== 'string') return !value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return VENDOR_CATEGORY_PLACEHOLDERS.has(normalized);
+}
+
+/** Normalizes a list of category names by trimming, stripping placeholders, and deduplicating. */
+export function normalizeVendorCategoryList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of values) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || isPlaceholderVendorCategory(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+  }
+  return cleaned;
+}
+
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
 export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
   if (!v) return false;
@@ -1768,6 +1813,166 @@ export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[]
     if (!raw) return [];
     const parsed: unknown = JSON.parse(raw);
     return Array.isArray(parsed) ? (parsed as VendorUploadHistoryBatch[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Removes vendors from `procucev_vendor_upload_history` in browser localStorage
+ * matching any deleted vendor ID, email, or name.
+ */
+export function removeVendorsFromUploadHistoryInStorage(
+  deletedIdentifiers: readonly string[]
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  if (!Array.isArray(deletedIdentifiers) || deletedIdentifiers.length === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  const lookupSet = new Set(
+    deletedIdentifiers
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+
+  if (lookupSet.size === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    const updatedBatches = (batches as VendorUploadHistoryBatch[])
+      .map((batch, batchIdx) => {
+        if (!Array.isArray(batch?.records)) return batch;
+        const filteredRecords = batch.records.filter((rec: Record<string, unknown>, recIdx: number) => {
+          const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+          const recEmail = String(rec.email || '').trim().toLowerCase();
+          const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+          const recCode = String(rec.vendorCode || '').trim().toLowerCase();
+
+          const syntheticId1 = `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`.toLowerCase();
+          const syntheticId2 = `v-hist-local-${batchIdx}-${recIdx}`.toLowerCase();
+          const masterId = rec.id ? `v-master-${String(rec.id)}`.toLowerCase() : '';
+
+          if (recId && lookupSet.has(recId)) return false;
+          if (recEmail && lookupSet.has(recEmail)) return false;
+          if (recName && lookupSet.has(recName)) return false;
+          if (recCode && lookupSet.has(recCode)) return false;
+          if (lookupSet.has(syntheticId1) || lookupSet.has(syntheticId2)) return false;
+          if (masterId && lookupSet.has(masterId)) return false;
+          return true;
+        });
+
+        return {
+          ...batch,
+          records: filteredRecords,
+          totalRecords: filteredRecords.length,
+          processedRecords: filteredRecords.length,
+        };
+      })
+      .filter((batch) => Array.isArray(batch.records) && batch.records.length > 0);
+
+    if (updatedBatches.length > 0) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+    } else {
+      window.localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+    if (typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    }
+    return updatedBatches;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Updates matching vendor records inside `procucev_vendor_upload_history` in browser
+ * localStorage after a buyer edits or promotes a synthetic fallback vendor.
+ */
+export function updateVendorInUploadHistoryStorage(
+  vendorIdentifiers: readonly string[],
+  updates: {
+    id?: string;
+    name?: string;
+    email?: string;
+    majorCategory?: string;
+    minorCategories?: string[];
+    contactPerson?: string;
+    phone?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    location?: string;
+  }
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  const lookupSet = new Set(
+    (vendorIdentifiers || [])
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+  if (lookupSet.size === 0) return loadVendorUploadHistoryFromStorage();
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    let changed = false;
+    const updatedBatches = (batches as VendorUploadHistoryBatch[]).map((batch) => {
+      if (!Array.isArray(batch?.records)) return batch;
+      const nextRecords = batch.records.map((rec: Record<string, unknown>, recIdx: number) => {
+        const syntheticId = `v-hist-local-${String(batch.id || '')}-${recIdx}`.toLowerCase();
+        const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+        const recEmail = String(rec.email || '').trim().toLowerCase();
+        const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+        const matches =
+          lookupSet.has(syntheticId) ||
+          (recId && lookupSet.has(recId)) ||
+          (recEmail && lookupSet.has(recEmail)) ||
+          (recName && lookupSet.has(recName));
+        if (!matches) return rec;
+        changed = true;
+        return {
+          ...rec,
+          ...(updates.id ? { vendorId: updates.id, id: updates.id } : {}),
+          ...(updates.name ? { name: updates.name } : {}),
+          ...(updates.email ? { email: updates.email } : {}),
+          ...(updates.majorCategory !== undefined
+            ? {
+                category: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+                majorCategory: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+              }
+            : {}),
+          ...(updates.minorCategories !== undefined
+            ? { minorCategories: normalizeVendorCategoryList(updates.minorCategories) }
+            : {}),
+          ...(updates.contactPerson !== undefined ? { contactPerson: updates.contactPerson } : {}),
+          ...(updates.phone !== undefined ? { phone: updates.phone } : {}),
+          ...(updates.city !== undefined ? { city: updates.city } : {}),
+          ...(updates.state !== undefined ? { state: updates.state } : {}),
+          ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
+          ...(updates.location !== undefined ? { location: updates.location } : {}),
+        };
+      });
+      return { ...batch, records: nextRecords };
+    });
+
+    if (changed) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+      if (typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      }
+    }
+    return updatedBatches;
   } catch {
     return [];
   }
@@ -1823,7 +2028,9 @@ export function reconcileBuyerVendorsWithUploadHistory(
       });
       const city = loc.city;
       const state = loc.state;
-      const rawCategory = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategoryCandidate = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategory = isPlaceholderVendorCategory(rawCategoryCandidate) ? '' : rawCategoryCandidate;
+      const minorCategories = normalizeVendorCategoryList(rec.minorCategories);
       const numericRating = Number(rec.rating);
       const rating =
         rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
@@ -1837,7 +2044,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
         phone: String(rec.phone || ''),
         email: rawEmail,
         majorCategory: rawCategory,
-        minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
+        minorCategories,
         location: loc.location || [city, state].filter(Boolean).join(', '),
         rating,
         source: 'buyer_uploaded',
@@ -2336,4 +2543,25 @@ export function resolveAttachmentMimeType(fileName?: string | null, declaredMime
     }
   }
   return normalized || 'application/octet-stream';
+}
+
+/**
+ * Subscribes to cross-tab `storage` updates for `VENDOR_UPLOAD_HISTORY_STORAGE_KEY`
+ * and returns a cleanup callback safe for React `useEffect`.
+ */
+export function subscribeVendorUploadHistory(
+  onUpdate: (batches: VendorUploadHistoryBatch[]) => void
+): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === VENDOR_UPLOAD_HISTORY_STORAGE_KEY || event.key === null) {
+      onUpdate(loadVendorUploadHistoryFromStorage());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+  };
 }

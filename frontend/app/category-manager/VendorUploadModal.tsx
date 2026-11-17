@@ -19,7 +19,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
-import { resolveVendorLocationFields } from '@/lib/constants';
+import { authClient } from '@/lib/authClient';
+import { isPlaceholderVendorCategory, resolveVendorLocationFields } from '@/lib/constants';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
@@ -146,7 +147,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       return;
     }
     setIsParsing(true);
-    const result = await parseVendorUploadFile(file);
+    const isBuyerSession = authClient.getSessionUser?.()?.role === 'buyer';
+    const result = await (isBuyerSession
+      ? parseVendorUploadFile(file, { requireCategory: true })
+      : parseVendorUploadFile(file));
     setIsParsing(false);
     if (!result.success) {
       showToast('Could Not Read File', result.error, 'warning');
@@ -209,7 +213,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
           email: r.vendor.email,
           phone: r.vendor.phone,
           gstin: r.vendor.gstin,
-          category: r.vendor.majorCategory,
+          category: isPlaceholderVendorCategory(r.vendor.majorCategory) ? '' : r.vendor.majorCategory,
+          ...(Array.isArray(r.vendor.minorCategories) && r.vendor.minorCategories.length > 0
+            ? { minorCategories: r.vendor.minorCategories }
+            : {}),
           city: loc.city,
           ...(loc.state ? { state: loc.state } : {}),
           ...(loc.pincode ? { pincode: loc.pincode } : {}),

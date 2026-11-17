@@ -427,4 +427,59 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(resErr.statusCode).toBe(200);
     expect(resErr.data.data.vendors).toEqual([]);
   });
+
+  test('enriches master fallback vendors with approved category mappings and never emits Vendor Master placeholder', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({
+      id: 'ba-cat-1',
+      corporateEmail: 'catbuyer@procucev.com',
+      organizationName: 'Cat Buyer Ltd',
+    });
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: { organizationId: 'org-cat-1' },
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValue({ id: 'sess-cat-1' });
+    jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecords').mockResolvedValue([
+      { id: 'rec-mapped', vendorCode: 'VC-M1', companyName: 'Mapped Vendor', email: 'mapped@co.test' },
+      { id: 'rec-placeholder', vendorCode: 'VC-M2', companyName: 'Placeholder Map Vendor', email: 'ph@co.test' },
+      { id: 'rec-rejected', vendorCode: 'VC-M3', companyName: 'Rejected Map Vendor', email: 'rej@co.test' },
+    ]);
+    jest.spyOn(vendorIngestionQueries, 'findCategoryMappings').mockResolvedValue([
+      {
+        vendorRecordId: 'rec-mapped',
+        buyerMajorCategory: 'Mechanical',
+        buyerMinorCategories: ['Industrial Valves', 'Gate Valves'],
+        aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Ball Valves'] },
+        reviewAction: 'APPROVED',
+      },
+      {
+        vendorRecordId: 'rec-placeholder',
+        aiSuggestion: { majorCategory: 'Vendor Master', minorCategories: ['Uncategorized'] },
+        status: 'PENDING',
+      },
+      {
+        vendorRecordId: 'rec-rejected',
+        aiSuggestion: { majorCategory: 'IT Infrastructure', minorCategories: ['Laptops'] },
+        reviewAction: 'REJECTED',
+      },
+    ]);
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ vendors: [], evaluations: [] });
+
+    const res = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', sub: 'u-cat-1', email: 'catbuyer@procucev.com' } }, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    const mapped = res.data.data.vendors.find((v) => v.id === 'v-master-rec-mapped');
+    const placeholder = res.data.data.vendors.find((v) => v.id === 'v-master-rec-placeholder');
+    const rejected = res.data.data.vendors.find((v) => v.id === 'v-master-rec-rejected');
+
+    expect(mapped).toMatchObject({
+      majorCategory: 'Mechanical',
+      minorCategories: ['Industrial Valves', 'Gate Valves'],
+    });
+    expect(placeholder.majorCategory).toBe('');
+    expect(placeholder.minorCategories).toEqual([]);
+    expect(rejected.majorCategory).toBe('');
+    expect(rejected.minorCategories).toEqual([]);
+  });
 });

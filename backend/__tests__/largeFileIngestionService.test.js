@@ -929,6 +929,53 @@ describe('largeFileIngestionService unit tests', () => {
       expect(job4).toBeNull();
     });
 
+    it('detects and fails stale jobs in getJobStatus, returning failed status', async () => {
+      const staleTimestamp = new Date(Date.now() - 120000).toISOString();
+      const freshTimestamp = new Date().toISOString();
+
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      // Stale PROCESSING job without custom errorMessage
+      jest.spyOn(queries, 'findIngestionJob').mockResolvedValueOnce({
+        id: 'stale-1',
+        status: 'PROCESSING',
+        updatedAt: staleTimestamp,
+      });
+      const staleJob1 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'stale-1');
+      expect(staleJob1.status).toBe('FAILED');
+      expect(staleJob1.errorMessage).toContain('AI categorization stopped unexpectedly');
+
+      // Stale PENDING job with custom errorMessage and update failure
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockRejectedValueOnce(new Error('D1 error'));
+      jest.spyOn(queries, 'findIngestionJob').mockResolvedValueOnce({
+        id: 'stale-2',
+        status: 'PENDING',
+        startedAt: staleTimestamp,
+        errorMessage: 'Custom failure reason',
+      });
+      const staleJob2 = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'stale-2');
+      expect(staleJob2.status).toBe('FAILED');
+      expect(staleJob2.errorMessage).toBe('Custom failure reason');
+
+      // Fresh PROCESSING job
+      jest.spyOn(queries, 'findIngestionJob').mockResolvedValueOnce({
+        id: 'fresh-1',
+        status: 'PROCESSING',
+        updatedAt: freshTimestamp,
+      });
+      const freshJob = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'fresh-1');
+      expect(freshJob.status).toBe('PROCESSING');
+
+      // Completed job
+      jest.spyOn(queries, 'findIngestionJob').mockResolvedValueOnce({
+        id: 'completed-1',
+        status: 'COMPLETED',
+        updatedAt: staleTimestamp,
+      });
+      const completedJob = await largeFileIngestionService.getJobStatus({ organizationId: 'org-1' }, 'sess-1', 'completed-1');
+      expect(completedJob.status).toBe('COMPLETED');
+    });
+
     it('cancels active ingestion jobs and updates progress to failed', async () => {
       jest.spyOn(queries, 'findActiveIngestionJobs').mockResolvedValueOnce([
         { id: 'job-cancel-1', jobType: 'VENDOR_MASTER' },

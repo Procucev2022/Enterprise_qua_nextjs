@@ -13,6 +13,7 @@
 const buyerAccountResolver = require('../src/services/buyerAccountResolver');
 const buyerProfileQueries = require('../src/db/buyerProfileQueries');
 const dbPool = require('../src/db/pool');
+const storeService = require('../src/services/storeService');
 const { BUYER_ACCOUNT_RESOLUTION } = require('../src/config/constants');
 
 const { MESSAGES } = BUYER_ACCOUNT_RESOLUTION;
@@ -221,4 +222,36 @@ describe('resolveActiveBuyerAccount', () => {
       expect(resolved.status).toBe(404);
     }
   );
+
+  test('hydrates legacy gstNumber/gst, address, and zipCode fallbacks onto resolved account', async () => {
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [{ total_rfqs: 0, total_spend: 0 }] }) };
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: profile({ gstNumber: '', panNumber: '', street: '', pincode: '' }),
+    });
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+      gstNumber: '29ABCDE1234F1Z5',
+      panNumber: 'ABCDE1234F',
+      address: '2nd Stage, Indiranagar',
+      zipCode: '560038',
+      unlimitedRfqAccess: true,
+    });
+
+    const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
+    expect(resolved.ok).toBe(true);
+    expect(resolved.account.gstin).toBe('29ABCDE1234F1Z5');
+    expect(resolved.account.street).toBe('2nd Stage, Indiranagar');
+    expect(resolved.account.pincode).toBe('560038');
+    expect(resolved.account.unlimitedRfqAccess).toBe(true);
+
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: profile({ gstNumber: '' }),
+    });
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+      gst: '27AAAAA0000A1Z5',
+    });
+    const resolvedGst = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
+    expect(resolvedGst.account.gstin).toBe('27AAAAA0000A1Z5');
+  });
 });

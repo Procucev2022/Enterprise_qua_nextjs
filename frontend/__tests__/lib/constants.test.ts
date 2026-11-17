@@ -878,4 +878,177 @@ describe('Indian address location extraction helpers', () => {
       rating: 0,
     });
   });
+
+  it('subscribes to cross-tab storage events for vendor upload history and handles unavailable window guards', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      subscribeVendorUploadHistory,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([{ id: 'batch-sub-1', records: [{ vendorName: 'Subscribed Co', email: 'sub@co.test' }] }])
+    );
+
+    const updates: unknown[] = [];
+    const unsubscribe = subscribeVendorUploadHistory((batches: unknown[]) => {
+      updates.push(batches);
+    });
+
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-key' }));
+    expect(updates).toHaveLength(0);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(1);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    expect(updates).toHaveLength(2);
+
+    unsubscribe();
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(2);
+
+    const addSpy = jest.spyOn(window, 'addEventListener');
+    const origAdd = window.addEventListener;
+    try {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: undefined });
+      const noop = subscribeVendorUploadHistory(() => {});
+      expect(() => noop()).not.toThrow();
+    } finally {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: origAdd });
+      addSpy.mockRestore();
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+  });
+
+  it('removes deleted vendors from local storage upload batches and dispatches update event', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      removeVendorsFromUploadHistoryInStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-del-1',
+          records: [
+            { id: 'v-keep-1', vendorName: 'Keep Vendor', email: 'keep@test.com' },
+            { id: 'v-del-1', vendorName: 'Delete By ID', email: 'del1@test.com' },
+            { id: 'v-del-2', vendorName: 'Delete By Email', email: 'delete-me@test.com' },
+            { id: 'v-del-3', vendorName: 'Delete By Name', email: 'del3@test.com' },
+          ],
+        },
+        {
+          id: 'batch-del-2',
+          records: [
+            { id: 'v-del-4', vendorName: 'Only Vendor To Delete', email: 'del4@test.com' },
+          ],
+        },
+      ])
+    );
+
+    // Call with empty / null identifiers
+    expect(removeVendorsFromUploadHistoryInStorage([] as any)).toHaveLength(2);
+    expect(removeVendorsFromUploadHistoryInStorage(['   '])).toHaveLength(2);
+
+    let eventFired = false;
+    const listener = () => { eventFired = true; };
+    window.addEventListener('vendor_upload_history_updated', listener);
+
+    const updated = removeVendorsFromUploadHistoryInStorage([
+      'v-del-1',
+      'delete-me@test.com',
+      'Delete By Name',
+      'v-del-4',
+    ]);
+
+    window.removeEventListener('vendor_upload_history_updated', listener);
+
+    expect(eventFired).toBe(true);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].records).toHaveLength(1);
+    expect(updated[0].records[0]).toMatchObject({ id: 'v-keep-1', vendorName: 'Keep Vendor' });
+
+    // Verify localStorage reflects the filtered batches
+    const stored = loadVendorUploadHistoryFromStorage();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].records).toHaveLength(1);
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('normalizes vendor categories, strips placeholders, and updates stored upload history batches', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      isPlaceholderVendorCategory,
+      normalizeVendorCategoryList,
+      reconcileBuyerVendorsWithUploadHistory,
+      updateVendorInUploadHistoryStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    expect(isPlaceholderVendorCategory('')).toBe(true);
+    expect(isPlaceholderVendorCategory(null)).toBe(true);
+    expect(isPlaceholderVendorCategory('Vendor Master')).toBe(true);
+    expect(isPlaceholderVendorCategory('Uncategorized (No Past POs)')).toBe(true);
+    expect(isPlaceholderVendorCategory('Mechanical')).toBe(false);
+
+    expect(
+      normalizeVendorCategoryList(['Valves', 'Vendor Master', 'valves', 'Pumps', '', null, 'None'])
+    ).toEqual(['Valves', 'Pumps']);
+    expect(normalizeVendorCategoryList(null)).toEqual([]);
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory(
+      [],
+      [
+        {
+          id: 'batch-placeholder',
+          majorCategory: 'Vendor Master',
+          records: [
+            {
+              name: 'Placeholder Vendor Co',
+              email: 'placeholder@vendor.test',
+              category: 'Uncategorised',
+              minorCategories: ['Vendor Master', 'Bearings'],
+            },
+          ],
+        },
+      ]
+    );
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0].majorCategory).toBe('');
+    expect(reconciled[0].minorCategories).toEqual(['Bearings']);
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-upd-1',
+          records: [
+            { id: 'v-master-1', vendorName: 'Govardhan Co', email: 'gov@co.test', category: 'Vendor Master' },
+            { id: 'v-other', vendorName: 'Other Co', email: 'other@co.test', category: 'Electrical' },
+          ],
+        },
+      ])
+    );
+
+    updateVendorInUploadHistoryStorage(['v-master-1', 'gov@co.test'], {
+      id: 'v-promoted-1',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops', 'Vendor Master'],
+    });
+
+    const updated = loadVendorUploadHistoryFromStorage();
+    expect(updated[0].records[0]).toMatchObject({
+      id: 'v-promoted-1',
+      category: 'IT Infrastructure',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops'],
+    });
+    expect(updated[0].records[1]).toMatchObject({ id: 'v-other', category: 'Electrical' });
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
 });

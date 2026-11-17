@@ -1370,6 +1370,39 @@ describe('app/buyer/buyer-profile.tsx', () => {
     // Now Raw Material is selected in selectedMajor (line 447 branch 100.0)
     expect(selectionSummary()).toContain('3 Major');
   });
+
+  it('hydrates GSTIN and registered address from legacy alias fields on activeBuyerAccount', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: {
+        organizationName: 'Veera solutions pvt ltd',
+        corporateEmail: 'veerababuv2002@gmail.com',
+        gstNumber: '29ABCDE1234F1Z5',
+        address: '42 Tech Park Road',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        zipCode: '560103',
+        country: 'India',
+      },
+    });
+
+    mockLoad({
+      ...PROFILE,
+      companyName: 'Veera solutions pvt ltd',
+      gstNumber: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+
+    await renderLoaded();
+
+    expect(screen.getByDisplayValue('29ABCDE1234F1Z5')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('42 Tech Park Road')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('560103')).toBeInTheDocument();
+  });
 });
 
 

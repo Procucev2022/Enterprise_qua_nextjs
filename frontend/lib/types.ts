@@ -845,6 +845,8 @@ export interface VendorOpportunity {
   type: 'direct_invitation' | 'network_marketplace';
   estimatedValue?: string;
   deliveryLocation: string;
+  deliveryPincode?: string;
+  pincode?: string;
   status: 'pending_bid' | 'submitted' | 'under_review' | 'Closed' | 'Expired';
   lineItems: LineItemBid[];
   /** The RFQ's real category (RFQItem.category) — empty when the buyer never set one. */
@@ -1029,6 +1031,7 @@ export interface VendorEvaluationRecord {
 /** Outcome of asking the server for a vendor evaluation. */
 export interface VendorEvaluationRequestResult {
   success: boolean;
+  code?: string;
   message?: string;
   /** True when a saved evaluation already existed, so no request was sent to the vendor. */
   evaluationExists?: boolean;
@@ -1261,6 +1264,7 @@ export interface VendorEntry {
   // self-service profile edit; optional everywhere else.
   gstin?: string;
   gst?: string;
+  vendorCode?: string;
   pan?: string;
   msme?: string;
   annualTurnover?: string;
@@ -1295,6 +1299,7 @@ export interface VendorUploadRow {
     state?: string;
     pincode?: string;
     majorCategory?: string;
+    minorCategories?: string[];
     products?: string;
   };
   isValid: boolean;
@@ -2076,6 +2081,8 @@ export interface BuyerAccount {
   contactDesignation?: string;
   mobileNumber: string;
   gstin: string;
+  gstNumber?: string;
+  gst?: string;
   panNumber?: string;
   cinNumber?: string;
   industrySector: string;
@@ -2092,10 +2099,12 @@ export interface BuyerAccount {
   primaryPlantLocation: string;
   street?: string;
   address1?: string;
+  address?: string;
   city?: string;
   state?: string;
   pincode?: string;
   zip_code?: string;
+  zipCode?: string;
   country?: string;
   pan?: string;
   supportedMajorCategories: string[];
@@ -2481,6 +2490,7 @@ export interface RegisterPayload {
   orgName?: string;
   street?: string;
   address?: string;
+  registeredAddress?: string;
   city?: string;
   state?: string;
   pincode?: string;

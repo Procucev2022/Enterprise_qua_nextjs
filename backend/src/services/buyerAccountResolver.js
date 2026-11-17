@@ -54,12 +54,12 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     // than guessed from the organisation name, which is what the seed effectively
     // did by hardcoding 'Automotive & Heavy Commercial Vehicles'.
     industrySector: '',
-    gstin: profile.gstNumber || legacyAccount?.gstin || '',
+    gstin: profile.gstNumber || legacyAccount?.gstin || legacyAccount?.gstNumber || legacyAccount?.gst || '',
     panNumber: profile.panNumber || legacyAccount?.pan || legacyAccount?.panNumber || '',
-    street: profile.street || legacyAccount?.street || legacyAccount?.address1 || (profile.city && profile.state ? `${profile.city}, ${profile.state}` : profile.city || ''),
+    street: profile.street || legacyAccount?.street || legacyAccount?.address1 || legacyAccount?.address || (profile.city && profile.state ? `${profile.city}, ${profile.state}` : profile.city || ''),
     city: profile.city || legacyAccount?.city || '',
     state: profile.state || legacyAccount?.state || '',
-    pincode: profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || '',
+    pincode: profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || legacyAccount?.zipCode || '',
     country: profile.country || legacyAccount?.country || 'India',
     primaryPlantLocation: [profile.city || legacyAccount?.city, profile.state || legacyAccount?.state].filter(Boolean).join(', '),
     // `profile.categories` is a flat list of `{ major, minor }` pairs — one per

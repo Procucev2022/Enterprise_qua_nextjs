@@ -30,6 +30,7 @@ import {
 import { authClient } from './authClient';
 import { logger } from './logger';
 import { installApiFetchPatch } from './apiFetchPatch';
+import { isAbortOrPageUnloadError } from './errorUtils';
 
 installApiFetchPatch();
 
@@ -59,6 +60,12 @@ import {
   STORE_MESSAGES,
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  updateVendorInUploadHistoryStorage,
+  removeVendorsFromUploadHistoryInStorage,
 } from './constants';
 
 function logApiResponseFailure(
@@ -137,6 +144,8 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     type: isNetwork ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? formatCurrency(rfq.budget) : undefined,
     deliveryLocation: rfq.deliveryLocation || '',
+    deliveryPincode: rfq.deliveryPincode || '',
+    pincode: rfq.deliveryPincode || '',
     status: rfq.status === 'Closed' || rfq.status === 'Expired'
       ? rfq.status
       : (rfq.quotes && rfq.quotes.length > 0 ? 'under_review' : 'pending_bid'),
@@ -239,8 +248,8 @@ interface AppContextType {
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => Promise<boolean>;
-  deleteBuyerVendor: (vendorId: string) => Promise<boolean>;
-  deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
+  deleteBuyerVendor: (vendorId: string, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
+  deleteMultipleBuyerVendors: (vendorIds: string[], targetVendors?: Array<Partial<VendorEntry>>) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
@@ -266,7 +275,7 @@ interface AppContextType {
 
   // Buyer Vendor Rating Revision Engine
   reviseVendorRating: (vendorId: string, qualityScore: number, costScore: number, deliveryScore: number, remarks: string) => Promise<VendorRatingRevisionRecord | null>;
-  requestVendorEvaluation: (vendorId: string, notes?: string) => Promise<VendorEvaluationRequestResult>;
+  requestVendorEvaluation: (vendorId: string, notes?: string, vendorDetails?: Partial<VendorEntry>) => Promise<VendorEvaluationRequestResult>;
   selectedRatingRevisionEmail: VendorRatingRevisionEmailPayload | null;
   setSelectedRatingRevisionEmail: (email: VendorRatingRevisionEmailPayload | null) => void;
   ratingRevisionEmailModalOpen: boolean;
@@ -292,6 +301,11 @@ interface AppContextType {
    * the same RFQ.
    */
   adoptCreatedRFQ: (rfq: RFQItem, remainingCredits?: number | null) => void;
+  /**
+   * Synchronize an updated RFQ record into the store list, session cache,
+   * vendor opportunities, and active selections without emitting creation logs.
+   */
+  syncRFQRecord: (rfq: RFQItem) => void;
   /**
    * Apply an edit to one RFQ and adopt the stored result.
    *
@@ -437,7 +451,7 @@ export function setSessionCache<T>(key: string, data: T): void {
   if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
   try {
     sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
-  } catch {}
+  } catch { }
 }
 
 export function clearSessionCache(): void {
@@ -445,7 +459,7 @@ export function clearSessionCache(): void {
   try {
     const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
     keys.forEach((k) => sessionStorage.removeItem(`procucev_cache_${k}`));
-  } catch {}
+  } catch { }
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
@@ -873,7 +887,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
       }
     } catch (err) {
-      logger.log('ERROR', 'Failed to load reference data', { error: err }, 'REFERENCE_DATA');
+      if (!isAbortOrPageUnloadError(err)) {
+        logger.log('ERROR', 'Failed to load reference data', { error: err }, 'REFERENCE_DATA');
+      }
       setDbConnected(false);
     } finally {
       setIsLoadingDB(false);
@@ -936,10 +952,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       loadedEntitiesRef.current.activeBuyerAccount = true;
     } catch (error) {
       if (requestGeneration !== activeBuyerAccountRequestGenerationRef.current) return;
-      logger.log('ERROR', 'Active buyer account refresh failed', {
-        operation: 'GET /api/buyer-accounts/active',
-        error,
-      }, 'BUYER_ACCOUNT');
+      if (!isAbortOrPageUnloadError(error)) {
+        logger.log('ERROR', 'Active buyer account refresh failed', {
+          operation: 'GET /api/buyer-accounts/active',
+          error,
+        }, 'BUYER_ACCOUNT');
+      }
       clearActiveBuyerAccount();
     }
   };
@@ -1134,9 +1152,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       tasks.push(loaders.ensureActiveBuyerAccount());
 
       if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
-        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureRFQs(true));
         tasks.push(loaders.ensureAIFeed());
-      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs') || path.startsWith('/buyer/rfq-details')) {
+      } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs')) {
+        tasks.push(loaders.ensureRFQs(true));
+      } else if (path.startsWith('/buyer/rfq-details')) {
         tasks.push(loaders.ensureRFQs());
       } else if (path.startsWith('/buyer/quote-matrix')) {
         tasks.push(loaders.ensureRFQs());
@@ -1955,12 +1975,57 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   const requestVendorEvaluation = async (
     vendorId: string,
-    notes?: string
+    notes?: string,
+    vendorDetails?: Partial<VendorEntry>
   ): Promise<VendorEvaluationRequestResult> => {
-    const targetVendor = buyerVendors.find((v) => v.id === vendorId);
-    if (!targetVendor) {
+    const directVendor = buyerVendors.find((v) => v.id === vendorId);
+    const reconciledList = !directVendor
+      ? reconcileBuyerVendorsWithUploadHistory(
+        buyerVendors,
+        loadVendorUploadHistoryFromStorage(),
+        activeBuyerAccount
+      )
+      : buyerVendors;
+    const resolvedVendor =
+      directVendor ||
+      reconciledList.find((v) => v.id === vendorId) ||
+      (vendorDetails
+        ? ({
+          ...vendorDetails,
+          id: vendorDetails.id || vendorId,
+          name: vendorDetails.name || vendorDetails.email || vendorId,
+        } as VendorEntry)
+        : undefined);
+    if (!resolvedVendor) {
       showToast(UI_STRINGS.vendorEvaluationRequest.vendorNotFoundTitle, UI_STRINGS.vendorEvaluationRequest.vendorNotFoundBody, 'warning');
       return { success: false, message: 'Vendor not found' };
+    }
+
+    const isSyntheticId =
+      vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+    const resolvedEmailLower = String(resolvedVendor.email || '').trim().toLowerCase();
+    const persistedByEmail =
+      isSyntheticId && resolvedEmailLower
+        ? buyerVendors.find(
+          (v) =>
+            !String(v.id || '').startsWith('v-master-') &&
+            !String(v.id || '').startsWith('v-hist-local-') &&
+            String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+        )
+        : undefined;
+    const targetVendor = persistedByEmail || resolvedVendor;
+    const requestPayload: Record<string, unknown> = { notes: notes || '' };
+    if (targetVendor.id.startsWith('v-master-') || targetVendor.id.startsWith('v-hist-local-')) {
+      if (targetVendor.email) requestPayload.vendorEmail = targetVendor.email;
+      if (targetVendor.name) requestPayload.vendorName = targetVendor.name;
+      if (targetVendor.contactPerson) requestPayload.contactPerson = targetVendor.contactPerson;
+      if (!isPlaceholderVendorCategory(targetVendor.majorCategory)) {
+        requestPayload.majorCategory = String(targetVendor.majorCategory).trim();
+      }
+      const cleanMinors = normalizeVendorCategoryList(targetVendor.minorCategories);
+      if (cleanMinors.length > 0) {
+        requestPayload.minorCategories = cleanMinors;
+      }
     }
 
     try {
@@ -1969,7 +2034,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor.id)}/request-evaluation`, {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify({ notes: notes || '' }),
+        body: JSON.stringify(requestPayload),
       });
       const data = await res.json().catch(() => null);
       if (!res.ok || !data?.success) {
@@ -1980,7 +2045,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         }
         const errMessage = data?.error || UI_STRINGS.vendorEvaluationRequest.requestFailedFallback;
         showToast(UI_STRINGS.vendorEvaluationRequest.requestFailedTitle, errMessage, 'warning');
-        return { success: false, message: errMessage };
+        return {
+          success: false,
+          code: typeof data?.code === 'string' ? data.code : undefined,
+          message: errMessage,
+        };
       }
 
       if (data.evaluationExists && data.data?.evaluation) {
@@ -1992,7 +2061,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           return [savedEvaluation, ...filtered];
         });
         logger.log('INFO', 'Saved vendor evaluation returned; no evaluation request sent', {
-          vendorId,
+          vendorId: targetVendor.id,
           evaluationId: savedEvaluation.id,
         }, 'EVALUATION');
         showToast(
@@ -2005,21 +2074,37 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
       // The server's record of the request is the source for the time, the buyer and the status shown on the row.
       const sent = data.data && typeof data.data === 'object' ? data.data : {};
+      const persistedVendorId = typeof sent.vendorId === 'string' && sent.vendorId ? sent.vendorId : targetVendor.id;
       const requestedAt = typeof sent.evaluationRequestedAt === 'string' ? sent.evaluationRequestedAt : new Date().toISOString();
       const requestedBy = typeof sent.evaluationRequestedBy === 'string' ? sent.evaluationRequestedBy : activeBuyerAccount?.organizationName || 'Buyer';
-      setBuyerVendors((prev) =>
-        prev.map((v) =>
-          v.id === vendorId
-            ? {
+      setBuyerVendors((prev) => {
+        const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendor.id || v.id === persistedVendorId);
+        if (hasMatch) {
+          return prev.map((v) =>
+            v.id === vendorId || v.id === targetVendor.id || v.id === persistedVendorId
+              ? {
                 ...v,
+                id: persistedVendorId,
                 evaluationRequested: true,
                 evaluationRequestedAt: requestedAt,
                 evaluationRequestedBy: requestedBy,
                 status: typeof sent.status === 'string' ? sent.status : v.status,
               }
-            : v
-        )
-      );
+              : v
+          );
+        }
+        return [
+          {
+            ...targetVendor,
+            id: persistedVendorId,
+            evaluationRequested: true,
+            evaluationRequestedAt: requestedAt,
+            evaluationRequestedBy: requestedBy,
+            status: typeof sent.status === 'string' ? sent.status : targetVendor.status,
+          },
+          ...prev,
+        ];
+      });
 
       void addFeedItem(
         `Evaluation Requested: ${targetVendor.name}`,
@@ -2129,35 +2214,102 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // The local list changes only after the server confirms the write, and it takes the record the server returns.
   const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+    const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+    const directVendor = buyerVendors.find((v) => v.id === vendorId);
+    const matchedVendor =
+      directVendor ||
+      (isSyntheticId
+        ? reconcileBuyerVendorsWithUploadHistory(
+            buyerVendors,
+            loadVendorUploadHistoryFromStorage(),
+            activeBuyerAccount
+          ).find((v) => v.id === vendorId)
+        : undefined);
+    const resolvedEmailLower = String(matchedVendor?.email || updates.email || '').trim().toLowerCase();
+    const persistedByEmail =
+      isSyntheticId && resolvedEmailLower
+        ? buyerVendors.find(
+            (v) =>
+              !String(v.id || '').startsWith('v-master-') &&
+              !String(v.id || '').startsWith('v-hist-local-') &&
+              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+          )
+        : undefined;
+    const targetVendorId = persistedByEmail?.id || vendorId;
+    const payload: Record<string, unknown> = { ...updates };
+    if (isSyntheticId && !persistedByEmail && matchedVendor) {
+      if (matchedVendor.email && !payload.vendorEmail) payload.vendorEmail = matchedVendor.email;
+      if (matchedVendor.name && !payload.vendorName) payload.vendorName = matchedVendor.name;
+      if (matchedVendor.contactPerson && !payload.contactPerson) payload.contactPerson = matchedVendor.contactPerson;
+      if (matchedVendor.vendorCode && !payload.vendorCode) payload.vendorCode = matchedVendor.vendorCode;
+      if (matchedVendor.phone && !payload.phone) payload.phone = matchedVendor.phone;
+      if (matchedVendor.location && !payload.location) payload.location = matchedVendor.location;
+      if (matchedVendor.city && !payload.city) payload.city = matchedVendor.city;
+      if (matchedVendor.state && !payload.state) payload.state = matchedVendor.state;
+      if (matchedVendor.pincode && !payload.pincode) payload.pincode = matchedVendor.pincode;
+      if (matchedVendor.gstin && !payload.gstin) payload.gstin = matchedVendor.gstin;
+    }
+
     let res: Response;
     try {
-      res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendorId)}`, {
         method: 'PUT',
         headers: authFetchHeaders(),
-        body: JSON.stringify(updates),
+        body: JSON.stringify(payload),
       });
     } catch (err) {
-      logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId }, 'VENDOR_PROFILE');
+      logger.log('ERROR', 'Failed to sync vendor update to backend', { error: err, vendorId: targetVendorId }, 'VENDOR_PROFILE');
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, STORE_MESSAGES.vendorUnreachable, 'warning');
       return false;
     }
 
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.success) {
-      logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId, responseError: json?.error });
+      logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId: targetVendorId, responseError: json?.error });
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, json?.error || STORE_MESSAGES.vendorUpdateFailed, 'warning');
       return false;
     }
 
     const saved: Partial<VendorEntry> = json.data && typeof json.data === 'object' ? json.data : updates;
-    setBuyerVendors((prev) => prev.map((v) => (v.id === vendorId ? { ...v, ...saved } : v)));
-    void addAuditLog(`Updated vendor profile record for ID ${vendorId}.`);
+    const savedId = typeof saved.id === 'string' && saved.id ? saved.id : targetVendorId;
+    setBuyerVendors((prev) => {
+      const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
+      const next = hasMatch
+        ? prev.map((v) =>
+            v.id === vendorId || v.id === targetVendorId || v.id === savedId
+              ? { ...v, ...updates, ...saved, id: savedId }
+              : v
+          )
+        : [{ ...(matchedVendor || {}), ...updates, ...saved, id: savedId } as VendorEntry, ...prev];
+      setSessionCache('vendors', next);
+      return next;
+    });
+    updateVendorInUploadHistoryStorage(
+      [vendorId, targetVendorId, savedId, String(saved.email || matchedVendor?.email || updates.email || ''), String(saved.name || matchedVendor?.name || updates.name || '')],
+      {
+        id: savedId,
+        name: saved.name || updates.name,
+        email: saved.email || updates.email,
+        majorCategory: saved.majorCategory || updates.majorCategory,
+        minorCategories: saved.minorCategories || updates.minorCategories,
+        contactPerson: saved.contactPerson || updates.contactPerson,
+        phone: saved.phone || updates.phone,
+        city: saved.city || updates.city,
+        state: saved.state || updates.state,
+        pincode: saved.pincode || updates.pincode,
+        location: saved.location || updates.location,
+      }
+    );
+    void addAuditLog(`Updated vendor profile record for ID ${savedId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
     return true;
   };
 
   // The vendor leaves the list only after the server confirms the delete.
-  const deleteBuyerVendor = async (vendorId: string): Promise<boolean> => {
+  const deleteBuyerVendor = async (
+    vendorId: string,
+    targetVendor?: Partial<VendorEntry>
+  ): Promise<boolean> => {
     let res: Response;
     try {
       res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
@@ -2177,17 +2329,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
+    const deletedVendor = buyerVendors.find((v) => v.id === vendorId || v.email === vendorId);
+    const identifiersToRemove = [
+      vendorId,
+      targetVendor?.id,
+      targetVendor?.email,
+      targetVendor?.name,
+      deletedVendor?.id,
+      deletedVendor?.email,
+      deletedVendor?.name,
+    ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
+    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
+
+    const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
+
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => v.id !== vendorId && v.email !== vendorId);
+      const updated = prev.filter((v) => {
+        const idMatch = v.id && matchSet.has(v.id.trim().toLowerCase());
+        const emailMatch = v.email && matchSet.has(v.email.trim().toLowerCase());
+        const nameMatch = v.name && matchSet.has(v.name.trim().toLowerCase());
+        return !idMatch && !emailMatch && !nameMatch;
+      });
       setSessionCache('vendors', updated);
       return updated;
     });
+
+    setVendorEvaluations((prev) => {
+      const updated = prev.filter((e) => {
+        const idMatch = e.vendorId && matchSet.has(e.vendorId.trim().toLowerCase());
+        const emailMatch = e.email && matchSet.has(e.email.trim().toLowerCase());
+        return !idMatch && !emailMatch;
+      });
+      setSessionCache('evaluations', updated);
+      return updated;
+    });
+
     void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
     return true;
   };
 
-  const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
+  const deleteMultipleBuyerVendors = async (
+    vendorIds: string[],
+    targetVendors?: Array<Partial<VendorEntry>>
+  ) => {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
     // Only the ids the server reports as deleted leave the list. A failed request leaves every row in place.
     let res: Response;
@@ -2214,16 +2399,53 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
-    const deletedSet = new Set(deletedIds);
+    const deletedSet = new Set([...deletedIds, ...vendorIds]);
+    const matchedVendors = buyerVendors.filter((v) => deletedSet.has(v.id) || deletedSet.has(v.email || ''));
+    const extraVendors = Array.isArray(targetVendors) ? targetVendors : [];
+
+    const identifiersToRemove = Array.from(
+      new Set(
+        [
+          ...vendorIds,
+          ...deletedIds,
+          ...matchedVendors.map((v) => v.id),
+          ...matchedVendors.map((v) => v.email || ''),
+          ...matchedVendors.map((v) => v.name || ''),
+          ...extraVendors.map((v) => v.id || ''),
+          ...extraVendors.map((v) => v.email || ''),
+          ...extraVendors.map((v) => v.name || ''),
+        ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      )
+    );
+    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
+
+    const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
+
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
+      const updated = prev.filter((v) => {
+        const idMatch = v.id && matchSet.has(v.id.trim().toLowerCase());
+        const emailMatch = v.email && matchSet.has(v.email.trim().toLowerCase());
+        const nameMatch = v.name && matchSet.has(v.name.trim().toLowerCase());
+        return !idMatch && !emailMatch && !nameMatch;
+      });
       setSessionCache('vendors', updated);
       return updated;
     });
-    void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
+
+    setVendorEvaluations((prev) => {
+      const updated = prev.filter((e) => {
+        const idMatch = e.vendorId && matchSet.has(e.vendorId.trim().toLowerCase());
+        const emailMatch = e.email && matchSet.has(e.email.trim().toLowerCase());
+        return !idMatch && !emailMatch;
+      });
+      setSessionCache('evaluations', updated);
+      return updated;
+    });
+
+    void addAuditLog(`Removed ${deletedIds.length || vendorIds.length} vendor record(s) from buyer vendor master.`);
     showToast(
       'Vendors Removed',
-      formatString(STORE_MESSAGES.vendorsRemovedMessage, { count: deletedIds.length }),
+      formatString(STORE_MESSAGES.vendorsRemovedMessage, { count: deletedIds.length || vendorIds.length }),
       'info'
     );
   };
@@ -2327,8 +2549,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // seal (sha) and no dispatch time.
     const emailId = `EML-${rfq.rfqNumber}-${vendor.id}`;
     const major = vendor.majorCategory || rfq.extractedEntities[0]?.majorCategory || rfq.category || '';
-    const minors = vendor.minorCategories && vendor.minorCategories.length > 0 
-      ? vendor.minorCategories 
+    const minors = vendor.minorCategories && vendor.minorCategories.length > 0
+      ? vendor.minorCategories
       : rfq.extractedEntities.map(e => e.minorCategory || e.category).filter(Boolean);
 
     let specialInstructions = '';
@@ -2394,7 +2616,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setSelectedEmailForModal(emailPayload);
     setEmailModalOpen(true);
   };
-  
+
   const [toastMessage, setToastMessage] = useState<{ title: string; description: string; type: 'success' | 'info' | 'warning' } | null>(null);
 
   const showToast = (title: string, description: string, type: 'success' | 'info' | 'warning' = 'info') => {
@@ -2552,32 +2774,34 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return { success: false, error: data.error };
       }
 
-      setRfqs((prev) =>
-        prev.map((r) =>
+      setRfqs((prev) => {
+        const next = prev.map((r) =>
           r.rfqNumber === rfqNumber
             ? {
-                ...r,
-                status: 'PO Generated' as const,
-                awardedVendor: effectiveVendorName,
-                awardedAmount: effectiveAmount,
-                awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
-                poNumber: data.poNumber,
-                poIssueDate: data.issueDate,
-                poFinalised: true,
-                poShaSignature: data.shaSignature,
-                quotes: Array.isArray(r.quotes)
-                  ? r.quotes.map((q) => {
-                      const isAwarded = Boolean(
-                        (effectiveVendorId && q.vendorId === effectiveVendorId) ||
-                        (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
-                      );
-                      return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
-                    })
-                  : r.quotes,
-              }
+              ...r,
+              status: 'PO Generated' as const,
+              awardedVendor: effectiveVendorName,
+              awardedAmount: effectiveAmount,
+              awardedVendorId: effectiveVendorId || (r as any).awardedVendorId || null,
+              poNumber: data.poNumber,
+              poIssueDate: data.issueDate,
+              poFinalised: true,
+              poShaSignature: data.shaSignature,
+              quotes: Array.isArray(r.quotes)
+                ? r.quotes.map((q) => {
+                  const isAwarded = Boolean(
+                    (effectiveVendorId && q.vendorId === effectiveVendorId) ||
+                    (effectiveVendorName && q.vendorName && String(q.vendorName).toLowerCase().trim() === String(effectiveVendorName).toLowerCase().trim())
+                  );
+                  return { ...q, status: isAwarded ? 'Awarded' : q.status, awarded: isAwarded };
+                })
+                : r.quotes,
+            }
             : r
-        )
-      );
+        );
+        setSessionCache('rfqs', next);
+        return next;
+      });
 
       // The approval endpoint writes its own audit entry on the server. It does not dispatch to an ERP or a
       // vendor portal, so the feed line states only what was recorded.
@@ -2606,22 +2830,30 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
    * Adopt a server-created RFQ, replacing any existing entry with the same RFQ
    * number so a refresh cannot leave two copies of one record.
    */
-  const adoptCreatedRFQ = (rfq: RFQItem, remainingCredits?: number | null) => {
+  const syncRFQRecord = useCallback((rfq: RFQItem) => {
+    const matchesTarget = (candidate?: Pick<RFQItem, 'id' | 'rfqNumber'> | null) =>
+      Boolean(
+        candidate &&
+        ((rfq.rfqNumber && candidate.rfqNumber === rfq.rfqNumber) || (rfq.id && candidate.id === rfq.id))
+      );
+
     setRfqs((prev) => {
-      const exists = prev.some((r) => r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id));
-      if (exists) {
-        return prev.map((r) => (r.rfqNumber === rfq.rfqNumber || (rfq.id && r.id === rfq.id) ? rfq : r));
-      }
-      return [rfq, ...prev];
+      const exists = prev.some((r) => matchesTarget(r));
+      const next = exists ? prev.map((r) => (matchesTarget(r) ? rfq : r)) : [rfq, ...prev];
+      setSessionCache('rfqs', next);
+      return next;
     });
     setVendorOpportunities((prev) => {
       const opp = buildOpportunityFromRFQ(rfq);
       const exists = prev.some((o) => o.rfqNumber === rfq.rfqNumber);
-      if (exists) {
-        return prev.map((o) => (o.rfqNumber === rfq.rfqNumber ? opp : o));
-      }
-      return [opp, ...prev];
+      return exists ? prev.map((o) => (o.rfqNumber === rfq.rfqNumber ? opp : o)) : [opp, ...prev];
     });
+    setSelectedRFQForMatrix((prev) => (matchesTarget(prev) ? rfq : prev));
+    setSelectedRFQForDeepDive((prev) => (matchesTarget(prev) ? rfq : prev));
+  }, []);
+
+  const adoptCreatedRFQ = (rfq: RFQItem, remainingCredits?: number | null) => {
+    syncRFQRecord(rfq);
 
     // Only a balance the server reported changes the count. If none was reported, the count is left as it was.
     // Nothing is decremented or derived here.
@@ -2661,18 +2893,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       ...result.rfq,
       assignedVendors:
         changes.assignedVendors &&
-        Array.isArray(changes.assignedVendors) &&
-        changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
+          Array.isArray(changes.assignedVendors) &&
+          changes.assignedVendors.length >= (result.rfq.assignedVendors?.length || 0)
           ? (changes.assignedVendors as any)
           : result.rfq.assignedVendors || (changes.assignedVendors as any) || [],
     };
-    setRfqs((prev) => prev.map((r) => (r.rfqNumber === saved.rfqNumber ? saved : r)));
-    setVendorOpportunities((prev) =>
-      prev.map((opp) => (opp.rfqNumber === saved.rfqNumber ? buildOpportunityFromRFQ(saved) : opp))
-    );
-    // Kept in step so a screen already holding this RFQ does not show the old terms.
-    setSelectedRFQForMatrix((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
-    setSelectedRFQForDeepDive((prev) => (prev?.rfqNumber === saved.rfqNumber ? saved : prev));
+    syncRFQRecord(saved);
 
     addAuditLog(
       `Edited ${saved.rfqNumber}: ${Object.keys(changes).join(', ')}`,
@@ -2701,7 +2927,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const { rfqNumber } = result;
-    setRfqs((prev) => prev.filter((r) => r.rfqNumber !== rfqNumber));
+    setRfqs((prev) => {
+      const next = prev.filter((r) => r.rfqNumber !== rfqNumber);
+      setSessionCache('rfqs', next);
+      return next;
+    });
     setVendorOpportunities((prev) => prev.filter((opp) => opp.rfqNumber !== rfqNumber));
     // A selection pointing at a deleted RFQ would render a stale record, so it is
     // cleared rather than left dangling.
@@ -2800,7 +3030,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
     // Replaces any entry with the same number so a concurrent refresh cannot leave
     // two copies of one RFQ.
-    setRfqs((prev) => [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)]);
+    setRfqs((prev) => {
+      const next = [newRFQ, ...prev.filter((r) => r.rfqNumber !== newRFQ.rfqNumber)];
+      setSessionCache('rfqs', next);
+      return next;
+    });
 
     // Built from the saved RFQ by the same mapper the list uses, so the vendor portal shows the buyer, location
     // and value the server stored.
@@ -2890,6 +3124,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         refreshCategoryTaxonomy,
         addNewRFQ,
         adoptCreatedRFQ,
+        syncRFQRecord,
         updateRFQ,
         deleteRFQ,
         triggerChannelChaser,

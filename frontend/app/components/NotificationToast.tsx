@@ -32,7 +32,7 @@ export default function NotificationToast() {
   };
 
   return (
-    <div className="fixed bottom-6 right-6 z-[70] max-w-md w-full px-4 animate-fade-in pointer-events-auto">
+    <div className="fixed bottom-6 right-6 z-[9999] max-w-md w-full px-4 animate-fade-in pointer-events-auto">
       <div
         className={`p-4 rounded-2xl bg-white/95 dark:bg-gray-900/95 border ${getBorderColor()} shadow-2xl backdrop-blur-xl flex items-start justify-between gap-3 text-xs`}
       >

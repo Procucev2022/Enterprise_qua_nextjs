@@ -613,6 +613,8 @@ describe('Store Service — remaining branch coverage', () => {
       await expect(freshStore.empanelIngestedVendor({
         name: 'Failed Ingested Vendor',
         email: 'failed-ingested@vendor.test',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
       })).rejects.toMatchObject({ statusCode, code });
       expect(freshStore.vendors).toHaveLength(0);
       expect(freshStore.getAuditLogs()).toHaveLength(0);
@@ -623,6 +625,17 @@ describe('Store Service — remaining branch coverage', () => {
       );
     });
 
+    test('empanelIngestedVendor rejects vendors without any valid category', async () => {
+      const { freshStore } = freshStoreWithFailingWrite({}, true);
+      await expect(freshStore.empanelIngestedVendor({
+        name: 'No Category Vendor',
+        email: 'nocat@vendor.test',
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+      })).rejects.toMatchObject({ statusCode: 400, code: 'VENDOR_CATEGORY_REQUIRED' });
+      expect(freshStore.vendors).toHaveLength(0);
+    });
+
     test('empanelIngestedVendor fails closed when a configured write returns no row', async () => {
       const { freshStore } = freshStoreWithFailingWrite({
         upsertVendorInDB: jest.fn().mockResolvedValue(null),
@@ -631,6 +644,8 @@ describe('Store Service — remaining branch coverage', () => {
       await expect(freshStore.empanelIngestedVendor({
         name: 'Missing Ingested Vendor',
         email: 'missing-ingested@vendor.test',
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
       })).rejects.toMatchObject({ statusCode: 503, code: 'PERSISTENCE_UNAVAILABLE' });
       expect(freshStore.vendors).toHaveLength(0);
     });

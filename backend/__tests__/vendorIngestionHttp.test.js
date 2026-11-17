@@ -152,4 +152,13 @@ describe('vendor ingestion HTTP boundary', () => {
     await pending;
     expect(next).toHaveBeenCalledWith(error);
   });
+
+  test('mounts GET /:sessionId/vendor-master alongside /:sessionId/vendor-master/preview', () => {
+    const vendorIngestionRouter = require('../src/routes/vendorIngestion');
+    const paths = vendorIngestionRouter.stack
+      .filter((layer) => layer.route && layer.route.methods.get)
+      .map((layer) => layer.route.path);
+    expect(paths).toContain('/:sessionId/vendor-master');
+    expect(paths).toContain('/:sessionId/vendor-master/preview');
+  });
 });

@@ -1535,3 +1535,113 @@ describe('RFQ specification download', () => {
     expect(callsTo('preview')).toHaveLength(0);
   });
 });
+
+describe('pincode and line-item category filters', () => {
+  test('covers pincode dropdown toggle, selection, clear all, and removal chips', async () => {
+    await renderForm({
+      vendorOpportunities: [
+        opportunity({ id: 'o1', rfqNumber: 'RFQ-PIN-1', pincode: '560001' }),
+        opportunity({ id: 'o2', rfqNumber: 'RFQ-PIN-2', deliveryLocation: 'Bangalore, 560002' }),
+        opportunity({ id: 'o3', rfqNumber: 'RFQ-PIN-3', pincode: '560003' }),
+      ],
+      rfqs: [
+        rfq({
+          id: 'r1',
+          rfqNumber: 'RFQ-PIN-1',
+          lineItems: [{ id: 'li-1', minorCategory: 'Pumps', category: 'Mechanical' }] as any,
+        }),
+        rfq({
+          id: 'r2',
+          rfqNumber: 'RFQ-PIN-2',
+          deliveryLocation: 'Bangalore, Karnataka 560002',
+        }),
+      ],
+    });
+
+    // Pincode dropdown toggle
+    const toggleBtn = screen.getByRole('button', { name: /Filter enquiries by pincode/i });
+    expect(toggleBtn).toBeInTheDocument();
+    fireEvent.click(toggleBtn);
+
+    // Should see checkboxes for available pincodes
+    const pin560001 = screen.getByRole('checkbox', { name: /560001/i });
+    expect(pin560001).not.toBeChecked();
+
+    // Check 560001
+    fireEvent.click(pin560001);
+    expect(pin560001).toBeChecked();
+
+    // Check 560002
+    const pin560002 = screen.getByRole('checkbox', { name: /560002/i });
+    fireEvent.click(pin560002);
+    expect(pin560002).toBeChecked();
+
+    // Uncheck 560002
+    fireEvent.click(pin560002);
+    expect(pin560002).not.toBeChecked();
+
+    // Clear all via dropdown button
+    const clearAllInDropdown = screen.getByRole('button', { name: /Clear All/i });
+    fireEvent.click(clearAllInDropdown);
+
+    // Select 560001 again
+    fireEvent.click(pin560001);
+
+    // Selected pincode chip appears below with remove button
+    const removeChip = screen.getByRole('button', { name: /Remove filter for pincode 560001/i });
+    expect(removeChip).toBeInTheDocument();
+    fireEvent.click(removeChip);
+
+    // Select 560001 again and clear via "Clear Pincodes" button
+    fireEvent.click(pin560001);
+    const clearPincodesBtn = screen.getByRole('button', { name: /Clear Pincodes/i });
+    fireEvent.click(clearPincodesBtn);
+
+    // Test programmatic hidden select
+    const selectEl = screen.getByLabelText(/Filter enquiries by pincode select/i);
+    fireEvent.change(selectEl, { target: { value: '560001' } });
+    fireEvent.change(selectEl, { target: { value: 'all' } });
+
+    // Close dropdown
+    fireEvent.click(toggleBtn);
+  });
+
+  test('handles empty pincodes in opportunities and category match pools', async () => {
+    await renderForm({
+      currentUserSession: {
+        ...VENDOR_SESSION,
+        pincode: '560001',
+        category: 'Centrifugal Pumps',
+        minorCategories: ['Valves', 'Pumps'],
+      } as any,
+      buyerVendors: [
+        vendorRecord({
+          id: VENDOR_ID,
+          name: VENDOR_NAME,
+          email: VENDOR_EMAIL,
+          pincode: '560001',
+          majorCategory: 'Mechanical',
+          minorCategories: ['Pumps', 'Turbines'],
+        }),
+      ],
+      vendorOpportunities: [
+        opportunity({ id: 'o-empty', rfqNumber: 'RFQ-NO-PIN', pincode: '', deliveryLocation: 'Unknown' }),
+      ],
+      rfqs: [
+        rfq({
+          id: 'r-no-pin',
+          rfqNumber: 'RFQ-NO-PIN',
+          deliveryLocation: 'Unknown Place',
+          category: 'Mechanical',
+          extractedEntities: [{ id: 'e1', minorCategory: 'Pumps', category: 'Mechanical' } as any],
+          lineItems: [{ id: 'li-1', minorCategory: 'Turbines', category: 'Mechanical' }] as any,
+        }),
+      ],
+    });
+
+    const toggleBtn = screen.getByRole('button', { name: /Filter enquiries by pincode/i });
+    fireEvent.click(toggleBtn);
+    expect(screen.getByText(/No pincodes found/i)).toBeInTheDocument();
+  });
+});
+

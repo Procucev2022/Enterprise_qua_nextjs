@@ -243,14 +243,15 @@ export default function BuyerProfilePage() {
     const activeAcc = activeBuyerAccountRef.current;
     const resolvedCity = profile.city || activeAcc?.city || '';
     const resolvedState = profile.state || activeAcc?.state || '';
-    const resolvedPincode = profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || '';
+    const resolvedPincode = profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || activeAcc?.zipCode || '';
     const resolvedCountry = profile.country || activeAcc?.country || 'India';
     const resolvedStreet =
       profile.street ||
       activeAcc?.street ||
       activeAcc?.address1 ||
+      activeAcc?.address ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
-    const resolvedGst = profile.gstNumber || activeAcc?.gstin || '';
+    const resolvedGst = profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '';
     const resolvedPan =
       profile.panNumber ||
       activeAcc?.panNumber ||
@@ -307,17 +308,24 @@ export default function BuyerProfilePage() {
     }
     if (!city && activeBuyerAccount.city) setCity(activeBuyerAccount.city);
     if (!state && activeBuyerAccount.state) setState(activeBuyerAccount.state);
-    if (!pincode && (activeBuyerAccount.pincode || activeBuyerAccount.zip_code)) {
-      setPincode(activeBuyerAccount.pincode || activeBuyerAccount.zip_code || '');
+    if (!pincode && (activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode)) {
+      setPincode(activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode || '');
     }
     if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
-    if (!gstNumber && activeBuyerAccount.gstin) setGstNumber(activeBuyerAccount.gstin);
+    const savedGst = activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '';
+    if (!gstNumber && savedGst) setGstNumber(savedGst);
     if (!panNumber) {
       const savedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || '';
       if (savedPan) setPanNumber(savedPan);
     }
     if (!street) {
-      const fallbackStreet = activeBuyerAccount.street || activeBuyerAccount.address1 || (activeBuyerAccount.city && activeBuyerAccount.state ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}` : activeBuyerAccount.city || '');
+      const fallbackStreet =
+        activeBuyerAccount.street ||
+        activeBuyerAccount.address1 ||
+        activeBuyerAccount.address ||
+        (activeBuyerAccount.city && activeBuyerAccount.state
+          ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+          : activeBuyerAccount.city || '');
       if (fallbackStreet) setStreet(fallbackStreet);
     }
     if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);

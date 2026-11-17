@@ -1,5 +1,6 @@
 import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
+import { isPlaceholderVendorCategory, normalizeVendorCategoryList } from './constants';
 import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN } from './validationSchemas';
 import type {
   VendorBulkInvitationResponse,
@@ -73,7 +74,10 @@ export type ParseVendorFileResult = { success: true; data: ParsedVendorFile } | 
  * silently defaulted (see initial-setup-modal.tsx's Vendor Master upload
  * for the pattern this deliberately does NOT repeat).
  */
-export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult> {
+export function parseVendorUploadFile(
+  file: File,
+  options?: { requireCategory?: boolean }
+): Promise<ParseVendorFileResult> {
   return new Promise((resolve) => {
     const reader = new FileReader();
 
@@ -154,10 +158,16 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
           const city = cityCol ? cellToString(raw[cityCol]) : '';
           const state = stateCol ? cellToString(raw[stateCol]) : '';
           const products = productsCol ? cellToString(raw[productsCol]) : '';
-          const majorCategory = categoryCols.map((c) => cellToString(raw[c])).filter(Boolean)[0] || '';
+          const extractedCategories = normalizeVendorCategoryList(categoryCols.map((c) => cellToString(raw[c])));
+          const majorCategory =
+            extractedCategories[0] && !isPlaceholderVendorCategory(extractedCategories[0]) ? extractedCategories[0] : '';
+          const minorCategories = extractedCategories;
 
           const errors: string[] = [];
           if (!name) errors.push('Company name is required.');
+          if (options?.requireCategory && !majorCategory && minorCategories.length === 0) {
+            errors.push('Category is required — a vendor cannot exist without a category.');
+          }
           // A row with no email is not rejected — it still uploads with a
           // null email (never fabricated) and is flagged via `missingEmail`
           // instead, so a large marketplace-directory import doesn't drop or
@@ -190,7 +200,20 @@ export function parseVendorUploadFile(file: File): Promise<ParseVendorFileResult
 
           rows.push({
             rowNumber,
-            vendor: { vendorCode, name, email, phone, contactPerson, gstin, city, state, pincode, majorCategory, products },
+            vendor: {
+              vendorCode,
+              name,
+              email,
+              phone,
+              contactPerson,
+              gstin,
+              city,
+              state,
+              pincode,
+              majorCategory,
+              ...(minorCategories.length > 0 ? { minorCategories } : {}),
+              products,
+            },
             isValid: errors.length === 0,
             errors,
             missingEmail,

@@ -11,7 +11,14 @@ import {
   PERIOD_BY_VENDOR_INGESTION_HORIZON,
   VENDOR_INGESTION_HORIZON_BY_PERIOD,
   VENDOR_MAPPING_PAGE_SIZE,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
 } from '@/lib/constants';
+import {
+  resolveMinorCategory,
+  findMajorForMinor,
+  hasMajorCategory,
+} from '@/lib/categoryTaxonomy';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
@@ -403,6 +410,17 @@ export default function InitialSetupModal() {
         state: local?.state,
         pincode: local?.pincode,
       });
+      const localPoLines = local ? matchPoLinesForVendor(local) : [];
+      let finalMinors = normalizeVendorCategoryList(mapping.finalMinorCategories);
+      if (mapping.finalMajorCategory !== '' && finalMinors.length === 0 && localPoLines.length > 0) {
+        finalMinors = Array.from(
+          new Set(
+            localPoLines
+              .map((p) => resolveMinorCategory(p.itemName, p.specs, mapping.finalMajorCategory))
+              .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
+          )
+        );
+      }
       return {
         id: mapping.vendorRecordId,
         vendorCode: mapping.vendorCode || undefined,
@@ -418,13 +436,13 @@ export default function InitialSetupModal() {
         vendorRatingScore: local?.vendorRatingScore,
         hasPoHistory: mapping.hasPoHistory,
         categoriesMappedByBuyer: mapping.finalMajorCategory !== '',
-        itemsSupplied: local ? matchPoLinesForVendor(local).map((p) => p.itemName) : [],
+        itemsSupplied: localPoLines.map((p) => p.itemName),
         pastPoSpend: mapping.hasPoHistory
           ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
           : 'No PO History in Dump',
         poCount: mapping.poCount,
         firstSetMajorCategory: mapping.finalMajorCategory,
-        secondSetMinorCategories: mapping.finalMinorCategories,
+        secondSetMinorCategories: finalMinors,
         secondSetSecondaryMajors: [],
       };
     });
@@ -526,7 +544,12 @@ export default function InitialSetupModal() {
         if (!job) continue;
         try {
           const res = await fetch(`/api/vendor-ingestion/${sessionId}/jobs/${job.id}`, {
-            headers: authFetchHeaders(),
+            headers: {
+              ...authFetchHeaders(),
+              'Cache-Control': 'no-cache, no-store',
+              Pragma: 'no-cache',
+            },
+            cache: 'no-store',
           });
           if (!res.ok || cancelled) continue;
           const json = await res.json();
@@ -1044,7 +1067,7 @@ export default function InitialSetupModal() {
                   email: v.email,
                   phone: v.phone,
                   gstin: v.gstNumber,
-                  category: 'Vendor Master',
+                  category: '',
                   address: loc.address || v.address,
                   city: loc.city,
                   ...(loc.state ? { state: loc.state } : {}),
@@ -1482,8 +1505,7 @@ export default function InitialSetupModal() {
     }
   };
 
-  // Browser-side join between the Vendor Master and the PO lines. It records which suppliers have PO history and
-  // what they bought. It assigns no categories: categories come only from the server's AI category job.
+  // Browser-side join between the Vendor Master and the PO lines. Derives vendor categories from actual PO line items.
   const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
     return storedVendors.map((v) => {
       const matchingPOs = matchPoLinesForVendor(v);
@@ -1500,6 +1522,7 @@ export default function InitialSetupModal() {
         state: v.state,
         pincode: v.pincode,
       });
+
       return {
         id: v.id,
         vendorCode: v.vendorCode,
@@ -2551,14 +2574,36 @@ export default function InitialSetupModal() {
             {aiJob?.status === 'FAILED' && (
               <div
                 data-testid="ai-job-error-banner"
-                className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex items-start gap-2.5 shadow-xs"
+                className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
               >
-                <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" size={16} />
-                <div className="flex-1 min-w-0">
-                  <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
-                  <p className="mt-0.5 text-[11px] leading-relaxed">
-                    {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
-                  </p>
+                <div className="flex items-start gap-2.5 min-w-0">
+                  <AlertCircle className="text-rose-600 dark:text-rose-400 shrink-0 mt-0.5" size={16} />
+                  <div className="flex-1 min-w-0">
+                    <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
+                    <p className="mt-0.5 text-[11px] leading-relaxed">
+                      {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                  <button
+                    type="button"
+                    onClick={handleSimulatePOJoin}
+                    disabled={isProcessingPOJoin || isAiRunning}
+                    className="btn btn-rose btn-xs font-bold px-3 py-1.5"
+                  >
+                    Retry AI Match
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiJoinedVendors(computeJoinedRecords());
+                      setStep(4);
+                    }}
+                    className="btn btn-secondary btn-xs font-bold px-3 py-1.5 text-slate-700 dark:text-gray-200"
+                  >
+                    Skip to Step 4
+                  </button>
                 </div>
               </div>
             )}
@@ -2748,17 +2793,33 @@ export default function InitialSetupModal() {
               <button type="button" onClick={() => navigateToStep(2)} className="btn btn-secondary btn-sm">
                 Back to Vendor Master
               </button>
-              <button
-                type="button"
-                onClick={handleSimulatePOJoin}
-                disabled={isProcessingPOJoin || isAiRunning}
-                className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5 disabled:opacity-60"
-              >
-                {isProcessingPOJoin || isAiRunning
-                  ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
-                  : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
-                <ArrowRight size={14} />
-              </button>
+              <div className="flex items-center gap-2">
+                {aiJob?.status === 'FAILED' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setApiJoinedVendors(computeJoinedRecords());
+                      setStep(4);
+                    }}
+                    className="btn btn-secondary font-bold text-xs py-2.5 px-4 text-slate-700 dark:text-gray-200"
+                  >
+                    Continue to Step 4 (Self-Map Required)
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={handleSimulatePOJoin}
+                  disabled={isProcessingPOJoin || isAiRunning}
+                  className="btn btn-primary font-bold text-xs py-2.5 px-5 flex items-center gap-1.5 disabled:opacity-60"
+                >
+                  {isProcessingPOJoin || isAiRunning
+                    ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
+                    : aiJob?.status === 'FAILED'
+                    ? 'Retry AI Category Cross-Match'
+                    : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
+                  <ArrowRight size={14} />
+                </button>
+              </div>
             </div>
           </div>
         )}

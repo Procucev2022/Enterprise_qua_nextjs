@@ -416,6 +416,10 @@ async function getActiveJobStatus(req, res, next) {
       null,
       req.query.type || null
     );
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+    }
     return res.json({ success: true, data: { job } });
   } catch (err) {
     return respondWithError(err, res, next, 'Failed to retrieve active job status');
@@ -424,6 +428,10 @@ async function getActiveJobStatus(req, res, next) {
 
 async function getJobById(req, res, next) {
   try {
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+    }
     const job = await largeFileIngestionService.getJobStatus(
       req.user,
       req.params.sessionId,

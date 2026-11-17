@@ -949,5 +949,49 @@ describe('Buyer profile service', () => {
       expect(taxonomy).toEqual(DEFAULT_CATEGORY_TAXONOMY);
       expect(taxonomy).not.toBe(DEFAULT_CATEGORY_TAXONOMY);
     });
+
+    test('getProfile auto-heals missing GSTIN, PAN, street, pincode, and country from buyer account mirror', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          street: '',
+          city: '',
+          state: '',
+          pincode: '',
+          country: '',
+          gstNumber: '',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        corporateEmail: SESSION.email,
+        address: '42 Industrial Estate',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        zipCode: '560099',
+        country: 'India',
+        gst: '29abcde1234f1z5',
+        panNumber: 'abcde1234f',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.street).toBe('42 Industrial Estate');
+      expect(hydrated.gstNumber).toBe('29ABCDE1234F1Z5');
+      expect(hydrated.panNumber).toBe('ABCDE1234F');
+      expect(hydrated.pincode).toBe('560099');
+      expect(hydrated.country).toBe('India');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          street: '42 Industrial Estate',
+          gstNumber: '29ABCDE1234F1Z5',
+          panNumber: 'ABCDE1234F',
+          pincode: '560099',
+          country: 'India',
+        }),
+      }));
+    });
   });
 });

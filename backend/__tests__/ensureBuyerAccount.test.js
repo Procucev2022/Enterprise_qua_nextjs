@@ -213,6 +213,40 @@ describe('storeService.ensureBuyerAccountForUser', () => {
       'STORE_SERVICE'
     );
   });
+
+  test('skips updateBuyerAccountDurably when profile adds no new non-empty fields', async () => {
+    storeService.buyerAccounts = [];
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const existing = {
+      id: 'db-buyer-noop',
+      organizationName: 'Veera solutions pvt ltd',
+      corporateEmail: 'noop@ex.com',
+      gstin: '',
+      mobileNumber: '',
+      city: '',
+    };
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(existing);
+    jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValue({
+      found: true,
+      profile: {
+        companyName: 'Veera solutions pvt ltd',
+        contactEmail: 'noop@ex.com',
+        gstNumber: '',
+        contactPhone: '',
+        city: '',
+      },
+    });
+    const updateSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably');
+
+    const result = await storeService.ensureBuyerAccountForUser({
+      role: 'buyer',
+      email: 'noop@ex.com',
+      sub: existing.id,
+    });
+
+    expect(result).toEqual(existing);
+    expect(updateSpy).not.toHaveBeenCalled();
+  });
 });
 
 describe('an imported buyer (no buyer_accounts row) can see the RFQ they create', () => {

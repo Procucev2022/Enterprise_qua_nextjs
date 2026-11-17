@@ -5,7 +5,22 @@ const { isRetryableD1Error } = require('../db/d1Bridge');
 const { buyerScopeIdsFor } = require('../services/buyerVendorScope');
 const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
-const { resolveVendorLocationFields } = require('../config/constants');
+const {
+  resolveVendorLocationFields,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+} = require('../config/constants');
+const categoryTaxonomyMaster = require('../config/categoryTaxonomyMaster.json');
+
+const categoryTaxonomyMap = new Map();
+for (const entry of categoryTaxonomyMaster) {
+  const mKey = String(entry.majorCategory || '').trim().toLowerCase();
+  const minors = new Map();
+  for (const m of entry.minorCategories || []) {
+    minors.set(String(m).trim().toLowerCase(), m);
+  }
+  categoryTaxonomyMap.set(mKey, { major: entry.majorCategory, minors });
+}
 
 /**
  * Load vendor_master_records from the buyer's latest ingestion session when those uploaded
@@ -29,6 +44,16 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     const masterRecords = await vendorIngestionQueries.findVendorMasterRecords(session.id, orgId, 500);
     if (!Array.isArray(masterRecords) || masterRecords.length === 0) return [];
 
+    const categoryMappings =
+      typeof vendorIngestionQueries.findCategoryMappings === 'function'
+        ? await vendorIngestionQueries.findCategoryMappings(session.id, orgId).catch(() => [])
+        : [];
+    const mappingByRecordId = new Map(
+      (Array.isArray(categoryMappings) ? categoryMappings : [])
+        .filter((m) => m && m.vendorRecordId)
+        .map((m) => [m.vendorRecordId, m])
+    );
+
     const seenEmails = new Set(
       existingVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
     );
@@ -46,6 +71,41 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
       }
       if (normalizedEmail) seenEmails.add(normalizedEmail);
       if (normalizedCode) seenCodes.add(normalizedCode);
+
+      const mapping = mappingByRecordId.get(rec.id);
+      const isRejectedMapping =
+        mapping?.status === 'SELF_MAP_REQUIRED' || mapping?.reviewAction === 'REJECTED';
+      const rawMajorCandidates = [
+        mapping?.buyerMajorCategory,
+        !isRejectedMapping ? mapping?.aiSuggestion?.majorCategory : null,
+        rec.majorCategory,
+      ];
+      const resolvedMajor =
+        rawMajorCandidates.find((candidate) => typeof candidate === 'string' && !isPlaceholderVendorCategory(candidate)) || '';
+      const rawMinors =
+        Array.isArray(mapping?.buyerMinorCategories) && mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : !isRejectedMapping && Array.isArray(mapping?.aiSuggestion?.minorCategories) && mapping.aiSuggestion.minorCategories.length > 0
+            ? mapping.aiSuggestion.minorCategories
+            : rec.minorCategories;
+      let resolvedMinors = normalizeVendorCategoryList(rawMinors);
+      if (resolvedMinors.length === 0 && resolvedMajor) {
+        const majorEntry = categoryTaxonomyMap.get(resolvedMajor.trim().toLowerCase());
+        if (majorEntry) {
+          const candidates = [
+            ...(Array.isArray(mapping?.aiSuggestion?.relevantProducts) ? mapping.aiSuggestion.relevantProducts : []),
+            ...(Array.isArray(rec.itemsSupplied) ? rec.itemsSupplied : []),
+          ];
+          for (const cand of candidates) {
+            const candKey = String(cand).trim().toLowerCase();
+            for (const [mKey, actualName] of majorEntry.minors.entries()) {
+              if (candKey.includes(mKey) || mKey.includes(candKey)) {
+                if (!resolvedMinors.includes(actualName)) resolvedMinors.push(actualName);
+              }
+            }
+          }
+        }
+      }
 
       const parsedRating = Number(rec.rating);
       const loc = resolveVendorLocationFields({
@@ -66,9 +126,9 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         state: loc.state || null,
         pincode: loc.pincode || null,
         gstin: rec.gstin || null,
-        majorCategory: 'Vendor Master',
-        minorCategories: [],
-        clientMappedCategories: [],
+        majorCategory: resolvedMajor.trim(),
+        minorCategories: resolvedMinors,
+        clientMappedCategories: [...resolvedMinors],
         vendorSelectedCategories: [],
         rating:
           rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(parsedRating)

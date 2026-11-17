@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
@@ -68,7 +68,16 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     setDeepDiveModalOpen,
     selectedRFQForDeepDive,
     isLoadingRFQs,
+    refreshRFQs,
   } = useApp();
+
+  const refreshRFQsRef = useRef(refreshRFQs);
+  refreshRFQsRef.current = refreshRFQs;
+  useEffect(() => {
+    if (typeof refreshRFQsRef.current === 'function') {
+      void refreshRFQsRef.current();
+    }
+  }, []);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side — see command-center.tsx's matching note), so allRfqs is

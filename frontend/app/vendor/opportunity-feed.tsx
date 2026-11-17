@@ -43,6 +43,7 @@ import {
   RotateCcw,
   Download,
   MoreHorizontal,
+  MapPin,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/constants';
 import { getAllUniqueMinorCategories } from '@/lib/categoryTaxonomy';
@@ -62,6 +63,13 @@ function vendorAuthHeaders(): Record<string, string> {
 /** Distinct, non-empty values in sorted order. Used for filter options taken from real RFQ records. */
 function distinctSorted(values: string[]): string[] {
   return Array.from(new Set(values.map((value) => value.trim()).filter(Boolean))).sort();
+}
+
+/** Extracts a 6-digit Indian postal code from a field or location string. */
+function extractPincode(value: unknown): string {
+  if (!value) return '';
+  const match = String(value).match(/\b\d{6}\b/);
+  return match ? match[0] : '';
 }
 
 export default function OpportunityFeed({
@@ -213,6 +221,7 @@ export default function OpportunityFeed({
   const [myBuyerId, setMyBuyerId] = React.useState<string>('');
   const [myVendorId, setMyVendorId] = React.useState<string>('');
   const [myVendorName, setMyVendorName] = React.useState<string>('');
+  const [myPincode, setMyPincode] = React.useState<string>('');
   const [myOnboardingSource, setMyOnboardingSource] = React.useState<'buyer' | 'self' | null>(null);
   React.useEffect(() => {
     let cancelled = false;
@@ -253,6 +262,7 @@ export default function OpportunityFeed({
         setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || '');
         setMyVendorId(data.data.id || '');
         setMyVendorName(data.data.name || '');
+        setMyPincode(data.data.pincode || '');
         const isBuyerAdded = data.data.addedByBuyerCompany || data.data.buyerId || data.data.buyerAccountId;
         setMyOnboardingSource(
           isBuyerAdded ? 'buyer' : data.data.source === 'self_registration' ? 'self' : null
@@ -361,13 +371,22 @@ export default function OpportunityFeed({
   };
 
   const [statusFilter, setStatusFilter] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [statusFilterDirect, setStatusFilterDirect] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
+  const [statusFilterNet, setStatusFilterNet] = React.useState<'all' | 'open' | 'submitted' | 'closed'>('all');
   const [isStatusDropdownOpen, setIsStatusDropdownOpen] = React.useState(false);
   const [statusModalFilter, setStatusModalFilter] = React.useState<'all' | 'open' | 'closed' | 'due_today' | null>(null);
   const [statusModalSearch, setStatusModalSearch] = React.useState('');
 
+  const [selectedPincodesDirect, setSelectedPincodesDirect] = React.useState<string[]>([]);
+  const [selectedPincodesNet, setSelectedPincodesNet] = React.useState<string[]>([]);
+  const [isPincodeDirectOpen, setIsPincodeDirectOpen] = React.useState(false);
+  const [isPincodeNetOpen, setIsPincodeNetOpen] = React.useState(false);
+
   const handleStatFilterClick = (status: 'all' | 'open' | 'closed' | 'due_today') => {
     if (status !== 'due_today') {
       setStatusFilter(status);
+      setStatusFilterDirect(status);
+      setStatusFilterNet(status);
     }
     setCurrentPage(1);
     setCurrentPageNet(1);
@@ -384,22 +403,35 @@ export default function OpportunityFeed({
     return () => window.removeEventListener('keydown', handleKey);
   }, [statusModalFilter]);
 
-  const handleResetFilters = () => {
+  const handleResetFiltersDirect = () => {
     setSelectedBuyerDirect('all');
     setSelectedMajorCategoryDirect('all');
     setSelectedMinorCategoryDirect('all');
+    setSelectedMinorCategory('all');
+    setRfqSearchTermDirect('');
+    setStatusFilterDirect('all');
+    setSelectedPincodesDirect([]);
+    setFilterCatalogueMatchesDirect(false);
+    setCurrentPage(1);
+  };
+
+  const handleResetFiltersNet = () => {
     setSelectedMajorCategoryNet('all');
     setSelectedMinorCategoryNet('all');
     setSelectedMinorCategory('all');
-    setRfqSearchTerm('');
-    setRfqSearchTermDirect('');
     setRfqSearchTermNet('');
-    setStatusFilter('all');
-    setFilterCatalogueMatches(false);
-    setFilterCatalogueMatchesDirect(false);
+    setStatusFilterNet('all');
+    setSelectedPincodesNet([]);
     setFilterCatalogueMatchesNet(false);
-    setCurrentPage(1);
     setCurrentPageNet(1);
+  };
+
+  const handleResetFilters = () => {
+    handleResetFiltersDirect();
+    handleResetFiltersNet();
+    setStatusFilter('all');
+    setRfqSearchTerm('');
+    setFilterCatalogueMatches(false);
   };
 
   const renderBuyerOption = (buyer: string) => (
@@ -428,28 +460,103 @@ export default function OpportunityFeed({
   // Checks vendor's addedByBuyerCompany against the RFQ's buyerAccountName,
   // buyer ID mapping, and explicit vendor assignment in assignedVendors.
   const myVendorRecord = buyerVendors.find((v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase());
+
+  const checkCategoryAndPincodeMatch = React.useCallback((opp: VendorOpportunity) => {
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    const rfqMinors = new Set<string>();
+    const addMinor = (c: any) => {
+      if (typeof c === 'string' && c.trim()) rfqMinors.add(c.trim().toLowerCase());
+    };
+    if (opp.minorCategory) addMinor(opp.minorCategory);
+    if (opp.category) addMinor(opp.category);
+    if (opp.majorCategory) addMinor(opp.majorCategory);
+    if (rfqRecord?.category) addMinor(rfqRecord.category);
+    if ((rfqRecord as any)?.majorCategory) addMinor((rfqRecord as any).majorCategory);
+    (rfqRecord?.extractedEntities || []).forEach((e: any) => {
+      if (e.minorCategory) addMinor(e.minorCategory);
+      if (e.category) addMinor(e.category);
+    });
+    (rfqRecord?.lineItems || []).forEach((li: any) => {
+      if (li.minorCategory) addMinor(li.minorCategory);
+      if (li.category) addMinor(li.category);
+    });
+
+    const vendorCatPool = [
+      myMajorCategory,
+      ...myMinorCategories,
+      myVendorRecord?.majorCategory,
+      ...(Array.isArray(myVendorRecord?.minorCategories) ? myVendorRecord.minorCategories : []),
+      (myVendorRecord as any)?.category,
+      (currentUserSession as any)?.category,
+      (currentUserSession as any)?.majorCategory,
+      ...(Array.isArray((currentUserSession as any)?.minorCategories) ? (currentUserSession as any).minorCategories : []),
+    ]
+      .filter((c): c is string => typeof c === 'string' && Boolean(c.trim()))
+      .map((c) => c.trim().toLowerCase());
+
+    const hasCategoryMatch =
+      rfqMinors.size > 0 &&
+      vendorCatPool.length > 0 &&
+      Array.from(rfqMinors).some((m) =>
+        vendorCatPool.some((vc) => vc === m || vc.includes(m) || m.includes(vc))
+      );
+
+    const oppPin =
+      extractPincode(opp.pincode) ||
+      extractPincode(opp.deliveryPincode) ||
+      extractPincode(rfqRecord?.deliveryPincode) ||
+      extractPincode((rfqRecord as any)?.pincode) ||
+      extractPincode(opp.deliveryLocation) ||
+      extractPincode(rfqRecord?.deliveryLocation);
+
+    const vendorPin =
+      extractPincode(myPincode) ||
+      extractPincode(myVendorRecord?.pincode) ||
+      extractPincode((currentUserSession as any)?.pincode) ||
+      extractPincode((currentUserSession as any)?.postalCode) ||
+      extractPincode((currentUserSession as any)?.address) ||
+      extractPincode((myVendorRecord as any)?.address);
+
+    const hasPincodeMatch = Boolean(oppPin) && Boolean(vendorPin) && oppPin === vendorPin;
+    return Boolean(hasCategoryMatch && hasPincodeMatch);
+  }, [rfqs, myMajorCategory, myMinorCategories, myVendorRecord, currentUserSession, myPincode]);
+
   const isOwnBuyerRfq = React.useCallback((opp: VendorOpportunity) => {
+    // If minor category matches vendor's category AND pincode matches vendor's pincode, it belongs in My Enquiries as well
+    if (checkCategoryAndPincodeMatch(opp)) {
+      return true;
+    }
+
     const sessionEmail = (currentUserSession?.email || '').toLowerCase().trim();
     const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
-    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors;
-    if (assignedList && assignedList.length > 0) {
-      const isAssigned = assignedList.some((v) => {
+
+    // Mode 0 RFQs without category + pincode match are public network opportunities
+    const mode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) return false;
+
+    const assignedList = opp.assignedVendors || rfqRecord?.assignedVendors || (rfqRecord?.followUpData as { vendors?: unknown[] })?.vendors;
+    if (Array.isArray(assignedList) && assignedList.length > 0) {
+      const isAssigned = assignedList.some((v: any) => {
+        if (!v) return false;
         const vEmail = (v.email ?? '').toLowerCase().trim();
         if (sessionEmail && vEmail === sessionEmail) return true;
-        const vId = String(v.id ?? '').trim();
-        if (myVendorId && vId === myVendorId) return true;
+        const vId = String(v.id ?? v.vendorId ?? '').trim().toLowerCase();
+        if (myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
         const vName = (v.name ?? '').toLowerCase().trim();
         return Boolean(myVendorName && vName === myVendorName.toLowerCase().trim());
       });
-      if (isAssigned) return true;
+      // When assignedVendors exists, ONLY invited vendors can see this RFQ in My Enquiries
+      return isAssigned;
     }
 
+    // Fallback only when no assignedVendors list exists on the RFQ
     const bCompany = myAddedByBuyerCompany || myVendorRecord?.addedByBuyerCompany;
-    if (bCompany && opp.buyer === bCompany) return true;
+    if (bCompany && (opp.buyer === bCompany || rfqRecord?.buyerAccountName === bCompany)) return true;
     const bId = myBuyerId || myVendorRecord?.buyerId || myVendorRecord?.buyerAccountId;
-    if (bId && opp.buyerAccountId === bId) return true;
+    if (bId && (opp.buyerAccountId === bId || rfqRecord?.buyerAccountId === bId)) return true;
     return false;
-  }, [rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+  }, [rfqs, checkCategoryAndPincodeMatch, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
 
   // The RFQs this vendor has not quoted on yet, prioritizing direct client invitations first
   const pendingBidOpportunities = React.useMemo(() => {
@@ -603,11 +710,65 @@ export default function OpportunityFeed({
   };
 
   const isDirectOpportunity = React.useCallback((opp: VendorOpportunity) => {
+    if (checkCategoryAndPincodeMatch(opp)) return true;
     if (typeof process !== 'undefined' && process.env.NODE_ENV === 'test') {
       return opp.type === 'direct_invitation';
     }
     return isOwnBuyerRfq(opp);
-  }, [isOwnBuyerRfq]);
+  }, [checkCategoryAndPincodeMatch, isOwnBuyerRfq]);
+
+  const isPublicOpportunity = React.useCallback((opp: VendorOpportunity) => {
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    const mode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) return true;
+
+    return !isDirectOpportunity(opp);
+  }, [rfqs, isDirectOpportunity]);
+
+  const getOpportunityPincode = React.useCallback((opp: VendorOpportunity) => {
+    const rfqRecord = rfqs?.find((r) => r.rfqNumber === opp.rfqNumber);
+    return (
+      extractPincode(opp.pincode) ||
+      extractPincode(opp.deliveryPincode) ||
+      extractPincode(rfqRecord?.deliveryPincode) ||
+      extractPincode((rfqRecord as any)?.pincode) ||
+      extractPincode(opp.deliveryLocation) ||
+      extractPincode(rfqRecord?.deliveryLocation)
+    );
+  }, [rfqs]);
+
+  // Section-wise base opportunities before user filters
+  const allDirectOpportunities = React.useMemo(() => {
+    return vendorOpportunities.filter((opp) => isDirectOpportunity(opp));
+  }, [vendorOpportunities, isDirectOpportunity]);
+
+  const allNetworkOpportunities = React.useMemo(() => {
+    return vendorOpportunities.filter((opp) => isPublicOpportunity(opp));
+  }, [vendorOpportunities, isPublicOpportunity]);
+
+  // Section-wise available pincodes
+  const availablePincodesDirect = React.useMemo(() => {
+    const set = new Set<string>();
+    allDirectOpportunities.forEach((opp) => {
+      const pin = getOpportunityPincode(opp);
+      if (pin) set.add(pin);
+    });
+    return Array.from(set).sort();
+  }, [allDirectOpportunities, getOpportunityPincode]);
+
+  const availablePincodesNet = React.useMemo(() => {
+    const set = new Set<string>();
+    allNetworkOpportunities.forEach((opp) => {
+      const pin = getOpportunityPincode(opp);
+      if (pin) set.add(pin);
+    });
+    return Array.from(set).sort();
+  }, [allNetworkOpportunities, getOpportunityPincode]);
+
+  const availablePincodes = React.useMemo(() => {
+    return Array.from(new Set([...availablePincodesDirect, ...availablePincodesNet])).sort();
+  }, [availablePincodesDirect, availablePincodesNet]);
 
   // FILTER DIRECT INVITATIONS (MY BUYER ENQUIRIES)
   const eligibleDirectOpportunities = vendorOpportunities.filter((opp) => {
@@ -617,27 +778,35 @@ export default function OpportunityFeed({
     if (selectedBuyerDirect !== 'all' && opp.buyer !== selectedBuyerDirect) return false;
     if (selectedMajorCategoryDirect !== 'all' && cats.major !== selectedMajorCategoryDirect) return false;
     if (selectedMinorCategoryDirect !== 'all' && cats.minor !== selectedMinorCategoryDirect) return false;
+    if (selectedPincodesDirect.length > 0) {
+      const oppPin = getOpportunityPincode(opp);
+      if (!selectedPincodesDirect.some((pin) => pin.replace(/\D/g, '') === oppPin)) return false;
+    }
     if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
     const directSearch = rfqSearchTermDirect || rfqSearchTerm;
     if (!matchOpportunitySearch(opp, directSearch, cats)) return false;
     const directCatFilter = filterCatalogueMatchesDirect || filterCatalogueMatches;
     if (directCatFilter && catalogueMatchesFor(opp).length === 0) return false;
-    return matchOpportunityStatus(opp, statusFilter);
+    return matchOpportunityStatus(opp, statusFilterDirect);
   });
 
   // FILTER NETWORK OPPORTUNITIES (OPEN MARKETPLACE / PUBLIC ENQUIRIES)
   const eligibleNetworkOpportunities = vendorOpportunities.filter((opp) => {
-    if (isDirectOpportunity(opp)) return false;
+    if (!isPublicOpportunity(opp)) return false;
     const cats = getOpportunityCategories(opp);
 
     if (selectedMajorCategoryNet !== 'all' && cats.major !== selectedMajorCategoryNet) return false;
     if (selectedMinorCategoryNet !== 'all' && cats.minor !== selectedMinorCategoryNet) return false;
+    if (selectedPincodesNet.length > 0) {
+      const oppPin = getOpportunityPincode(opp);
+      if (!selectedPincodesNet.some((pin) => pin.replace(/\D/g, '') === oppPin)) return false;
+    }
     if (!matchOpportunityMinorCat(opp, selectedMinorCategory)) return false;
     const netSearch = rfqSearchTermNet || rfqSearchTerm;
     if (!matchOpportunitySearch(opp, netSearch, cats)) return false;
     const netCatFilter = filterCatalogueMatchesNet || filterCatalogueMatches;
     if (netCatFilter && catalogueMatchesFor(opp).length === 0) return false;
-    return matchOpportunityStatus(opp, statusFilter);
+    return matchOpportunityStatus(opp, statusFilterNet);
   });
 
   // Total summary counts of RFQs matching vendor's item catalogue
@@ -658,6 +827,8 @@ export default function OpportunityFeed({
       return bTime - aTime;
     });
   }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
+
+
 
   const networkOpps = eligibleNetworkOpportunities;
   const [currentPageNet, setCurrentPageNet] = React.useState(1);
@@ -1233,7 +1404,7 @@ export default function OpportunityFeed({
                 </button>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-6 gap-3 text-[11px] items-end">
                 {/* Buyer Filter */}
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">
@@ -1306,14 +1477,74 @@ export default function OpportunityFeed({
                   </select>
                 </div>
 
+                {/* Pincode Multi-Select Filter */}
+                <div className="flex flex-col gap-1 relative">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pincode</span>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsPincodeDirectOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs text-left"
+                      aria-label="Direct Pincode Filter"
+                      aria-expanded={isPincodeDirectOpen}
+                    >
+                      <span className="truncate">
+                        {selectedPincodesDirect.length === 0
+                          ? `All Pincodes (${availablePincodesDirect.length})`
+                          : `${selectedPincodesDirect.length} PIN${selectedPincodesDirect.length > 1 ? 's' : ''}`}
+                      </span>
+                      <span className="text-[10px] text-slate-400">▾</span>
+                    </button>
+                    {isPincodeDirectOpen && (
+                      <div className="absolute left-0 top-full z-40 mt-1 max-h-56 w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+                        <div className="mb-1.5 flex items-center justify-between border-b border-slate-100 pb-1 text-[11px] dark:border-gray-800">
+                          <span className="font-bold text-slate-700 dark:text-gray-300">Pincodes ({availablePincodesDirect.length})</span>
+                          {selectedPincodesDirect.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => { setSelectedPincodesDirect([]); setCurrentPage(1); }}
+                              className="text-[10px] font-bold text-blue-600 hover:underline"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {availablePincodesDirect.length === 0 ? (
+                          <div className="py-3 text-center text-xs text-slate-400">No pincodes available</div>
+                        ) : (
+                          availablePincodesDirect.map((pin) => (
+                            <label key={pin} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:text-gray-300 dark:hover:bg-gray-800">
+                              <input
+                                type="checkbox"
+                                checked={selectedPincodesDirect.includes(pin)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedPincodesDirect((prev) => [...prev, pin]);
+                                  } else {
+                                    setSelectedPincodesDirect((prev) => prev.filter((p) => p !== pin));
+                                  }
+                                  setCurrentPage(1);
+                                }}
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <span>{pin}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Status Filter */}
                 <div className="flex flex-col gap-1">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status</span>
                   <select
                     role="listbox"
                     aria-label="Status"
-                    value={statusFilter}
+                    value={statusFilterDirect}
                     onChange={(e) => {
+                      setStatusFilterDirect(e.target.value as any);
                       setStatusFilter(e.target.value as any);
                       setCurrentPage(1);
                     }}
@@ -1347,13 +1578,43 @@ export default function OpportunityFeed({
                 <div className="flex items-center">
                   <button
                     type="button"
-                    onClick={handleResetFilters}
+                    onClick={handleResetFiltersDirect}
                     className="btn btn-secondary py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 w-full hover:bg-slate-100 cursor-pointer"
                   >
                     <RotateCcw size={13} /> Reset
                   </button>
                 </div>
               </div>
+
+              {/* Selected Pincode Chips for Direct Invitations */}
+              {selectedPincodesDirect.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/50 dark:border-gray-800">
+                  <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400">Selected Pincodes:</span>
+                  {selectedPincodesDirect.map((pin) => (
+                    <span
+                      key={pin}
+                      className="inline-flex items-center gap-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
+                    >
+                      PIN: {pin}
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPincodesDirect((prev) => prev.filter((p) => p !== pin))}
+                        className="hover:text-indigo-900 dark:hover:text-white ml-0.5"
+                        aria-label={`Remove filter for pincode ${pin}`}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                  <button
+                    type="button"
+                    onClick={() => { setSelectedPincodesDirect([]); setCurrentPage(1); }}
+                    className="text-[10px] font-bold text-blue-600 hover:underline dark:text-cyan-400 ml-1"
+                  >
+                    Clear Pincodes
+                  </button>
+                </div>
+              )}
             </div>
 
             {directInvites.length === 0 ? (
@@ -1433,15 +1694,15 @@ export default function OpportunityFeed({
               </button>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-[11px]">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
               {/* Major Category Dropdown (hidden in browser, preserved for unit tests) */}
               <div className="sr-only">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Major Category</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Major Category</span>
                 <select
                   aria-label="Network Major Category"
                   value={selectedMajorCategoryNet}
                   onChange={handleMajorCategoryNet}
-                  className="select py-1 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-gray-200"
+                  className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
                 >
                   <option value="all">🌐 All Major Categories</option>
                   {feedMajorCategories.map((major) => (
@@ -1452,7 +1713,7 @@ export default function OpportunityFeed({
 
               {/* Minor Category Dropdown with 3-char autocomplete search */}
               <div className="flex flex-col gap-1 relative">
-                <span className="text-[9px] uppercase font-bold text-slate-400">Category</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</span>
                 <CategorySearchInput
                   label="Category"
                   options={allMinorCategories}
@@ -1490,23 +1751,145 @@ export default function OpportunityFeed({
                 </select>
               </div>
 
+              {/* Pincode Multi-Select Filter */}
+              <div className="flex flex-col gap-1 relative">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pincode</span>
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => setIsPincodeNetOpen((prev) => !prev)}
+                    className="flex w-full items-center justify-between py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs text-left"
+                    aria-label="Network Pincode Filter"
+                    aria-expanded={isPincodeNetOpen}
+                  >
+                    <span className="truncate">
+                      {selectedPincodesNet.length === 0
+                        ? `All Pincodes (${availablePincodesNet.length})`
+                        : `${selectedPincodesNet.length} PIN${selectedPincodesNet.length > 1 ? 's' : ''}`}
+                    </span>
+                    <span className="text-[10px] text-slate-400">▾</span>
+                  </button>
+                  {isPincodeNetOpen && (
+                    <div className="absolute left-0 top-full z-40 mt-1 max-h-56 w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+                      <div className="mb-1.5 flex items-center justify-between border-b border-slate-100 pb-1 text-[11px] dark:border-gray-800">
+                        <span className="font-bold text-slate-700 dark:text-gray-300">Pincodes ({availablePincodesNet.length})</span>
+                        {selectedPincodesNet.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={() => { setSelectedPincodesNet([]); setCurrentPageNet(1); }}
+                            className="text-[10px] font-bold text-blue-600 hover:underline"
+                          >
+                            Clear
+                          </button>
+                        )}
+                      </div>
+                      {availablePincodesNet.length === 0 ? (
+                        <div className="py-3 text-center text-xs text-slate-400">No pincodes available</div>
+                      ) : (
+                        availablePincodesNet.map((pin) => (
+                          <label key={pin} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:text-gray-300 dark:hover:bg-gray-800">
+                            <input
+                              type="checkbox"
+                              checked={selectedPincodesNet.includes(pin)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedPincodesNet((prev) => [...prev, pin]);
+                                } else {
+                                  setSelectedPincodesNet((prev) => prev.filter((p) => p !== pin));
+                                }
+                                setCurrentPageNet(1);
+                              }}
+                              className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                            />
+                            <span>{pin}</span>
+                          </label>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              {/* Status Filter for Network */}
+              <div className="flex flex-col gap-1">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status</span>
+                <select
+                  role="listbox"
+                  aria-label="Network Status"
+                  value={statusFilterNet}
+                  onChange={(e) => {
+                    setStatusFilterNet(e.target.value as any);
+                    setStatusFilter(e.target.value as any);
+                    setCurrentPageNet(1);
+                  }}
+                  className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                >
+                  <option value="all">All Status</option>
+                  <option value="open">Open</option>
+                  <option value="submitted">Bid Submitted</option>
+                  <option value="closed">Closed</option>
+                </select>
+              </div>
+
               {/* Sourcing Intelligence Search Bar */}
               <div className="flex flex-col gap-1">
-                <span className="text-[9px] uppercase font-bold text-slate-405">Search Specs</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Search Specs</span>
                 <div className="relative">
-                  <span className="absolute inset-y-0 left-0 flex items-center pl-2 text-slate-400">
-                    <Search size={12} />
+                  <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400">
+                    <Search size={13} />
                   </span>
                   <input
                     type="text"
                     placeholder="Specs, location, keywords..."
                     value={rfqSearchTermNet}
                     onChange={handleSearchNet}
-                    className="input pl-7 py-1 text-[11px] w-full bg-white dark:bg-gray-900 border border-slate-200 rounded-lg font-bold text-slate-850 dark:text-white"
+                    className="input pl-8 py-2 text-xs w-full bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-white"
                   />
                 </div>
               </div>
+
+              {/* Reset Button for Network */}
+              <div className="flex items-center">
+                <button
+                  type="button"
+                  aria-label="Clear Filters"
+                  onClick={handleResetFiltersNet}
+                  className="btn btn-secondary py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 w-full hover:bg-slate-100 cursor-pointer"
+                >
+                  <RotateCcw size={13} /> Reset
+                </button>
+              </div>
             </div>
+
+            {/* Selected Pincode Chips for Network */}
+            {selectedPincodesNet.length > 0 && (
+              <div className="flex flex-wrap items-center gap-1.5 pt-1 border-t border-slate-200/50 dark:border-gray-800">
+                <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400">Selected Pincodes:</span>
+                {selectedPincodesNet.map((pin) => (
+                  <span
+                    key={pin}
+                    className="inline-flex items-center gap-1 rounded-md bg-indigo-50 dark:bg-indigo-950/60 px-2 py-0.5 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800"
+                  >
+                    PIN: {pin}
+                    <button
+                      type="button"
+                      onClick={() => setSelectedPincodesNet((prev) => prev.filter((p) => p !== pin))}
+                      className="hover:text-indigo-900 dark:hover:text-white ml-0.5"
+                      aria-label={`Remove filter for pincode ${pin}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => { setSelectedPincodesNet([]); setCurrentPageNet(1); }}
+                  className="text-[10px] font-bold text-blue-600 hover:underline dark:text-cyan-400 ml-1"
+                >
+                  Clear Pincodes
+                </button>
+              </div>
+            )}
           </div>
 
           {networkOpps.length === 0 ? (

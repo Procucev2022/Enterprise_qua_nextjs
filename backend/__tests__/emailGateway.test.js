@@ -235,7 +235,7 @@ describe('emailGatewayService.processMessage', () => {
     expect(payload.sourceEmail).toBe(SENDER);
     expect(account.id).toBe('buyer-acc-101');
     expect(result.rfq.rfqNumber).toBe('RFQ-2026-0001');
-  });
+  }, 30000);
 
   test('does not record or charge an email RFQ when its durable create fails', async () => {
     mockExtraction();

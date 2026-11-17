@@ -201,15 +201,33 @@ function canVendorViewRfq(vendor, rfq) {
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
   const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  // Buyer-specific vendor access rule:
-  // When a vendor is mapped to the buyer who created the RFQ, they can view that buyer's RFQs across all modes.
+  // Mode 0 RFQs are public enquiries: visible to all vendors in public enquiries,
+  // even if the RFQ category does not match their registered categories.
+  if (isV0) {
+    return true;
+  }
+
+  // Explicitly invited vendors can view the RFQ regardless of their registered category
+  if (storeService._isInvitedVendor(vendor, rfq)) {
+    return true;
+  }
+
+  // For RFQs with an explicit assigned vendors list, only invited vendors may view it in private modes
+  const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+  if (hasExplicitAssigned) {
+    if (isV2 || isV3) {
+      if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+    }
+    return false;
+  }
+
+  // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists:
   if (storeService.isVendorMappedToRfqBuyer(vendor, rfq)) {
     return true;
   }
 
-  // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
-  // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
-  if (isV0 || isV2 || isV3) {
+  // RFQ details visible across network modes (V2, V3) for category-matched vendors
+  if (isV2 || isV3) {
     if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
   }
 
@@ -433,9 +451,9 @@ async function getRFQs(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
     if (scope.restricted && scope.role === 'buyer' && scope.buyerAccountId) {
-      await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+      await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     } else {
-      await storeService.syncRFQsFromDB();
+      await storeService.syncRFQsFromDB(true);
     }
     let rfqs = scopedRfqList(scope);
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
@@ -462,6 +480,9 @@ async function getRFQs(req, res, next) {
         }))
       : rfqs;
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
@@ -481,7 +502,7 @@ async function getRFQs(req, res, next) {
  */
 async function getAllRFQs(req, res, next) {
   try {
-    await storeService.syncRFQsFromDB();
+    await storeService.syncRFQsFromDB(true);
     let rfqs = storeService
       .getRFQs()
       .slice()
@@ -1610,9 +1631,12 @@ async function stageExtractionDocument(req, res, next) {
 async function getRFQSummary(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
-    await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+    await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
@@ -1800,7 +1824,7 @@ async function downloadQuoteAttachment(req, res, next) {
 async function updateRFQ(req, res, next) {
   const { id } = req.params;
   try {
-    const existing = storeService.getRFQById(id);
+    const existing = storeService.getRFQById(id) || (await storeService.getRFQByIdAsync(id));
     if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });

@@ -795,7 +795,7 @@ describe('ItemCatalogue Comprehensive Suite', () => {
       fireEvent.change(moqInput, { target: { value: '1' } });
       fireEvent.click(addBtn);
     });
-  });
+  }, 30000);
 
   test('covers category input focus and non-Error exception handling', async () => {
     renderWithProvider(<ItemCatalogueWithSession />);

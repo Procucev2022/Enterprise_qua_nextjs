@@ -4247,6 +4247,60 @@ function makeInquiry(overrides: any = {}): any {
 
       unmount();
     });
+
+    it('synchronizes store status, session list, and parent callback when closing or extending an RFQ', async () => {
+      const refreshRFQs = jest.fn().mockResolvedValue(undefined);
+      const syncRFQRecord = jest.fn();
+      const refreshFromDB = jest.fn().mockResolvedValue(undefined);
+      const onUpdate = jest.fn();
+
+      const openRfq = buildRFQ({
+        id: 'rfq-close-sync-1',
+        rfqNumber: 'RFQ261611296521',
+        status: 'Quotes Pending',
+      });
+      const extendedRfq = {
+        ...openRfq,
+        closingDeadline: '2099-11-24T09:25:00.000Z',
+        isExtended: true,
+        extensionHours: 144,
+      };
+      const closedRfq = {
+        ...extendedRfq,
+        status: 'Closed' as const,
+      };
+
+      mockExtendRFQ.mockResolvedValueOnce({ success: true, rfq: extendedRfq });
+      mockUpdateRFQ.mockResolvedValueOnce({ success: true, rfq: closedRfq });
+
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB,
+        refreshRFQs,
+        syncRFQRecord,
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
+      });
+
+      renderDetails(openRfq, { onUpdate });
+
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(DETAILS.extendRfqAction, 'i') }));
+      const modal = screen.getByRole('dialog');
+      const confirmExtend = within(modal).getByRole('button', { name: /Confirm Extension/i });
+      fireEvent.click(confirmExtend);
+
+      await waitFor(() => expect(syncRFQRecord).toHaveBeenCalledWith(extendedRfq));
+      expect(onUpdate).toHaveBeenCalledWith(extendedRfq);
+      expect(refreshRFQs).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+
+      await waitFor(() => expect(syncRFQRecord).toHaveBeenCalledWith(closedRfq));
+      expect(onUpdate).toHaveBeenCalledWith(closedRfq);
+      expect(refreshRFQs).toHaveBeenCalledTimes(2);
+      expect(refreshFromDB).toHaveBeenCalledTimes(2);
+    });
   });
 });
 

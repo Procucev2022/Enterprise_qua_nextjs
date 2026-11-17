@@ -2,6 +2,7 @@ const bootstrapController = require('../src/controllers/bootstrapController');
 const buyerAccountController = require('../src/controllers/buyerAccountController');
 const vendorController = require('../src/controllers/vendorController');
 const identityQueries = require('../src/db/identityQueries');
+const domainQueries = require('../src/db/domainQueries');
 const rootResolvers = require('../src/graphql/resolvers');
 const storeService = require('../src/services/storeService');
 const zohoPaymentService = require('../src/services/zohoPaymentService');
@@ -173,6 +174,39 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(next).toHaveBeenCalled();
+
+      // Merges into existing buyer mirror when an account already exists for corporateEmail
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'u-buyer-existing',
+        corporateEmail: 'merge@test.com',
+        organizationId: 'org-merge-1',
+      });
+      const mergeSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({
+        id: 'u-buyer-existing',
+        organizationName: 'Merge Corp',
+        gstin: '27AAAAA0000A1Z5',
+        street: 'Plot 88',
+      });
+      const mergeRes = mockRes();
+      await buyerAccountController.createBuyerAccount(
+        {
+          user: { role: 'buyer', sub: 'u-buyer-existing', email: 'merge@test.com' },
+          body: {
+            organizationName: 'Merge Corp',
+            corporateEmail: 'merge@test.com',
+            gstin: '27AAAAA0000A1Z5',
+            street: 'Plot 88',
+          },
+        },
+        mergeRes,
+        next
+      );
+      expect(mergeSpy).toHaveBeenCalledWith('u-buyer-existing', expect.objectContaining({
+        gstin: '27AAAAA0000A1Z5',
+        street: 'Plot 88',
+        organizationId: 'org-merge-1',
+      }));
+      expect(mergeRes.status).toHaveBeenCalledWith(201);
     });
 
     test('updateBuyerAccount not found, success, and error', async () => {
@@ -705,6 +739,57 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         next
       );
       expect(next).toHaveBeenCalledWith(expect.any(Error));
+
+      // 7. Batch storage path (pool.hasStorage() === true and multiple targetIds)
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      const getBatchSpy = jest.spyOn(domainQueries, 'getVendorsByIdsFromDB').mockResolvedValueOnce([
+        { id: 'v-owned-1', buyerId: 'buyer-org-123' },
+        { id: 'v-denied-1', buyerId: 'other-org' },
+      ]);
+      const deleteBatchDbSpy = jest.spyOn(domainQueries, 'deleteVendorsInDB').mockResolvedValueOnce(3);
+      const resBatchStorage = mockRes();
+      await vendorController.bulkDeleteVendors(
+        {
+          user: { role: 'buyer', email: 'b@b.com' },
+          body: { vendorIds: ['v-owned-1', 'v-denied-1', 'vm-legacy-orphan', 'nonexistent'] },
+        },
+        resBatchStorage,
+        next
+      );
+      expect(getBatchSpy).toHaveBeenCalledWith(['v-owned-1', 'v-denied-1', 'vm-legacy-orphan', 'nonexistent']);
+      expect(deleteBatchDbSpy).toHaveBeenCalledWith(['v-owned-1', 'vm-legacy-orphan']);
+      expect(resBatchStorage.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          deletedCount: 2,
+          deletedIds: ['v-owned-1', 'vm-legacy-orphan'],
+          skippedIds: ['v-denied-1', 'nonexistent'],
+        })
+      );
+
+      // Admin with no matching delete targets skips DB deletion call
+      getBatchSpy.mockResolvedValueOnce([]);
+      const resAdminSkip = mockRes();
+      await vendorController.bulkDeleteVendors(
+        {
+          user: { role: 'admin', email: 'admin@qua.com' },
+          body: { vendorIds: ['unknown-1', 'unknown-2'] },
+        },
+        resAdminSkip,
+        next
+      );
+      expect(resAdminSkip.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: true, deletedCount: 0, skippedIds: ['unknown-1', 'unknown-2'] })
+      );
+
+      // 8. Storage delete error in deleteVendorsDurably surfaces 503 via next(err)
+      await expect(storeService.deleteVendorsDurably([])).resolves.toEqual([]);
+      jest.spyOn(domainQueries, 'deleteVendorsInDB').mockRejectedValueOnce(new Error('D1 delete down'));
+      await expect(storeService.deleteVendorsDurably(['v-err-1'], 'b@b.com')).rejects.toMatchObject({
+        statusCode: 503,
+        code: 'PERSISTENCE_UNAVAILABLE',
+      });
     });
 
     test('reviseRating validation and success flows', async () => {
@@ -1857,6 +1942,507 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       });
       expect(capturedSql).toContain("raw->>'city' ILIKE");
       expect(capturedD1).toContain("lower(json_extract(raw,'$.city'))");
+    });
+
+    test('enforces valid vendor categories across createVendor, updateVendor (including synthetic v-master fallback), and buyer bulkImportVendors', async () => {
+      const { VENDOR_CATEGORY_VALIDATION_MESSAGES } = require('../src/config/constants');
+      const buyerReqUser = { role: 'buyer', sub: 'u-buyer-cat-1', email: 'buyer@cat.test', orgId: 'org-buyer-cat-1', name: 'Buyer Cat' };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'ba-cat-promo',
+        corporateEmail: 'buyer@cat.test',
+        organizationName: 'Buyer Org',
+      });
+
+      // 1. createVendor blocks placeholder majorCategory
+      const badCreateRes = mockRes();
+      await vendorController.createVendor({
+        user: buyerReqUser,
+        body: {
+          name: 'Bad Category Vendor',
+          email: 'badcat@vendor.test',
+          phone: '9876543210',
+          majorCategory: 'Vendor Master',
+          minorCategories: [],
+        },
+      }, badCreateRes, jest.fn());
+      expect(badCreateRes.status).toHaveBeenCalledWith(400);
+      expect(badCreateRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED,
+      }));
+
+      // 2. updateVendor blocks updating to placeholder categories
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-owned-cat',
+        name: 'Owned Vendor',
+        email: 'owned@cat.test',
+        buyerId: 'ba-cat-promo',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+      });
+      const badUpdateRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-owned-cat' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Uncategorized', minorCategories: ['None'] },
+      }, badUpdateRes, jest.fn());
+      expect(badUpdateRes.status).toHaveBeenCalledWith(400);
+      expect(badUpdateRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED,
+      }));
+
+      // 3. updateVendor promotes synthetic v-master-* record with valid categories
+      const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'getVendors').mockResolvedValue([]);
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'gov-1',
+        sessionId: 'sess-gov-1',
+        companyName: 'Govardhan Master Co',
+        email: 'govardhan@cat.test',
+        phone: '9966766905',
+      });
+      jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockResolvedValueOnce(null);
+      const empanelSpy = jest.spyOn(storeService, 'empanelIngestedVendor').mockResolvedValue({
+        id: 'vnd-promoted-cat',
+        name: 'Govardhan Master Co',
+        email: 'govardhan@cat.test',
+        majorCategory: 'IT Infrastructure',
+        minorCategories: ['Laptops'],
+        buyerId: 'ba-cat-promo',
+      });
+      const promoRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-gov-1' },
+        user: buyerReqUser,
+        body: {
+          vendorEmail: 'govardhan@cat.test',
+          vendorName: 'Govardhan Master Co',
+          majorCategory: 'IT Infrastructure',
+          minorCategories: ['Laptops'],
+        },
+      }, promoRes, jest.fn());
+      expect(promoRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          id: 'vnd-promoted-cat',
+          majorCategory: 'IT Infrastructure',
+          minorCategories: ['Laptops'],
+        }),
+      }));
+      expect(empanelSpy).toHaveBeenCalled();
+
+      // 4. Synthetic v-hist-local-* update without valid category returns 400 VENDOR_CATEGORY_REQUIRED
+      const promoMissingCatRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-hist-local-batch-2' },
+        user: buyerReqUser,
+        body: {
+          vendorEmail: 'govardhan2@cat.test',
+          vendorName: 'Govardhan 2 Co',
+          phone: '9876543210',
+        },
+      }, promoMissingCatRes, jest.fn());
+      expect(promoMissingCatRes.status).toHaveBeenCalledWith(400);
+      expect(promoMissingCatRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: false,
+        code: 'VENDOR_CATEGORY_REQUIRED',
+      }));
+
+      // 5. Buyer bulkImportVendors rejects rows lacking valid category
+      const bulkRes = mockRes();
+      await vendorController.bulkImportVendors({
+        user: buyerReqUser,
+        body: {
+          vendors: [
+            {
+              name: 'No Cat Import Co',
+              email: 'nocat-import@test.com',
+              phone: '9876543210',
+              majorCategory: 'Vendor Master',
+            },
+          ],
+        },
+      }, bulkRes, jest.fn());
+      expect(bulkRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ total: 1, imported: 0, failed: 1 }),
+      }));
+
+      // 6. updateCategories validation, placeholder guard, synthetic promotion, and owned update
+      const badSchemaCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-owned-1' },
+        user: buyerReqUser,
+        body: { minorCategories: 'not-an-array' },
+      }, badSchemaCatRes, jest.fn());
+      expect(badSchemaCatRes.status).toHaveBeenCalledWith(400);
+
+      const placeholderMajorCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-owned-1' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Vendor Master' },
+      }, placeholderMajorCatRes, jest.fn());
+      expect(placeholderMajorCatRes.status).toHaveBeenCalledWith(400);
+
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'gov-cat-1',
+        sessionId: 'sess-cat-1',
+        companyName: 'Gov Cat Co',
+        email: 'govcat@cat.test',
+      });
+      jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      const promoCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-master-gov-cat-1' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Electrical', minorCategories: ['Switchgear'] },
+      }, promoCatRes, jest.fn());
+      expect(promoCatRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      const missingCatPromoRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-hist-local-empty-cat' },
+        user: buyerReqUser,
+        body: { minorCategories: [] },
+      }, missingCatPromoRes, jest.fn());
+      expect(missingCatPromoRes.status).toHaveBeenCalledWith(400);
+      expect(missingCatPromoRes.json).toHaveBeenCalledWith(expect.objectContaining({ code: 'VENDOR_CATEGORY_REQUIRED' }));
+
+      const missingMasterCatRes = mockRes();
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce(null);
+      await vendorController.updateCategories({
+        params: { id: 'v-master-missing-404' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Electrical', minorCategories: ['Switchgear'] },
+      }, missingMasterCatRes, jest.fn());
+      expect(missingMasterCatRes.status).toHaveBeenCalledWith(404);
+
+      const missingDirectCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-nonexistent-999' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Electrical', minorCategories: ['Switchgear'] },
+      }, missingDirectCatRes, jest.fn());
+      expect(missingDirectCatRes.status).toHaveBeenCalledWith(404);
+
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-owned-clear',
+        name: 'Clear Test',
+        email: 'clear@cat.test',
+        buyerAccountId: buyerReqUser.sub,
+        majorCategory: '',
+        minorCategories: ['Switchgear'],
+      });
+      const clearCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-owned-clear' },
+        user: buyerReqUser,
+        body: { minorCategories: [] },
+      }, clearCatRes, jest.fn());
+      expect(clearCatRes.status).toHaveBeenCalledWith(400);
+
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-owned-valid',
+        name: 'Valid Cat Co',
+        email: 'valid@cat.test',
+        buyerEmail: buyerReqUser.email,
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+      });
+      jest.spyOn(storeService, 'updateVendorCategoriesDurably').mockResolvedValueOnce({
+        id: 'v-owned-valid',
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
+      });
+      const validCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-owned-valid' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Electrical', minorCategories: ['Cables'] },
+      }, validCatRes, jest.fn());
+      expect(validCatRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // 7. resolveFallbackVendorRecord email/foreign/master-ai branches + v-hist-local promotion
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'v-existing-scope', name: 'In Scope', email: 'inscope@cat.test', buyerId: 'ba-cat-promo' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValueOnce({ id: 'v-existing-scope', majorCategory: 'Civil', minorCategories: ['Cement'] });
+      const scopeMatchRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-email-scope' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'inscope@cat.test', majorCategory: 'Civil', minorCategories: ['Cement'] },
+      }, scopeMatchRes, jest.fn());
+      expect(scopeMatchRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'v-foreign', email: 'foreign@cat.test', buyerId: 'other-buyer' });
+      const foreignRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-foreign' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'foreign@cat.test', majorCategory: 'Civil', minorCategories: ['Cement'] },
+      }, foreignRes, jest.fn());
+      expect(foreignRes.status).toHaveBeenCalledWith(404);
+
+      // Cover sanitizeVendorCategoryUpdates placeholder minor array (lines 1003-1004) and empty existing major (1016-1017)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-owned-placeholder-minors',
+        email: 'phmin@cat.test',
+        buyerId: 'ba-cat-promo',
+        majorCategory: 'Civil',
+        minorCategories: ['Cement'],
+      });
+      const phMinorsRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-owned-placeholder-minors' },
+        user: buyerReqUser,
+        body: { minorCategories: ['Vendor Master'] },
+      }, phMinorsRes, jest.fn());
+      expect(phMinorsRes.status).toHaveBeenCalledWith(400);
+
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-owned-empty-cats',
+        email: 'emptycats@cat.test',
+        buyerId: 'ba-cat-promo',
+        majorCategory: '',
+        minorCategories: ['Cement'],
+      });
+      const clearMinorsRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-owned-empty-cats' },
+        user: buyerReqUser,
+        body: { minorCategories: [] },
+      }, clearMinorsRes, jest.fn());
+      expect(clearMinorsRes.status).toHaveBeenCalledWith(400);
+
+      // Cover synthetic v-master-* update with locked field (line 1030) and missing master record (1057-1058)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce(null);
+      const missingMasterUpdRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-not-found' },
+        user: buyerReqUser,
+        body: { pan: 'ABCDE1234F', majorCategory: 'Civil', minorCategories: ['Cement'] },
+      }, missingMasterUpdRes, jest.fn());
+      expect(missingMasterUpdRes.status).toHaveBeenCalledWith(404);
+
+      // Cover findCategoryMappingByVendorRecord rejection catch (line 1372)
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'gov-cat-err-1',
+        sessionId: 'sess-err-1',
+        companyName: 'Gov Err Co',
+        email: 'goverr@cat.test',
+      });
+      jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockRejectedValueOnce(new Error('D1 timeout'));
+      const mappingErrRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-gov-cat-err-1' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Mechanical', minorCategories: ['Valves'] },
+      }, mappingErrRes, jest.fn());
+      expect(mappingErrRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Cover updateCategories resolving synthetic v-master-* into already-existing buyer vendor (line 1850)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'v-already-empanelled',
+          email: 'already@cat.test',
+          buyerId: 'ba-cat-promo',
+          majorCategory: 'Mechanical',
+          minorCategories: ['Valves'],
+        });
+      jest.spyOn(storeService, 'updateVendorCategoriesDurably').mockResolvedValueOnce({
+        id: 'v-already-empanelled',
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
+      });
+      const promoExistingCatRes = mockRes();
+      await vendorController.updateCategories({
+        params: { id: 'v-master-already-empanelled' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'already@cat.test', majorCategory: 'Electrical', minorCategories: ['Cables'] },
+      }, promoExistingCatRes, jest.fn());
+      expect(promoExistingCatRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+
+      // Cover checkVendorOwnership prefix check when buyer string prefix is passed (line 136)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-hist-123',
+        email: 'histprefix@cat.test',
+        source: 'vendor',
+      });
+      const prefixAllowedRes = mockRes();
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValueOnce({ id: 'v-hist-123', majorCategory: 'Civil', minorCategories: ['Bricks'] });
+      await vendorController.updateVendor({
+        params: { id: 'v-hist-123' },
+        user: buyerReqUser,
+        body: { majorCategory: 'Civil', minorCategories: ['Bricks'] },
+      }, prefixAllowedRes, jest.fn());
+      expect(prefixAllowedRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Cover sendBulkImportInvitations uncovered branches (2083-2169)
+      const eventOutboxService = require('../src/services/eventOutboxService');
+      const cmUser = { role: 'category_manager', sub: 'cm-1', email: 'cm@procucev.com' };
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValueOnce({
+        id: 'v-buyer-priv',
+        email: 'priv@co.test',
+        buyerId: 'ba-1',
+        onboardingEmailStatus: 'skipped',
+      });
+      const bulkCmSkipRes = mockRes();
+      await vendorController.sendBulkImportInvitations({ user: cmUser, body: { vendorIds: ['v-buyer-priv'] } }, bulkCmSkipRes, jest.fn());
+      expect(bulkCmSkipRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ results: [{ vendorId: 'v-buyer-priv', status: 'not_found' }] }),
+      }));
+
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValueOnce({
+        id: 'v-bulk-null-save',
+        email: 'nullsave@co.test',
+        onboardingEmailStatus: 'skipped',
+      });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce({ id: 'u-ns', email: 'nullsave@co.test' });
+      jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValueOnce({ id: 'ob-1', status: 'pending' });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValueOnce(null);
+      const bulkNullSaveRes = mockRes();
+      await vendorController.sendBulkImportInvitations({ user: cmUser, body: { vendorIds: ['v-bulk-null-save'] } }, bulkNullSaveRes, jest.fn());
+      expect(bulkNullSaveRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ queuedCount: 1 }),
+      }));
+
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockRejectedValueOnce(new Error('DB read err'));
+      const bulkItemErrRes = mockRes();
+      await vendorController.sendBulkImportInvitations({ user: cmUser, body: { vendorIds: ['v-item-err'] } }, bulkItemErrRes, jest.fn());
+      expect(bulkItemErrRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ results: [{ vendorId: 'v-item-err', status: 'failed' }] }),
+      }));
+
+      const persistErr = new Error('Persistence unavailable');
+      persistErr.code = 'PERSISTENCE_UNAVAILABLE';
+      const bulkOuterErrRes = mockRes();
+      const nextSpy = jest.fn();
+      await vendorController.sendBulkImportInvitations({
+        user: cmUser,
+        body: { get vendorIds() { throw persistErr; } },
+      }, bulkOuterErrRes, nextSpy);
+      expect(bulkOuterErrRes.status).toHaveBeenCalledWith(503);
+
+      const bulkGenericErr = new Error('Unexpected fail');
+      const bulkGenericNext = jest.fn();
+      await vendorController.sendBulkImportInvitations({
+        user: cmUser,
+        body: { get vendorIds() { throw bulkGenericErr; } },
+      }, mockRes(), bulkGenericNext);
+      expect(bulkGenericNext).toHaveBeenCalledWith(bulkGenericErr);
+
+      // Cover createSubscriptionPaymentLink phone fallback error & 400 (lines 1641-1657)
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue({
+        id: 'v-pay-nophone',
+        email: 'nophone@pay.test',
+        phone: '',
+      });
+      jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('identity timeout'));
+      const payNoPhoneRes = mockRes();
+      await vendorController.createSubscriptionPaymentLink({
+        params: { id: 'v-pay-nophone' },
+        user: { role: 'vendor', email: 'nophone@pay.test', mobile: '9876543210' },
+        body: { plan: 'connect', billingDuration: '6_months' },
+      }, payNoPhoneRes, jest.fn());
+      // Even if downstream Zoho fails or succeeds, lines 1641-1655 ran
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValueOnce(null);
+      const payStillNoPhoneRes = mockRes();
+      await vendorController.createSubscriptionPaymentLink({
+        params: { id: 'v-pay-nophone' },
+        user: { role: 'vendor', email: 'nophone@pay.test' },
+        body: { plan: 'connect' },
+      }, payStillNoPhoneRes, jest.fn());
+      expect(payStillNoPhoneRes.status).toHaveBeenCalledWith(400);
+
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'gov-ai-1',
+        sessionId: 'sess-ai-1',
+        companyName: 'Gov AI Co',
+        email: 'govai@cat.test',
+      });
+      jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockResolvedValueOnce({
+        aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'] },
+        status: 'APPROVED',
+      });
+      const aiPromoRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-gov-ai-1' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'govai@cat.test' },
+      }, aiPromoRes, jest.fn());
+      expect(aiPromoRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Rejected AI mapping with no payload category -> 400 VENDOR_CATEGORY_REQUIRED
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'gov-ai-rej',
+        sessionId: 'sess-ai-rej',
+        companyName: 'Gov AI Rejected Co',
+        email: 'govrej@cat.test',
+      });
+      jest.spyOn(vendorIngestionQueries, 'findCategoryMappingByVendorRecord').mockResolvedValueOnce({
+        aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'] },
+        reviewAction: 'REJECTED',
+      });
+      const aiRejRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-gov-ai-rej' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'govrej@cat.test' },
+      }, aiRejRes, jest.fn());
+      expect(aiRejRes.status).toHaveBeenCalledWith(400);
+
+      const histPromoRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-hist-local-promo-1' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'hist@cat.test', vendorName: 'Hist Co', majorCategory: 'Mechanical', minorCategories: ['Pumps'] },
+      }, histPromoRes, jest.fn());
+      expect(histPromoRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // 8. checkVendorOwnership foreign buyerAccountId/buyerEmail + in-memory pincode filter
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-other-account',
+        email: 'other@cat.test',
+        buyerAccountId: 'foreign-account-999',
+        buyerEmail: 'otherbuyer@foreign.test',
+      });
+      const forbiddenRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-other-account' },
+        user: buyerReqUser,
+        body: { name: 'Attempted Edit' },
+      }, forbiddenRes, jest.fn());
+      expect(forbiddenRes.status).toHaveBeenCalledWith(403);
+
+      jest.spyOn(storeService, 'getVendors').mockResolvedValueOnce([
+        { id: 'v-pin-1', name: 'Pin One', category: 'Cables', pincode: '411 001', city: 'Pune', state: 'Maharashtra', location: 'Pune, Maharashtra' },
+      ]);
+      const pinReq = { query: { search: ' , Pin', pincode: '411001', state: 'Maharashtra', city: 'Pune', category: 'Cables' } };
+      const pinRes = mockRes();
+      await vendorController.getVendors(pinReq, pinRes, jest.fn());
+      expect(pinRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: [expect.objectContaining({ id: 'v-pin-1' })],
+      }));
     });
   });
 });

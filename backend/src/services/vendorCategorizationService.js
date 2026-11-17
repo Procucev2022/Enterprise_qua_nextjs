@@ -287,7 +287,86 @@ function confidenceBand(confidence) {
  * that the buyer must approve. That satisfies RULE 10 (no silent category
  * creation) without discarding the analysis.
  */
-function validateAiResult(parsed, { categoryMaster = [] } = {}) {
+const GENERIC_CATEGORY_STOP_WORDS = new Set([
+  'industrial', 'electrical', 'mechanical', 'electronic', 'general', 'spare', 'spares',
+  'part', 'parts', 'item', 'items', 'heavy', 'duty', 'suitable', 'required', 'product',
+  'products', 'equipment', 'material', 'materials', 'accessories', 'system', 'systems',
+]);
+
+const MINOR_TECHNICAL_KEYWORDS = [
+  { words: ['switch', 'router', 'ethernet', 'networking'], minor: 'Networking Equipment' },
+  { words: ['box', 'boxes', 'carton', 'cartons', 'packaging'], minor: 'Corrugated Boxes' },
+  { words: ['laptop', 'notebook'], minor: 'Laptop' },
+  { words: ['desktop', 'computer', 'pc'], minor: 'Computer' },
+  { words: ['bearing', 'bearings'], minor: 'Bearings & Accessories' },
+  { words: ['gearbox', 'gearboxes', 'gear'], minor: 'Gearboxes & Spares' },
+  { words: ['panel', 'panels', 'switchboard', 'lt panel'], minor: 'Panels' },
+  { words: ['mcb', 'mccb', 'breaker', 'breakers'], minor: 'Circuit Breakers' },
+  { words: ['cable', 'cables', 'wire', 'wires'], minor: 'Cables' },
+  { words: ['pipe', 'pipes', 'fitting', 'fittings'], minor: 'Pipes & Pipe Fittings' },
+  { words: ['motor', 'motors', 'induction motor'], minor: 'Motors' },
+  { words: ['cylinder', 'cylinders', 'hydraulic cylinder'], minor: 'Cylinders' },
+  { words: ['aluminium', 'aluminum'], minor: 'Aluminium' },
+  { words: ['copper'], minor: 'Copper' },
+  { words: ['steel', 'steels', 'ms plate', 'tmt'], minor: 'Steels' },
+  { words: ['film', 'wrapping', 'stretch wrap'], minor: 'Plastic Packaging' },
+];
+
+function matchMinorCategory(candidate, matchedMajor) {
+  if (!candidate || !matchedMajor || !matchedMajor.minors) return null;
+  const rawKey = categoryKey(candidate);
+  if (!rawKey) return null;
+
+  if (matchedMajor.minors.has(rawKey)) {
+    return matchedMajor.minors.get(rawKey);
+  }
+
+  const variants = new Set();
+  if (rawKey.endsWith('ies')) variants.add(rawKey.slice(0, -3) + 'y');
+  if (rawKey.endsWith('es')) {
+    variants.add(rawKey.slice(0, -2));
+    variants.add(rawKey.slice(0, -1));
+  }
+  if (rawKey.endsWith('s')) variants.add(rawKey.slice(0, -1));
+  variants.add(rawKey + 's');
+  variants.add(rawKey + 'es');
+
+  for (const v of variants) {
+    if (matchedMajor.minors.has(v)) {
+      return matchedMajor.minors.get(v);
+    }
+  }
+
+  for (const tk of MINOR_TECHNICAL_KEYWORDS) {
+    if (tk.words.some((w) => rawKey.includes(w))) {
+      const match = matchedMajor.minors.get(categoryKey(tk.minor));
+      if (match) return match;
+    }
+  }
+
+  const candidateTokens = rawKey.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+  for (const [mKey, actualName] of matchedMajor.minors.entries()) {
+    if (rawKey.includes(mKey) || mKey.includes(rawKey)) {
+      return actualName;
+    }
+    const mTokens = mKey.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
+    for (const ct of candidateTokens) {
+      if (GENERIC_CATEGORY_STOP_WORDS.has(ct)) continue;
+      const ctStem = ct.endsWith('ies') ? ct.slice(0, -3) + 'y' : ct.endsWith('es') ? ct.slice(0, -2) : ct.endsWith('s') ? ct.slice(0, -1) : ct;
+      for (const mt of mTokens) {
+        if (GENERIC_CATEGORY_STOP_WORDS.has(mt)) continue;
+        const mtStem = mt.endsWith('ies') ? mt.slice(0, -3) + 'y' : mt.endsWith('es') ? mt.slice(0, -2) : mt.endsWith('s') ? mt.slice(0, -1) : mt;
+        if (ct === mt || ctStem === mt || ct === mtStem || ctStem === mtStem) {
+          return actualName;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+function validateAiResult(parsed, { categoryMaster = [], vendorProfile = null } = {}) {
   if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
     return { valid: false, error: 'Reply was not a JSON object.' };
   }
@@ -347,12 +426,33 @@ function validateAiResult(parsed, { categoryMaster = [] } = {}) {
   // than re-parented, because re-parenting would assert a taxonomy relationship
   // the buyer never defined.
   const minorCategories = [];
-  for (const candidate of cleanStringList(
+  const primaryCandidates = cleanStringList(
     parsed.minorCategories,
     VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR
-  )) {
+  );
+  for (const candidate of primaryCandidates) {
     const exact = matchedMajor.minors.get(categoryKey(candidate));
-    if (exact && !minorCategories.includes(exact)) minorCategories.push(exact);
+    if (exact && !minorCategories.includes(exact)) {
+      minorCategories.push(exact);
+    } else {
+      const fuzzy = matchMinorCategory(candidate, matchedMajor);
+      if (fuzzy && !minorCategories.includes(fuzzy)) minorCategories.push(fuzzy);
+    }
+  }
+
+  // If parsed.minorCategories yielded nothing, inspect relevantProducts and PO line summaries
+  if (minorCategories.length === 0) {
+    const fallbackCandidates = [
+      ...cleanStringList(parsed.relevantProducts, VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR),
+      ...(Array.isArray(vendorProfile?.lineSummaries) ? vendorProfile.lineSummaries : []),
+    ];
+    for (const candidate of fallbackCandidates) {
+      if (minorCategories.length >= VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR) break;
+      const matched = matchMinorCategory(candidate, matchedMajor);
+      if (matched && !minorCategories.includes(matched)) {
+        minorCategories.push(matched);
+      }
+    }
   }
 
   // Below the review threshold the suggestion is held for a person regardless of
@@ -422,10 +522,19 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
 
   for (let attempt = 1; attempt <= VENDOR_INGESTION_CONFIG.AI_MAX_ATTEMPTS; attempt += 1) {
     const startedAt = Date.now();
-    const result = await geminiService.generateJson({
-      prompt,
-      label: `vendor categorisation for ${mapping.vendorCode || mapping.companyName}`,
-    });
+    let result;
+    try {
+      result = await geminiService.generateJson({
+        prompt,
+        label: `vendor categorisation for ${mapping.vendorCode || mapping.companyName}`,
+        budgetMs: 15000,
+      });
+    } catch (apiErr) {
+      result = {
+        status: geminiService.EXTRACTION_STATUS.ERROR,
+        error: apiErr.message || 'Gemini API call failed',
+      };
+    }
     const durationMs = Date.now() - startedAt;
 
     if (result.status === geminiService.EXTRACTION_STATUS.NOT_CONFIGURED) {
@@ -465,7 +574,7 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
       continue;
     }
 
-    const validated = validateAiResult(result.data, { categoryMaster });
+    const validated = validateAiResult(result.data, { categoryMaster, vendorProfile });
     if (!validated.valid) {
       lastStatus = CLASSIFICATION_STATUS.INVALID_RESPONSE;
       lastError = validated.error;
@@ -569,53 +678,65 @@ async function runCategorizationBatch({ session, organizationId, mappings, profi
   const outcomes = [];
 
   for (const mapping of mappings) {
-    const vendorProfile = profilesByRecordId.get(mapping.vendorRecordId);
-    await vendorIngestionQueries.markMappingProcessing(mapping.id, organizationId);
+    try {
+      const vendorProfile = profilesByRecordId.get(mapping.vendorRecordId);
+      await vendorIngestionQueries.markMappingProcessing(mapping.id, organizationId);
 
-    const result = await classifyVendor({
-      session,
-      organizationId,
-      mapping,
-      vendorProfile,
-      categoryMaster,
-    });
+      const result = await classifyVendor({
+        session,
+        organizationId,
+        mapping,
+        vendorProfile,
+        categoryMaster,
+      });
 
-    if (result.status === CLASSIFICATION_STATUS.SUCCESS) {
-      const saved = await vendorIngestionQueries.saveAiSuggestion(mapping.id, organizationId, result.suggestion);
+      if (result.status === CLASSIFICATION_STATUS.SUCCESS) {
+        const saved = await vendorIngestionQueries.saveAiSuggestion(mapping.id, organizationId, result.suggestion);
+        outcomes.push({
+          mappingId: mapping.id,
+          vendorRecordId: mapping.vendorRecordId,
+          companyName: mapping.companyName,
+          status: CLASSIFICATION_STATUS.SUCCESS,
+          mapping: saved,
+          suggestion: result.suggestion,
+        });
+        logger.info(
+          `Categorised ${mapping.companyName} as ${result.suggestion.majorCategory || NEW_CATEGORY_SENTINEL}`,
+          {
+            mappingId: mapping.id,
+            confidence: result.suggestion.confidence,
+            band: result.suggestion.confidenceBand,
+            poCount: vendorProfile ? vendorProfile.poCount : 0,
+          },
+          LOG_CATEGORY
+        );
+        continue;
+      }
+
+      await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, result.error);
       outcomes.push({
         mappingId: mapping.id,
         vendorRecordId: mapping.vendorRecordId,
         companyName: mapping.companyName,
-        status: CLASSIFICATION_STATUS.SUCCESS,
-        mapping: saved,
-        suggestion: result.suggestion,
+        status: result.status,
+        error: result.error,
       });
-      logger.info(
-        `Categorised ${mapping.companyName} as ${result.suggestion.majorCategory || NEW_CATEGORY_SENTINEL}`,
-        {
-          mappingId: mapping.id,
-          confidence: result.suggestion.confidence,
-          band: result.suggestion.confidenceBand,
-          poCount: vendorProfile ? vendorProfile.poCount : 0,
-        },
+      logger.warn(
+        `Categorisation failed for ${mapping.companyName}`,
+        { mappingId: mapping.id, status: result.status, error: result.error },
         LOG_CATEGORY
       );
-      continue;
+    } catch (mappingErr) {
+      logger.error(`Unexpected failure categorising ${mapping.companyName}`, mappingErr, LOG_CATEGORY);
+      await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, mappingErr.message).catch(() => {});
+      outcomes.push({
+        mappingId: mapping.id,
+        vendorRecordId: mapping.vendorRecordId,
+        companyName: mapping.companyName,
+        status: CLASSIFICATION_STATUS.AI_FAILED,
+        error: mappingErr.message || 'Classification failed unexpectedly',
+      });
     }
-
-    await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, result.error);
-    outcomes.push({
-      mappingId: mapping.id,
-      vendorRecordId: mapping.vendorRecordId,
-      companyName: mapping.companyName,
-      status: result.status,
-      error: result.error,
-    });
-    logger.warn(
-      `Categorisation failed for ${mapping.companyName}`,
-      { mappingId: mapping.id, status: result.status, error: result.error },
-      LOG_CATEGORY
-    );
   }
 
   return outcomes;

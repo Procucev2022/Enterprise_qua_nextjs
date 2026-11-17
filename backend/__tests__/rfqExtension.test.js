@@ -167,7 +167,7 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
         .send({
           title: 'Mechanical Spares Procurement',
           category: 'Engineering Spares - Mechanical',
-          sourcingMode: 'mode_2',
+          sourcingMode: 'mode_0',
           budget: 348000,
           targetDeliveryDate: A_FUTURE_DATE,
           deliveryLocation: 'Navi Mumbai Plant, Gate 3',
@@ -179,9 +179,8 @@ describe('RFQ Extension Feature (whole days, strictly one-time)', () => {
     }
 
     test('rejects unauthenticated requests with 401', async () => {
-      const rfq = await createOwnRFQ();
       const res = await request(app)
-        .post(`/api/rfqs/${rfq.id}/extend`)
+        .post('/api/rfqs/rfq-unauth-check/extend')
         .send({ days: 1 });
       expect(res.status).toBe(401);
     });

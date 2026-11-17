@@ -50,6 +50,7 @@ import {
   ChevronsRight,
   Tag,
   Filter,
+  MapPin,
 } from 'lucide-react';
 
 /**
@@ -58,6 +59,13 @@ import {
  */
 function messageSortTime(timestamp: string | null | undefined): number {
   return timestamp ? new Date(timestamp).getTime() : Number.MAX_SAFE_INTEGER;
+}
+
+function extractPin(pinVal?: any, addrVal?: any): string {
+  const digits = String(pinVal || '').replace(/\D/g, '');
+  if (digits.length === 6) return digits;
+  const match = String(addrVal || '').match(/\b\d{6}\b/);
+  return match ? match[0] : '';
 }
 
 interface QuotationFormProps {
@@ -89,6 +97,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed' | 'direct'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
+  const [selectedPincodes, setSelectedPincodes] = useState<string[]>([]);
+  const [isPincodeDropdownOpen, setIsPincodeDropdownOpen] = useState(false);
   const [userSelectedTab, setUserSelectedTab] = useState<'my_enquiries' | 'public_enquiries' | null>(null);
   const [locallyUnlockedRfqIds, setLocallyUnlockedRfqIds] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -159,6 +169,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [myVendorName, setMyVendorName] = useState<string>('');
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
   const [myBuyerId, setMyBuyerId] = useState<string | null>(null);
+  const [myPincode, setMyPincode] = useState<string>('');
+  const [myMajorCategory, setMyMajorCategory] = useState<string>('');
+  const [myMinorCategories, setMyMinorCategories] = useState<string[]>([]);
   const myVendorRecord = buyerVendors?.find(
     (v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase()
   );
@@ -193,10 +206,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled && data.success && data.data) {
-          setMyVendorId(data.data.id);
-          setMyVendorName(data.data.name);
+          setMyVendorId(data.data.id || '');
+          setMyVendorName(data.data.name || '');
           setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
           setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || null);
+          setMyPincode(data.data.pincode || '');
+          setMyMajorCategory(data.data.majorCategory || '');
+          setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
         }
       } catch {
         // Leave myVendorId null — bidding/download actions will surface a
@@ -230,16 +246,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
 
     const qVendorId = String(q.vendorId || '').trim().toLowerCase();
-    if (myVendorId && qVendorId && qVendorId === myVendorId.toLowerCase()) return true;
-    if (myVendorRecord?.id && qVendorId && qVendorId === String(myVendorRecord.id).toLowerCase()) return true;
+    const myIds = [myVendorId, myVendorRecord?.id ? String(myVendorRecord.id) : '']
+      .filter((id): id is string => Boolean(id))
+      .map((id) => id.toLowerCase());
+    if (qVendorId && myIds.includes(qVendorId)) return true;
 
     const qName = (q.vendorName || '').toLowerCase().trim();
     if (qName) {
-      if (myVendorName && qName === myVendorName.toLowerCase().trim()) return true;
-      if (myVendorRecord?.name && qName === myVendorRecord.name.toLowerCase().trim()) return true;
-      if (currentUserSession?.name && qName === currentUserSession.name.toLowerCase().trim()) return true;
       const sessionOrgName = (currentUserSession as any)?.organizationName || currentUserSession?.orgName;
-      if (sessionOrgName && qName === String(sessionOrgName).toLowerCase().trim()) return true;
+      const myNames = [myVendorName, myVendorRecord?.name, currentUserSession?.name, sessionOrgName]
+        .filter(Boolean)
+        .map((n) => String(n).toLowerCase().trim());
+      if (myNames.includes(qName)) return true;
     }
     return false;
   };
@@ -263,6 +281,84 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       };
     });
 
+  // Vendor's category pool and pincode for matching
+  const vendorCategoryPool = useMemo(() => {
+    const pool = new Set<string>();
+    const add = (c: any) => {
+      if (typeof c === 'string' && c.trim()) {
+        pool.add(c.trim().toLowerCase());
+      } else if (Array.isArray(c)) {
+        c.forEach((item) => add(item));
+      }
+    };
+    add(myMajorCategory);
+    add(myMinorCategories);
+    add(myVendorRecord?.majorCategory);
+    add(myVendorRecord?.minorCategories);
+    add((myVendorRecord as any)?.category);
+    add((currentUserSession as any)?.category);
+    add((currentUserSession as any)?.majorCategory);
+    add((currentUserSession as any)?.minorCategories);
+    return Array.from(pool);
+  }, [myMajorCategory, myMinorCategories, myVendorRecord, currentUserSession]);
+
+  const effectiveVendorPincode = useMemo(() => {
+    const raw =
+      myPincode ||
+      myVendorRecord?.pincode ||
+      (currentUserSession as any)?.pincode ||
+      (currentUserSession as any)?.postalCode ||
+      '';
+    return String(raw).replace(/\D/g, '');
+  }, [myPincode, myVendorRecord, currentUserSession]);
+
+  const checkCategoryAndPincodeMatch = useCallback((rfqNumber: string) => {
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    if (!rfq && !rfqRecord) return false;
+
+    const rfqMinors = new Set<string>();
+    const addMinor = (c: any) => {
+      if (typeof c === 'string' && c.trim()) rfqMinors.add(c.trim().toLowerCase());
+    };
+    if (rfq?.minorCategory) addMinor(rfq.minorCategory);
+    if (rfq?.category) addMinor(rfq.category);
+    if (rfqRecord?.category) addMinor(rfqRecord.category);
+    if ((rfqRecord as any)?.majorCategory) addMinor((rfqRecord as any).majorCategory);
+    (rfqRecord?.extractedEntities || []).forEach((e: any) => {
+      if (e.minorCategory) addMinor(e.minorCategory);
+      if (e.category) addMinor(e.category);
+    });
+    (rfqRecord?.lineItems || []).forEach((li: any) => {
+      if (li.minorCategory) addMinor(li.minorCategory);
+      if (li.category) addMinor(li.category);
+    });
+
+    const hasCategoryMatch =
+      rfqMinors.size > 0 &&
+      vendorCategoryPool.length > 0 &&
+      Array.from(rfqMinors).some((minor) =>
+        vendorCategoryPool.some((vc) => vc === minor || vc.includes(minor) || minor.includes(vc))
+      );
+
+    const rfqPin = extractPin(
+      rfq?.pincode || rfq?.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode,
+      rfq?.deliveryLocation || rfqRecord?.deliveryLocation
+    );
+
+    const vendorPin = extractPin(
+      effectiveVendorPincode,
+      (currentUserSession as any)?.address || (myVendorRecord as any)?.address
+    );
+
+    const hasPincodeMatch =
+      Boolean(rfqPin) &&
+      Boolean(vendorPin) &&
+      rfqPin === vendorPin;
+
+    return Boolean(hasCategoryMatch && hasPincodeMatch);
+  }, [vendorOpportunities, rfqs, vendorCategoryPool, effectiveVendorPincode, currentUserSession, myVendorRecord]);
+
   // Direct-vs-marketplace reflects the real relationship:
   // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's direct RFQs (V1).
   // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan unless specifically invited.
@@ -271,24 +367,36 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
     if (!rfq && !rfqRecord) return false;
 
-    // Check if the vendor was explicitly invited/assigned by the buyer
-    const isExplicitlyAssigned = (rfqRecord?.assignedVendors || []).some((v) => {
-      const vEmail = (v.email || '').toLowerCase().trim();
-      const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
-      if (vEmail && sEmail && vEmail === sEmail) return true;
-      const vId = String(v.id || '').toLowerCase().trim();
-      if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
-      const vName = (v.name || '').toLowerCase().trim();
-      if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
-      return false;
-    });
-    if (isExplicitlyAssigned) return true;
+    // If RFQ's minor category matches vendor's category AND pincode matches, display in My Enquiries
+    if (checkCategoryAndPincodeMatch(rfqNumber)) {
+      return true;
+    }
 
-    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) {
+      return false;
+    }
+
+    const assignedList = rfqRecord?.assignedVendors || (rfq as { assignedVendors?: unknown[] })?.assignedVendors || (rfqRecord?.followUpData as { vendors?: unknown[] })?.vendors;
+    if (Array.isArray(assignedList) && assignedList.length > 0) {
+      // Check if the vendor was explicitly invited/assigned by the buyer
+      const isExplicitlyAssigned = (assignedList as Array<Record<string, unknown>>).some((v) => {
+        if (!v) return false;
+        const vEmail = (typeof v.email === 'string' ? v.email : '').toLowerCase().trim();
+        const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
+        if (vEmail && sEmail && vEmail === sEmail) return true;
+        const vId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
+        const vName = (typeof v.name === 'string' ? v.name : '').toLowerCase().trim();
+        if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+        return false;
+      });
+      // When assignedVendors exists, ONLY invited vendors can see this RFQ in My Enquiries
+      return isExplicitlyAssigned;
+    }
+
     if (
-      mode === 'mode_0' ||
-      mode === 'v0' ||
-      mode === 'version_0' ||
       mode === 'mode_3' ||
       mode === 'v3' ||
       mode === 'version_3'
@@ -305,7 +413,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (myVendorRecord.buyerAccountId && buyerAccountId === myVendorRecord.buyerAccountId) return true;
     }
     return false;
-  }, [vendorOpportunities, rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+  }, [vendorOpportunities, rfqs, checkCategoryAndPincodeMatch, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+
+  const isPublicEnquiryRfq = useCallback((rfqNumber: string) => {
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+
+    // In Mode 0, all RFQs should be visible to all vendors in public enquiries,
+    // even if the RFQ category does not match their registered categories
+    if (isV0) {
+      return true;
+    }
+
+    return !isOwnBuyerRfq(rfqNumber);
+  }, [vendorOpportunities, rfqs, isOwnBuyerRfq]);
 
   // Entitlement is decided from store data only: the subscription plan from the backend and
   // the credit balance from refreshVendorCredits. A balance that has not loaded (null) does not
@@ -329,31 +452,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     ).trim();
   }, [rfqs]);
 
-  // Extract distinct minor categories available across opportunities
-  const availableCategories = useMemo(() => {
-    const set = new Set<string>();
-    vendorOpportunities.forEach((opp) => {
-      const cat = resolveOpportunityCategory(opp);
-      if (cat) set.add(cat);
-    });
-    rfqs.forEach((rfq) => {
-      (rfq.extractedEntities || []).forEach((e) => {
-        const entCat = (e.minorCategory || e.majorCategory || '').trim();
-        if (entCat) set.add(entCat);
-      });
-      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
-    });
-    return Array.from(set).sort();
-  }, [vendorOpportunities, rfqs, resolveOpportunityCategory]);
-
   // Compile RFQ Bidding summaries
   const myEnquiries = useMemo(() => {
     return vendorOpportunities.filter((opp) => isOwnBuyerRfq(opp.rfqNumber));
   }, [vendorOpportunities, isOwnBuyerRfq]);
 
   const publicEnquiries = useMemo(() => {
-    return vendorOpportunities.filter((opp) => !isOwnBuyerRfq(opp.rfqNumber));
-  }, [vendorOpportunities, isOwnBuyerRfq]);
+    return vendorOpportunities.filter((opp) => isPublicEnquiryRfq(opp.rfqNumber));
+  }, [vendorOpportunities, isPublicEnquiryRfq]);
 
   const effectiveTab: 'my_enquiries' | 'public_enquiries' = useMemo(() => {
     if (userSelectedTab) return userSelectedTab;
@@ -361,6 +467,51 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (myEnquiries.length > 0) return 'my_enquiries';
     return 'public_enquiries';
   }, [userSelectedTab, opportunityStatusFilter, myEnquiries.length]);
+
+  // Extract distinct categories available across opportunities for the active tab
+  const availableCategories = useMemo(() => {
+    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const set = new Set<string>();
+    pool.forEach((opp) => {
+      const cat = resolveOpportunityCategory(opp);
+      if (cat) set.add(cat);
+      if (opp.minorCategory && opp.minorCategory.trim()) set.add(opp.minorCategory.trim());
+      if (opp.majorCategory && opp.majorCategory.trim()) set.add(opp.majorCategory.trim());
+      const rfq = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
+      if (rfq) {
+        if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
+        (rfq.extractedEntities || []).forEach((e) => {
+          const entCat = (e.minorCategory || (e as any).majorCategory || '').trim();
+          if (entCat) set.add(entCat);
+        });
+        (rfq.lineItems || []).forEach((li: any) => {
+          if (li.minorCategory && li.minorCategory.trim()) set.add(li.minorCategory.trim());
+        });
+      }
+    });
+    return Array.from(set).sort();
+  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs, resolveOpportunityCategory]);
+
+  // Extract distinct pincodes available across opportunities for the active tab
+  const availablePincodes = useMemo(() => {
+    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const set = new Set<string>();
+    pool.forEach((opp) => {
+      const rfqRecord = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
+      const rawPin = opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '';
+      let pin = String(rawPin).replace(/\D/g, '');
+      if (!pin && opp.deliveryLocation) {
+        const m = opp.deliveryLocation.match(/\b\d{6}\b/);
+        if (m) pin = m[0];
+      }
+      if (!pin && rfqRecord?.deliveryLocation) {
+        const m = rfqRecord.deliveryLocation.match(/\b\d{6}\b/);
+        if (m) pin = m[0];
+      }
+      if (pin) set.add(pin);
+    });
+    return Array.from(set).sort();
+  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs]);
 
   const totalReceivedCount = vendorOpportunities.length;
   const pendingQuotesCount = useMemo(() => {
@@ -387,12 +538,31 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
         const oppCat = resolveOpportunityCategory(opp);
 
-        // Category filter check (multi-category support):
-        // Filter strictly by the enquiry's resolved category so that choosing a category
-        // (e.g. Civil Works) does not surface RFQs from other categories (e.g. Electrical, IT).
+        // Pincode filter check (multi-pincode support):
+        if (selectedPincodes.length > 0) {
+          const oppPin = String(opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '').replace(/\D/g, '');
+          const matchesPincode = selectedPincodes.some(
+            (pin) => pin.replace(/\D/g, '') === oppPin
+          );
+          if (!matchesPincode) return false;
+        }
+
+        // Category & minor category filter check (multi-category support):
         if (selectedCategories.length > 0) {
-          const matchesCategory = selectedCategories.some(
-            (cat) => cat.toLowerCase() === oppCat.toLowerCase()
+          const rfqCategories = [
+            oppCat,
+            opp.minorCategory,
+            opp.majorCategory,
+            opp.category,
+            rfqRecord?.category,
+            ...(rfqRecord?.extractedEntities || []).map((e) => e.minorCategory),
+            ...(rfqRecord?.extractedEntities || []).map((e) => e.majorCategory),
+          ]
+            .filter((c): c is string => typeof c === 'string' && Boolean(c.trim()))
+            .map((c) => c.trim().toLowerCase());
+
+          const matchesCategory = selectedCategories.some((cat) =>
+            rfqCategories.includes(cat.trim().toLowerCase())
           );
           if (!matchesCategory) return false;
         }
@@ -442,11 +612,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const bTime = new Date(b.deadline || 0).getTime();
         return bTime - aTime;
       });
-  }, [effectiveTab, myEnquiries, publicEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [effectiveTab, opportunitySearch, opportunityStatusFilter, selectedCategories, pageSize]);
+  }, [effectiveTab, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, pageSize]);
 
   const totalFilteredCount = filteredOpportunities.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
@@ -1038,8 +1208,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </span>
           </div>
 
-          {/* Search, Categories, and Status Filters */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)_200px]">
+          {/* Search, Categories, Pincodes, and Status Filters */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(160px,210px)_minmax(160px,210px)_180px]">
             <label className="relative block min-w-0">
               <span className="sr-only">Search enquiries</span>
               <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1078,6 +1248,97 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </select>
             </label>
 
+            {/* Multi-Select Pincode Filter */}
+            <div className="relative block min-w-0">
+              <span className="sr-only">Filter enquiries by pincode</span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsPincodeDropdownOpen((prev) => !prev)}
+                  className="flex h-11 w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
+                  aria-label="Filter enquiries by pincode"
+                  aria-expanded={isPincodeDropdownOpen}
+                >
+                  <MapPin size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <span className="truncate">
+                    {selectedPincodes.length === 0
+                      ? `All Pincodes (${availablePincodes.length})`
+                      : `${selectedPincodes.length} Pincode${selectedPincodes.length === 1 ? '' : 's'}`}
+                  </span>
+                  <span className="text-xs text-slate-400">▾</span>
+                </button>
+
+                {/* Backwards-compatible select for programmatic testing */}
+                <select
+                  aria-label="Filter enquiries by pincode select"
+                  value={selectedPincodes.length === 0 ? 'all' : selectedPincodes[0]}
+                  onChange={(event) => {
+                    const val = event.target.value;
+                    if (val === 'all') {
+                      setSelectedPincodes([]);
+                    } else {
+                      setSelectedPincodes([val]);
+                    }
+                  }}
+                  className="sr-only"
+                  tabIndex={-1}
+                >
+                  <option value="all">All Pincodes</option>
+                  {availablePincodes.map((pin) => (
+                    <option key={pin} value={pin}>
+                      {pin}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {isPincodeDropdownOpen && (
+                <div className="absolute right-0 top-full z-40 mt-1 max-h-60 w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl dark:border-slate-700 dark:bg-gray-900">
+                  <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-1.5 text-xs dark:border-slate-800">
+                    <span className="font-bold text-slate-700 dark:text-gray-300">Select Pincodes</span>
+                    {selectedPincodes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPincodes([])}
+                        className="text-[11px] font-bold text-blue-600 hover:underline dark:text-cyan-400"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                  {availablePincodes.length === 0 ? (
+                    <p className="py-2 text-center text-xs text-slate-400">No pincodes found</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {availablePincodes.map((pin) => {
+                        const isChecked = selectedPincodes.includes(pin);
+                        return (
+                          <label
+                            key={pin}
+                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-gray-300 dark:hover:bg-gray-800"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedPincodes((prev) => [...prev, pin]);
+                                } else {
+                                  setSelectedPincodes((prev) => prev.filter((p) => p !== pin));
+                                }
+                              }}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span>{pin}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <label className="relative block min-w-0">
               <span className="sr-only">Filter enquiries by status</span>
               <Filter size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1096,11 +1357,45 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </label>
           </div>
 
+          {selectedPincodes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-gray-400">Selected Pincodes:</span>
+              {selectedPincodes.map((pin) => (
+                <span
+                  key={pin}
+                  className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                >
+                  PIN: {pin}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPincodes((prev) => prev.filter((p) => p !== pin))}
+                    className="hover:text-indigo-900 dark:hover:text-white"
+                    aria-label={`Remove filter for pincode ${pin}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSelectedPincodes([])}
+                className="ml-1 text-xs font-bold text-blue-600 hover:underline dark:text-cyan-400"
+              >
+                Clear Pincodes
+              </button>
+            </div>
+          )}
+
           <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
             Showing <span className="font-bold text-slate-700 dark:text-gray-200">{filteredOpportunities.length}</span> of {totalReceivedCount} enquiries
             {selectedCategories.length > 0 && (
               <span className="ml-1 text-blue-600 dark:text-blue-400 font-semibold">
                 (Filtered by {selectedCategories.length} categor{selectedCategories.length === 1 ? 'y' : 'ies'})
+              </span>
+            )}
+            {selectedPincodes.length > 0 && (
+              <span className="ml-1 text-indigo-600 dark:text-indigo-400 font-semibold">
+                (Filtered by {selectedPincodes.length} pincode{selectedPincodes.length === 1 ? '' : 's'})
               </span>
             )}
           </p>
@@ -1119,10 +1414,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
                 : 'Try another search term or choose a different status filter.'}
             </p>
-            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0) && (
+            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0 || selectedPincodes.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters

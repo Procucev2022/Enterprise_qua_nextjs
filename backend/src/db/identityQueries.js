@@ -372,8 +372,8 @@ async function insertBuyerAccount({
   // never a placeholder number.
   const normalizedEmail = String(email).trim().toLowerCase();
   const normalizedPhone = normalizePhone(phone);
-  const orgName = organizationName || `${normalizedEmail.split('@')[0]} Enterprises`;
-  const displayName = fullName || normalizedEmail.split('@')[0];
+  const orgName = String(organizationName || `${normalizedEmail.split('@')[0]} Enterprises`).trim();
+  const displayName = String(fullName || normalizedEmail.split('@')[0]).trim();
   const addressCity = (city || '').trim();
   const addressState = (state || '').trim();
   const addressPincode = (pincode || '').trim();
@@ -402,7 +402,7 @@ async function insertBuyerAccount({
   // between this read and the batch when another registration is in flight.
   if (hasD1()) {
     const orgLookup = await pool.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
@@ -520,6 +520,7 @@ async function insertBuyerAccount({
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -540,7 +541,7 @@ async function insertBuyerAccount({
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid]
     );
 
@@ -642,6 +643,7 @@ async function insertBuyerAccount({
     );
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -713,7 +715,7 @@ async function insertStaffAccount({
   // the same organization name without creating a second organization row.
   if (hasD1()) {
     const orgLookup = await pool.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
@@ -806,6 +808,7 @@ async function insertStaffAccount({
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -824,7 +827,7 @@ async function insertStaffAccount({
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid]
     );
 
@@ -890,6 +893,7 @@ async function insertStaffAccount({
     );
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -974,7 +978,7 @@ async function insertVendorAccount({
   // guards for concurrent duplicate registrations and organization creation.
   if (hasD1()) {
     const orgLookup = await pool.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
@@ -1058,6 +1062,7 @@ async function insertVendorAccount({
     const organizationReused = organizationReusedBeforeWrite || !organizationInserted;
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -1076,7 +1081,7 @@ async function insertVendorAccount({
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 limit 1',
+      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid]
     );
 
@@ -1152,6 +1157,7 @@ async function insertVendorAccount({
     }
 
     queryCache.invalidate('user');
+    queryCache.invalidate('buyer_accounts');
     return {
       created: true,
       user: {
@@ -1234,7 +1240,158 @@ async function updateBuyerOnboardingStatus({
     }
   );
   queryCache.invalidate('user');
+  queryCache.invalidate('buyer_accounts');
   return (result.rowCount || 0) > 0;
+}
+
+/**
+ * Ensure a buyer user has a linked organization row populated with onboarding
+ * tax and address details when `user.org_uuid` is missing or dangling.
+ */
+async function ensureBuyerOrganization({
+  userUuid,
+  email,
+  organizationName,
+  contactName,
+  phone,
+  street = '',
+  address = '',
+  city = '',
+  state = '',
+  pincode = '',
+  country = 'India',
+  gstin = '',
+  pan = '',
+  actorEmail = 'buyer-onboarding',
+}) {
+  if (!pool.hasStorage() || !userUuid) return null;
+
+  const normalizedEmail = String(email || '').trim().toLowerCase();
+  const normalizedPhone = normalizePhone(phone);
+  const orgName = String(organizationName || (normalizedEmail ? `${normalizedEmail.split('@')[0]} Enterprises` : 'Buyer Organization')).trim();
+  const displayName = String(contactName || (normalizedEmail ? normalizedEmail.split('@')[0] : 'Buyer Contact')).trim();
+  const addressCity = String(city || '').trim();
+  const addressState = String(state || '').trim();
+  const addressPincode = String(pincode || '').trim();
+  const addressCountry = String(country || 'India').trim();
+  const streetAddress = String(
+    street || address || (addressCity && addressState ? `${addressCity}, ${addressState}` : addressCity || '')
+  ).trim();
+  const taxGstin = String(gstin || '').trim().toUpperCase();
+  const taxPan = String(pan || '').trim().toUpperCase();
+
+  const orgTypeUuid = await resolveMasterUuid('org_types', 'type_name', IDENTITY_MASTER_DATA.BUYER_ORG_TYPE);
+  if (!orgTypeUuid) return null;
+
+  const existingOrg = await pool.query(
+    'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
+    [orgName, orgTypeUuid],
+    { d1: true }
+  );
+  let orgUuid = existingOrg.rows[0]?.uuid || null;
+
+  if (!orgUuid) {
+    orgUuid = crypto.randomUUID();
+    const statusUuid = await resolveMasterUuid('master_status', 'status', IDENTITY_MASTER_DATA.BUYER_STATUS);
+    await pool.query(
+      `insert into organization
+         (uuid, organization_name, contact_person, email, organization_phonenumber,
+          address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
+          client_status_uuid, self_client, source_type, company_id,
+          created_by, created_ts, last_modified_by, last_modified_ts)
+       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true, $16, $17, $18, now(), $18, now())`,
+      [
+        orgUuid,
+        orgName,
+        displayName,
+        normalizedEmail,
+        normalizedPhone,
+        streetAddress,
+        addressCity,
+        addressState,
+        addressPincode,
+        addressPincode,
+        addressCountry,
+        taxGstin,
+        taxPan,
+        orgTypeUuid,
+        statusUuid || null,
+        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        buildCompanyId(orgName),
+        actorEmail,
+      ],
+      {
+        d1: true,
+        d1Text: `insert into organization
+           (uuid, organization_name, contact_person, email, organization_phonenumber,
+            address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
+            created_ts, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+        d1Params: [
+          orgUuid,
+          orgName,
+          displayName,
+          normalizedEmail,
+          normalizedPhone,
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
+          orgTypeUuid,
+        ],
+      }
+    );
+  } else {
+    await pool.query(
+      `update organization
+          set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+              city = case when coalesce($2, '') <> '' then $2 else city end,
+              state = case when coalesce($3, '') <> '' then $3 else state end,
+              zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+              country = case when coalesce($5, '') <> '' then $5 else country end,
+              gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
+              pan = case when coalesce($7, '') <> '' then $7 else pan end,
+              contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
+              last_modified_by = $9,
+              last_modified_ts = now()
+        where uuid = $10`,
+      [streetAddress, addressCity, addressState, addressPincode, addressCountry, taxGstin, taxPan, displayName, actorEmail, orgUuid],
+      {
+        d1: true,
+        d1Text: `update organization
+            set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+                city = case when coalesce($2, '') <> '' then $2 else city end,
+                state = case when coalesce($3, '') <> '' then $3 else state end,
+                zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                pincode = case when coalesce($5, '') <> '' then $5 else pincode end,
+                country = case when coalesce($6, '') <> '' then $6 else country end,
+                gstin = case when coalesce($7, '') <> '' then $7 else gstin end,
+                pan = case when coalesce($8, '') <> '' then $8 else pan end,
+                contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
+                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          where uuid = $10`,
+        d1Params: [streetAddress, addressCity, addressState, addressPincode, addressPincode, addressCountry, taxGstin, taxPan, displayName, orgUuid],
+      }
+    );
+  }
+
+  await pool.query(
+    'update "user" set org_uuid = $1, organization_name = $2, full_name = case when coalesce($3, \'\') <> \'\' then $3 else full_name end, last_modified_by = $4, last_modified_ts = now() where uuid = $5',
+    [orgUuid, orgName, displayName, actorEmail, String(userUuid)],
+    {
+      d1: true,
+      d1Text:
+        'update "user" set org_uuid = $1, organization_name = $2, full_name = case when coalesce($3, \'\') <> \'\' then $3 else full_name end, last_modified_by = $4, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $5',
+    }
+  );
+  queryCache.invalidate('user');
+  queryCache.invalidate('buyer_accounts');
+  return orgUuid;
 }
 
 module.exports = {
@@ -1256,6 +1413,7 @@ module.exports = {
   updateUserPassword,
   updateUserPasswordByUuid,
   updateBuyerOnboardingStatus,
+  ensureBuyerOrganization,
   MASTER_TABLES,
   USER_SELECT,
 };

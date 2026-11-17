@@ -549,9 +549,9 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   const hasCustomD1Params = d1ParamOverrides.size > 0 || d1ExtraParams.length > 0;
   const d1BaseParams = hasCustomD1Params
     ? [
-        ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
-        ...d1ExtraParams,
-      ]
+      ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
+      ...d1ExtraParams,
+    ]
     : null;
 
   let total = 0;
@@ -1048,7 +1048,7 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
          AND json_extract(raw,'$.buyerId') IS NULL
          AND json_extract(raw,'$.buyerAccountId') IS NULL`;
 
-  return executePincodeTieredPublicVendorQuery({
+  const primaryRows = await executePincodeTieredPublicVendorQuery({
     basePgWhere,
     baseD1Where,
     basePgParams,
@@ -1064,6 +1064,79 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
     fallbackPgParams: basePgParams,
     fallbackD1Params: baseD1Params,
   });
+
+  // Several master minors (e.g. IT > Laptop, Networking Equipment) have no tagged vendors in the
+  // bulk catalogue, or carry composite minor labels ("Desktop & Laptop") / product keywords in
+  // their company name or products field (see getVendorsPageFromDB). Also, on D1 the quoted-prefix
+  // check (`raw LIKE '%"term%'`) can match non-category fields such as email addresses. Count how
+  // many primary rows actually carry a matching minor term in their category/name/products fields,
+  // and when fewer than safeLimit verified rows were found, top up with substring matches (>= 4 chars)
+  // under the same parent major categories and pincode proximity stages.
+  const broadTerms = terms.filter((term) => term.length >= 4);
+  const verifiedPrimaryCount = primaryRows.filter((vendor) => {
+    if (!vendor || typeof vendor !== 'object') return false;
+    const haystack = [
+      vendor.name,
+      vendor.products,
+      vendor.majorCategory,
+      vendor.category,
+      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [vendor.minorCategories]),
+      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
+      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...(Array.isArray(vendor.categories) ? vendor.categories : []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return terms.some((term) => haystack.includes(term));
+  }).length;
+  if (verifiedPrimaryCount >= safeLimit || broadTerms.length === 0) {
+    return primaryRows;
+  }
+
+  const broadPatterns = broadTerms.map((term) => `%${term}%`);
+  const broadPgParams = [majors, ...broadPatterns];
+  const broadPgClauses = broadPatterns.map((_, index) => {
+    const p = index + 2;
+    return `lower(concat_ws(' ', raw->>'name', raw->>'products', (raw->'minorCategories')::text, (raw->'vendorSelectedCategories')::text, (raw->'clientMappedCategories')::text, (raw->'categories')::text)) LIKE $${p}`;
+  });
+  const broadPgWhere = `lower(major_category) = ANY($1::text[])
+       AND (${broadPgClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+
+  const broadD1Params = [...majors, ...broadPatterns];
+  const broadD1Clauses = broadPatterns.map((_, index) => {
+    const p = majors.length + index + 1;
+    return `(raw LIKE $${p} AND lower(coalesce(json_extract(raw,'$.name'), '') || ' ' || coalesce(json_extract(raw,'$.products'), '') || ' ' || coalesce(json_extract(raw,'$.minorCategories'), '') || ' ' || coalesce(json_extract(raw,'$.vendorSelectedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.clientMappedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.categories'), '')) LIKE $${p})`;
+  });
+  const broadD1Where = `major_category COLLATE NOCASE IN (${d1Majors})
+         AND (${broadD1Clauses.join(' OR ')})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  const broadRows = await executePincodeTieredPublicVendorQuery({
+    basePgWhere: broadPgWhere,
+    baseD1Where: broadD1Where,
+    basePgParams: broadPgParams,
+    baseD1Params: broadD1Params,
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors
+     WHERE ${broadPgWhere}
+     ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors
+       WHERE ${broadD1Where}
+       ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: broadPgParams,
+    fallbackD1Params: broadD1Params,
+  });
+
+  const combined = [];
+  const seenKeys = new Set();
+  appendUniqueVendors(combined, seenKeys, primaryRows, safeLimit);
+  appendUniqueVendors(combined, seenKeys, broadRows, safeLimit);
+  return combined;
 }
 
 /**
@@ -1717,6 +1790,9 @@ async function updateVendorIfUnchangedInDB(snapshot, vendor) {
   );
   if (!result.rows[0]) return null;
   queryCache.invalidate('vendors');
+  if (normalizedVendor.id) {
+    void syncVendorCategoriesIndexed(normalizedVendor.id, normalizedVendor);
+  }
   return parseVendorRaw(result.rows[0].raw);
 }
 
@@ -1854,6 +1930,47 @@ async function deleteVendorInDB(id) {
   queryCache.invalidate('vendors');
   nonVendorEmailCache.clear();
   return result.rowCount > 0;
+}
+
+async function getVendorsByIdsFromDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return [];
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  const rows = [];
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `SELECT raw FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    for (const row of result.rows || []) {
+      const parsed = parseVendorRaw(row.raw);
+      if (parsed) rows.push(parsed);
+    }
+  }
+  return rows;
+}
+
+async function deleteVendorsInDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return 0;
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  let totalDeleted = 0;
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `DELETE FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    totalDeleted += result.rowCount || 0;
+  }
+  queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
+  return totalDeleted;
 }
 
 // One multi-row INSERT for a whole batch of newly bulk-uploaded vendors,
@@ -2018,7 +2135,7 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   const result = await pool.query(
     sql,
     params,
-    { d1: true, d1Text: d1Sql, useCache: true, tag: 'rfqs', ttlMs: 60000 }
+    { d1: true, d1Text: d1Sql }
   );
   return result.rows.map((row) => parseRaw(row.raw));
 }
@@ -2516,7 +2633,7 @@ async function getBuyerAccountsFromDB(limit = null) {
 async function getBuyerAccountByEmailFromDB(email, { fresh = false } = {}) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
   );
@@ -2545,7 +2662,7 @@ async function getBuyerAccountSnapshotByIdFromDB(id) {
 async function getBuyerAccountSnapshotByEmailFromDB(email) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true }
   );
@@ -2740,11 +2857,11 @@ async function upsertAIFeedItemInDB(item) {
 
   try {
     await pool.query(
-      `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+      `DELETE FROM ai_feed WHERE sequence < (SELECT MIN(sequence) FROM (SELECT sequence FROM ai_feed ORDER BY sequence DESC LIMIT 100) AS recent_ai_feed)`,
       [],
       {
         d1: true,
-        d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+        d1Text: `DELETE FROM ai_feed WHERE rowid < (SELECT MIN(rowid) FROM (SELECT rowid FROM ai_feed ORDER BY rowid DESC LIMIT 100))`,
       }
     );
   } catch (error) {
@@ -3872,6 +3989,8 @@ module.exports = {
   incrementBulkImportSessionInDB,
   upsertVendorInDB,
   deleteVendorInDB,
+  getVendorsByIdsFromDB,
+  deleteVendorsInDB,
   bulkInsertVendorsInDB,
   getRFQsFromDB,
   getRFQsByBuyerFromDB,

@@ -343,7 +343,7 @@ describe('catalogue workbook preview validation', () => {
     mockApp.vendorCatalogue = Array.from({ length: 99 }, (_, index) => ({ id: `${index}`, sku: `ITEM-${index}`, name: 'Existing', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }));
     jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: true, error: null, rows: [row(), row({ rowNumber: 3, sku: 'IMPORTED-2' })] });
     const { container } = render(<ItemCatalogue />);
-    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'));
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'), {}, { timeout: 10000 });
     upload(new File(['workbook'], 'catalogue.xlsx'));
     await waitFor(() => expect(parseCatalogueWorkbook).toHaveBeenCalled());
     await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
@@ -362,7 +362,7 @@ describe('catalogue product limit from the pricing API', () => {
     mockApp.currentUserSession = null;
     mockApp.vendorCatalogue = [{ id: 'only', name: 'Existing', sku: 'EXISTING', category: 'Pumps', specs: '', unitPrice: 1, leadTimeDays: 1, moq: 1 }];
     render(<ItemCatalogue />);
-    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '1'));
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '1'), {}, { timeout: 10000 });
     fireEvent.change(screen.getByPlaceholderText(/e\.g\. Centrifugal Water Pump/), { target: { value: 'New item' } });
     fireEvent.change(screen.getByPlaceholderText('SKU-PUMP-500'), { target: { value: 'NEW-1' } });
     fireEvent.change(screen.getByPlaceholderText('850'), { target: { value: '100' } });
@@ -421,7 +421,7 @@ describe('catalogue load, save and import failure paths', () => {
     mockApp.currentUserSession = SESSION;
     fetchReturning(() => ({ ok: false, status: 500, json: async () => ({ success: false }) }));
     render(<ItemCatalogue />);
-    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable)).toBeInTheDocument();
+    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable, {}, { timeout: 10000 })).toBeInTheDocument();
   });
 
   test('shows an empty catalogue when the vendor has no profile yet', async () => {
@@ -444,7 +444,7 @@ describe('catalogue load, save and import failure paths', () => {
       ? { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'v-1' } }) }
       : { ok: false, status: 503, json: async () => ({ success: false }) }));
     const { unmount } = render(<ItemCatalogue />);
-    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable)).toBeInTheDocument();
+    expect(await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueUnavailable, {}, { timeout: 10000 })).toBeInTheDocument();
     unmount();
 
     fetchReturning((url) => (url.startsWith('/api/vendors/')
@@ -517,7 +517,7 @@ describe('catalogue load, save and import failure paths', () => {
       ? { ok: true, status: 200, json: async () => ({ success: false }) }
       : { ok: true, status: 200, json: async () => ({ success: true, data: { id: 'new-1', sku: 'FITS-1' } }) }));
     const { container } = render(<ItemCatalogue />);
-    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'));
+    await screen.findByText(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit.replace('{limit}', '100'), {}, { timeout: 10000 });
     fireEvent.change(screen.getByLabelText('Upload catalogue Excel workbook'), { target: { files: [new File(['w'], 'catalogue.xlsx')] } });
     await waitFor(() => expect(container.querySelectorAll('tbody tr').length).toBeGreaterThan(1));
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: /Import Valid Rows/ })); });

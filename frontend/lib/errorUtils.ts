@@ -24,6 +24,37 @@ export interface DescriptiveUIError {
   timestamp: string;
 }
 
+let unloadListenersBound = false;
+let pageUnloading = false;
+
+function bindPageUnloadListeners(): void {
+  if (unloadListenersBound || typeof window === 'undefined') return;
+  unloadListenersBound = true;
+  const markUnloading = () => {
+    pageUnloading = true;
+  };
+  const resetUnloading = () => {
+    pageUnloading = false;
+  };
+  window.addEventListener('beforeunload', markUnloading);
+  window.addEventListener('pagehide', markUnloading);
+  window.addEventListener('pageshow', resetUnloading);
+}
+
+/**
+ * Returns true when a fetch failure was triggered by component abort or browser
+ * page navigation/unload rather than a real API outage.
+ */
+export function isAbortOrPageUnloadError(error: unknown, signal?: AbortSignal): boolean {
+  bindPageUnloadListeners();
+  if (signal?.aborted || pageUnloading) return true;
+  if (error instanceof DOMException && error.name === 'AbortError') return true;
+  if (error && typeof error === 'object' && 'name' in error && (error as { name?: string }).name === 'AbortError') {
+    return true;
+  }
+  return false;
+}
+
 /**
  * Parses and formats any error into a rich, descriptive user-facing error payload.
  */

@@ -587,7 +587,7 @@ describe('Email & Ingestion RFQ Title Analysis Pipeline Tests', () => {
         rfqNumber: 'RFQ-ELEC-01',
         title: 'Electronics RFQ',
         category: 'Electronics & Electrical',
-        sourcingMode: 'mode_0',
+        sourcingMode: 'mode_1',
         lineItems: [{ name: 'Camera', quantity: 1 }],
       };
       jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue(electronicsRfq);

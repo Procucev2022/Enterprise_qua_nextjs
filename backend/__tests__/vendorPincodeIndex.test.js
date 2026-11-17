@@ -1,6 +1,12 @@
 const fs = require('fs');
 const path = require('path');
-const { DatabaseSync } = require('node:sqlite');
+let DatabaseSync;
+try {
+  ({ DatabaseSync } = require('node:sqlite'));
+} catch {
+  // node:sqlite requires Node 22+
+}
+const describeWithSqlite = DatabaseSync ? describe : describe.skip;
 
 const pool = require('../src/db/pool');
 const d1Bridge = require('../src/db/d1Bridge');
@@ -101,7 +107,7 @@ function createSqliteVendorFixtureDb() {
   return db;
 }
 
-describe('vendor pincode proximity index & tiered RFQ vendor queries', () => {
+describeWithSqlite('vendor pincode proximity index & tiered RFQ vendor queries', () => {
   const originalPool = pool.pool;
   const originalBinding = globalThis.__CF_ENV__;
 

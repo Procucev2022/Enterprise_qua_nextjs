@@ -224,6 +224,25 @@ async function createBuyerAccount(req, res, next) {
       logger.warn('Failed to create buyer account: Missing organizationName or corporateEmail', { body }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(400).json({ success: false, error: 'organizationName and corporateEmail are required.' });
     }
+    const normalizedEmail = String(body.corporateEmail).trim().toLowerCase();
+    const sessionUserId = req.user && (req.user.sub || req.user.id);
+    const sessionEmail = String((req.user && req.user.email) || '').trim().toLowerCase();
+    const isSelfRegistrationMirrorSync = !body.id && Boolean(sessionUserId) && sessionEmail === normalizedEmail;
+    const existing = isSelfRegistrationMirrorSync
+      ? await storeService.getBuyerAccountByEmail(normalizedEmail)
+      : null;
+    if (existing && existing.id === sessionUserId) {
+      const sanitizedUpdates = sanitizeBuyerAccountUpdates(body, res);
+      if (!sanitizedUpdates) return;
+      logger.info(`Merging buyer account update into existing mirror: ${body.organizationName}`, { id: existing.id, email: normalizedEmail }, 'BUYER_ACCOUNT_CONTROLLER');
+      const merged = await storeService.updateBuyerAccountDurably(existing.id, {
+        ...sanitizedUpdates,
+        organizationId: sanitizedUpdates.organizationId || existing.organizationId || null,
+      });
+      if (merged) {
+        return res.status(201).json({ success: true, data: merged });
+      }
+    }
     logger.info(`Creating new buyer account: ${body.organizationName}`, { organizationName: body.organizationName, email: body.corporateEmail }, 'BUYER_ACCOUNT_CONTROLLER');
     const created = await storeService.addBuyerAccountDurably(body);
     res.status(201).json({ success: true, data: created });

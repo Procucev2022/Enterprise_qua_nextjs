@@ -66,6 +66,13 @@ describe('d1Bridge', () => {
       const { toD1Sql } = require('../src/db/d1Bridge');
       expect(toD1Sql('select * from t')).toBe('select * from t');
     });
+
+    it('converts now() to CURRENT_TIMESTAMP and strips ::type casts for SQLite D1 compatibility', () => {
+      const { toD1Sql } = require('../src/db/d1Bridge');
+      expect(toD1Sql('update t set a = $1::jsonb, b = now() where id = $2')).toBe(
+        'update t set a = ?, b = CURRENT_TIMESTAMP where id = ?'
+      );
+    });
   });
 
   describe('queryD1', () => {
