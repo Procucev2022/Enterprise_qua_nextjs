@@ -4490,5 +4490,30 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.queryByText('PO Date')).not.toBeInTheDocument();
     expect(screen.queryByText(/Total Spend/i)).not.toBeInTheDocument();
   });
+
+  it('derives minor categories from local PO lines when server mapping has majorCategory but empty finalMinorCategories', async () => {
+    installIngestionServer({
+      mappings: [{ ...APEX_MAPPING, finalMinorCategories: [] }],
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = poInputs[poInputs.length - 1] as HTMLInputElement;
+    fireEvent.change(poInput, { target: { files: [createValidPoDumpFile()] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
+    await waitFor(() => expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled());
+    const submittedVendors = mockProcessHistoricalPurchaseData.mock.calls[0][1];
+    expect(submittedVendors[0].secondSetMinorCategories.length).toBeGreaterThan(0);
+  });
 });
 

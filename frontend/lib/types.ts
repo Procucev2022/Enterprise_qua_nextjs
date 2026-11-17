@@ -1232,6 +1232,9 @@ export interface VendorEntry {
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories?: string[]; // Categories assigned by buyer (from PO / vendor master upload)
   vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (max 10)
+  poMajorCategory?: string; // Major category derived from historical PO records
+  poMinorCategories?: string[]; // Minor categories derived from historical PO records
+  itemsSupplied?: string[]; // Historical item descriptions supplied by vendor
   isCategoryAligned?: boolean; // True if vendor selected matches client mapped
   categoryMismatchDetails?: {
     clientOnly: string[];

@@ -3062,6 +3062,77 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(false);
     });
 
+    it('cleans up buyerVendors, vendorEvaluations, and upload history using targetVendor/targetVendors hints across single and bulk delete', async () => {
+      const ctx = await mountStore();
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: sent.email === 'hint1@vendor.com' ? 'v-hint-1' : 'v-hint-2' } }),
+          });
+        }
+        if (String(url).startsWith('/api/vendors/v-hint-') && init?.method === 'DELETE') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+        }
+        if (url === '/api/vendors/bulk-delete' && init?.method === 'POST') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, deletedIds: [] }) });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      await act(async () => {
+        await ctx().addBuyerVendor({ name: 'Hint Vendor One', majorCategory: 'Mechanical', email: 'hint1@vendor.com' } as any);
+        await ctx().addBuyerVendor({ name: 'Hint Vendor Two', majorCategory: 'Electrical', email: 'hint2@vendor.com' } as any);
+        await ctx().addBuyerVendor({ name: 'Kept Vendor', majorCategory: 'Civil', email: 'kept@vendor.com' } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-hint-1',
+          vendorId: 'v-hint-1',
+          vendorName: 'Hint Vendor One',
+          email: 'hint1@vendor.com',
+          overallScore: 88,
+        } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-hint-2',
+          vendorId: 'v-other-id',
+          vendorName: 'Hint Vendor Two',
+          email: 'hint2@vendor.com',
+          overallScore: 84,
+        } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-kept',
+          vendorId: 'v-kept-eval',
+          vendorName: 'Kept Vendor',
+          email: 'kept@vendor.com',
+          overallScore: 91,
+        } as any);
+      });
+
+      // Single delete passing targetVendor hints removes matching evaluation and vendor
+      await act(async () => {
+        const ok = await ctx().deleteBuyerVendor('hint1@vendor.com', {
+          id: 'v-hint-1',
+          email: 'hint1@vendor.com',
+          name: 'Hint Vendor One',
+        });
+        expect(ok).toBe(true);
+      });
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-hint-1')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-kept')).toBe(true);
+
+      // Bulk delete passing targetVendors hints with empty deletedIds from server falls back to vendorIds.length
+      await act(async () => {
+        await ctx().deleteMultipleBuyerVendors(['hint2@vendor.com'], [
+          { id: 'v-hint-2', email: 'hint2@vendor.com', name: 'Hint Vendor Two' },
+          {},
+        ]);
+      });
+      expect(ctx().buyerVendors.some((v: any) => v.email === 'hint2@vendor.com')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-hint-2')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-kept')).toBe(true);
+    });
+
     it('keeps every vendor and logs the failure when bulk deletion is refused', async () => {
       const ctx = await mountStore();
       const countBefore = ctx().buyerVendors.length;

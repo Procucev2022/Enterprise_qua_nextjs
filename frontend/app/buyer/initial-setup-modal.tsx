@@ -14,11 +14,7 @@ import {
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
 } from '@/lib/constants';
-import {
-  resolveMinorCategory,
-  findMajorForMinor,
-  hasMajorCategory,
-} from '@/lib/categoryTaxonomy';
+import { resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,

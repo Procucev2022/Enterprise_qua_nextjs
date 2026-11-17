@@ -1328,14 +1328,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (currentMinors.length === 0) {
       if (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0) {
         currentMinors = normalizeVendorCategoryList(vendor.clientMappedCategories);
-      } else if (Array.isArray((vendor as any).poMinorCategories) && (vendor as any).poMinorCategories.length > 0) {
-        currentMinors = normalizeVendorCategoryList((vendor as any).poMinorCategories);
+      } else if (Array.isArray(vendor.poMinorCategories) && vendor.poMinorCategories.length > 0) {
+        currentMinors = normalizeVendorCategoryList(vendor.poMinorCategories);
       } else if (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) {
         currentMinors = normalizeVendorCategoryList(vendor.vendorSelectedCategories);
-      } else if (Array.isArray((vendor as any).itemsSupplied) && (vendor as any).itemsSupplied.length > 0) {
+      } else if (Array.isArray(vendor.itemsSupplied) && vendor.itemsSupplied.length > 0) {
         currentMinors = Array.from(
           new Set(
-            ((vendor as any).itemsSupplied as string[])
+            vendor.itemsSupplied
               .map((it) => resolveMinorCategory(String(it), '', vendor.majorCategory))
               .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
           )

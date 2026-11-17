@@ -1813,13 +1813,13 @@ class StoreService {
     );
     const resolvedLocation = hasLocationInput
       ? resolveVendorLocationFields({
-          location: safeVendorData.location,
-          address: safeVendorData.address,
-          factoryAddress: safeVendorData.factoryAddress,
-          city: safeVendorData.city,
-          state: safeVendorData.state,
-          pincode: safeVendorData.pincode,
-        })
+        location: safeVendorData.location,
+        address: safeVendorData.address,
+        factoryAddress: safeVendorData.factoryAddress,
+        city: safeVendorData.city,
+        state: safeVendorData.state,
+        pincode: safeVendorData.pincode,
+      })
       : null;
     const cleanCategories = resolveValidVendorCategories(safeVendorData);
     const resolvedMajorCategory = cleanCategories.majorCategory ||
@@ -4045,7 +4045,7 @@ class StoreService {
     }
 
     if (pool.hasStorage() && closedList.length > 0 && !this.isHydratedFromDB) {
-      await this.hydrateFromDB().catch(() => {});
+      await this.hydrateFromDB().catch(() => { });
     }
 
     for (const updated of closedList) {

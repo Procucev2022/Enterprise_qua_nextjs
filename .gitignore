@@ -12,6 +12,8 @@ node_modules/
 # Test & Code Coverage
 coverage/
 */coverage/
+coverage-fast/
+*/coverage-fast/
 .nyc_output/
 
 # Next.js Build Outputs

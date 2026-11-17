@@ -6203,3 +6203,10 @@ in this image, we are always getting minor category shortfall "0" value for all 
 basically when a RFQ invitations is sent to minor category vendors, in case we have 4 minor category vendors for that pincode instead of 25, we send this email notifications, but the value is not coming correct, can you please check
 ```
 ---
+
+### Prompt 256
+**Timestamp**: 2026-11-17T18:16:16+05:30
+```text
+Please check once, all checks are failing, please fix them. Also, how can a commit happen without quality checks passing. Can you please check & fix
+```
+---
