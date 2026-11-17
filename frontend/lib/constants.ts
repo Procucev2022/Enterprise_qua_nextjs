@@ -1748,6 +1748,11 @@ export const VENDOR_CATEGORY_PLACEHOLDERS: ReadonlySet<string> = new Set([
   'n/a',
   '-',
   '—',
+  'category not assigned',
+  'not assigned',
+  'category unassigned',
+  'division unassigned',
+  'category required',
 ]);
 
 /** Returns true when a category string is empty or a synthetic placeholder value. */
@@ -1842,16 +1847,24 @@ export function removeVendorsFromUploadHistoryInStorage(
     if (!Array.isArray(batches)) return [];
 
     const updatedBatches = (batches as VendorUploadHistoryBatch[])
-      .map((batch) => {
+      .map((batch, batchIdx) => {
         if (!Array.isArray(batch?.records)) return batch;
-        const filteredRecords = batch.records.filter((rec: Record<string, unknown>) => {
+        const filteredRecords = batch.records.filter((rec: Record<string, unknown>, recIdx: number) => {
           const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
           const recEmail = String(rec.email || '').trim().toLowerCase();
           const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+          const recCode = String(rec.vendorCode || '').trim().toLowerCase();
+
+          const syntheticId1 = `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`.toLowerCase();
+          const syntheticId2 = `v-hist-local-${batchIdx}-${recIdx}`.toLowerCase();
+          const masterId = rec.id ? `v-master-${String(rec.id)}`.toLowerCase() : '';
 
           if (recId && lookupSet.has(recId)) return false;
           if (recEmail && lookupSet.has(recEmail)) return false;
           if (recName && lookupSet.has(recName)) return false;
+          if (recCode && lookupSet.has(recCode)) return false;
+          if (lookupSet.has(syntheticId1) || lookupSet.has(syntheticId2)) return false;
+          if (masterId && lookupSet.has(masterId)) return false;
           return true;
         });
 
@@ -1864,9 +1877,14 @@ export function removeVendorsFromUploadHistoryInStorage(
       })
       .filter((batch) => Array.isArray(batch.records) && batch.records.length > 0);
 
-    window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+    if (updatedBatches.length > 0) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+    } else {
+      window.localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
     if (typeof window.dispatchEvent === 'function') {
       window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
     }
     return updatedBatches;
   } catch {

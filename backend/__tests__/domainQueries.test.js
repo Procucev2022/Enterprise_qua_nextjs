@@ -650,6 +650,19 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
 
         await expect(domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels', null], 0)).resolves.toEqual([]);
         expect(query.mock.calls[0][1]).toEqual([['steels'], 100]);
+
+        // Pincode proximity tiered lookup
+        const pinQuery = jest.fn().mockResolvedValue({
+          rows: [
+            { raw: JSON.stringify({ id: 'v-pin-1', name: 'Pin Vendor', email: 'pin@example.com' }) },
+          ],
+        });
+        pool.pool = { query: pinQuery };
+        const pinResult = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels'], 10, { pincode: '560001' });
+        expect(pinResult).toEqual([{ id: 'v-pin-1', name: 'Pin Vendor', email: 'pin@example.com' }]);
+
+        const pinResult2 = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Steels'], 10, { pincode: '56' });
+        expect(pinResult2).toEqual([{ id: 'v-pin-1', name: 'Pin Vendor', email: 'pin@example.com' }]);
       });
     });
 
@@ -2893,6 +2906,36 @@ describe('D1 streamlined vendor search queries', () => {
     expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
     expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.buyerId')) IS NULL");
     expect(d1Queries[0]).toContain('lower(json_extract(raw,\'$.name\')) LIKE lower($1)');
+
+    // Test category, state, minRating, verifiedOnly filters
+    query.mockClear();
+    query.mockResolvedValueOnce({ rows: [{ total: 1 }] });
+    query.mockResolvedValueOnce({ rows: [{ id: 'v-pub-1', raw: JSON.stringify({ id: 'v-pub-1', name: 'Havells' }), status: 'verified', created_at: '2026-01-01', major_category: 'Electrical' }] });
+    const filteredRes = await domainQueries.getPublicVendorsPageFromDB({
+      limit: 10,
+      offset: 0,
+      category: 'Electrical',
+      state: 'Karnataka',
+      minRating: 4.5,
+      verifiedOnly: true,
+    });
+    expect(filteredRes.total).toBe(1);
+    expect(filteredRes.rows[0].id).toBe('v-pub-1');
+
+    // Test cached branch
+    const cachedRes = await domainQueries.getPublicVendorsPageFromDB({
+      limit: 10,
+      offset: 0,
+      category: 'Electrical',
+      state: 'Karnataka',
+      minRating: 4.5,
+      verifiedOnly: true,
+    });
+    expect(cachedRes).toEqual(filteredRes);
+
+    // Test no storage branch
+    jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(false);
+    expect(await domainQueries.getPublicVendorsPageFromDB()).toEqual({ rows: [], total: 0 });
   });
 
   test('executes category-count searches directly and keeps exact predicates without FTS', async () => {
@@ -3145,6 +3188,93 @@ describe('additional domainQueries branch coverage', () => {
       const deletedCount = await domainQueries.deleteVendorsInDB(['v-1', 'v-2']);
       expect(deletedCount).toBe(2);
       expect(querySpy.mock.calls[1][0]).toContain('DELETE FROM vendors WHERE id IN ($1, $2)');
+    });
+
+    test('getVendorsPageFromDB filters by state and city with or without alias', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'v-c1', raw: JSON.stringify({ id: 'v-c1' }) }] })
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'v-c2', raw: JSON.stringify({ id: 'v-c2' }) }] })
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'v-c3', raw: JSON.stringify({ id: 'v-c3' }) }] });
+
+      const res1 = await domainQueries.getVendorsPageFromDB({
+        state: 'Karnataka',
+        city: 'Bengaluru (Bangalore)',
+      });
+      expect(res1.rows).toHaveLength(1);
+
+      const res2 = await domainQueries.getVendorsPageFromDB({
+        city: 'Mumbai',
+      });
+      expect(res2.rows).toHaveLength(1);
+
+      const res3 = await domainQueries.getVendorsPageFromDB({
+        search: '@procucev.com',
+      });
+      expect(res3.rows).toHaveLength(1);
+    });
+
+    test('getEvaluationsForVendorFromDB handles storage presence, inputs, and results', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(false);
+      expect(await domainQueries.getEvaluationsForVendorFromDB('v-1')).toEqual([]);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      expect(await domainQueries.getEvaluationsForVendorFromDB('')).toEqual([]);
+
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [{ raw: JSON.stringify({ id: 'eval-1', vendorId: 'v-1' }) }],
+      });
+      const evals = await domainQueries.getEvaluationsForVendorFromDB('v-1', '5');
+      expect(evals).toEqual([{ id: 'eval-1', vendorId: 'v-1' }]);
+      expect(querySpy.mock.calls[0][1]).toEqual(['v-1', 5]);
+    });
+
+    test('buyer account snapshot helpers handle storage states and raw formats', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(false);
+      expect(await domainQueries.getBuyerAccountSnapshotByIdFromDB('b-1')).toBeNull();
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      expect(await domainQueries.getBuyerAccountSnapshotByIdFromDB('')).toBeNull();
+      expect(await domainQueries.getBuyerAccountSnapshotByEmailFromDB('')).toBeNull();
+
+      const querySpy = jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ id: 'b-1', raw: { id: 'b-1', name: 'Buyer' } }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'b-1', raw: JSON.stringify({ id: 'b-1', name: 'Buyer' }) }] });
+
+      expect(await domainQueries.getBuyerAccountSnapshotByIdFromDB('b-missing')).toBeNull();
+      const snapObj = await domainQueries.getBuyerAccountSnapshotByIdFromDB('b-1');
+      expect(snapObj.account.id).toBe('b-1');
+      const snapEmail = await domainQueries.getBuyerAccountSnapshotByEmailFromDB('test@example.com');
+      expect(snapEmail.account.id).toBe('b-1');
+    });
+
+    test('insertChaserJobsInDB and addBuyerCreditsInDB branch coverage', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(false);
+      expect(await domainQueries.insertChaserJobsInDB([{ id: 'j-1' }])).toEqual([]);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      expect(await domainQueries.insertChaserJobsInDB([])).toEqual([]);
+
+      // Non-D1 fallback
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ id: 'j-1' }] }) };
+      const saved = await domainQueries.insertChaserJobsInDB([{ id: 'j-1' }]);
+      expect(saved).toEqual([{ id: 'j-1' }]);
+
+      // D1 batch branch
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValueOnce({});
+      const batchSpy = jest.spyOn(d1Bridge, 'batchD1').mockResolvedValueOnce([]);
+      const savedD1 = await domainQueries.insertChaserJobsInDB([{ id: 'j-2' }]);
+      expect(savedD1).toEqual([{ id: 'j-2' }]);
+
+      // addBuyerCreditsInDB forwarder
+      const buyerCreditQueries = require('../src/db/buyerCreditQueries');
+      jest.spyOn(buyerCreditQueries, 'addBuyerCreditsInDB').mockResolvedValueOnce({ balance: 100 });
+      expect(await domainQueries.addBuyerCreditsInDB({ buyerId: 'b-1' })).toEqual({ balance: 100 });
     });
   });
 });

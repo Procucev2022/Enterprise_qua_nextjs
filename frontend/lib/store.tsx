@@ -248,8 +248,8 @@ interface AppContextType {
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => Promise<boolean>;
-  deleteBuyerVendor: (vendorId: string) => Promise<boolean>;
-  deleteMultipleBuyerVendors: (vendorIds: string[]) => Promise<void>;
+  deleteBuyerVendor: (vendorId: string, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
+  deleteMultipleBuyerVendors: (vendorIds: string[], targetVendors?: Array<Partial<VendorEntry>>) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
   generateVendorOnboardingEmail: (vendor: VendorEntry, isExisting: boolean) => VendorOnboardingEmailPayload;
   selectedOnboardingEmail: VendorOnboardingEmailPayload | null;
@@ -2306,7 +2306,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   // The vendor leaves the list only after the server confirms the delete.
-  const deleteBuyerVendor = async (vendorId: string): Promise<boolean> => {
+  const deleteBuyerVendor = async (
+    vendorId: string,
+    targetVendor?: Partial<VendorEntry>
+  ): Promise<boolean> => {
     let res: Response;
     try {
       res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}`, {
@@ -2327,22 +2330,49 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const deletedVendor = buyerVendors.find((v) => v.id === vendorId || v.email === vendorId);
-    const identifiersToRemove = [vendorId, deletedVendor?.id, deletedVendor?.email, deletedVendor?.name].filter(
-      (val): val is string => typeof val === 'string' && Boolean(val.trim())
-    );
+    const identifiersToRemove = [
+      vendorId,
+      targetVendor?.id,
+      targetVendor?.email,
+      targetVendor?.name,
+      deletedVendor?.id,
+      deletedVendor?.email,
+      deletedVendor?.name,
+    ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
     removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
 
+    const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
+
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => v.id !== vendorId && v.email !== vendorId);
+      const updated = prev.filter((v) => {
+        const idMatch = v.id && matchSet.has(v.id.trim().toLowerCase());
+        const emailMatch = v.email && matchSet.has(v.email.trim().toLowerCase());
+        const nameMatch = v.name && matchSet.has(v.name.trim().toLowerCase());
+        return !idMatch && !emailMatch && !nameMatch;
+      });
       setSessionCache('vendors', updated);
       return updated;
     });
+
+    setVendorEvaluations((prev) => {
+      const updated = prev.filter((e) => {
+        const idMatch = e.vendorId && matchSet.has(e.vendorId.trim().toLowerCase());
+        const emailMatch = e.email && matchSet.has(e.email.trim().toLowerCase());
+        return !idMatch && !emailMatch;
+      });
+      setSessionCache('evaluations', updated);
+      return updated;
+    });
+
     void addAuditLog(`Removed vendor record ID ${vendorId} from buyer vendor master.`);
     showToast('Vendor Removed', 'Vendor deleted from directory.', 'info');
     return true;
   };
 
-  const deleteMultipleBuyerVendors = async (vendorIds: string[]) => {
+  const deleteMultipleBuyerVendors = async (
+    vendorIds: string[],
+    targetVendors?: Array<Partial<VendorEntry>>
+  ) => {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) return;
     // Only the ids the server reports as deleted leave the list. A failed request leaves every row in place.
     let res: Response;
@@ -2371,6 +2401,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
     const deletedSet = new Set([...deletedIds, ...vendorIds]);
     const matchedVendors = buyerVendors.filter((v) => deletedSet.has(v.id) || deletedSet.has(v.email || ''));
+    const extraVendors = Array.isArray(targetVendors) ? targetVendors : [];
+
     const identifiersToRemove = Array.from(
       new Set(
         [
@@ -2379,20 +2411,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           ...matchedVendors.map((v) => v.id),
           ...matchedVendors.map((v) => v.email || ''),
           ...matchedVendors.map((v) => v.name || ''),
+          ...extraVendors.map((v) => v.id || ''),
+          ...extraVendors.map((v) => v.email || ''),
+          ...extraVendors.map((v) => v.name || ''),
         ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
       )
     );
     removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
 
+    const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
+
     setBuyerVendors((prev) => {
-      const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
+      const updated = prev.filter((v) => {
+        const idMatch = v.id && matchSet.has(v.id.trim().toLowerCase());
+        const emailMatch = v.email && matchSet.has(v.email.trim().toLowerCase());
+        const nameMatch = v.name && matchSet.has(v.name.trim().toLowerCase());
+        return !idMatch && !emailMatch && !nameMatch;
+      });
       setSessionCache('vendors', updated);
       return updated;
     });
-    void addAuditLog(`Removed ${deletedIds.length} vendor record(s) from buyer vendor master.`);
+
+    setVendorEvaluations((prev) => {
+      const updated = prev.filter((e) => {
+        const idMatch = e.vendorId && matchSet.has(e.vendorId.trim().toLowerCase());
+        const emailMatch = e.email && matchSet.has(e.email.trim().toLowerCase());
+        return !idMatch && !emailMatch;
+      });
+      setSessionCache('evaluations', updated);
+      return updated;
+    });
+
+    void addAuditLog(`Removed ${deletedIds.length || vendorIds.length} vendor record(s) from buyer vendor master.`);
     showToast(
       'Vendors Removed',
-      formatString(STORE_MESSAGES.vendorsRemovedMessage, { count: deletedIds.length }),
+      formatString(STORE_MESSAGES.vendorsRemovedMessage, { count: deletedIds.length || vendorIds.length }),
       'info'
     );
   };

@@ -168,6 +168,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [isSubmittingEdit, setIsSubmittingEdit] = useState(false);
   const [categoryModalOpen, setCategoryModalOpen] = useState(false);
   const [isSavingCategories, setIsSavingCategories] = useState(false);
+  const [vendorPoSuggestion, setVendorPoSuggestion] = useState<{
+    majorCategory: string;
+    minorCategories: string[];
+    source: string;
+  } | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
   const [deleteModalOpen, setDeleteModalOpen] = useState(false);
   const [selectedVendorForCrud, setSelectedVendorForCrud] = useState<any | null>(null);
@@ -294,6 +299,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   useEffect(() => {
     loadUploadHistory();
+    const handleStorageUpdate = () => {
+      loadUploadHistory();
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('vendor_upload_history_updated', handleStorageUpdate);
+      window.addEventListener('storage', handleStorageUpdate);
+      return () => {
+        window.removeEventListener('vendor_upload_history_updated', handleStorageUpdate);
+        window.removeEventListener('storage', handleStorageUpdate);
+      };
+    }
   }, [loadUploadHistory]);
 
   const handleDownloadBatchCsv = (batch: any) => {
@@ -805,6 +821,59 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!initialMajor && cleanedMinors.length > 0) {
       initialMajor = getMajorForCategory(cleanedMinors[0]) || '';
     }
+
+    const vId = (vendor.id || '').toLowerCase().trim();
+    const vName = (vendor.name || '').toLowerCase().trim();
+    let poSug: { majorCategory: string; minorCategories: string[]; source: string } | null = null;
+    if (vendor.poMajorCategory && Array.isArray(vendor.poMinorCategories) && vendor.poMinorCategories.length > 0) {
+      poSug = {
+        majorCategory: vendor.poMajorCategory,
+        minorCategories: normalizeVendorCategoryList(vendor.poMinorCategories),
+        source: 'PO Ingestion',
+      };
+    } else {
+      const matchedRfqs = rfqs.filter((rfqItem) => {
+        const r = rfqItem as any;
+        const quotations: any[] = Array.isArray(r?.quotations) ? r.quotations : [];
+        const followUps: any[] = Array.isArray(r?.followUps) ? r.followUps : [];
+        const inQuotes = quotations.some(
+          (q: any) => (q?.vendorName && String(q.vendorName).toLowerCase().trim() === vName) || (q?.vendorId && String(q.vendorId).toLowerCase().trim() === vId)
+        );
+        const inFollowUps = followUps.some(
+          (f: any) => (f?.vendorName && String(f.vendorName).toLowerCase().trim() === vName) || (f?.vendorId && String(f.vendorId).toLowerCase().trim() === vId)
+        );
+        return inQuotes || inFollowUps;
+      });
+      const rfqMajors = new Set<string>();
+      const rfqMinors = new Set<string>();
+      matchedRfqs.forEach((rfqItem) => {
+        const r = rfqItem as any;
+        const entities: any[] = Array.isArray(r?.extractedEntities) ? r.extractedEntities : [];
+        entities.forEach((e: any) => {
+          if (e?.majorCategory && !isPlaceholderVendorCategory(e.majorCategory)) rfqMajors.add(String(e.majorCategory).trim());
+          if (e?.minorCategory && !isPlaceholderVendorCategory(e.minorCategory)) rfqMinors.add(String(e.minorCategory).trim());
+        });
+      });
+      if (rfqMajors.size > 0 || rfqMinors.size > 0) {
+        poSug = {
+          majorCategory: Array.from(rfqMajors)[0] || '',
+          minorCategories: Array.from(rfqMinors),
+          source: 'PO Purchase Dump / RFQ Records',
+        };
+      } else if (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0) {
+        const cleanMinors = normalizeVendorCategoryList(vendor.clientMappedCategories);
+        const infMajor = cleanMinors[0] ? getMajorForCategory(cleanMinors[0]) : '';
+        if (cleanMinors.length > 0) {
+          poSug = {
+            majorCategory: infMajor || (!isPlaceholderVendorCategory(vendor.majorCategory) ? vendor.majorCategory : ''),
+            minorCategories: cleanMinors,
+            source: 'PO Master Data',
+          };
+        }
+      }
+    }
+    setVendorPoSuggestion(poSug);
+
     setSelectedVendorForCrud(vendor);
     setFormMajorCategory(initialMajor);
     setFormMinorCategories(cleanedMinors);
@@ -968,6 +1037,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       if (res !== false) {
         setDeleteModalOpen(false);
         setSelectedVendorForCrud(null);
+        loadUploadHistory();
       }
     } catch (err) {
       logger.log('ERROR', 'Failed to delete vendor', { error: err, vendorId }, 'VENDOR_DIRECTORY');
@@ -1004,6 +1074,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       } else if (typeof deleteBuyerVendor === 'function') {
         await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
       }
+      loadUploadHistory();
       setSelectedVendorIds([]);
       setBulkDeleteModalOpen(false);
     } catch (err) {
@@ -1579,7 +1650,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     ))}
                   </div>
                 ) : (
-                  <span className="text-[10px] text-slate-400 italic">None</span>
+                  <div className="space-y-0.5">
+                    <span className="text-[10px] text-slate-400 italic">None</span>
+                    <span className="block text-[9px] text-amber-600 dark:text-amber-400 font-semibold">
+                      Category Not Assigned
+                    </span>
+                  </div>
                 )}
                 {isUploaded && (
                   <button
@@ -2827,6 +2903,53 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {renderModalErrorBanner()}
 
             <form onSubmit={handleCategoryModalSubmit} noValidate className="my-4 space-y-4 text-xs">
+              {/* Category Guidance & PO Evidence Comparison Box */}
+              <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700/60 space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
+                    Current Stored Category:
+                  </span>
+                  <span className="text-[11px] font-semibold text-slate-700 dark:text-gray-200">
+                    {isPlaceholderVendorCategory(selectedVendorForCrud.majorCategory)
+                      ? 'Category Not Assigned'
+                      : selectedVendorForCrud.majorCategory}
+                    {Array.isArray(selectedVendorForCrud.minorCategories) && selectedVendorForCrud.minorCategories.length > 0
+                      ? ` (${selectedVendorForCrud.minorCategories.join(', ')})`
+                      : ''}
+                  </span>
+                </div>
+                {vendorPoSuggestion && (
+                  <div className="pt-2 border-t border-slate-200 dark:border-gray-700 flex items-center justify-between gap-2">
+                    <div>
+                      <span className="text-[10px] font-bold uppercase tracking-wider text-indigo-600 dark:text-indigo-400 block">
+                        Suggested from {vendorPoSuggestion.source}:
+                      </span>
+                      <span className="text-[11px] font-semibold text-slate-800 dark:text-white">
+                        {vendorPoSuggestion.majorCategory || 'Multi-Category'}
+                        {vendorPoSuggestion.minorCategories.length > 0
+                          ? ` (${vendorPoSuggestion.minorCategories.join(', ')})`
+                          : ''}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      data-testid="apply-po-suggestion-button"
+                      onClick={() => {
+                        if (vendorPoSuggestion.majorCategory) {
+                          setFormMajorCategory(vendorPoSuggestion.majorCategory);
+                        }
+                        if (vendorPoSuggestion.minorCategories.length > 0) {
+                          setFormMinorCategories(vendorPoSuggestion.minorCategories);
+                        }
+                      }}
+                      className="btn btn-xs btn-outline btn-primary text-[10px] font-bold shrink-0"
+                    >
+                      Apply PO Suggestion
+                    </button>
+                  </div>
+                )}
+              </div>
+
               {renderDivisionSelectField('category-modal-major-category', false)}
               {renderCategoryTagsField('category-modal')}
 

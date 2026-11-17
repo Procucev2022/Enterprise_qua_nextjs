@@ -4028,6 +4028,11 @@ const VENDOR_CATEGORY_PLACEHOLDERS = Object.freeze([
   'n/a',
   '-',
   '—',
+  'category not assigned',
+  'not assigned',
+  'category unassigned',
+  'division unassigned',
+  'category required',
 ]);
 
 const VENDOR_CATEGORY_PLACEHOLDER_SET = new Set(VENDOR_CATEGORY_PLACEHOLDERS);

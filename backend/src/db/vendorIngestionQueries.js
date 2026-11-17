@@ -745,6 +745,80 @@ async function deleteVendorMasterRecords(sessionId, organizationId) {
 }
 
 /**
+ * Permanently delete specific vendor_master_records (and cascading category mappings)
+ * by raw record ID, v-master- prefixed ID, email, or vendor code.
+ */
+async function deleteVendorMasterRecordsByIdsOrEmails(identifiers, organizationId) {
+  if (!pool.hasStorage() || !Array.isArray(identifiers) || identifiers.length === 0 || !organizationId) {
+    return 0;
+  }
+
+  const rawIds = [];
+  const emails = [];
+  const codes = [];
+
+  for (const item of identifiers) {
+    if (!item || typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('v-master-')) {
+      rawIds.push(trimmed.slice('v-master-'.length));
+    } else if (trimmed.includes('@')) {
+      emails.push(trimmed.toLowerCase());
+    } else {
+      rawIds.push(trimmed);
+      codes.push(trimmed);
+    }
+  }
+
+  if (rawIds.length === 0 && emails.length === 0 && codes.length === 0) {
+    return 0;
+  }
+
+  const conditions = [];
+  const params = [organizationId];
+  let pIdx = 2;
+
+  if (rawIds.length > 0) {
+    const idPlaceholders = rawIds.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`id in (${idPlaceholders})`);
+    params.push(...rawIds);
+  }
+  if (emails.length > 0) {
+    const emailPlaceholders = emails.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`lower(email) in (${emailPlaceholders})`);
+    params.push(...emails);
+  }
+  if (codes.length > 0) {
+    const codePlaceholders = codes.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`vendor_code in (${codePlaceholders})`);
+    params.push(...codes);
+  }
+
+  const selectSql = `select id from vendor_master_records where organization_id = $1 and (${conditions.join(' or ')})`;
+  const rows = await pool.rows(selectSql, params, { d1: true });
+  if (!rows || rows.length === 0) return 0;
+
+  const matchedIds = Array.from(new Set(rows.map((r) => r.id).filter(Boolean)));
+  if (matchedIds.length === 0) return 0;
+
+  const mapPlaceholders = matchedIds.map((_, i) => `$${i + 2}`).join(', ');
+  await pool.query(
+    `delete from vendor_category_mappings where organization_id = $1 and vendor_record_id in (${mapPlaceholders})`,
+    [organizationId, ...matchedIds],
+    { d1: true }
+  );
+
+  const result = await pool.query(
+    `delete from vendor_master_records where organization_id = $1 and id in (${mapPlaceholders})`,
+    [organizationId, ...matchedIds],
+    { d1: true }
+  );
+
+  return result.rowCount || matchedIds.length;
+}
+
+/**
  * Stamp the organization's first vendor master upload.
  *
  * The `is null` guard means only the first call writes. Later uploads keep the original timestamp, so the
@@ -2295,6 +2369,7 @@ module.exports = {
   findVendorMasterRecord,
   countVendorMasterRecords,
   deleteVendorMasterRecords,
+  deleteVendorMasterRecordsByIdsOrEmails,
   markVendorMasterUploaded,
   // po data
   bulkInsertPoLineItems,

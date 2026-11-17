@@ -1097,6 +1097,15 @@ async function deleteVendor(req, res, next) {
     if (!existing) {
       existing = storeService.getVendorById(id, 'all');
     }
+
+    const orgId = req.user?.orgId || req.user?.organizationId;
+    if (orgId && typeof vendorIngestionQueries.deleteVendorMasterRecordsByIdsOrEmails === 'function') {
+      const identifiers = [id, existing?.id, existing?.email, existing?.vendorCode].filter(Boolean);
+      await vendorIngestionQueries.deleteVendorMasterRecordsByIdsOrEmails(identifiers, orgId).catch((cleanupErr) => {
+        logger.warn('Failed to clean up vendor_master_records on single delete', { id, error: cleanupErr }, 'VENDOR_CONTROLLER');
+      });
+    }
+
     if (!existing) {
       // If it's a buyer vendor ID pattern or buyer session, handle deletion idempotently
       if (
@@ -1141,6 +1150,13 @@ async function bulkDeleteVendors(req, res, next) {
     const deletedIds = [];
     const skippedIds = [];
     const cleanedIds = Array.from(new Set(targetIds.map((rawId) => String(rawId || '').trim()).filter(Boolean)));
+
+    const orgId = user.orgId || user.organizationId;
+    if (orgId && typeof vendorIngestionQueries.deleteVendorMasterRecordsByIdsOrEmails === 'function') {
+      await vendorIngestionQueries.deleteVendorMasterRecordsByIdsOrEmails(cleanedIds, orgId).catch((cleanupErr) => {
+        logger.warn('Failed to clean up vendor_master_records on bulk delete', { count: cleanedIds.length, error: cleanupErr }, 'VENDOR_CONTROLLER');
+      });
+    }
 
     const useBatchDbPath =
       pool.hasStorage() &&

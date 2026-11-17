@@ -359,6 +359,41 @@ describe('scoped reads, limits and deletion results', () => {
     expect(await queries[name](SESSION, ORG)).toBe(0);
   });
 
+  test('deleteVendorMasterRecordsByIdsOrEmails removes matching vendor master records and cascades category mappings', async () => {
+    expect(await queries.deleteVendorMasterRecordsByIdsOrEmails([], ORG)).toBe(0);
+    expect(await queries.deleteVendorMasterRecordsByIdsOrEmails(null, ORG)).toBe(0);
+    expect(await queries.deleteVendorMasterRecordsByIdsOrEmails([''], ORG)).toBe(0);
+    expect(await queries.deleteVendorMasterRecordsByIdsOrEmails(['rec-1'], null)).toBe(0);
+
+    // When rows match
+    pool.rows.mockResolvedValueOnce([{ id: 'rec-1' }, { id: 'rec-2' }]);
+    pool.query.mockResolvedValueOnce({ rowCount: 2 }).mockResolvedValueOnce({ rowCount: 2 });
+    const count = await queries.deleteVendorMasterRecordsByIdsOrEmails(
+      ['v-master-rec-1', 'supplier@acme.com', 'VC-101'],
+      ORG
+    );
+    expect(count).toBe(2);
+    expect(pool.rows).toHaveBeenCalledWith(
+      expect.stringContaining('select id from vendor_master_records'),
+      [ORG, 'rec-1', 'VC-101', 'supplier@acme.com', 'VC-101'],
+      { d1: true }
+    );
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('delete from vendor_category_mappings'),
+      [ORG, 'rec-1', 'rec-2'],
+      { d1: true }
+    );
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('delete from vendor_master_records'),
+      [ORG, 'rec-1', 'rec-2'],
+      { d1: true }
+    );
+
+    // When no rows match
+    pool.rows.mockResolvedValueOnce([]);
+    expect(await queries.deleteVendorMasterRecordsByIdsOrEmails(['rec-nonexistent'], ORG)).toBe(0);
+  });
+
   test('matches PO data in identifier priority order and reports each outcome', async () => {
     pool.query.mockResolvedValueOnce({ rowCount: 20 }).mockResolvedValueOnce({ rowCount: 5 })
       .mockResolvedValueOnce({ rowCount: 3 }).mockResolvedValueOnce({ rowCount: 2 }).mockResolvedValueOnce({ rowCount: 1 });
