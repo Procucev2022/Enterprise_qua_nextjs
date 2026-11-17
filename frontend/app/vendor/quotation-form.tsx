@@ -99,7 +99,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPincodes, setSelectedPincodes] = useState<string[]>([]);
   const [isPincodeDropdownOpen, setIsPincodeDropdownOpen] = useState(false);
-  const [userSelectedTab, setUserSelectedTab] = useState<'my_enquiries' | 'public_enquiries' | null>(null);
+  const [userSelectedTab, setUserSelectedTab] = useState<'all' | 'my_enquiries' | 'public_enquiries' | null>(null);
   const [locallyUnlockedRfqIds, setLocallyUnlockedRfqIds] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -461,16 +461,34 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     return vendorOpportunities.filter((opp) => isPublicEnquiryRfq(opp.rfqNumber));
   }, [vendorOpportunities, isPublicEnquiryRfq]);
 
-  const effectiveTab: 'my_enquiries' | 'public_enquiries' = useMemo(() => {
+  // Combined listing without duplicate RFQs
+  const combinedEnquiries = useMemo(() => {
+    const seen = new Set<string>();
+    const list: VendorOpportunity[] = [];
+    for (const opp of [...myEnquiries, ...publicEnquiries]) {
+      const key = opp.rfqNumber || opp.id;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(opp);
+      }
+    }
+    return list;
+  }, [myEnquiries, publicEnquiries]);
+
+  const effectiveTab: 'all' | 'my_enquiries' | 'public_enquiries' = useMemo(() => {
     if (userSelectedTab) return userSelectedTab;
     if (opportunityStatusFilter === 'direct') return 'my_enquiries';
-    if (myEnquiries.length > 0) return 'my_enquiries';
-    return 'public_enquiries';
-  }, [userSelectedTab, opportunityStatusFilter, myEnquiries.length]);
+    return 'all';
+  }, [userSelectedTab, opportunityStatusFilter]);
 
   // Extract distinct categories available across opportunities for the active tab
   const availableCategories = useMemo(() => {
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     const set = new Set<string>();
     pool.forEach((opp) => {
       const cat = resolveOpportunityCategory(opp);
@@ -490,11 +508,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       }
     });
     return Array.from(set).sort();
-  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs, resolveOpportunityCategory]);
 
   // Extract distinct pincodes available across opportunities for the active tab
   const availablePincodes = useMemo(() => {
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     const set = new Set<string>();
     pool.forEach((opp) => {
       const rfqRecord = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
@@ -511,7 +534,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (pin) set.add(pin);
     });
     return Array.from(set).sort();
-  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs]);
 
   const totalReceivedCount = vendorOpportunities.length;
   const pendingQuotesCount = useMemo(() => {
@@ -525,7 +548,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   const filteredOpportunities = useMemo(() => {
     const query = opportunitySearch.trim().toLocaleLowerCase();
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     return pool
       .filter((opp) => {
         const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
@@ -583,36 +611,17 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           .some((value) => value.toLocaleLowerCase().includes(query));
       })
       .sort((a, b) => {
-        const aHasQuote = submittedQuotes.some((item) => item.rfqNumber === a.rfqNumber) || a.status === 'submitted';
-        const bHasQuote = submittedQuotes.some((item) => item.rfqNumber === b.rfqNumber) || b.status === 'submitted';
-        const aDirect = isOwnBuyerRfq(a.rfqNumber);
-        const bDirect = isOwnBuyerRfq(b.rfqNumber);
+        const aRecord = (rfqs || []).find((r) => r.rfqNumber === a.rfqNumber || r.id === a.id);
+        const bRecord = (rfqs || []).find((r) => r.rfqNumber === b.rfqNumber || r.id === b.id);
+        const aDate = new Date(a.createdAt || aRecord?.createdAt || 0).getTime();
+        const bDate = new Date(b.createdAt || bRecord?.createdAt || 0).getTime();
 
-        // Sorting priority to prevent vendor's own requests from being buried:
-        // Score 4: Direct client invitation awaiting quote (Highest urgency)
-        // Score 3: Submitted quote (Vendor's active submission tracking)
-        // Score 2: Direct client invitation (closed/other)
-        // Score 0: Generic marketplace / open network enquiry
-        const getPriority = (hasQuote: boolean, isDirect: boolean, opp: VendorOpportunity) => {
-          const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
-          if (isDirect && !hasQuote && !isClosed) return 4;
-          if (hasQuote) return 3;
-          if (isDirect) return 2;
-          return 0;
-        };
-
-        const aScore = getPriority(aHasQuote, aDirect, a);
-        const bScore = getPriority(bHasQuote, bDirect, b);
-
-        if (bScore !== aScore) {
-          return bScore - aScore;
+        if (bDate !== aDate) {
+          return bDate - aDate;
         }
-
-        const aTime = new Date(a.deadline || 0).getTime();
-        const bTime = new Date(b.deadline || 0).getTime();
-        return bTime - aTime;
+        return 0;
       });
-  }, [effectiveTab, myEnquiries, publicEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -1142,7 +1151,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* MY ENQUIRIES & PUBLIC ENQUIRIES TABS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setUserSelectedTab('all')}
+          className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition-all shadow-sm ${
+            effectiveTab === 'all'
+              ? 'bg-[#1a3a8f] text-white shadow-blue-900/20'
+              : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 dark:bg-gray-900 dark:text-gray-300 dark:border-slate-800'
+          }`}
+          aria-label="All RFQs tab"
+        >
+          <FileText size={16} />
+          <span>All RFQs</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            effectiveTab === 'all'
+              ? 'bg-white/20 text-white'
+              : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+          }`}>
+            {combinedEnquiries.length}
+          </span>
+        </button>
+
         <button
           type="button"
           onClick={() => setUserSelectedTab('my_enquiries')}
@@ -1200,7 +1230,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <p className="mt-1 pl-10 text-xs text-slate-500 dark:text-gray-400">
                 {effectiveTab === 'my_enquiries'
                   ? 'Direct buyer RFQs invited specifically for your company. Download specifications and submit quotes freely.'
-                  : 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'}
+                  : effectiveTab === 'public_enquiries'
+                  ? 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'
+                  : 'All sourcing enquiries from your buyers and open marketplace combined, newest first.'}
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-gray-400">
@@ -1417,7 +1449,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0 || selectedPincodes.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); setUserSelectedTab('all'); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters

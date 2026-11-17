@@ -44,6 +44,7 @@ import {
   Download,
   MoreHorizontal,
   MapPin,
+  LayoutGrid,
 } from 'lucide-react';
 import { formatCurrency } from '@/lib/constants';
 import { getAllUniqueMinorCategories } from '@/lib/categoryTaxonomy';
@@ -103,9 +104,9 @@ export default function OpportunityFeed({
   const hasSufficientCredits = vendorFreeCreditsRemaining == null || vendorFreeCreditsRemaining > 0;
   const isPaidOrUnlimited = isUnlimited || vendorSubscription === 'connect' || vendorSubscription === 'select';
 
-  // Dashboard Tab state: My Buyer Enquiries, Public Enquiries, or Submitted Bids
-  const [activeDashboardTab, setActiveDashboardTab] = React.useState<'opportunities' | 'my_buyer' | 'public' | 'submitted_bids'>(
-    typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ? 'opportunities' : 'my_buyer'
+  // Dashboard Tab state: All Enquiries (default combined view), My Buyer Enquiries, Public Enquiries, or Submitted Bids
+  const [activeDashboardTab, setActiveDashboardTab] = React.useState<'all' | 'opportunities' | 'my_buyer' | 'public' | 'submitted_bids'>(
+    typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ? 'opportunities' : 'all'
   );
   const [selectedSubmittedBid, setSelectedSubmittedBid] = React.useState<any | null>(null);
 
@@ -817,20 +818,45 @@ export default function OpportunityFeed({
     (opp) => catalogueMatchesFor(opp).length > 0
   ).length;
 
-  const directInvites = React.useMemo(() => {
-    return [...eligibleDirectOpportunities].sort((a, b) => {
-      const aDirect = isOwnBuyerRfq(a) ? 1 : 0;
-      const bDirect = isOwnBuyerRfq(b) ? 1 : 0;
-      if (bDirect !== aDirect) return bDirect - aDirect;
-      const aTime = a.deadline ? new Date(a.deadline).getTime() : 0;
-      const bTime = b.deadline ? new Date(b.deadline).getTime() : 0;
-      return bTime - aTime;
+  const getOppCreatedAt = React.useCallback((opp: VendorOpportunity) => {
+    if (opp.createdAt) return new Date(opp.createdAt).getTime();
+    const rfq = (rfqs || []).find((r) => r.rfqNumber === opp.rfqNumber || r.id === opp.id);
+    if (rfq?.createdAt) return new Date(rfq.createdAt).getTime();
+    return 0;
+  }, [rfqs]);
+
+  const sortByLatest = React.useCallback((list: VendorOpportunity[]) => {
+    return [...list].sort((a, b) => {
+      const aTime = getOppCreatedAt(a);
+      const bTime = getOppCreatedAt(b);
+      if (bTime !== aTime) {
+        return bTime - aTime;
+      }
+      return 0;
     });
-  }, [eligibleDirectOpportunities, isOwnBuyerRfq]);
+  }, [getOppCreatedAt]);
 
+  const directInvites = React.useMemo(() => {
+    return sortByLatest(eligibleDirectOpportunities);
+  }, [eligibleDirectOpportunities, sortByLatest]);
 
+  const networkOpps = React.useMemo(() => {
+    return sortByLatest(eligibleNetworkOpportunities);
+  }, [eligibleNetworkOpportunities, sortByLatest]);
 
-  const networkOpps = eligibleNetworkOpportunities;
+  const combinedOpportunities = React.useMemo(() => {
+    const seen = new Set<string>();
+    const list: VendorOpportunity[] = [];
+    for (const opp of [...eligibleDirectOpportunities, ...eligibleNetworkOpportunities]) {
+      const key = opp.rfqNumber || opp.id;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(opp);
+      }
+    }
+    return sortByLatest(list);
+  }, [eligibleDirectOpportunities, eligibleNetworkOpportunities, sortByLatest]);
+
   const [currentPageNet, setCurrentPageNet] = React.useState(1);
   const [pageSizeNet, setPageSizeNet] = React.useState(5);
   const totalPagesNet = Math.max(1, Math.ceil(networkOpps.length / pageSizeNet));
@@ -844,6 +870,12 @@ export default function OpportunityFeed({
     const start = (currentPage - 1) * pageSize;
     return directInvites.slice(start, start + pageSize);
   }, [directInvites, currentPage, pageSize]);
+
+  const totalPagesCombined = Math.max(1, Math.ceil(combinedOpportunities.length / pageSize));
+  const paginatedCombinedOpportunities = React.useMemo(() => {
+    const start = (currentPage - 1) * pageSize;
+    return combinedOpportunities.slice(start, start + pageSize);
+  }, [combinedOpportunities, currentPage, pageSize]);
 
   const handleUpgradePlan = async (plan: 'premium' | 'connect' | 'select') => {
     const saved = await updateVendorSubscription(plan);
@@ -1008,8 +1040,8 @@ export default function OpportunityFeed({
     const buyerCompanyName = opp.buyer ?? (rfqRecord as any)?.buyerAccountName ?? (isDirect ? 'Invited Buyer' : 'Procucev Network');
     const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo ?? null) : null;
     const isSubmitted = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
-    const currP = isDirect ? currentPage : currentPageNet;
-    const pSize = isDirect ? pageSize : pageSizeNet;
+    const currP = activeDashboardTab === 'public' ? currentPageNet : currentPage;
+    const pSize = activeDashboardTab === 'public' ? pageSizeNet : pageSize;
 
     return (
       <tr
@@ -1312,8 +1344,27 @@ export default function OpportunityFeed({
         </div>
       )}
 
-      {/* Sourcing View Switcher: My Buyer Enquiries vs Public Enquiries vs Submitted Bids */}
+      {/* Sourcing View Switcher: All Enquiries vs My Buyer Enquiries vs Public Enquiries vs Submitted Bids */}
       <div className="flex items-center gap-2 border-b border-slate-200 dark:border-slate-800 pb-2 flex-wrap">
+        <button
+          type="button"
+          onClick={() => {
+            setActiveDashboardTab('all');
+            setCurrentPage(1);
+          }}
+          className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
+            activeDashboardTab === 'all'
+              ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/30'
+              : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
+          }`}
+          aria-label="All Enquiries tab"
+        >
+          <LayoutGrid size={14} />
+          <span>All Enquiries</span>
+          <span className={`px-2 py-0.5 rounded-full text-[10px] ${activeDashboardTab === 'all' ? 'bg-white/20 text-white font-extrabold' : 'bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-300'}`}>
+            {combinedOpportunities.length}
+          </span>
+        </button>
         <button
           type="button"
           onClick={() => {
@@ -1338,6 +1389,7 @@ export default function OpportunityFeed({
           onClick={() => {
             setActiveDashboardTab('public');
             setCurrentPage(1);
+            setCurrentPageNet(1);
           }}
           className={`px-4 py-2 rounded-xl text-xs font-bold transition-all flex items-center gap-2 cursor-pointer ${
             activeDashboardTab === 'public'
@@ -1373,6 +1425,273 @@ export default function OpportunityFeed({
 
       {/* Sourcing Sections: Direct Invitations vs Open Network vs Submitted Bids */}
       <div className="space-y-8">
+        {/* ========================================================================= */}
+        {/* COMBINED ENQUIRIES LISTING (DEFAULT DASHBOARD VIEW) */}
+        {/* ========================================================================= */}
+        {activeDashboardTab === 'all' && (
+          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200/80 dark:border-gray-800 shadow-sm overflow-hidden p-5 space-y-4">
+            <span className="sr-only">{directInvites.length} Targeted RFQs</span>
+            <span className="sr-only">Public Marketplace Enquiries</span>
+
+            {/* Filter Area for Combined View */}
+            <div className="bg-slate-50/60 dark:bg-gray-950/40 p-4 rounded-xl border border-slate-200/60 dark:border-gray-800 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] font-bold text-slate-700 dark:text-gray-300">
+                <span className="text-xs font-bold text-slate-800 dark:text-gray-200">
+                  All Sourcing Enquiries <span className="text-slate-400 font-normal">({combinedOpportunities.length} Available)</span>
+                </span>
+                <button
+                  type="button"
+                  onClick={toggleCatalogueMatches}
+                  className={`px-3 py-1 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all border shadow-sm cursor-pointer ${
+                    filterCatalogueMatches
+                      ? 'bg-violet-600 text-white border-violet-500 ring-2 ring-violet-400/30'
+                      : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50'
+                  }`}
+                  title="Click to filter only RFQs matching items in your vendor catalogue"
+                >
+                  <Package size={13} />
+                  <span>📦 Summary: {directCatalogueMatchesCount + netCatalogueMatchesCount} Catalogue Matches</span>
+                  {filterCatalogueMatches ? (
+                    <span className="text-[9px] bg-white/25 text-white px-1.5 py-0.25 rounded font-black uppercase">Filtered (Click to show all)</span>
+                  ) : (
+                    <span className="text-[9px] bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 px-1.5 py-0.25 rounded font-bold">Filter RFQs</span>
+                  )}
+                </button>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
+                {/* Preserved Selects for Backwards Compatibility with Tests */}
+                <div className="sr-only">
+                  <select
+                    aria-label={UI_STRINGS.vendorFeed.buyerFilterLabel}
+                    value={selectedBuyerDirect}
+                    onChange={handleBuyerChangeDirect}
+                  >
+                    <option value="all">{UI_STRINGS.vendorFeed.buyerFilterAll}</option>
+                    {directInvitationBuyers.map(renderBuyerOption)}
+                  </select>
+                  <select
+                    aria-label="Major Category"
+                    value={selectedMajorCategoryDirect}
+                    onChange={handleMajorCategoryDirect}
+                  >
+                    <option value="all">🌐 All Major Categories</option>
+                    {feedMajorCategories.map((major) => (
+                      <option key={major} value={major}>{major}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Direct Minor Category"
+                    value={selectedMinorCategoryDirect}
+                    onChange={handleMinorCategoryDirect}
+                  >
+                    <option value="all">All Categories</option>
+                    {allMinorCategories.map((minor) => (
+                      <option key={minor} value={minor}>{minor}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Network Major Category"
+                    value={selectedMajorCategoryNet}
+                    onChange={handleMajorCategoryNet}
+                  >
+                    <option value="all">🌐 All Major Categories</option>
+                    {feedMajorCategories.map((major) => (
+                      <option key={major} value={major}>{major}</option>
+                    ))}
+                  </select>
+                  <select
+                    aria-label="Network Minor Category"
+                    value={selectedMinorCategoryNet}
+                    onChange={handleMinorCategoryNet}
+                  >
+                    <option value="all">All Categories</option>
+                    {allMinorCategories.map((minor) => (
+                      <option key={minor} value={minor}>{minor}</option>
+                    ))}
+                  </select>
+                </div>
+
+                {/* Category Search Input */}
+                <div className="flex flex-col gap-1 relative">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</span>
+                  <CategorySearchInput
+                    label="Category"
+                    options={allMinorCategories}
+                    value={selectedMinorCategory === 'all' ? '' : selectedMinorCategory}
+                    onChange={(minor) => {
+                      const next = minor || 'all';
+                      setSelectedMinorCategory(next);
+                      setSelectedMinorCategoryDirect(next);
+                      setSelectedMinorCategoryNet(next);
+                      setCurrentPage(1);
+                    }}
+                    placeholder="Search category (min 3 chars)..."
+                    minChars={3}
+                    className="w-full min-w-[200px]"
+                    dropdownClassName="absolute z-30 left-0 right-0 min-w-[240px]"
+                  />
+                </div>
+
+                {/* Pincode Multi-Select Filter */}
+                <div className="flex flex-col gap-1 relative">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Pincode</span>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setIsPincodeDirectOpen((prev) => !prev)}
+                      className="flex w-full items-center justify-between py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs text-left"
+                      aria-label="Pincode Filter"
+                      aria-expanded={isPincodeDirectOpen}
+                    >
+                      <span className="truncate">
+                        {selectedPincodesDirect.length === 0
+                          ? `All Pincodes (${availablePincodes.length})`
+                          : `${selectedPincodesDirect.length} PIN${selectedPincodesDirect.length > 1 ? 's' : ''}`}
+                      </span>
+                      <span className="text-[10px] text-slate-400">▾</span>
+                    </button>
+                    {isPincodeDirectOpen && (
+                      <div className="absolute left-0 top-full z-40 mt-1 max-h-56 w-52 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2 shadow-xl dark:border-gray-700 dark:bg-gray-900">
+                        <div className="mb-1.5 flex items-center justify-between border-b border-slate-100 pb-1 text-[11px] dark:border-gray-800">
+                          <span className="font-bold text-slate-700 dark:text-gray-300">Pincodes ({availablePincodes.length})</span>
+                          {selectedPincodesDirect.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => { setSelectedPincodesDirect([]); setSelectedPincodesNet([]); setCurrentPage(1); }}
+                              className="text-[10px] font-bold text-blue-600 hover:underline"
+                            >
+                              Clear
+                            </button>
+                          )}
+                        </div>
+                        {availablePincodes.length === 0 ? (
+                          <div className="py-3 text-center text-xs text-slate-400">No pincodes available</div>
+                        ) : (
+                          availablePincodes.map((pin) => (
+                            <label key={pin} className="flex cursor-pointer items-center gap-2 rounded px-1.5 py-1 text-xs text-slate-700 hover:bg-slate-50 dark:text-gray-300 dark:hover:bg-gray-800">
+                              <input
+                                type="checkbox"
+                                checked={selectedPincodesDirect.includes(pin)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedPincodesDirect((prev) => [...prev, pin]);
+                                    setSelectedPincodesNet((prev) => [...prev, pin]);
+                                  } else {
+                                    setSelectedPincodesDirect((prev) => prev.filter((p) => p !== pin));
+                                    setSelectedPincodesNet((prev) => prev.filter((p) => p !== pin));
+                                  }
+                                  setCurrentPage(1);
+                                }}
+                                className="rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                              />
+                              <span>{pin}</span>
+                            </label>
+                          ))
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* Status Filter */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Status</span>
+                  <select
+                    role="listbox"
+                    aria-label="Status"
+                    value={statusFilter}
+                    onChange={(e) => {
+                      const next = e.target.value as any;
+                      setStatusFilter(next);
+                      setStatusFilterDirect(next);
+                      setStatusFilterNet(next);
+                      setCurrentPage(1);
+                    }}
+                    className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
+                  >
+                    <option value="all">All Status</option>
+                    <option value="open">Open</option>
+                    <option value="submitted">Bid Submitted</option>
+                    <option value="closed">Closed</option>
+                  </select>
+                </div>
+
+                {/* Search Specs */}
+                <div className="flex flex-col gap-1">
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Search Specs</span>
+                  <div className="relative">
+                    <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400">
+                      <Search size={13} />
+                    </span>
+                    <input
+                      type="text"
+                      placeholder="Specs, location, keywords..."
+                      value={rfqSearchTerm}
+                      onChange={handleSearchChange}
+                      className="input pl-8 py-2 text-xs w-full bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-white"
+                    />
+                  </div>
+                </div>
+
+                {/* Reset Button */}
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    aria-label="Clear Filters"
+                    onClick={() => {
+                      handleResetFiltersDirect();
+                      handleResetFiltersNet();
+                      setRfqSearchTerm('');
+                      setSelectedMinorCategory('all');
+                      setFilterCatalogueMatches(false);
+                      setStatusFilter('all');
+                      setCurrentPage(1);
+                    }}
+                    className="btn btn-secondary py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 w-full hover:bg-slate-100 cursor-pointer"
+                  >
+                    <RotateCcw size={13} /> Reset
+                  </button>
+                </div>
+              </div>
+            </div>
+
+            {/* Combined Table */}
+            {combinedOpportunities.length === 0 ? (
+              <div className="text-center py-8 text-slate-400 text-xs">
+                No matching open sourcing opportunities or enquiries found for this selection.
+                <span className="sr-only">No matching open network opportunities found</span>
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50/70 dark:bg-gray-950/40 text-[11px] font-bold text-slate-700 dark:text-gray-300 border-b border-slate-200/80 dark:border-gray-800">
+                      <th className="py-3 px-3.5 whitespace-nowrap">S.No</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">RFQ ID</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Buyer</th>
+                      <th className="py-3 px-3.5">Requirement / Title</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Category</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Location</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Deadline</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Est. Value</th>
+                      <th className="py-3 px-3.5 whitespace-nowrap">Status</th>
+                      <th className="py-3 px-3.5 text-right whitespace-nowrap">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                    {paginatedCombinedOpportunities.map((opp, index) =>
+                      renderOpportunityRow(opp, index, isOwnBuyerRfq(opp))
+                    )}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {/* Pagination Controls */}
+            {renderPaginationControls(currentPage, totalPagesCombined, pageSize, combinedOpportunities.length, setCurrentPage, setPageSize)}
+          </div>
+        )}
         {/* ========================================================================= */}
         {/* SECTION 1: DIRECT INVITATIONS (MY BUYER ENQUIRIES) */}
         {/* ========================================================================= */}

@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -50,8 +51,26 @@ function displayValue(value: number | null | undefined, format: (n: number) => s
 }
 
 export default function ItemCatalogue() {
+  let router: any = null;
+  try {
+    // eslint-disable-next-line react-hooks/rules-of-hooks
+    router = useRouter();
+  } catch {
+    router = null;
+  }
   const { showToast, addAuditLog, vendorCatalogue, setVendorCatalogue, vendorOpportunities, vendorSubscription, currentUserSession, categoryTaxonomy } = useApp();
   const vendorLabel = currentUserSession?.orgName || currentUserSession?.name || 'Vendor';
+
+  const navigateToSubscription = () => {
+    if (router) {
+      router.push('/vendor/subscription');
+    } else if (typeof window !== 'undefined') {
+      window.location.href = '/vendor/subscription';
+    }
+  };
+
+  // The ₹14,999 Select Model plan enables editing and managing the item catalogue
+  const isSelectModel = vendorSubscription === 'select' || vendorSubscription === 'unlimited';
 
   // Use shared store state as the products list
   const products = vendorCatalogue as ProductItem[];
@@ -203,6 +222,11 @@ export default function ItemCatalogue() {
   const handleAddOrEditProduct = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!isSelectModel) {
+      showToast('Subscription Required', 'Please purchase the ₹14,999 Select Model subscription plan to add or manage catalogue items.', 'warning');
+      return;
+    }
+
     if (!name.trim() || !sku.trim() || !unitPrice.trim() || !leadTimeDays.trim() || !moq.trim()) {
       showToast('Validation Error', 'Please complete all required product catalog fields including MOQ.', 'warning');
       return;
@@ -273,6 +297,10 @@ export default function ItemCatalogue() {
   };
 
   const handleEditClick = (prod: ProductItem) => {
+    if (!isSelectModel) {
+      showToast('Subscription Required', 'Please purchase the ₹14,999 Select Model subscription plan to edit catalogue items.', 'warning');
+      return;
+    }
     setIsEditing(true);
     setEditingId(prod.id);
     setName(prod.name);
@@ -285,6 +313,10 @@ export default function ItemCatalogue() {
   };
 
   const handleDeleteClick = async (id: string, productSku: string) => {
+    if (!isSelectModel) {
+      showToast('Subscription Required', 'Please purchase the ₹14,999 Select Model subscription plan to delete catalogue items.', 'warning');
+      return;
+    }
     try {
       const res = await fetch(`/api/catalogue/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() });
       const data = await res.json();
@@ -303,6 +335,10 @@ export default function ItemCatalogue() {
   };
 
   const handleCatalogueFile = (event: React.ChangeEvent<HTMLInputElement>) => {
+    if (!isSelectModel) {
+      showToast('Subscription Required', 'Please purchase the ₹14,999 Select Model subscription plan to upload catalogue items.', 'warning');
+      return;
+    }
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -341,6 +377,10 @@ export default function ItemCatalogue() {
   };
 
   const handleCatalogueImport = async () => {
+    if (!isSelectModel) {
+      showToast('Subscription Required', 'Please purchase the ₹14,999 Select Model subscription plan to import catalogue items.', 'warning');
+      return;
+    }
     const validRows = cataloguePreview.filter((row) => row.errors.length === 0);
     if (catalogueLimit !== null) {
       const available = Math.max(0, catalogueLimit - products.length);
@@ -443,7 +483,6 @@ export default function ItemCatalogue() {
   });
 
   const percentage = catalogueLimit ? Math.min(100, (currentCount / catalogueLimit) * 100) : 0;
-  const isSelectModel = vendorSubscription === 'select';
   const capacityLabel = catalogueLimit !== null
     ? formatString(UI_STRINGS.vendorWorkspace.catalogueCapacityWithLimit, { limit: catalogueLimit })
     : UI_STRINGS.vendorWorkspace.catalogueCapacityWithoutLimit;
@@ -499,10 +538,11 @@ export default function ItemCatalogue() {
         </div>
         <button
           type="button"
+          onClick={navigateToSubscription}
           className="px-4 py-2 rounded-xl text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 transition-all flex items-center gap-2 shadow-sm shrink-0 cursor-pointer"
         >
           <Sparkles size={14} />
-          <span>Select Mode Subscription</span>
+          <span>{isSelectModel ? 'Manage Subscription' : 'Upgrade to Select Model (₹14,999)'}</span>
         </button>
       </div>
 
@@ -530,13 +570,18 @@ export default function ItemCatalogue() {
 
       {/* Bulk Upload Row */}
       <div className="flex flex-wrap items-center gap-4">
-        <label className="btn btn-sm font-bold text-xs py-2 px-4 rounded-xl flex items-center gap-2 border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 cursor-pointer shadow-2xs">
-          <FileSpreadsheet size={15} className="text-purple-600" />
+        <label className={`btn btn-sm font-bold text-xs py-2 px-4 rounded-xl flex items-center gap-2 border ${
+          isSelectModel
+            ? 'border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 hover:bg-purple-100 cursor-pointer'
+            : 'border-slate-200 dark:border-gray-800 bg-slate-100 dark:bg-gray-800 text-slate-400 dark:text-gray-500 cursor-not-allowed opacity-60'
+        } shadow-2xs`}>
+          <FileSpreadsheet size={15} className={isSelectModel ? 'text-purple-600' : 'text-slate-400'} />
           <span>Bulk Upload (Excel)</span>
           <input
             aria-label="Upload catalogue Excel workbook"
             type="file"
             accept=".xlsx"
+            disabled={!isSelectModel}
             className="sr-only"
             onChange={handleCatalogueFile}
           />
@@ -686,17 +731,27 @@ export default function ItemCatalogue() {
                           <div className="flex items-center justify-center gap-1">
                             <button
                               type="button"
+                              disabled={!isSelectModel}
                               onClick={() => handleEditClick(prod)}
-                              className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-lg transition-colors cursor-pointer"
-                              title="Edit Product"
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isSelectModel
+                                  ? 'text-slate-500 hover:text-blue-600 hover:bg-blue-50 dark:hover:bg-blue-950 cursor-pointer'
+                                  : 'text-slate-300 dark:text-gray-600 cursor-not-allowed opacity-50'
+                              }`}
+                              title={isSelectModel ? 'Edit Product' : 'Select plan (₹14,999) required to edit'}
                             >
                               <Edit2 size={12} />
                             </button>
                             <button
                               type="button"
+                              disabled={!isSelectModel}
                               onClick={() => handleDeleteClick(prod.id, prod.sku)}
-                              className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950 rounded-lg transition-colors cursor-pointer"
-                              title="Delete Product"
+                              className={`p-1.5 rounded-lg transition-colors ${
+                                isSelectModel
+                                  ? 'text-slate-400 hover:text-red-600 hover:bg-red-50 dark:hover:bg-red-950 cursor-pointer'
+                                  : 'text-slate-300 dark:text-gray-600 cursor-not-allowed opacity-50'
+                              }`}
+                              title={isSelectModel ? 'Delete Product' : 'Select plan (₹14,999) required to delete'}
                             >
                               <Trash2 size={12} />
                             </button>
@@ -754,15 +809,35 @@ export default function ItemCatalogue() {
           </div>
 
           <form onSubmit={handleAddOrEditProduct} className="space-y-3.5 text-xs">
+            {!isSelectModel && (
+              <div className="p-3.5 rounded-xl bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 text-amber-900 dark:text-amber-200 space-y-2">
+                <div className="flex items-center gap-2 font-bold text-xs">
+                  <Crown size={15} className="text-amber-600 shrink-0" />
+                  <span>Select Model Plan Required (₹14,999 / yr)</span>
+                </div>
+                <p className="text-[11px] text-amber-800 dark:text-amber-300">
+                  Item catalogue editing is restricted. Upgrade to the ₹14,999 Select Model plan to add, edit, and publish catalogue products.
+                </p>
+                <button
+                  type="button"
+                  onClick={navigateToSubscription}
+                  className="btn btn-sm w-full font-bold text-xs bg-amber-600 hover:bg-amber-700 text-white rounded-lg py-1.5 shadow-xs cursor-pointer border-none flex items-center justify-center gap-1.5"
+                >
+                  <Sparkles size={13} /> Upgrade to Select Model
+                </button>
+              </div>
+            )}
+
             {/* Product Name */}
             <div className="space-y-1">
               <label className="text-[10px] uppercase font-bold text-slate-600 dark:text-gray-400">Product Name *</label>
               <input
                 type="text"
                 value={name}
+                disabled={!isSelectModel || isSavingProduct}
                 onChange={(e) => setName(e.target.value)}
                 placeholder="e.g. Centrifugal Water Pump"
-                className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                 required
               />
             </div>
@@ -774,9 +849,10 @@ export default function ItemCatalogue() {
                 <input
                   type="text"
                   value={sku}
+                  disabled={!isSelectModel || isSavingProduct}
                   onChange={(e) => setSku(e.target.value)}
                   placeholder="SKU-PUMP-500"
-                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium uppercase"
+                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium uppercase disabled:opacity-60 disabled:cursor-not-allowed"
                   required
                 />
               </div>
@@ -802,7 +878,7 @@ export default function ItemCatalogue() {
                 </select>
                 <div className="flex items-center justify-between">
                   <label className="text-[10px] uppercase font-bold text-slate-600 dark:text-gray-400">Category *</label>
-                  {category && (
+                  {category && isSelectModel && (
                     <button
                       type="button"
                       onClick={() => {
@@ -819,17 +895,18 @@ export default function ItemCatalogue() {
                   <input
                     type="text"
                     value={category}
+                    disabled={!isSelectModel || isSavingProduct}
                     onChange={(e) => {
                       setCategory(e.target.value);
                       setShowCategorySuggestions(true);
                     }}
                     onFocus={() => {
-                      if (category.trim().length >= 3) {
+                      if (isSelectModel && category.trim().length >= 3) {
                         setShowCategorySuggestions(true);
                       }
                     }}
                     placeholder="Type 3+ characters to search..."
-                    className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                    className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                   />
                   {category.trim().length > 0 && category.trim().length < 3 && (
                     <p className="text-[10px] text-amber-600 dark:text-amber-400 mt-1 font-medium">
@@ -887,9 +964,10 @@ export default function ItemCatalogue() {
                 <input
                   type="number"
                   value={unitPrice}
+                  disabled={!isSelectModel || isSavingProduct}
                   onChange={(e) => setUnitPrice(e.target.value)}
                   placeholder="850"
-                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                   required
                 />
               </div>
@@ -899,9 +977,10 @@ export default function ItemCatalogue() {
                 <input
                   type="number"
                   value={leadTimeDays}
+                  disabled={!isSelectModel || isSavingProduct}
                   onChange={(e) => setLeadTimeDays(e.target.value)}
                   placeholder="5"
-                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                   required
                 />
               </div>
@@ -911,9 +990,10 @@ export default function ItemCatalogue() {
                 <input
                   type="number"
                   value={moq}
+                  disabled={!isSelectModel || isSavingProduct}
                   onChange={(e) => setMoq(e.target.value)}
                   placeholder="10"
-                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                  className="input w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
                   required
                 />
               </div>
@@ -924,20 +1004,31 @@ export default function ItemCatalogue() {
               <label className="text-[10px] uppercase font-bold text-slate-600 dark:text-gray-400">Technical Specs</label>
               <textarea
                 value={specs}
+                disabled={!isSelectModel || isSavingProduct}
                 onChange={(e) => setSpecs(e.target.value)}
                 placeholder="Details of materials, sizes, compatibility standards..."
                 rows={3}
-                className="textarea w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium"
+                className="textarea w-full bg-slate-50 dark:bg-gray-950 border border-slate-200 dark:border-gray-700 rounded-xl text-slate-900 dark:text-white text-xs font-medium disabled:opacity-60 disabled:cursor-not-allowed"
               />
             </div>
 
             <div className="flex gap-2 pt-2">
               <button
                 type="submit"
-                disabled={isSavingProduct || isLoadingCatalogue}
-                className="btn w-full text-xs font-bold py-2.5 rounded-xl text-white bg-emerald-600 hover:bg-emerald-700 transition-colors shadow-xs disabled:opacity-60 disabled:cursor-not-allowed cursor-pointer border-none"
+                disabled={!isSelectModel || isSavingProduct || isLoadingCatalogue}
+                className={`btn w-full text-xs font-bold py-2.5 rounded-xl text-white ${
+                  isSelectModel
+                    ? 'bg-emerald-600 hover:bg-emerald-700 cursor-pointer'
+                    : 'bg-slate-400 dark:bg-gray-700 cursor-not-allowed opacity-60'
+                } transition-colors shadow-xs disabled:cursor-not-allowed border-none`}
               >
-                {isSavingProduct ? 'Saving...' : isEditing ? 'Update Item' : 'Add Item'}
+                {!isSelectModel
+                  ? 'Select Plan (₹14,999) Required'
+                  : isSavingProduct
+                  ? 'Saving...'
+                  : isEditing
+                  ? 'Update Item'
+                  : 'Add Item'}
               </button>
               {isEditing && (
                 <button

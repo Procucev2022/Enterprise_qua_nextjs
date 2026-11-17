@@ -857,6 +857,7 @@ export interface VendorOpportunity {
   sourcingMode?: string;
   category?: string;
   assignedVendors?: RFQAssignedVendor[];
+  createdAt?: string;
 }
 
 export interface AuditLogEntry {

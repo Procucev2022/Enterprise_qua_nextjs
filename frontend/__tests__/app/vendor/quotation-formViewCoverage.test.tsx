@@ -1325,7 +1325,12 @@ describe('upgrade and payment modals', () => {
       expect(screen.getByRole('button', { name: /My Enquiries/i })).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Public Enquiries/i })).toBeInTheDocument();
 
-      // By default with direct enquiries, My Enquiries is active
+      // By default without filters, combined listing shows both direct and public enquiries
+      expect(screen.getByText('RFQ-DIRECT-1')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-PUBLIC-1')).toBeInTheDocument();
+
+      // Switch to My Enquiries tab
+      fireEvent.click(screen.getByRole('button', { name: /My Enquiries/i }));
       expect(screen.getByText('RFQ-DIRECT-1')).toBeInTheDocument();
       expect(screen.queryByText('RFQ-PUBLIC-1')).not.toBeInTheDocument();
 
@@ -1337,6 +1342,7 @@ describe('upgrade and payment modals', () => {
       // Switch back to My Enquiries
       fireEvent.click(screen.getByRole('button', { name: /My Enquiries/i }));
       expect(screen.getByText('RFQ-DIRECT-1')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-PUBLIC-1')).not.toBeInTheDocument();
     });
 
     test('clicking RFQ number and View button navigates to rfq-details', async () => {
