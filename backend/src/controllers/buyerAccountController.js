@@ -834,29 +834,39 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    if (requestType === 'Buyer Credit Deletion' && balance !== null && amount > balance) {
-      return res.status(400).json({
-        success: false,
-        error: `Cannot delete ${amount} credits: ${buyer.organizationName} only has ${balance} credits available.`,
-      });
+    const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      if (numAmount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'A positive credit amount is required for Buyer Credit Deletion.',
+        });
+      }
+      if (balance !== null && numAmount > balance) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete ${numAmount} credits: ${buyer.organizationName} only has ${balance} credits available.`,
+        });
+      }
     }
 
     let taskCategory = 'CREDIT_MANAGEMENT';
     let taskType = 'Add Credits';
-    let title = `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`;
+    let title = `Credit Allocation Request: ${numAmount} Credits for ${buyer.organizationName}`;
     let description = reason || `Requested credit top-up for ${buyer.organizationName}`;
-    let valueImpact = `${amount} RFQ Credits (${buyer.organizationName})`;
-    let quantity = amount || 1;
-    let effectiveAmount = amount || 0;
+    let valueImpact = `${numAmount} RFQ Credits (${buyer.organizationName})`;
+    let quantity = numAmount || 1;
+    let effectiveAmount = numAmount;
 
     if (requestType === 'Buyer Credit Deletion') {
       taskCategory = 'CREDIT_MANAGEMENT';
       taskType = 'Credit Deletion';
-      title = `Credit Deduction Request: ${amount} Credits from ${buyer.organizationName}`;
+      title = `Credit Deduction Request: ${numAmount} Credits from ${buyer.organizationName}`;
       description = reason || `Requested credit deduction for ${buyer.organizationName}`;
-      valueImpact = `-${amount} RFQ Credits (${buyer.organizationName})`;
-      quantity = amount;
-      effectiveAmount = amount;
+      valueImpact = `-${numAmount} RFQ Credits (${buyer.organizationName})`;
+      quantity = numAmount;
+      effectiveAmount = numAmount;
     } else if (requestType === 'Discounts') {
       taskCategory = 'CREDIT_MANAGEMENT';
       taskType = 'Discounts';

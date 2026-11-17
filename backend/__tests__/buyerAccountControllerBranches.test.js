@@ -460,6 +460,33 @@ describe('buyerAccountController branches', () => {
       }));
     });
 
+    test('refuses buyer credit addition and deletion when amount is not a valid positive number', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([{
+        id: 'ba-num',
+        organizationName: 'Buyer Num Org',
+        creditBalance: 50,
+      }]);
+
+      const resAdd = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-num' },
+        body: { requestType: 'Buyer Credit Addition', amount: -5, approverName: APPROVER_NAME },
+      }, resAdd, jest.fn());
+      expect(resAdd.status).toHaveBeenCalledWith(400);
+
+      const resDel = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-num' },
+        body: { requestType: 'Buyer Credit Deletion', approverName: APPROVER_NAME },
+      }, resDel, jest.fn());
+      expect(resDel.status).toHaveBeenCalledWith(400);
+      expect(resDel.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: 'A positive credit amount is required for Buyer Credit Deletion.',
+      }));
+    });
+
     test('submits requests for Buyer Credit Deletion, Discounts, Trial Periods, and Offline Payments', async () => {
       const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockResolvedValue({ task_number: 'TSK-REQ-1' });
 
@@ -1078,6 +1105,121 @@ describe('buyerAccountController branches', () => {
           totalSuccessfulPayments: 2,
           totalRefundedAmount: 0,
         }),
+      }));
+    });
+  });
+
+  describe('createBuyerAccount, updateBuyerAccount & deleteBuyerAccount branches', () => {
+    test('merges into existing mirror account when session matches', async () => {
+      const mirrorEmail = 'mirror@test.com';
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'u-mirror-1',
+        organizationName: 'Old Mirror',
+        corporateEmail: mirrorEmail,
+      });
+      const updateSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({
+        id: 'u-mirror-1',
+        organizationName: 'New Mirror',
+        corporateEmail: mirrorEmail,
+      });
+
+      const res = mockRes();
+      await buyerAccountController.createBuyerAccount({
+        user: { id: 'u-mirror-1', email: mirrorEmail, role: 'admin' },
+        body: { organizationName: 'New Mirror', corporateEmail: mirrorEmail },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(updateSpy).toHaveBeenCalledWith('u-mirror-1', expect.objectContaining({
+        organizationName: 'New Mirror',
+      }));
+    });
+
+    test('returns 404 and catches error on updateBuyerAccount', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyerAccount()]);
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce(null);
+
+      const res404 = mockRes();
+      await buyerAccountController.updateBuyerAccount({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-1' },
+        body: { organizationName: 'Nonexistent' },
+      }, res404, jest.fn());
+      expect(res404.status).toHaveBeenCalledWith(404);
+
+      const nextErr = jest.fn();
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValueOnce(new Error('DB failure'));
+      await buyerAccountController.updateBuyerAccount({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-1' },
+        body: { organizationName: 'Exploding' },
+      }, mockRes(), nextErr);
+      expect(nextErr).toHaveBeenCalledWith(expect.any(Error));
+    });
+
+    test('catches error on deleteBuyerAccount', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyerAccount()]);
+      const nextErr = jest.fn();
+      jest.spyOn(storeService, 'deleteBuyerAccountDurably').mockRejectedValueOnce(new Error('Delete crash'));
+
+      await buyerAccountController.deleteBuyerAccount({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-1' },
+      }, mockRes(), nextErr);
+      expect(nextErr).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
+
+  describe('getBuyerUploadedVendors branches', () => {
+    test('fetches from DB when pool has storage and matches in-memory vendor fallbacks', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValue({
+        id: 'ba-db-1',
+        organizationName: 'DB Buyer Corp',
+        corporateEmail: 'dbbuyer@test.com',
+      });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+      jest.spyOn(domainQueries, 'getVendorsUploadedByBuyerFromDB').mockResolvedValue([
+        { id: 'v-db-1', name: 'Vendor DB', vendorId: 'v-db-1' },
+      ]);
+
+      storeService.vendors = [
+        null,
+        { id: 'v-match-account', buyerAccountId: 'ba-db-1', name: 'Matched By Account ID' },
+        { id: 'v-match-email', buyerEmail: 'dbbuyer@test.com', name: 'Matched By Email' },
+        { id: 'v-match-company', addedByBuyerCompany: 'DB Buyer Corp', name: 'Matched By Company' },
+        { id: 'v-no-match', buyerId: 'other-buyer', name: 'Ignored Vendor' },
+      ];
+
+      const res = mockRes();
+      await buyerAccountController.getBuyerUploadedVendors({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-db-1' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        count: expect.any(Number),
+      }));
+    });
+
+    test('fetches by email when caller is buyer without matched ID', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'ba-buyer-role',
+        organizationName: 'Buyer Role Org',
+        corporateEmail: OWNER_EMAIL,
+      });
+
+      const res = mockRes();
+      await buyerAccountController.getBuyerUploadedVendors({
+        user: { role: 'buyer', email: OWNER_EMAIL },
+        params: { id: 'ba-unknown' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
       }));
     });
   });
