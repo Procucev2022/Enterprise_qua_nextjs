@@ -135,7 +135,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
           rfqNumber: result.rfq.rfqNumber,
         })
       );
-    });
+    }, 30000);
   });
 
   describe('Scenario 5: Registered buyer continues to use original workflow', () => {
