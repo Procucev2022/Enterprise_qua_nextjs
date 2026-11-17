@@ -3749,5 +3749,180 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         localStorage.removeItem('procucev_vendor_upload_history');
       }
     });
+
+    it('marks vendors inactive/active via setBuyerVendorActiveStatus & setMultipleBuyerVendorsActiveStatus and excludes inactive vendors from matchSuitableVendors', async () => {
+      const ctx = await mountStore();
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-active-toggle',
+            records: [
+              { id: 'v-tog-1', name: 'Active Pump Co', email: 'tog1@vendor.test', category: 'Mechanical' },
+            ],
+          },
+        ])
+      );
+
+      let toggleMode: 'ok' | 'http_fail' | 'network_fail' = 'ok';
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: sent.email === 'tog1@vendor.test' ? 'v-tog-1' : 'v-tog-2' } }),
+          });
+        }
+        if (String(url).includes('/status') && init?.method === 'PATCH') {
+          const body = JSON.parse(init.body || '{}');
+          if (toggleMode === 'network_fail') return Promise.reject(new Error('offline'));
+          if (toggleMode === 'http_fail') {
+            return Promise.resolve({ ok: false, status: 400, json: async () => ({ success: false, error: 'Status rejected' }) });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                id: 'v-tog-1',
+                name: 'Active Pump Co',
+                email: 'tog1@vendor.test',
+                isActive: body.isActive,
+                disabled: !body.isActive,
+                status: body.isActive ? 'REGISTERED / NOT EVALUATED' : 'INACTIVE',
+              },
+            }),
+          });
+        }
+        if (url === '/api/vendors/bulk-status' && init?.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          if (toggleMode === 'network_fail') return Promise.reject(new Error('bulk offline'));
+          if (toggleMode === 'http_fail') {
+            return Promise.resolve({ ok: false, status: 500, json: async () => ({ success: false, error: 'Bulk status failed' }) });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              updatedIds: ['v-tog-2'],
+              skippedIds: [],
+              data: [
+                {
+                  id: 'v-tog-2',
+                  name: 'Second Valve Co',
+                  email: 'tog2@vendor.test',
+                  isActive: body.isActive,
+                  disabled: !body.isActive,
+                  status: body.isActive ? 'REGISTERED / NOT EVALUATED' : 'INACTIVE',
+                },
+              ],
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      try {
+        await act(async () => {
+          await ctx().addBuyerVendor({ name: 'Active Pump Co', majorCategory: 'Mechanical', minorCategories: ['Pumps'], email: 'tog1@vendor.test', source: 'buyer_manual' } as any);
+          await ctx().addBuyerVendor({ name: 'Second Valve Co', majorCategory: 'Mechanical', minorCategories: ['Valves'], email: 'tog2@vendor.test', source: 'buyer_manual' } as any);
+        });
+
+        let okSingle = false;
+        await act(async () => {
+          okSingle = await ctx().setBuyerVendorActiveStatus('v-tog-1', false);
+        });
+        expect(okSingle).toBe(true);
+        const disabledVendor = ctx().buyerVendors.find((v: any) => v.id === 'v-tog-1');
+        expect(disabledVendor?.isActive).toBe(false);
+        expect(disabledVendor?.status).toBe('INACTIVE');
+
+        // Upload history is preserved with isActive: false
+        const historyAfterDisable = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+        expect(historyAfterDisable).toHaveLength(1);
+        expect(historyAfterDisable[0].records[0].isActive).toBe(false);
+
+        // Inactive vendor is excluded from matchSuitableVendors across Mode 1 / 2 / 3 while active remains
+        const sampleEntities: any[] = [{ id: 'ent-1', itemName: 'Pump & Valve', quantity: 1, unit: 'Nos', targetDate: '', technicalSpecs: '', confidence: 90, category: 'Mechanical', majorCategory: 'Mechanical', minorCategory: '' }];
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_1').map((v: any) => v.id)).not.toContain('v-tog-1');
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_2').map((v: any) => v.id)).not.toContain('v-tog-1');
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_3').map((v: any) => v.id)).toContain('v-tog-2');
+
+        // Reactivate single vendor
+        await act(async () => {
+          await ctx().setBuyerVendorActiveStatus('v-tog-1', true);
+        });
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-1')?.isActive).toBe(true);
+
+        // Bulk disable & empty guard
+        let emptyBulk = true;
+        await act(async () => {
+          emptyBulk = await ctx().setMultipleBuyerVendorsActiveStatus([], false);
+        });
+        expect(emptyBulk).toBe(false);
+
+        let okBulk = false;
+        await act(async () => {
+          okBulk = await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2'], false);
+        });
+        expect(okBulk).toBe(true);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-2')?.isActive).toBe(false);
+
+        // Error and network failure branches
+        toggleMode = 'http_fail';
+        await act(async () => {
+          expect(await ctx().setBuyerVendorActiveStatus('v-tog-1', false)).toBe(false);
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2'], true)).toBe(false);
+        });
+        toggleMode = 'network_fail';
+        await act(async () => {
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-offline-1', false, { name: 'Master Co', email: 'm@co.test', vendorCode: 'MC1', phone: '9999999999', city: 'Pune', state: 'Maharashtra', pincode: '411001', gstin: '27AAAAA0000A1Z5', contactPerson: 'Lead', location: 'Pune' })).toBe(false);
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-master-offline-1'], false, [{ id: 'v-master-offline-1', name: 'Master Co', email: 'm@co.test' }])).toBe(false);
+        });
+
+        // Synthetic fallback status change (history lookup + persistedByEmail + omitted json.data + bulk reactivation/fallback)
+        toggleMode = 'ok';
+        mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+          if (String(url).includes('/status') && init?.method === 'PATCH') {
+            return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+          }
+          if (url === '/api/vendors/bulk-status' && init?.method === 'POST') {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                skippedIds: ['v-skip-1'],
+              }),
+            });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+        });
+        localStorage.setItem(
+          'procucev_vendor_upload_history',
+          JSON.stringify([
+            {
+              id: 'batch-syn-tog',
+              records: [{ id: 'syn-tog-rec', name: 'Upload History Vendor', email: 'hist-tog@vendor.test', category: 'Mechanical' }],
+            },
+          ])
+        );
+        await act(async () => {
+          // Synthetic not in buyerVendors prepends updated record even when response omits data
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-syn-tog-rec', false)).toBe(true);
+          // Synthetic with email matching persisted vendor in buyerVendors redirects to persisted ID
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-redirect', false, { email: 'tog1@vendor.test' })).toBe(true);
+          // Bulk reactivate when backend omits updatedIds/data and skips one ID
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2', 'v-skip-1'], true)).toBe(true);
+        });
+        expect(ctx().buyerVendors.some((v: any) => v.id === 'v-master-syn-tog-rec' && v.isActive === false)).toBe(true);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-2')?.isActive).toBe(true);
+      } finally {
+        localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
   });
 });

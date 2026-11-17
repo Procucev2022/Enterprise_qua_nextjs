@@ -30,7 +30,7 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
+import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, isVendorActive, parseSearchTokens } from '@/lib/constants';
 import type { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
@@ -242,8 +242,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
     void fetchVendorCandidates(rfq.id).then((result) => {
       if (result.success) {
-        setCandidates(result.candidates);
-        result.candidates.forEach((c) => {
+        const activeCandidates = result.candidates.filter((c) => isVendorActive(c));
+        setCandidates(activeCandidates);
+        activeCandidates.forEach((c) => {
           if (c?.id) knownVendorsRef.current.set(c.id, c);
         });
       } else {
@@ -311,7 +312,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   const stampInvited = (vendors: RFQVendorCandidate[]): RFQVendorCandidate[] => {
     const isAssigned = buildAssignedMatcher(rfq);
-    return vendors.map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
+    return vendors.filter((v) => isVendorActive(v)).map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
   };
 
   // Fetched lazily on first switch into "All Vendors", and re-fetched from

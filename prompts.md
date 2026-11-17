@@ -6210,3 +6210,17 @@ basically when a RFQ invitations is sent to minor category vendors, in case we h
 Please check once, all checks are failing, please fix them. Also, how can a commit happen without quality checks passing. Can you please check & fix
 ```
 ---
+
+### Prompt 257
+**Timestamp**: 2026-11-17T18:56:38+05:30
+```text
+In buyer uploaded vendor, there should not be a delete vendor option, the option should be to disable it or mark it inactive. so that any later flow is not impacted, any future flow should not have this vendor, such as in the create RFQ flow for RFQ invitation etc.
+```
+---
+
+### Prompt 258
+**Timestamp**: 2026-11-17T19:09:29+05:30
+```text
+Keep commiting & pushing the changes to "test-v3"
+```
+---

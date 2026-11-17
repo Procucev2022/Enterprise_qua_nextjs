@@ -43,6 +43,7 @@ const {
   exclusiveDigitPrefixUpperBound,
   exclusiveNocasePrefixUpperBound,
   expandCategoryDashVariants,
+  isVendorInactive,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -252,7 +253,7 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false, activeOnly = false } = {}) {
   // Pincode prefix (3–6 digits). Anything else is ignored rather than turned into a LIKE pattern.
   const cleanPincode = /^\d{3,6}$/.test(String(pincode || '').replace(/\s+/g, '')) ? String(pincode).replace(/\s+/g, '') : '';
   if (!pool.hasStorage()) return { rows: [], total: 0 };
@@ -271,9 +272,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     publicOnly,
     scopedBuyerId,
     skipCount,
-    // Appended only when set so existing (minor-less) cache keys are unchanged.
+    // Appended only when set so existing (minor-less / activeOnly-less) cache keys are unchanged.
     ...(cleanMinorTerms.length > 0 ? [`minors:${cleanMinorTerms.join('|')}`] : []),
     ...(cleanPincode ? [`pincode:${cleanPincode}`] : []),
+    ...(activeOnly ? ['activeOnly'] : []),
   ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
@@ -543,6 +545,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
     )`);
   }
+  if (publicOnly || activeOnly) {
+    conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+    d1Conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const rawD1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
   const d1Where = rawD1Where.replace(/__D1_EXTRA_(\d+)__/g, (_, idx) => `$${params.length + 1 + Number(idx)}`);
@@ -630,14 +636,15 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     if (staleResponse !== null) return staleResponse;
     throw err;
   }
+  const mappedRows = dataResult.rows.map((row) => {
+    const v = parseVendorRaw(row.raw);
+    if (row.created_at && !v.created_at) v.created_at = row.created_at;
+    if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+    if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+    return v;
+  });
   const response = {
-    rows: dataResult.rows.map((row) => {
-      const v = parseVendorRaw(row.raw);
-      if (row.created_at && !v.created_at) v.created_at = row.created_at;
-      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-      return v;
-    }),
+    rows: (publicOnly || activeOnly) ? mappedRows.filter((v) => !isVendorInactive(v)) : mappedRows,
     total,
   };
   if (countFailed) {
@@ -712,17 +719,19 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   }
 
-  // Public-only: a vendor tagged to a specific buyer is never in the network pool.
-  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  // Public-only: a vendor tagged to a specific buyer or marked inactive is never in the network pool.
+  const activeStatusPredicate = `(status IS NULL OR upper(status) != 'INACTIVE')`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL AND ${activeStatusPredicate}`;
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
+  const activeWhereD1 = `${whereD1} AND ${activeStatusPredicate}`;
 
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
     params,
     {
       d1: true,
-      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${activeWhereD1}`,
       d1Params,
       useCache: true,
       tag: 'vendors',
@@ -764,7 +773,7 @@ function appendUniqueVendors(collected, seenKeys, rows, maxCount) {
   for (const row of Array.isArray(rows) ? rows : []) {
     if (collected.length >= maxCount) break;
     const vendor = parseVendorRaw(row?.raw ?? row);
-    if (!vendor) continue;
+    if (!vendor || isVendorInactive(vendor)) continue;
     const key = String(vendor.id || vendor.email || vendor.name || '').trim().toLowerCase();
     if (!key || seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -3448,12 +3457,14 @@ async function getPublicVendorsPageFromDB({
   }
 
   const params = [];
-  // Rule: public listing NEVER exposes private buyer rosters.
+  // Rule: public listing NEVER exposes private buyer rosters or inactive suppliers.
   const pgConditions = [
     `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
   const d1Conditions = [
     `lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
 
   if (search) {

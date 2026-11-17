@@ -10,11 +10,14 @@ import {
   isBuyerUploadedVendor,
   isPlaceholderVendorCategory,
   isProcucevNetworkVendor,
+  isVendorActive,
+  isVendorInactive,
   loadVendorUploadHistoryFromStorage,
-  removeVendorsFromUploadHistoryInStorage,
+  setVendorsActiveStateInStorage,
   normalizeVendorCategoryList,
   reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
+  VENDOR_ACTIVE_STATUSES,
 } from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import {
@@ -36,7 +39,8 @@ import {
   Users,
   Eye,
   Pencil,
-  Trash2,
+  Power,
+  PowerOff,
   Phone,
   Globe,
   FileText,
@@ -92,8 +96,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     buyerVendors,
     addBuyerVendor,
     updateBuyerVendor,
-    deleteBuyerVendor,
-    deleteMultipleBuyerVendors,
+    setBuyerVendorActiveStatus,
+    setMultipleBuyerVendorsActiveStatus,
     categoryTaxonomy,
     ensureCategoryTaxonomy,
     reviseVendorRating,
@@ -105,8 +109,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
-  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
-  const [isDeletingBulk, setIsDeletingBulk] = useState(false);
+  const [bulkStatusModalOpen, setBulkStatusModalOpen] = useState(false);
+  const [bulkTargetIsActive, setBulkTargetIsActive] = useState(false);
+  const [isUpdatingBulkStatus, setIsUpdatingBulkStatus] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
@@ -174,7 +179,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     source: string;
   } | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [statusModalOpen, setStatusModalOpen] = useState(false);
+  const [targetStatusIsActive, setTargetStatusIsActive] = useState(false);
+  const [isUpdatingSingleStatus, setIsUpdatingSingleStatus] = useState(false);
   const [selectedVendorForCrud, setSelectedVendorForCrud] = useState<any | null>(null);
 
   // Rating Revision State
@@ -919,10 +926,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setViewModalOpen(true);
   };
 
-  // Open Delete Vendor Modal
-  const handleOpenDeleteModal = (vendor: any) => {
+  // Open Mark Inactive / Activate Vendor Confirmation Modal
+  const handleOpenStatusModal = (vendor: VendorEntry, nextIsActive: boolean) => {
     setSelectedVendorForCrud(vendor);
-    setDeleteModalOpen(true);
+    setTargetStatusIsActive(nextIsActive);
+    setStatusModalOpen(true);
   };
 
   // Add Minor Category Tag
@@ -1021,67 +1029,103 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     }
   };
 
-  // Confirm Delete Vendor
-  const handleDeleteVendorConfirm = async () => {
-    if (!selectedVendorForCrud) return;
+  const updateSingleVendorStatus = async (vendor: Partial<VendorEntry>, nextIsActive: boolean): Promise<boolean> => {
+    const vendorId = String(vendor.id || '');
+    if (typeof setBuyerVendorActiveStatus === 'function') {
+      return setBuyerVendorActiveStatus(vendorId, nextIsActive, vendor);
+    }
+    const nextStatus = (
+      nextIsActive
+        ? (vendor.previousStatus || 'REGISTERED / NOT EVALUATED')
+        : VENDOR_ACTIVE_STATUSES.INACTIVE
+    ) as VendorEntry['status'];
+    return updateBuyerVendor(vendorId, {
+      isActive: nextIsActive,
+      disabled: !nextIsActive,
+      status: nextStatus,
+    });
+  };
+
+  // Confirm Single Vendor Active/Inactive Update
+  const handleConfirmSingleStatusChange = async () => {
+    if (!selectedVendorForCrud || isUpdatingSingleStatus) return;
     const vendorId = selectedVendorForCrud.id;
+    setIsUpdatingSingleStatus(true);
     try {
       const identifiers = [
         selectedVendorForCrud.id,
         selectedVendorForCrud.email,
         selectedVendorForCrud.name,
       ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
-      removeVendorsFromUploadHistoryInStorage(identifiers);
-      loadUploadHistory();
-      const res = await deleteBuyerVendor(vendorId);
+      const res = await updateSingleVendorStatus(selectedVendorForCrud, targetStatusIsActive);
       if (res !== false) {
-        setDeleteModalOpen(false);
-        setSelectedVendorForCrud(null);
+        setVendorsActiveStateInStorage(identifiers, targetStatusIsActive);
         loadUploadHistory();
+        setStatusModalOpen(false);
+        setSelectedVendorForCrud(null);
       }
     } catch (err) {
-      logger.log('ERROR', 'Failed to delete vendor', { error: err, vendorId }, 'VENDOR_DIRECTORY');
+      logger.log('ERROR', 'Failed to update vendor status', { error: err, vendorId, nextIsActive: targetStatusIsActive }, 'VENDOR_DIRECTORY');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.singleUpdateFailedMessage, 'warning');
+    } finally {
+      setIsUpdatingSingleStatus(false);
     }
   };
 
-  // Open Bulk Delete Modal
-  const handleOpenBulkDeleteModal = () => {
+  // Open Bulk Status Modal (Mark Inactive / Reactivate)
+  const handleOpenBulkStatusModal = (nextIsActive: boolean) => {
     if (selectedVendorIds.length === 0) return;
-    setBulkDeleteModalOpen(true);
+    setBulkTargetIsActive(nextIsActive);
+    setBulkStatusModalOpen(true);
   };
 
-  // Confirm Bulk Delete Vendors
-  const handleBulkDeleteConfirm = async () => {
-    if (selectedVendorIds.length === 0) return;
-    setIsDeletingBulk(true);
+  // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
+  const handleBulkStatusConfirm = async () => {
+    if (selectedVendorIds.length === 0 || isUpdatingBulkStatus) return;
+    setIsUpdatingBulkStatus(true);
     try {
-      const idsToDelete = [...selectedVendorIds];
-      const selectedVendors = mergedVendors.filter((v) => idsToDelete.includes(v.id));
+      const selectedVendors = mergedVendors.filter((v) => selectedVendorIds.includes(v.id));
+      const targetedVendors = selectedVendors.filter((v) =>
+        bulkTargetIsActive ? isVendorInactive(v) : isVendorActive(v)
+      );
+      const effectiveVendors = targetedVendors.length > 0 ? targetedVendors : selectedVendors;
+      const idsToUpdate = effectiveVendors.length > 0
+        ? effectiveVendors.map((v) => v.id)
+        : [...selectedVendorIds];
       const identifiers = Array.from(
         new Set(
           [
-            ...idsToDelete,
-            ...selectedVendors.map((v) => v.id),
-            ...selectedVendors.map((v) => v.email || ''),
-            ...selectedVendors.map((v) => v.name || ''),
+            ...idsToUpdate,
+            ...effectiveVendors.map((v) => v.email || ''),
+            ...effectiveVendors.map((v) => v.name || ''),
           ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
         )
       );
-      removeVendorsFromUploadHistoryInStorage(identifiers);
-      loadUploadHistory();
-      if (typeof deleteMultipleBuyerVendors === 'function') {
-        await deleteMultipleBuyerVendors(idsToDelete);
-      } else if (typeof deleteBuyerVendor === 'function') {
-        await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
+
+      let updated = false;
+      if (typeof setMultipleBuyerVendorsActiveStatus === 'function') {
+        updated = await setMultipleBuyerVendorsActiveStatus(idsToUpdate, bulkTargetIsActive, effectiveVendors);
+      } else {
+        const results = await Promise.all(
+          idsToUpdate.map((id) => {
+            const vendorRecord = effectiveVendors.find((v) => v.id === id) || { id };
+            return updateSingleVendorStatus(vendorRecord, bulkTargetIsActive);
+          })
+        );
+        updated = results.every((r) => r !== false);
       }
-      loadUploadHistory();
-      setSelectedVendorIds([]);
-      setBulkDeleteModalOpen(false);
+
+      if (updated !== false) {
+        setVendorsActiveStateInStorage(identifiers, bulkTargetIsActive);
+        loadUploadHistory();
+        setSelectedVendorIds([]);
+        setBulkStatusModalOpen(false);
+      }
     } catch (err) {
-      logger.log('ERROR', 'Failed to bulk delete vendors', { error: err }, 'VENDOR_DIRECTORY');
-      showToast('Error', 'Failed to delete selected vendors. Please try again.', 'warning');
+      logger.log('ERROR', 'Failed to bulk update vendor status', { error: err, bulkTargetIsActive }, 'VENDOR_DIRECTORY');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.bulkUpdateFailedMessage, 'warning');
     } finally {
-      setIsDeletingBulk(false);
+      setIsUpdatingBulkStatus(false);
     }
   };
 
@@ -1201,6 +1245,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
     if (!targetVendor || isRequestingEvaluation) return;
+    if (isVendorInactive(targetVendor)) {
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked, 'warning');
+      return;
+    }
 
     setIsRequestingEvaluation(true);
     try {
@@ -1415,6 +1463,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const matchesCategory = selectedCategory === 'ALL' || rawCategory.toLowerCase() === selectedCategory.toLowerCase();
     const matchesStatus =
       selectedStatus === 'ALL' ||
+      (selectedStatus === 'ACTIVE' && isVendorActive(v)) ||
+      (selectedStatus === 'INACTIVE' && isVendorInactive(v)) ||
       (selectedStatus === 'EVALUATED' && v.evaluated) ||
       (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
       (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
@@ -1502,12 +1552,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     const engagement = getVendorRfqEngagement(vendor);
     const isSelected = selectedVendorIds.includes(vendor.id);
+    const vendorInactive = isVendorInactive(vendor);
 
     return (
       <tr
         key={vendor.id}
-        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
-          }`}
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
         <td className="py-2.5 px-3 w-10 text-center align-middle">
@@ -1753,20 +1803,31 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
         {/* Status */}
         <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
-          <span
-            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
-                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                : getStatusStyle(vendor.status || '')
-              }`}
-          >
-            {currentMode === 'mode_1' && !isUploaded
-              ? 'UNAVAILABLE IN V1'
-              : isLockedForProcucevV2
-                ? 'LOCKED (PENDING BID)'
-                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                  ? 'BUYER ROSTER (NO EVAL)'
-                  : vendor.status}
-          </span>
+          {vendorInactive ? (
+            <span
+              data-testid={`status-badge-inactive-${vendor.id}`}
+              title={UI_STRINGS.vendorStatusControl.inactiveTooltip}
+              className="px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center gap-1 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-900/60"
+            >
+              <PowerOff size={10} />
+              {UI_STRINGS.vendorStatusControl.inactiveBadge}
+            </span>
+          ) : (
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
+                  ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
+                  : getStatusStyle(vendor.status || '')
+                }`}
+            >
+              {currentMode === 'mode_1' && !isUploaded
+                ? 'UNAVAILABLE IN V1'
+                : isLockedForProcucevV2
+                  ? 'LOCKED (PENDING BID)'
+                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                    ? 'BUYER ROSTER (NO EVAL)'
+                    : vendor.status}
+            </span>
+          )}
           {vendor.evaluationRequested && (
             <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
               {vendor.evaluationRequestedAt
@@ -1803,15 +1864,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             )}
 
-            {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
+            {/* Mark Inactive / Reactivate Button - Only for buyer-uploaded vendors */}
             {isUploaded && (
               <button
                 type="button"
-                onClick={() => handleOpenDeleteModal(vendor)}
-                className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
-                title="Delete vendor from directory and database"
+                data-testid={vendorInactive ? `enable-vendor-${vendor.id}` : `disable-vendor-${vendor.id}`}
+                onClick={() => handleOpenStatusModal(vendor, vendorInactive)}
+                className={
+                  vendorInactive
+                    ? 'btn btn-ghost btn-xs text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1'
+                    : 'btn btn-ghost btn-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1'
+                }
+                title={
+                  vendorInactive
+                    ? UI_STRINGS.vendorStatusControl.markActiveTitle
+                    : UI_STRINGS.vendorStatusControl.markInactiveTitle
+                }
               >
-                <Trash2 size={11} /> Delete
+                {vendorInactive ? <Power size={11} /> : <PowerOff size={11} />}
+                {vendorInactive
+                  ? UI_STRINGS.vendorStatusControl.markActiveButton
+                  : UI_STRINGS.vendorStatusControl.markInactiveButton}
               </button>
             )}
 
@@ -1969,7 +2042,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             onChange={(e) => setSelectedStatus(e.target.value)}
             className="select-field text-xs py-1.5"
           >
-            <option value="ALL">All Statuses</option>
+            <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
+            <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
+            <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
             <option value="EVALUATED">Evaluated Only</option>
             <option value="NOT_EVALUATED">Pending Evaluation</option>
             <option value="PREFERRED">Preferred Status</option>
@@ -2013,15 +2088,40 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             >
               Export Selected ({selectedVendorIds.length})
             </button>
-            <button
-              type="button"
-              data-testid="bulk-delete-vendors-button"
-              onClick={handleOpenBulkDeleteModal}
-              className="btn btn-rose btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-            >
-              <Trash2 size={12} />
-              Delete Selected ({selectedVendorIds.length})
-            </button>
+            {(() => {
+              const selectedSet = new Set(selectedVendorIds);
+              const selectedRecords = buyerUploadedVendorsList.filter((v) => selectedSet.has(v.id));
+              const inactiveSelectedCount = selectedRecords.filter((v) => isVendorInactive(v)).length;
+              const activeSelectedCount = Math.max(0, selectedVendorIds.length - inactiveSelectedCount);
+              return (
+                <>
+                  {activeSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-disable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(false)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markInactiveTitle}
+                    >
+                      <PowerOff size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkDisableButton, { count: activeSelectedCount })}
+                    </button>
+                  )}
+                  {inactiveSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-enable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(true)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markActiveTitle}
+                    >
+                      <Power size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkEnableButton, { count: inactiveSelectedCount })}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
@@ -2641,6 +2741,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     {selectedVendorForCrud.name}
+                    {isVendorInactive(selectedVendorForCrud) && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                        {UI_STRINGS.vendorStatusControl.inactiveBadge}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Comprehensive supplier registration, compliance, and taxonomy profile.
@@ -2693,8 +2798,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
-                  <div className="font-bold text-[10.5px] text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
-                    {selectedVendorForCrud.status || '—'}
+                  <div
+                    className={`font-bold text-[10.5px] mt-0.5 truncate ${
+                      isVendorInactive(selectedVendorForCrud)
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }`}
+                  >
+                    {isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.inactiveBadge
+                      : selectedVendorForCrud.status || '—'}
                   </div>
                 </div>
 
@@ -2853,7 +2966,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <button
                   type="button"
                   onClick={() => {
@@ -2864,12 +2977,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 >
                   <Pencil size={13} /> Edit Profile
                 </button>
+                {isBuyerUploaded(selectedVendorForCrud) && (
+                  <button
+                    type="button"
+                    data-testid="view-profile-status-toggle-button"
+                    onClick={() => {
+                      const target = selectedVendorForCrud;
+                      setViewModalOpen(false);
+                      handleOpenStatusModal(target, isVendorInactive(target));
+                    }}
+                    className={
+                      isVendorInactive(selectedVendorForCrud)
+                        ? 'btn btn-secondary btn-sm font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5'
+                        : 'btn btn-secondary btn-sm font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5'
+                    }
+                  >
+                    {isVendorInactive(selectedVendorForCrud) ? <Power size={13} /> : <PowerOff size={13} />}
+                    {isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.markActiveButton
+                      : UI_STRINGS.vendorStatusControl.markInactiveButton}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
-                  disabled={isRequestingEvaluation}
-                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs"
-                  title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                  disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
+                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={
+                    isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                      : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                  }
                 >
                   {isRequestingEvaluation ? (
                     <Loader2 size={13} className="animate-spin" />
@@ -3017,27 +3155,57 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       )}
 
       {/* ========================================================================= */}
-      {/* DELETE VENDOR CONFIRMATION MODAL */}
+      {/* SINGLE VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
       {/* ========================================================================= */}
-      {deleteModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
-          <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-rose-200 dark:border-rose-900/60 animate-fade-in flex flex-col">
+      {statusModalOpen && selectedVendorForCrud && (
+        <div className="modal-overlay !z-[1100]" data-testid="single-vendor-status-modal">
+          <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col">
             <div className="flex items-start gap-3 pb-3 border-b border-slate-200 dark:border-gray-800">
-              <div className="p-3 rounded-full bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-400 shrink-0">
-                <Trash2 size={22} />
+              <div
+                className={`p-3 rounded-full shrink-0 ${
+                  targetStatusIsActive
+                    ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                    : 'bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
+                }`}
+              >
+                {targetStatusIsActive ? <Power size={22} /> : <PowerOff size={22} />}
               </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete Vendor Record</h3>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {targetStatusIsActive
+                    ? UI_STRINGS.vendorStatusControl.singleEnableTitle
+                    : UI_STRINGS.vendorStatusControl.singleDisableTitle}
+                </h3>
                 <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Are you sure you want to delete <strong>{selectedVendorForCrud.name}</strong> from your vendor directory?
+                  {formatString(
+                    targetStatusIsActive
+                      ? UI_STRINGS.vendorStatusControl.singleEnableDescription
+                      : UI_STRINGS.vendorStatusControl.singleDisableDescription,
+                    {
+                      vendorName: selectedVendorForCrud.name,
+                      vendorId: selectedVendorForCrud.id,
+                    }
+                  )}
                 </p>
               </div>
             </div>
 
-            <div className="my-4 p-3 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-[11px] text-rose-800 dark:text-rose-300">
+            <div
+              className={`my-4 p-3 rounded-xl border text-[11px] space-y-1 ${
+                targetStatusIsActive
+                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40 text-emerald-900 dark:text-emerald-300'
+                  : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-300'
+              }`}
+            >
+              <p className="font-bold">
+                {targetStatusIsActive
+                  ? UI_STRINGS.vendorStatusControl.singleEnableBanner
+                  : UI_STRINGS.vendorStatusControl.singleDisableBanner}
+              </p>
               <p>
-                This action will permanently delete supplier ID <strong>{selectedVendorForCrud.id}</strong> (
-                {selectedVendorForCrud.email}) from your private buyer master list and synchronised database records.
+                {targetStatusIsActive
+                  ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
+                  : UI_STRINGS.vendorStatusControl.singleDisableImpactNote}
               </p>
             </div>
 
@@ -3045,19 +3213,38 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <button
                 type="button"
                 onClick={() => {
-                  setDeleteModalOpen(false);
+                  setStatusModalOpen(false);
                   setSelectedVendorForCrud(null);
                 }}
-                className="btn btn-ghost btn-sm font-semibold"
+                disabled={isUpdatingSingleStatus}
+                className="btn btn-ghost btn-sm font-semibold disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={handleDeleteVendorConfirm}
-                className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl"
+                data-testid="confirm-vendor-status-button"
+                onClick={handleConfirmSingleStatusChange}
+                disabled={isUpdatingSingleStatus}
+                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${
+                  targetStatusIsActive
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
               >
-                <Trash2 size={13} /> Delete Vendor
+                {isUpdatingSingleStatus ? (
+                  <>
+                    <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
+                  </>
+                ) : targetStatusIsActive ? (
+                  <>
+                    <Power size={13} /> {UI_STRINGS.vendorStatusControl.confirmEnableButton}
+                  </>
+                ) : (
+                  <>
+                    <PowerOff size={13} /> {UI_STRINGS.vendorStatusControl.confirmDisableButton}
+                  </>
+                )}
               </button>
             </div>
           </div>
@@ -3065,42 +3252,75 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       )}
 
       {/* ========================================================================= */}
-      {/* BULK DELETE VENDORS CONFIRMATION MODAL */}
+      {/* BULK VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
       {/* ========================================================================= */}
-      {bulkDeleteModalOpen && (
-        <div className="modal-overlay !z-[1100]">
-          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-rose-200 dark:border-rose-900/60 animate-fade-in flex flex-col gap-4">
+      {bulkStatusModalOpen && (
+        <div className="modal-overlay !z-[1100]" data-testid="bulk-vendor-status-modal">
+          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
             <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 shrink-0">
-                  <Trash2 size={22} />
+                <div
+                  className={`p-3 rounded-2xl border shrink-0 ${
+                    bulkTargetIsActive
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
+                      : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/60'
+                  }`}
+                >
+                  {bulkTargetIsActive ? <Power size={22} /> : <PowerOff size={22} />}
                 </div>
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Delete Multiple Vendors ({selectedVendorIds.length})
+                    {formatString(
+                      bulkTargetIsActive
+                        ? UI_STRINGS.vendorStatusControl.bulkEnableModalTitle
+                        : UI_STRINGS.vendorStatusControl.bulkDisableModalTitle,
+                      {
+                        count: selectedVendorIds.length,
+                        plural: selectedVendorIds.length === 1 ? '' : 's',
+                      }
+                    )}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    Are you sure you want to permanently delete these {selectedVendorIds.length} supplier records?
+                    {UI_STRINGS.vendorStatusControl.bulkModalSubtitle}
                   </p>
                 </div>
               </div>
               <button
                 type="button"
-                data-testid="close-bulk-delete-modal"
-                onClick={() => setBulkDeleteModalOpen(false)}
-                disabled={isDeletingBulk}
+                data-testid="close-bulk-status-modal"
+                onClick={() => setBulkStatusModalOpen(false)}
+                disabled={isUpdatingBulkStatus}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
               >
                 <X size={18} />
               </button>
             </div>
 
-            <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-800 dark:text-rose-300 flex items-start gap-2.5">
-              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+            <div
+              className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
+                bulkTargetIsActive
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-900 dark:text-emerald-300'
+                  : 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-300'
+              }`}
+            >
+              <AlertCircle
+                size={16}
+                className={`shrink-0 mt-0.5 ${
+                  bulkTargetIsActive
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                }`}
+              />
               <div>
-                <p className="font-semibold">Irreversible Action</p>
-                <p className="text-[11px] mt-0.5 text-rose-700/90 dark:text-rose-300/90">
-                  This will permanently delete {selectedVendorIds.length} selected vendor records from your private buyer master list and backend database.
+                <p className="font-semibold">
+                  {bulkTargetIsActive
+                    ? UI_STRINGS.vendorStatusControl.bulkEnableBannerTitle
+                    : UI_STRINGS.vendorStatusControl.bulkDisableBannerTitle}
+                </p>
+                <p className="text-[11px] mt-0.5 opacity-90">
+                  {bulkTargetIsActive
+                    ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
+                    : UI_STRINGS.vendorStatusControl.bulkDisableBannerText}
                 </p>
               </div>
             </div>
@@ -3136,8 +3356,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           )}
                         </div>
                       </div>
-                      <span className="badge badge-rose text-[9px] font-bold shrink-0">
-                        To Delete
+                      <span
+                        className={`badge text-[9px] font-bold shrink-0 ${
+                          bulkTargetIsActive ? 'badge-emerald' : 'badge-amber'
+                        }`}
+                      >
+                        {bulkTargetIsActive
+                          ? UI_STRINGS.vendorStatusControl.confirmEnableButton
+                          : UI_STRINGS.vendorStatusControl.confirmDisableButton}
                       </span>
                     </div>
                   );
@@ -3148,26 +3374,42 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
               <button
                 type="button"
-                onClick={() => setBulkDeleteModalOpen(false)}
-                disabled={isDeletingBulk}
+                onClick={() => setBulkStatusModalOpen(false)}
+                disabled={isUpdatingBulkStatus}
                 className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                data-testid="confirm-bulk-delete-button"
-                onClick={handleBulkDeleteConfirm}
-                disabled={isDeletingBulk}
-                className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl disabled:opacity-50"
+                data-testid="confirm-bulk-status-button"
+                onClick={handleBulkStatusConfirm}
+                disabled={isUpdatingBulkStatus}
+                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${
+                  bulkTargetIsActive
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                }`}
               >
-                {isDeletingBulk ? (
+                {isUpdatingBulkStatus ? (
                   <>
-                    <Loader2 size={13} className="animate-spin" /> Deleting...
+                    <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
+                  </>
+                ) : bulkTargetIsActive ? (
+                  <>
+                    <Power size={13} />{' '}
+                    {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmEnableButton, {
+                      count: selectedVendorIds.length,
+                      plural: selectedVendorIds.length === 1 ? '' : 's',
+                    })}
                   </>
                 ) : (
                   <>
-                    <Trash2 size={13} /> Delete {selectedVendorIds.length} Vendor{selectedVendorIds.length === 1 ? '' : 's'}
+                    <PowerOff size={13} />{' '}
+                    {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmDisableButton, {
+                      count: selectedVendorIds.length,
+                      plural: selectedVendorIds.length === 1 ? '' : 's',
+                    })}
                   </>
                 )}
               </button>
@@ -3261,9 +3503,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <button
                         type="button"
                         onClick={() => handleRequestVendorEvaluation(vendor)}
-                        disabled={isRequestingEvaluation}
-                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
-                        title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                        disabled={isRequestingEvaluation || isVendorInactive(vendor)}
+                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={
+                          isVendorInactive(vendor)
+                            ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                            : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                        }
                       >
                         {isRequestingEvaluation ? (
                           <Loader2 size={11} className="animate-spin" />

@@ -3598,6 +3598,35 @@ const VENDOR_DIRECTORY_SESSION_STATUS = Object.freeze({
   CLOSED: 'CLOSED',
 });
 
+const VENDOR_ACTIVE_STATUSES = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+});
+
+const VENDOR_STATUS_MESSAGES = Object.freeze({
+  INVALID_ACTIVE_FLAG: 'Specify whether the vendor should be active or inactive (isActive boolean).',
+  BULK_VENDOR_IDS_REQUIRED: 'Select at least one vendor to update active status.',
+  VENDOR_ROLE_FORBIDDEN: 'Vendors cannot change their own active status.',
+  INACTIVE_EVALUATION_BLOCKED: 'This vendor is marked inactive and cannot receive new evaluation requests. Reactivate the vendor first to request an evaluation.',
+  INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
+  MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
+  MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+});
+
+/** Returns true when a vendor record has been disabled / marked inactive. */
+function isVendorInactive(vendor) {
+  if (!vendor || typeof vendor !== 'object') return false;
+  if (vendor.isActive === false || vendor.disabled === true || vendor.active === false) {
+    return true;
+  }
+  return String(vendor.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+/** Returns true when a vendor object is present and eligible for active workflows. */
+function isVendorActive(vendor) {
+  return Boolean(vendor) && !isVendorInactive(vendor);
+}
+
 const VENDOR_DIRECTORY_LOGOUT_REASONS = Object.freeze({
   MANUAL: 'MANUAL',
   INACTIVITY: 'INACTIVITY',
@@ -4363,5 +4392,9 @@ module.exports = {
   ACTION_CENTER_CHANNELS,
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  isVendorInactive,
+  isVendorActive,
 };
 

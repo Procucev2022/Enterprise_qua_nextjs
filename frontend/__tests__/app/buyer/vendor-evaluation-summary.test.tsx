@@ -867,4 +867,44 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     rerender(<VendorEvaluationSummary />);
     expect(screen.queryByRole('button', { name: /Synced Later Co/ })).not.toBeInTheDocument();
   });
+
+  it('hides unevaluated inactive buyer vendors from future evaluation selection while preserving historical evaluated ones', () => {
+    const unevaluatedInactive = buildVendor({
+      id: 'v-eval-inact-none',
+      name: 'Inactive Without Eval Co',
+      source: 'buyer_uploaded',
+      isActive: false,
+      status: 'INACTIVE',
+    });
+    const evaluatedInactive = buildVendor({
+      id: 'v-eval-inact-hist',
+      name: 'Inactive Historical Eval Co',
+      source: 'buyer_uploaded',
+      isActive: false,
+      status: 'INACTIVE',
+    });
+    const activeVendor = buildVendor({
+      id: 'v-eval-act',
+      name: 'Active Supplier Co',
+      source: 'buyer_uploaded',
+    });
+    const histEvalRecord = {
+      id: 'eval-hist-inactive',
+      vendorId: 'v-eval-inact-hist',
+      vendorName: 'Inactive Historical Eval Co',
+      overallScore: 85,
+      pillarScores: {},
+    } as any;
+
+    mockStore({
+      buyerVendors: [unevaluatedInactive, evaluatedInactive, activeVendor],
+      vendorEvaluations: [histEvalRecord],
+    });
+    render(<VendorEvaluationSummary />);
+
+    fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    expect(screen.getByRole('button', { name: /Active Supplier Co/ })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Inactive Historical Eval Co/ })).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Inactive Without Eval Co/ })).not.toBeInTheDocument();
+  });
 });

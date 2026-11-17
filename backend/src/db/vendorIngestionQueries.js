@@ -545,6 +545,7 @@ function mapRowToVendorMaster(row) {
     pincode: loc.pincode,
     gstin: text(row.gstin),
     rating: numeric(row.rating),
+    ...(rawMeta.isActive === false ? { isActive: false, disabled: true, status: rawMeta.status || 'INACTIVE' } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };

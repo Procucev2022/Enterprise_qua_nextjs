@@ -66,6 +66,9 @@ import {
   reconcileBuyerVendorsWithUploadHistory,
   updateVendorInUploadHistoryStorage,
   removeVendorsFromUploadHistoryInStorage,
+  setVendorsActiveStateInStorage,
+  isVendorActive,
+  VENDOR_ACTIVE_STATUSES,
 } from './constants';
 
 function logApiResponseFailure(
@@ -248,6 +251,12 @@ interface AppContextType {
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => Promise<boolean>;
+  setBuyerVendorActiveStatus: (vendorId: string, isActive: boolean, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
+  setMultipleBuyerVendorsActiveStatus: (
+    vendorIds: string[],
+    isActive: boolean,
+    targetVendors?: Array<Partial<VendorEntry>>
+  ) => Promise<boolean>;
   deleteBuyerVendor: (vendorId: string, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
   deleteMultipleBuyerVendors: (vendorIds: string[], targetVendors?: Array<Partial<VendorEntry>>) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
@@ -2212,43 +2221,56 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return newV;
   };
 
-  // The local list changes only after the server confirms the write, and it takes the record the server returns.
-  const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+  const resolveVendorMutationTarget = (vendorId: string, hintVendor?: Partial<VendorEntry>) => {
     const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
     const matchedVendor =
       directVendor ||
       (isSyntheticId
         ? reconcileBuyerVendorsWithUploadHistory(
-            buyerVendors,
-            loadVendorUploadHistoryFromStorage(),
-            activeBuyerAccount
-          ).find((v) => v.id === vendorId)
-        : undefined);
-    const resolvedEmailLower = String(matchedVendor?.email || updates.email || '').trim().toLowerCase();
+          buyerVendors,
+          loadVendorUploadHistoryFromStorage(),
+          activeBuyerAccount
+        ).find((v) => v.id === vendorId)
+        : undefined) ||
+      hintVendor;
+    const resolvedEmailLower = String(matchedVendor?.email || hintVendor?.email || '').trim().toLowerCase();
     const persistedByEmail =
       isSyntheticId && resolvedEmailLower
         ? buyerVendors.find(
-            (v) =>
-              !String(v.id || '').startsWith('v-master-') &&
-              !String(v.id || '').startsWith('v-hist-local-') &&
-              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
-          )
+          (v) =>
+            !String(v.id || '').startsWith('v-master-') &&
+            !String(v.id || '').startsWith('v-hist-local-') &&
+            String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+        )
         : undefined;
     const targetVendorId = persistedByEmail?.id || vendorId;
-    const payload: Record<string, unknown> = { ...updates };
+    const syntheticHints: Record<string, unknown> = {};
     if (isSyntheticId && !persistedByEmail && matchedVendor) {
-      if (matchedVendor.email && !payload.vendorEmail) payload.vendorEmail = matchedVendor.email;
-      if (matchedVendor.name && !payload.vendorName) payload.vendorName = matchedVendor.name;
-      if (matchedVendor.contactPerson && !payload.contactPerson) payload.contactPerson = matchedVendor.contactPerson;
-      if (matchedVendor.vendorCode && !payload.vendorCode) payload.vendorCode = matchedVendor.vendorCode;
-      if (matchedVendor.phone && !payload.phone) payload.phone = matchedVendor.phone;
-      if (matchedVendor.location && !payload.location) payload.location = matchedVendor.location;
-      if (matchedVendor.city && !payload.city) payload.city = matchedVendor.city;
-      if (matchedVendor.state && !payload.state) payload.state = matchedVendor.state;
-      if (matchedVendor.pincode && !payload.pincode) payload.pincode = matchedVendor.pincode;
-      if (matchedVendor.gstin && !payload.gstin) payload.gstin = matchedVendor.gstin;
+      const hintMapping: ReadonlyArray<readonly [keyof VendorEntry, string]> = [
+        ['email', 'vendorEmail'],
+        ['name', 'vendorName'],
+        ['contactPerson', 'contactPerson'],
+        ['vendorCode', 'vendorCode'],
+        ['phone', 'phone'],
+        ['location', 'location'],
+        ['city', 'city'],
+        ['state', 'state'],
+        ['pincode', 'pincode'],
+        ['gstin', 'gstin'],
+      ];
+      for (const [sourceKey, targetKey] of hintMapping) {
+        const value = matchedVendor[sourceKey];
+        if (value) syntheticHints[targetKey] = value;
+      }
     }
+    return { targetVendorId, matchedVendor, syntheticHints };
+  };
+
+  // The local list changes only after the server confirms the write, and it takes the record the server returns.
+  const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+    const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(vendorId, updates);
+    const payload: Record<string, unknown> = { ...syntheticHints, ...updates };
 
     let res: Response;
     try {
@@ -2276,10 +2298,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
       const next = hasMatch
         ? prev.map((v) =>
-            v.id === vendorId || v.id === targetVendorId || v.id === savedId
-              ? { ...v, ...updates, ...saved, id: savedId }
-              : v
-          )
+          v.id === vendorId || v.id === targetVendorId || v.id === savedId
+            ? { ...v, ...updates, ...saved, id: savedId }
+            : v
+        )
         : [{ ...(matchedVendor || {}), ...updates, ...saved, id: savedId } as VendorEntry, ...prev];
       setSessionCache('vendors', next);
       return next;
@@ -2302,6 +2324,193 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
     void addAuditLog(`Updated vendor profile record for ID ${savedId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
+    return true;
+  };
+
+  // Non-destructive status toggle: marks a buyer-uploaded vendor INACTIVE (excluded from future flows) or ACTIVE.
+  const setBuyerVendorActiveStatus = async (
+    vendorId: string,
+    isActive: boolean,
+    targetVendor?: Partial<VendorEntry>
+  ): Promise<boolean> => {
+    const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(vendorId, targetVendor);
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendorId)}/status`, {
+        method: 'PATCH',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ ...syntheticHints, isActive }),
+      });
+    } catch (err) {
+      logger.log('ERROR', 'Failed to sync vendor active status to backend', { error: err, vendorId: targetVendorId, isActive }, 'VENDOR_PROFILE');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.networkErrorMessage, 'warning');
+      return false;
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Vendor active status update request failed', res, 'VENDOR_PROFILE', {
+        vendorId: targetVendorId,
+        isActive,
+        responseError: json?.error,
+      });
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.singleUpdateFailedMessage,
+        'warning'
+      );
+      return false;
+    }
+
+    const saved: Partial<VendorEntry> = json.data && typeof json.data === 'object'
+      ? json.data
+      : { isActive, disabled: !isActive, status: isActive ? 'REGISTERED / NOT EVALUATED' : VENDOR_ACTIVE_STATUSES.INACTIVE };
+    const savedId = typeof saved.id === 'string' && saved.id ? saved.id : targetVendorId;
+
+    setBuyerVendors((prev) => {
+      const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
+      const next = hasMatch
+        ? prev.map((v) =>
+            v.id === vendorId || v.id === targetVendorId || v.id === savedId
+              ? { ...v, ...saved, isActive, disabled: !isActive, id: savedId }
+              : v
+          )
+        : [{ ...(matchedVendor || {}), ...saved, isActive, disabled: !isActive, id: savedId } as VendorEntry, ...prev];
+      setSessionCache('vendors', next);
+      return next;
+    });
+
+    const identifiersToSync = [
+      vendorId,
+      targetVendorId,
+      savedId,
+      String(saved.email || matchedVendor?.email || targetVendor?.email || ''),
+      String(saved.name || matchedVendor?.name || targetVendor?.name || ''),
+    ].filter(Boolean);
+    setVendorsActiveStateInStorage(identifiersToSync, isActive);
+
+    const displayName = saved.name || matchedVendor?.name || targetVendor?.name || savedId;
+    void addAuditLog(
+      isActive
+        ? `Reactivated vendor ${displayName} (${savedId}) for future sourcing workflows.`
+        : `Marked vendor ${displayName} (${savedId}) INACTIVE (historical data preserved; excluded from future RFQs).`
+    );
+    showToast(
+      UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
+      formatString(
+        isActive ? UI_STRINGS.vendorStatusControl.singleEnabledToast : UI_STRINGS.vendorStatusControl.singleDisabledToast,
+        { vendorName: displayName }
+      ),
+      isActive ? 'success' : 'info'
+    );
+    return true;
+  };
+
+  // Bulk non-destructive active/inactive toggle across selected buyer-uploaded vendors.
+  const setMultipleBuyerVendorsActiveStatus = async (
+    vendorIds: string[],
+    isActive: boolean,
+    targetVendors?: Array<Partial<VendorEntry>>
+  ): Promise<boolean> => {
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) return false;
+    const extraVendors = Array.isArray(targetVendors) ? targetVendors : [];
+    const hintPayload = vendorIds.map((rawId) => {
+      const { matchedVendor, syntheticHints } = resolveVendorMutationTarget(
+        rawId,
+        extraVendors.find((item) => item?.id === rawId)
+      );
+      return {
+        id: rawId,
+        ...(matchedVendor ? { vendorName: matchedVendor.name, vendorEmail: matchedVendor.email, vendorCode: matchedVendor.vendorCode } : {}),
+        ...syntheticHints,
+      };
+    });
+
+    let res: Response;
+    try {
+      res = await fetch('/api/vendors/bulk-status', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ vendorIds, isActive, vendors: hintPayload }),
+      });
+    } catch (err) {
+      logger.log('ERROR', 'Failed to sync bulk vendor status update to backend', { error: err, isActive }, 'VENDOR_PROFILE');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.networkErrorMessage, 'warning');
+      return false;
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Bulk vendor active status update request failed', res, 'VENDOR_PROFILE', {
+        requestedCount: vendorIds.length,
+        isActive,
+        responseError: json?.error,
+      });
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.bulkUpdateFailedMessage,
+        'warning'
+      );
+      return false;
+    }
+
+    const updatedRows: Partial<VendorEntry>[] = Array.isArray(json.data) ? json.data : [];
+    const updatedIds: string[] = Array.isArray(json.updatedIds) ? json.updatedIds : [];
+    const skippedIds: string[] = Array.isArray(json.skippedIds) ? json.skippedIds : [];
+    const skippedSet = new Set(skippedIds);
+    const affectedIds = updatedIds.length > 0 ? updatedIds : vendorIds.filter((id) => !skippedSet.has(id));
+    const affectedSet = new Set([...affectedIds, ...vendorIds.filter((id) => !skippedSet.has(id))]);
+    const updatedByEmail = new Map<string, Partial<VendorEntry>>();
+    const updatedById = new Map<string, Partial<VendorEntry>>();
+    updatedRows.forEach((row) => {
+      if (row.id) updatedById.set(row.id, row);
+      if (row.email) updatedByEmail.set(row.email.trim().toLowerCase(), row);
+    });
+
+    const matchedVendors = buyerVendors.filter((v) => affectedSet.has(v.id) || (v.email && affectedSet.has(v.email)));
+    const identifiersToSync = Array.from(
+      new Set(
+        [
+          ...affectedIds,
+          ...[...matchedVendors, ...updatedRows, ...extraVendors].flatMap((v) => [v.id, v.email, v.name]),
+        ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      )
+    );
+    setVendorsActiveStateInStorage(identifiersToSync, isActive);
+
+    setBuyerVendors((prev) => {
+      const next = prev.map((v) => {
+        const directMatch = updatedById.get(v.id) || (v.email ? updatedByEmail.get(v.email.trim().toLowerCase()) : undefined);
+        const isTargeted = Boolean(directMatch) || affectedSet.has(v.id) || (v.email ? affectedSet.has(v.email) : false);
+        if (!isTargeted) return v;
+        return {
+          ...v,
+          ...(directMatch || {}),
+          isActive,
+          disabled: !isActive,
+          status: (isActive
+            ? (directMatch?.status || v.previousStatus || 'REGISTERED / NOT EVALUATED')
+            : VENDOR_ACTIVE_STATUSES.INACTIVE) as VendorEntry['status'],
+        };
+      });
+      setSessionCache('vendors', next);
+      return next;
+    });
+
+    const changedCount = updatedIds.length || affectedIds.length;
+    void addAuditLog(
+      isActive
+        ? `Reactivated ${changedCount} buyer vendor(s) for future sourcing workflows.`
+        : `Marked ${changedCount} buyer vendor(s) INACTIVE (historical data preserved; excluded from future RFQs).`
+    );
+    showToast(
+      UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
+      formatString(
+        isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
+        { count: changedCount }
+      ),
+      isActive ? 'success' : 'info'
+    );
     return true;
   };
 
@@ -2456,7 +2665,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     mode: SourcingMode,
     customList?: VendorEntry[]
   ): VendorEntry[] => {
-    const vendorPool = customList && customList.length > 0 ? customList : buyerVendors;
+    const rawPool = customList && customList.length > 0 ? customList : buyerVendors;
+    const vendorPool = rawPool.filter((v) => isVendorActive(v));
     const targetMinorCategories = entities.map(e => (e.minorCategory || '').toLowerCase().trim()).filter(Boolean);
     const targetMajorCategories = entities.map(e => (e.majorCategory || e.category || '').toLowerCase().trim()).filter(Boolean);
 
@@ -3198,6 +3408,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         buyerVendors,
         addBuyerVendor,
         updateBuyerVendor,
+        setBuyerVendorActiveStatus,
+        setMultipleBuyerVendorsActiveStatus,
         deleteBuyerVendor,
         deleteMultipleBuyerVendors,
         matchSuitableVendors,

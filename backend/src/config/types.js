@@ -32,6 +32,11 @@
  * @property {string} majorCategory
  * @property {number} compositeRating
  * @property {string} status
+ * @property {boolean} [isActive]
+ * @property {boolean} [disabled]
+ * @property {string|null} [disabledAt]
+ * @property {string|null} [disabledBy]
+ * @property {string|null} [previousStatus]
  * @property {boolean} [evaluationRequested]
  * @property {string} [evaluationRequestedAt]
  * @property {string} [evaluationRequestedBy]
@@ -86,6 +91,7 @@ const DOMAIN_TYPES = {
     'general',
   ],
   RFQ_STATUSES: ['Ingested', 'Dispatched', 'In Evaluation', 'Quotes Pending', 'PO Awarded'],
+  VENDOR_ACTIVE_STATUSES: ['ACTIVE', 'INACTIVE'],
   SOURCING_MODES: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
   SEVERITY_LEVELS: ['INFO', 'WARN', 'ERROR', 'CRITICAL'],
   AUDIT_CATEGORIES: ['SECURITY', 'DATA_MUTATION', 'SYSTEM', 'AUTHENTICATION', 'PERFORMANCE', 'CRYPTOGRAPHY'],

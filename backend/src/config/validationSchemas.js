@@ -284,6 +284,42 @@ const VALIDATION_SCHEMAS = {
     pincode: { type: 'string', required: false, maxLength: 32 },
     gstin: { type: 'string', required: false, maxLength: 32 },
   },
+  vendorActiveStatusUpdate: {
+    isActive: {
+      type: 'boolean',
+      required: true,
+      message: 'Specify whether the vendor should be active or inactive.',
+    },
+    vendorEmail: { type: 'string', required: false, maxLength: 320 },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    contactPerson: { type: 'string', required: false, maxLength: 255 },
+    vendorCode: { type: 'string', required: false, maxLength: 120 },
+    phone: { type: 'string', required: false, maxLength: 64 },
+    location: { type: 'string', required: false, maxLength: 1024 },
+    city: { type: 'string', required: false, maxLength: 150 },
+    state: { type: 'string', required: false, maxLength: 150 },
+    pincode: { type: 'string', required: false, maxLength: 32 },
+    gstin: { type: 'string', required: false, maxLength: 32 },
+  },
+  vendorBulkActiveStatusUpdate: {
+    vendorIds: {
+      type: 'array',
+      required: true,
+      custom: (value) => {
+        if (!Array.isArray(value) || value.length === 0) {
+          return 'Select at least one vendor to update active status.';
+        }
+        return null;
+      },
+      message: 'Select at least one vendor to update active status.',
+    },
+    isActive: {
+      type: 'boolean',
+      required: true,
+      message: 'Specify whether selected vendors should be active or inactive.',
+    },
+    vendors: { type: 'array', required: false },
+  },
   evaluationListQuery: {
     vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
   },
@@ -1219,6 +1255,12 @@ const VALIDATION_SCHEMAS = {
       required: false,
       enum: ['true', 'false', '1', '0'],
       message: 'publicOnly must be true, false, 1, or 0.',
+    },
+    activeOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'activeOnly must be true, false, 1, or 0.',
     },
   },
 

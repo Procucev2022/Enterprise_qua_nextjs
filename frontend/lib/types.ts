@@ -1194,7 +1194,22 @@ export interface VendorEntry {
     | 'self_onboarded'
     | 'category_manager_upload'
     | string;
-  status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
+  status?:
+    | 'PREFERRED ENTERPRISE SUPPLIER'
+    | 'CONDITIONAL / UNDER REVIEW'
+    | 'REGISTERED / NOT EVALUATED'
+    | 'DISQUALIFIED SUPPLIER'
+    | 'INACTIVE'
+    | 'ACTIVE'
+    | 'PENDING EVALUATION';
+  isActive?: boolean;
+  disabled?: boolean;
+  disabledAt?: string | null;
+  disabledBy?: string | null;
+  previousStatus?: string | null;
+  reactivatedAt?: string | null;
+  reactivatedBy?: string | null;
+  masterRecordId?: string | null;
   score?: number | null;
   evaluated?: boolean;
   evaluationRequested?: boolean;
