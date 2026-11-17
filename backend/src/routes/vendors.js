@@ -38,6 +38,8 @@ router.post('/:id/request-credit-approval', authenticate, vendorController.reque
 router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
 router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);
 router.get('/:id/payment-history', authenticate, vendorController.getVendorPaymentHistory);
+router.get('/:id/buyer-uploads', authenticate, vendorController.getSellerBuyerUploads);
+router.get('/:id/active-rfqs', authenticate, vendorController.getSellerActiveRFQs);
 
 // Seller Dossier Documents
 router.get('/:id/documents', authenticate, accountDocumentController.getSellerDocuments);

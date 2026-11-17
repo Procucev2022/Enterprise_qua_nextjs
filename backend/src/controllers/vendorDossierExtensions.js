@@ -3,7 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES, DOSSIER_MESSAGES, formatMessage } = require('../config/constants');
 
 const VENDOR_DOSSIER_ERRORS = Object.freeze({
   ACTOR_REQUIRED: 'Sign in with a staff account to record this vendor communication. No signed-in user was found on the request.',
@@ -770,6 +770,160 @@ async function requestCreditApproval(req, res, next) {
   }
 }
 
+async function getSellerBuyerUploads(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbBuyers = [];
+    if (pool.hasStorage()) {
+      dbBuyers = await domainQueries.getAssociatedBuyersForVendorFromDB(vendor, 100);
+    }
+
+    const inMemBuyers = (storeService.getBuyerAccounts() || []).filter((b) => {
+      if (!b) return false;
+      const bId = String(b.id).toLowerCase();
+      const bEmail = b.corporateEmail ? String(b.corporateEmail).toLowerCase() : '';
+      const bOrg = b.organizationName ? String(b.organizationName).toLowerCase() : '';
+      const vBuyerId = vendor.buyerId ? String(vendor.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = vendor.buyerAccountId ? String(vendor.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = vendor.buyerEmail ? String(vendor.buyerEmail).toLowerCase() : '';
+      const vAddedBy = vendor.addedByBuyerCompany ? String(vendor.addedByBuyerCompany).toLowerCase() : '';
+      return (
+        (vBuyerId && vBuyerId === bId) ||
+        (vBuyerAccountId && vBuyerAccountId === bId) ||
+        (bEmail && vBuyerEmail && vBuyerEmail === bEmail) ||
+        (bOrg && vAddedBy && vAddedBy === bOrg)
+      );
+    }).map((b) => ({
+      id: b.id,
+      name: b.organizationName || b.name || b.contactPerson || b.corporateEmail,
+      companyName: b.organizationName || b.companyName || b.name || 'Enterprise Buyer',
+      contactPerson: b.contactPerson || b.name || 'Primary Contact',
+      email: b.corporateEmail || b.email || '',
+      phone: b.mobileNumber || b.phone || '',
+      uploadDate: vendor.createdAt || vendor.created_at || b.createdAt,
+      status: b.status || 'ACTIVE_VERIFIED',
+      sourcingMode: b.sourcingMode || 'Mode 1',
+      subscriptionPlan: b.subscriptionPlan || b.subscriptionTier || 'Version_3',
+      location: b.location || b.city || '',
+    }));
+
+    const buyerMap = new Map();
+    for (const b of [...dbBuyers, ...inMemBuyers]) {
+      const key = String(b.id || b.email).toLowerCase();
+      if (key && !buyerMap.has(key)) {
+        buyerMap.set(key, b);
+      }
+    }
+
+    if (buyerMap.size === 0 && (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail)) {
+      const key = String(vendor.buyerId || vendor.buyerEmail || vendor.addedByBuyerCompany).toLowerCase();
+      buyerMap.set(key, {
+        id: vendor.buyerId || `buyer-ext-${key.slice(0, 10)}`,
+        name: vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client',
+        companyName: vendor.addedByBuyerCompany || 'Enterprise Client',
+        contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Contact',
+        email: vendor.buyerEmail || '',
+        phone: '',
+        uploadDate: vendor.createdAt || vendor.created_at || new Date().toISOString(),
+        status: 'ACTIVE_VERIFIED',
+        sourcingMode: 'Mode 1',
+        subscriptionPlan: 'Enterprise',
+        location: vendor.city ? `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}` : '',
+      });
+    }
+
+    const buyers = Array.from(buyerMap.values());
+    return res.status(200).json({
+      success: true,
+      count: buyers.length,
+      data: buyers,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller buyer uploads', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
+async function getSellerActiveRFQs(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbMatchedRFQs = [];
+    if (pool.hasStorage()) {
+      dbMatchedRFQs = await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB(vendor, 100);
+    }
+
+    const now = Date.now();
+    const inMemRFQs = (storeService.rfqs || []).filter((rfq) => {
+      if (!rfq) return false;
+      const status = String(rfq.status || '').toLowerCase();
+      if (status.includes('close') || status.includes('cancel') || status.includes('expire') || status.includes('complet')) {
+        return false;
+      }
+      const closingDate = rfq.closingDate || rfq.deadline || rfq.bidClosingDate;
+      if (closingDate) {
+        const time = new Date(closingDate).getTime();
+        if (!isNaN(time) && time < now) return false;
+      }
+      const rfqCat = rfq.category || rfq.procurementCategory || rfq.majorCategory;
+      return (
+        storeService.vendorCoversCategory(vendor, rfqCat) ||
+        (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) ||
+        (Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category)))
+      );
+    }).map((rfq) => ({
+      id: rfq.id,
+      rfqNumber: rfq.rfqNumber || rfq.id,
+      title: rfq.title || `RFQ ${rfq.rfqNumber}`,
+      category: rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General',
+      procurementCategory: rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General',
+      buyerCompanyName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+      buyerCompany: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+      buyerName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+      location: rfq.deliveryLocation || rfq.location || rfq.city || '—',
+      publishedDate: rfq.publishedDate || rfq.createdAt || rfq.created_at || new Date().toISOString(),
+      closingDate: rfq.closingDate || rfq.deadline || rfq.bidClosingDate || null,
+      status: rfq.status || 'Quotes Pending',
+      budget: rfq.budget ?? 0,
+      sourcingMode: rfq.sourcingMode || 'Mode 1',
+      extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+      lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : (Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
+      description: rfq.description || rfq.notes || '',
+      ...rfq,
+    }));
+
+    const rfqMap = new Map();
+    for (const rfq of [...dbMatchedRFQs, ...inMemRFQs]) {
+      if (rfq?.id && !rfqMap.has(rfq.id)) {
+        rfqMap.set(rfq.id, rfq);
+      }
+    }
+
+    const activeRfqs = Array.from(rfqMap.values());
+    return res.status(200).json({
+      success: true,
+      count: activeRfqs.length,
+      data: activeRfqs,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller active RFQs', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
@@ -780,4 +934,6 @@ module.exports = {
   getVendorPaymentHistory,
   addQuoteCredits,
   requestCreditApproval,
+  getSellerBuyerUploads,
+  getSellerActiveRFQs,
 };

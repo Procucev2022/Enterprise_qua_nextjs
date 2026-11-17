@@ -22,6 +22,14 @@ function respondIfAuthStorageUnavailable(res, err) {
 
 async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
   try {
+    const role = String(user.role || '').toLowerCase().trim();
+    let userType = 'buyer';
+    if (role === 'category_manager' || role === 'admin' || role === 'staff' || role === 'categorymanager' || user.email?.endsWith('@procucev.com')) {
+      userType = 'category_manager';
+    } else if (role === 'vendor' || role === 'seller') {
+      userType = 'vendor';
+    }
+
     await loginLogsQueries.recordLoginLog({
       userId: user.id,
       userName: user.name,
@@ -30,7 +38,7 @@ async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
       // login_logs.company_name is NOT NULL, so an account with no company on
       // record is stored as an empty value rather than a placeholder company.
       companyName: user.orgName || user.companyName || '',
-      userType: user.role === 'vendor' ? 'vendor' : 'buyer',
+      userType,
       ipAddress,
     });
   } catch (error) {

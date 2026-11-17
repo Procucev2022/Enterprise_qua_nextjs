@@ -532,5 +532,260 @@ describe('Login Logs API & Controller', () => {
       expect(entry).not.toBeNull();
       expect(entry.status).toBe('TIMED_OUT');
     });
+
+    describe('Category Manager Separation & Exclusion Standard', () => {
+      test('normalizes category_manager, admin, staff roles to category_manager', () => {
+        const cmRow = loginLogsQueries.mapRow({ user_type: 'category_manager' });
+        expect(cmRow.userType).toBe('category_manager');
+
+        const adminRow = loginLogsQueries.mapRow({ user_type: 'admin' });
+        expect(adminRow.userType).toBe('category_manager');
+
+        const staffRow = loginLogsQueries.mapRow({ user_type: 'staff' });
+        expect(staffRow.userType).toBe('category_manager');
+
+        const vendorRow = loginLogsQueries.mapRow({ user_type: 'vendor' });
+        expect(vendorRow.userType).toBe('vendor');
+
+        const buyerRow = loginLogsQueries.mapRow({ user_type: 'buyer' });
+        expect(buyerRow.userType).toBe('buyer');
+
+        const unknownRow = loginLogsQueries.mapRow({ user_type: 'unknown_role' });
+        expect(unknownRow.userType).toBeNull();
+      });
+
+      test('excludes category manager from buyerLogins and sellerLogins in summary', async () => {
+        loginLogsQueries.inMemoryLogs.clear();
+
+        // 1 buyer
+        await loginLogsQueries.recordLoginLog({
+          email: 'buyer@test.local',
+          userType: 'buyer',
+          companyName: 'Buyer Co',
+        });
+        // 1 vendor
+        await loginLogsQueries.recordLoginLog({
+          email: 'vendor@test.local',
+          userType: 'vendor',
+          companyName: 'Vendor Co',
+        });
+        // 1 category manager
+        await loginLogsQueries.recordLoginLog({
+          email: 'categorymanager@procucev.com',
+          userType: 'category_manager',
+          companyName: 'Procucev Platform Staff',
+        });
+
+        const summary = await loginLogsQueries.getLoginLogsSummary();
+        expect(summary.totalToday).toBe(3);
+        expect(summary.buyerLogins).toBe(1);
+        expect(summary.sellerLogins).toBe(1);
+      });
+
+      test('excludes category manager when filtering by userType=buyer or userType=vendor', async () => {
+        loginLogsQueries.inMemoryLogs.clear();
+        await loginLogsQueries.recordLoginLog({
+          email: 'buyer@test.local',
+          userType: 'buyer',
+          userName: 'Buyer User',
+          companyName: 'Buyer Co',
+        });
+        await loginLogsQueries.recordLoginLog({
+          email: 'vendor@test.local',
+          userType: 'vendor',
+          userName: 'Vendor User',
+          companyName: 'Vendor Co',
+        });
+        await loginLogsQueries.recordLoginLog({
+          email: 'cm@procucev.com',
+          userType: 'category_manager',
+          userName: 'CM User',
+          companyName: 'Internal Staff',
+        });
+
+        const buyersOnly = await loginLogsQueries.listLoginLogs({ userType: 'buyer' });
+        expect(buyersOnly.logs.length).toBe(1);
+        expect(buyersOnly.logs[0].userType).toBe('buyer');
+
+        const vendorsOnly = await loginLogsQueries.listLoginLogs({ userType: 'vendor' });
+        expect(vendorsOnly.logs.length).toBe(1);
+        expect(vendorsOnly.logs[0].userType).toBe('vendor');
+
+        const allUsers = await loginLogsQueries.listLoginLogs({ userType: 'all' });
+        expect(allUsers.logs.length).toBe(3);
+      });
+
+      test('syncDatabaseLogs loads buyer, vendor and CM records from database', async () => {
+        loginLogsQueries.inMemoryLogs.clear();
+
+        jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+          if (sql.includes('vendor_directory_sessions')) {
+            return {
+              rows: [
+                {
+                  id: 'cm-session-1',
+                  user_uuid: 'cm-uuid-1',
+                  email: 'cm@procucev.com',
+                  role: 'category_manager',
+                  login_at: new Date().toISOString(),
+                  last_activity_at: new Date().toISOString(),
+                  logout_at: null,
+                  duration_seconds: 120,
+                  status: 'ACTIVE',
+                  ip_address: '1.1.1.1',
+                  user_agent: 'TestAgent',
+                  created_at: new Date().toISOString(),
+                },
+                {
+                  id: 'cm-session-2',
+                  user_uuid: 'cm-uuid-2',
+                  email: 'cm2@procucev.com',
+                  role: 'category_manager',
+                  login_at: new Date().toISOString(),
+                  last_activity_at: null,
+                  logout_at: new Date().toISOString(),
+                  duration_seconds: null,
+                  status: 'CLOSED',
+                  ip_address: null,
+                  user_agent: null,
+                  created_at: null,
+                },
+              ],
+            };
+          }
+          if (sql.includes('vendor_presence')) {
+            return {
+              rows: [
+                {
+                  identifier: 'seller@test.local',
+                  vendor_id: 'v-100',
+                  status: 'online',
+                  last_active_at: Date.now(),
+                  updated_at: Date.now(),
+                },
+                {
+                  identifier: 'staff@procucev.com',
+                  vendor_id: null,
+                  status: 'online',
+                  last_active_at: null,
+                  updated_at: null,
+                },
+              ],
+            };
+          }
+          if (sql.includes('buyer_accounts')) {
+            return {
+              rows: [
+                {
+                  id: 'b-100',
+                  corporate_email: 'buyer_db@test.local',
+                  status: 'ACTIVE_VERIFIED',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                  raw: JSON.stringify({
+                    organizationName: 'Database Buyer Corp',
+                    contactPerson: 'David Buyer',
+                    mobileNumber: '+919876543210',
+                    city: 'Mumbai',
+                    state: 'Maharashtra',
+                  }),
+                },
+                {
+                  id: 'b-fallback',
+                  corporate_email: 'fallback_buyer@test.local',
+                  status: 'ACTIVE_VERIFIED',
+                  created_at: new Date().toISOString(),
+                  updated_at: null,
+                  raw: '{}',
+                },
+              ],
+            };
+          }
+          if (sql.includes('vendors')) {
+            return {
+              rows: [
+                {
+                  id: 'v-200',
+                  email: 'vendor_db@test.local',
+                  major_category: 'Industrial',
+                  status: 'ACTIVE',
+                  created_at: new Date().toISOString(),
+                  updated_at: new Date().toISOString(),
+                  raw: JSON.stringify({
+                    name: 'Database Vendor LLC',
+                    contactPerson: 'Victor Vendor',
+                    phone: '+919123456789',
+                    location: 'Bangalore',
+                  }),
+                },
+                {
+                  id: 'v-fallback',
+                  email: 'staff_vendor@procucev.com',
+                  major_category: 'General',
+                  status: 'ACTIVE',
+                  created_at: new Date().toISOString(),
+                  updated_at: null,
+                  raw: '{}',
+                },
+              ],
+            };
+          }
+          return { rows: [] };
+        });
+
+        await loginLogsQueries.syncDatabaseLogs(true);
+
+        const logs = await loginLogsQueries.listLoginLogs({ userType: 'all' });
+        expect(logs.total).toBe(8);
+
+        const cm = logs.logs.find((l) => l.id === 'cm-session-1');
+        expect(cm).toBeDefined();
+        expect(cm.email).toBe('cm@procucev.com');
+        expect(cm.userType).toBe('category_manager');
+
+        const buyer = logs.logs.find((l) => l.id === 'buyer_sess_b-100');
+        expect(buyer).toBeDefined();
+        expect(buyer.companyName).toBe('Database Buyer Corp');
+        expect(buyer.userType).toBe('buyer');
+
+        const vendor = logs.logs.find((l) => l.id === 'vendor_sess_v-200');
+        expect(vendor).toBeDefined();
+        expect(vendor.companyName).toBe('Database Vendor LLC');
+        expect(vendor.userType).toBe('vendor');
+      });
+
+      test('syncDatabaseLogs respects cooldown and handles errors gracefully', async () => {
+        // Cooldown branch (called twice in quick succession)
+        await loginLogsQueries.syncDatabaseLogs(false);
+
+        // Top level catch block
+        jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Fatal pool error'));
+        await expect(loginLogsQueries.syncDatabaseLogs(true)).resolves.not.toThrow();
+      });
+
+      test('parseSafeJson handles null, invalid json and object input', () => {
+        expect(loginLogsQueries.parseSafeJson(null)).toEqual({});
+        expect(loginLogsQueries.parseSafeJson('{bad json')).toEqual({});
+        expect(loginLogsQueries.parseSafeJson({ key: 'val' })).toEqual({ key: 'val' });
+      });
+
+      test('recordLoginLog rejects missing or empty email with VALIDATION_FAILED', async () => {
+        await expect(loginLogsQueries.recordLoginLog({})).rejects.toThrow('An email address is required');
+        await expect(loginLogsQueries.recordLoginLog({ email: '   ' })).rejects.toThrow('An email address is required');
+      });
+
+      test('recordEvent returns 400 when validation fails', async () => {
+        const valError = new Error('Validation rule failed');
+        valError.code = 'VALIDATION_FAILED';
+        jest.spyOn(loginLogsQueries, 'recordLoginLog').mockRejectedValueOnce(valError);
+
+        const res = await request(app).post('/api/login-logs/event').send({
+          email: 'valid@example.com',
+        });
+        expect(res.status).toBe(400);
+        expect(res.body.success).toBe(false);
+        expect(res.body.error).toBe('Validation rule failed');
+      });
+    });
   });
 });

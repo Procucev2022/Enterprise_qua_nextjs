@@ -37,6 +37,10 @@ import {
   Upload,
   Plus,
   FileText,
+  Users,
+  Layers,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { getScenariosForEntityType, interpolateScenarioTemplate, getScenarioForCallOutcome } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
@@ -52,6 +56,8 @@ import type {
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
   InternalTeamMember,
+  SellerBuyerUploadItem,
+  SellerActiveRFQItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -70,6 +76,8 @@ import {
   fetchSupplierCommunications,
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
+  fetchSellerBuyerUploads,
+  fetchSellerActiveRFQs,
 } from '@/lib/supplierProfileClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
@@ -120,8 +128,8 @@ export interface SupplierDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   sellerRfqs?: RFQItem[];
   rfqs?: RFQItem[];
-  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents';
-  onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => void;
+  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs';
+  onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs') => void;
 }
 
 // Shown wherever a value is missing from the record. Never a substitute value.
@@ -141,11 +149,96 @@ export default function SupplierDossierDrawer({
   const effectiveRfqs = useMemo(() => (sellerRfqs.length > 0 ? sellerRfqs : (rfqs || [])), [sellerRfqs, rfqs]);
 
   // Active Main Tab
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents'>(initialTab || 'profile');
-  const setDossierTab = useCallback((tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => {
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs'>(initialTab || 'profile');
+  const setDossierTab = useCallback((tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs') => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
+
+  // Buyer Uploads state
+  const [buyerUploads, setBuyerUploads] = useState<SellerBuyerUploadItem[]>([]);
+  const [loadingBuyerUploads, setLoadingBuyerUploads] = useState<boolean>(false);
+  const [buyerUploadsError, setBuyerUploadsError] = useState<string | null>(null);
+  const [buyerUploadSearch, setBuyerUploadSearch] = useState<string>('');
+  const [selectedBuyerForModal, setSelectedBuyerForModal] = useState<SellerBuyerUploadItem | null>(null);
+
+  // Active RFQs state
+  const [activeRfqs, setActiveRfqs] = useState<SellerActiveRFQItem[]>([]);
+  const [loadingActiveRfqs, setLoadingActiveRfqs] = useState<boolean>(false);
+  const [activeRfqsError, setActiveRfqsError] = useState<string | null>(null);
+  const [activeRfqSearch, setActiveRfqSearch] = useState<string>('');
+  const [selectedActiveRfqForModal, setSelectedActiveRfqForModal] = useState<SellerActiveRFQItem | null>(null);
+
+  const loadBuyerUploads = useCallback(async () => {
+    if (!seller?.id) return;
+    setLoadingBuyerUploads(true);
+    setBuyerUploadsError(null);
+    try {
+      const res = await fetchSellerBuyerUploads(seller.id);
+      if (res.success && Array.isArray(res.data)) {
+        setBuyerUploads(res.data);
+      } else {
+        setBuyerUploadsError(res.error || strings.buyerUploads.loadError);
+      }
+    } catch (err: unknown) {
+      setBuyerUploadsError(err instanceof Error ? err.message : strings.buyerUploads.loadError);
+    } finally {
+      setLoadingBuyerUploads(false);
+    }
+  }, [seller?.id, strings.buyerUploads.loadError]);
+
+  const loadActiveRfqs = useCallback(async () => {
+    if (!seller?.id) return;
+    setLoadingActiveRfqs(true);
+    setActiveRfqsError(null);
+    try {
+      const res = await fetchSellerActiveRFQs(seller.id);
+      if (res.success && Array.isArray(res.data)) {
+        setActiveRfqs(res.data);
+      } else {
+        setActiveRfqsError(res.error || strings.activeRfqs.loadError);
+      }
+    } catch (err: unknown) {
+      setActiveRfqsError(err instanceof Error ? err.message : strings.activeRfqs.loadError);
+    } finally {
+      setLoadingActiveRfqs(false);
+    }
+  }, [seller?.id, strings.activeRfqs.loadError]);
+
+  useEffect(() => {
+    void loadBuyerUploads();
+    void loadActiveRfqs();
+  }, [loadBuyerUploads, loadActiveRfqs]);
+
+  const filteredBuyerUploads = useMemo(() => {
+    return buyerUploads.filter((b) => {
+      if (buyerUploadSearch.trim()) {
+        const q = buyerUploadSearch.toLowerCase();
+        const matchName = (b.name || '').toLowerCase().includes(q);
+        const matchComp = (b.companyName || '').toLowerCase().includes(q);
+        const matchContact = (b.contactPerson || '').toLowerCase().includes(q);
+        const matchEmail = (b.email || '').toLowerCase().includes(q);
+        const matchPhone = (b.phone || '').toLowerCase().includes(q);
+        return matchName || matchComp || matchContact || matchEmail || matchPhone;
+      }
+      return true;
+    });
+  }, [buyerUploads, buyerUploadSearch]);
+
+  const filteredActiveRfqs = useMemo(() => {
+    return activeRfqs.filter((r) => {
+      if (activeRfqSearch.trim()) {
+        const q = activeRfqSearch.toLowerCase();
+        const matchId = (r.rfqNumber || r.id || '').toLowerCase().includes(q);
+        const matchTitle = (r.title || '').toLowerCase().includes(q);
+        const matchBuyer = (r.buyerCompanyName || r.buyerCompany || r.buyerName || '').toLowerCase().includes(q);
+        const matchCat = (r.category || r.procurementCategory || '').toLowerCase().includes(q);
+        const matchLoc = (r.location || '').toLowerCase().includes(q);
+        return matchId || matchTitle || matchBuyer || matchCat || matchLoc;
+      }
+      return true;
+    });
+  }, [activeRfqs, activeRfqSearch]);
   const [docCount, setDocCount] = useState<number>(0);
   const [isAddQuoteCreditsModalOpen, setIsAddQuoteCreditsModalOpen] = useState<boolean>(false);
   const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(0);
@@ -880,83 +973,107 @@ export default function SupplierDossierDrawer({
           </button>
         </div>
 
-        {/* 5 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS */}
-        <div className="flex items-center gap-2 mt-6 border-b border-slate-200 dark:border-slate-700">
+        {/* 8 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS, DOCUMENTS, BUYER UPLOADS, ACTIVE RFQS */}
+        <div className="flex items-center gap-1 mt-6 border-b border-slate-200 dark:border-slate-700 overflow-x-auto scrollbar-thin">
           <button
             type="button"
             onClick={() => setDossierTab('profile')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'profile'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Building2 className="w-4 h-4" />
-            {strings.profileTab}
+            <Building2 className="w-4 h-4 shrink-0" />
+            <span>{strings.profileTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('quotes')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'quotes'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileCheck className="w-4 h-4" />
-            {strings.quotesTab} ({supplierQuotesList.length})
+            <FileCheck className="w-4 h-4 shrink-0" />
+            <span>{strings.quotesTab} ({supplierQuotesList.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('credit')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'credit'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <CreditCard className="w-4 h-4" />
-            {strings.creditTab}
+            <CreditCard className="w-4 h-4 shrink-0" />
+            <span>{strings.creditTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('communications')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'communications'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <MessageSquare className="w-4 h-4" />
-            {strings.communicationsTab} ({communications.length})
+            <MessageSquare className="w-4 h-4 shrink-0" />
+            <span>{strings.communicationsTab} ({communications.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('payments')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'payments'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Receipt className="w-4 h-4" />
-            {strings.paymentsTab} ({payments.length})
+            <Receipt className="w-4 h-4 shrink-0" />
+            <span>{strings.paymentsTab} ({payments.length})</span>
           </button>
           <button
             type="button"
             onClick={() => setDossierTab('documents')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'documents'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            {strings.documentsTab || 'Documents'} ({docCount})
+            <FileText className="w-4 h-4 shrink-0" />
+            <span>{strings.documentsTab || 'Documents'} ({docCount})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDossierTab('buyer-uploads')}
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+              dossierTab === 'buyer-uploads'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Users className="w-4 h-4 shrink-0" />
+            <span>{strings.buyerUploadsTab} ({buyerUploads.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDossierTab('active-rfqs')}
+            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+              dossierTab === 'active-rfqs'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <Layers className="w-4 h-4 shrink-0" />
+            <span>{strings.activeRfqsTab} ({activeRfqs.length})</span>
           </button>
         </div>
       </div>
@@ -1728,6 +1845,250 @@ export default function SupplierDossierDrawer({
                 </div>
               )}
             </div>
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 7: BUYER UPLOADS TAB                                            */}
+        {/* =================================================================== */}
+        {dossierTab === 'buyer-uploads' && (
+          <div className="space-y-4">
+            {/* Header / Search Controls */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={buyerUploadSearch}
+                  onChange={(e) => setBuyerUploadSearch(e.target.value)}
+                  placeholder={strings.buyerUploads.searchPlaceholder}
+                  className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadBuyerUploads()}
+                title={strings.buyerUploads.retry}
+                aria-label={strings.buyerUploads.retry}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer self-end sm:self-auto"
+              >
+                <RotateCcw className={`w-4 h-4 ${loadingBuyerUploads ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {/* Content states */}
+            {loadingBuyerUploads ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 text-emerald-600" />
+                <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+              </div>
+            ) : buyerUploadsError ? (
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-xs">{buyerUploadsError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadBuyerUploads()}
+                  className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                >
+                  {strings.buyerUploads.retry}
+                </button>
+              </div>
+            ) : filteredBuyerUploads.length === 0 ? (
+              <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                <Users className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                  {strings.buyerUploads.emptyMessage}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">{strings.buyerUploads.subtitle}</p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colBuyerName}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colCompanyName}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colContactPerson}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colEmail}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colPhone}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colUploadDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colStatus}</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">{strings.buyerUploads.colActions}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredBuyerUploads.map((buyerItem) => (
+                        <tr key={buyerItem.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                          <td className="py-3 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                            {buyerItem.name || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {buyerItem.companyName || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.contactPerson || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                            {buyerItem.email || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.phone || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.uploadDate ? formatIndianDateTime(buyerItem.uploadDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              (buyerItem.status || '').toUpperCase().includes('ACTIVE') || (buyerItem.status || '').toUpperCase().includes('VERIFIED')
+                                ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            }`}>
+                              {buyerItem.status || EMPTY_VALUE}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedBuyerForModal(buyerItem)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              {strings.buyerUploads.viewDetails}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 8: ACTIVE RFQS TAB                                              */}
+        {/* =================================================================== */}
+        {dossierTab === 'active-rfqs' && (
+          <div className="space-y-4">
+            {/* Header / Search Controls */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={activeRfqSearch}
+                  onChange={(e) => setActiveRfqSearch(e.target.value)}
+                  placeholder={strings.activeRfqs.searchPlaceholder}
+                  className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadActiveRfqs()}
+                title={strings.activeRfqs.retry}
+                aria-label={strings.activeRfqs.retry}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer self-end sm:self-auto"
+              >
+                <RotateCcw className={`w-4 h-4 ${loadingActiveRfqs ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {/* Content states */}
+            {loadingActiveRfqs ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 text-emerald-600" />
+                <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+              </div>
+            ) : activeRfqsError ? (
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-xs">{activeRfqsError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadActiveRfqs()}
+                  className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                >
+                  {strings.activeRfqs.retry}
+                </button>
+              </div>
+            ) : filteredActiveRfqs.length === 0 ? (
+              <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                <Layers className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                  {strings.activeRfqs.emptyMessage}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">{strings.activeRfqs.subtitle}</p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colRfqId}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colRfqTitle}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colCategory}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colBuyerCompany}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colLocation}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colPublishedDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colClosingDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colStatus}</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">{strings.activeRfqs.colActions}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredActiveRfqs.map((rfq) => (
+                        <tr key={rfq.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                          <td className="py-3 px-4 font-mono font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                            {rfq.rfqNumber || rfq.id || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100 max-w-xs truncate whitespace-nowrap">
+                            {rfq.title || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {rfq.procurementCategory || rfq.category || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                            {rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.location || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.publishedDate ? formatIndianDateTime(rfq.publishedDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.closingDate ? formatIndianDateTime(rfq.closingDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                              {rfq.status || EMPTY_VALUE}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedActiveRfqForModal(rfq)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              {strings.activeRfqs.viewDetails}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -2558,6 +2919,237 @@ export default function SupplierDossierDrawer({
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* Buyer Details Modal */}
+      {selectedBuyerForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedBuyerForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedBuyerForModal.companyName || selectedBuyerForModal.name || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.buyerUploads.buyerDetailsTitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedBuyerForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.buyerUploads.closeModal}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colBuyerName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.name || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colCompanyName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.companyName || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colContactPerson}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.contactPerson || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colEmail}</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium break-all">{selectedBuyerForModal.email || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colPhone}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.phone || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.sourcingModeLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.sourcingMode || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.locationLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.location || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.subscriptionPlanLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.subscriptionPlan || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colUploadDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedBuyerForModal.uploadDate ? formatIndianDateTime(selectedBuyerForModal.uploadDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedBuyerForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedBuyerForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.buyerUploads.closeModal}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active RFQ Details Modal */}
+      {selectedActiveRfqForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedActiveRfqForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedActiveRfqForModal.rfqNumber || selectedActiveRfqForModal.id} — {selectedActiveRfqForModal.title || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.activeRfqs.rfqDetailsTitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedActiveRfqForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.activeRfqs.closeModal}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colCategory}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.procurementCategory || selectedActiveRfqForModal.category || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colBuyerCompany}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.buyerCompanyName || selectedActiveRfqForModal.buyerCompany || selectedActiveRfqForModal.buyerName || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colLocation}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.location || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.budgetLabel}</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                  {selectedActiveRfqForModal.budget != null && selectedActiveRfqForModal.budget > 0
+                    ? formatCurrency(selectedActiveRfqForModal.budget)
+                    : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colPublishedDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedActiveRfqForModal.publishedDate ? formatIndianDateTime(selectedActiveRfqForModal.publishedDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colClosingDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedActiveRfqForModal.closingDate ? formatIndianDateTime(selectedActiveRfqForModal.closingDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.sourcingModeLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.sourcingMode || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedActiveRfqForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
+
+            {/* Line items if available */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                {strings.activeRfqs.lineItemsLabel}
+              </span>
+              {Array.isArray(selectedActiveRfqForModal.extractedEntities) && selectedActiveRfqForModal.extractedEntities.length > 0 ? (
+                <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[10px] uppercase text-slate-500 font-bold">
+                      <tr>
+                        <th className="p-2">Item Description</th>
+                        <th className="p-2">Qty</th>
+                        <th className="p-2">Unit</th>
+                        <th className="p-2">Target Price</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {selectedActiveRfqForModal.extractedEntities.map((ent, i) => (
+                        <tr key={i} className="text-slate-700 dark:text-slate-300">
+                          <td className="p-2 font-medium">{ent.itemName || ent.itemDescription || ent.rawText || ent.technicalSpecs || EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.quantity ?? EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.unit || EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.targetPrice != null ? formatCurrency(ent.targetPrice) : EMPTY_VALUE}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 italic p-2 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
+                  {strings.activeRfqs.noLineItems}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
+              {onSelectRFQ ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const rfqToSelect = selectedActiveRfqForModal as unknown as RFQItem;
+                    setSelectedActiveRfqForModal(null);
+                    onSelectRFQ(rfqToSelect);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors cursor-pointer"
+                >
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in RFQ Workspace</span>
+                </button>
+              ) : (
+                <div />
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedActiveRfqForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.activeRfqs.closeModal}
+              </button>
+            </div>
           </div>
         </div>
       )}

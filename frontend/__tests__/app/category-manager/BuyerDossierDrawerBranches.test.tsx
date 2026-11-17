@@ -26,6 +26,7 @@ jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCommunications: jest.fn(),
   fetchBuyerPaymentHistory: jest.fn(),
   recordBuyerCommunication: jest.fn(),
+  fetchBuyerUploadedVendors: jest.fn().mockResolvedValue({ success: true, data: [] }),
   fetchCategoryTaxonomy: jest.fn().mockResolvedValue({
     success: true,
     data: [
@@ -188,7 +189,8 @@ describe('BuyerDossierDrawer branch coverage', () => {
   };
 
   const fillCreditRequest = (approver: string) => {
-    fireEvent.click(screen.getByText('Add Credit'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
     fireEvent.change(document.getElementById('credit-approver') as HTMLInputElement, {
       target: { value: approver },
@@ -252,6 +254,9 @@ describe('BuyerDossierDrawer branch coverage', () => {
     restoreUiStrings.splice(0).reverse().forEach((restore) => restore());
     sessionSpy?.mockRestore();
     sessionSpy = undefined;
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock)
+      .mockReset()
+      .mockResolvedValue({ success: true, message: 'Request submitted' });
     (categoryTaxonomy.getMajorCategories as jest.Mock)
       .mockReset()
       .mockImplementation(actualCategoryTaxonomy.getMajorCategories);
@@ -261,6 +266,9 @@ describe('BuyerDossierDrawer branch coverage', () => {
     (emailScenarioTemplates.getScenarioForCallOutcome as jest.Mock)
       .mockReset()
       .mockImplementation(actualEmailScenarioTemplates.getScenarioForCallOutcome);
+    (accountDocsClient.requestBuyerCreditApproval as jest.Mock)
+      .mockReset()
+      .mockResolvedValue({ success: true, message: 'Request submitted' });
   });
 
   describe('category list', () => {
@@ -337,7 +345,8 @@ describe('BuyerDossierDrawer branch coverage', () => {
       expect(await screen.findByText(UI_STRINGS.buyerDirectory.dossier.credit.totalAllocated)).toBeInTheDocument();
       expect(screen.getAllByText(UI_STRINGS.dataLoad.emptyCell).length).toBeGreaterThan(0);
 
-      fireEvent.click(screen.getByText('Add Credit'));
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
       expect(screen.getByText('5 Credits')).toBeInTheDocument();
     });
 
@@ -359,6 +368,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
   describe('add credit request', () => {
     it('shows the built-in labels in the Add Credit form when its strings are empty', async () => {
       blankDossierStrings('creditApproval', [
+        'types',
         'modalTitle',
         'modalSubtitle',
         'buyerNameLabel',
@@ -376,9 +386,9 @@ describe('BuyerDossierDrawer branch coverage', () => {
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
       fillCreditRequest('Test Approver');
-      expect(screen.getByText('Request Buyer Sourcing Credits')).toBeInTheDocument();
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
       expect(screen.getByText('Buyer Organization')).toBeInTheDocument();
-      expect(screen.getByText('Available Sourcing Credits')).toBeInTheDocument();
+      expect(screen.getByText('Requested Credits')).toBeInTheDocument();
       expect(screen.getByText('Assigned Approver')).toBeInTheDocument();
       expect(screen.getByPlaceholderText('Enter business justification...')).toBeInTheDocument();
 

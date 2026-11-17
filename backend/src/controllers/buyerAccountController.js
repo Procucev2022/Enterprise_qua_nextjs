@@ -11,6 +11,8 @@ const {
   BUYER_SUBSCRIPTION_PLANS,
   getSubscriptionPricingConfig,
   PERSISTENCE_MESSAGES,
+  DOSSIER_MESSAGES,
+  formatMessage,
 } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
@@ -787,7 +789,16 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    const {
+      amount,
+      reason,
+      approverName,
+      idempotencyKey,
+      requestType = 'Buyer Credit Addition',
+      discountPercentage,
+      durationDays,
+      paymentReference,
+    } = validation.sanitizedData;
 
     // The maker is the signed-in account, not a name typed into the form.
     const makerEmail = req.user.email;
@@ -797,19 +808,69 @@ async function requestCreditApproval(req, res, next) {
     // The approver decides against the balance this request is made on. A buyer
     // with no balance on record is refused, not shown an assumed balance.
     const balance = knownCreditBalance(buyer);
-    if (balance === null) {
+    if (balance === null && (requestType === 'Buyer Credit Addition' || requestType === 'Buyer Credit Deletion')) {
       return res.status(422).json({
         success: false,
         error: `The credit balance for ${buyer.organizationName} is not on record, so the approver cannot see the balance this request is made against. Refresh the buyer account and try again.`,
       });
     }
 
+    if (requestType === 'Buyer Credit Deletion' && balance !== null && amount > balance) {
+      return res.status(400).json({
+        success: false,
+        error: `Cannot delete ${amount} credits: ${buyer.organizationName} only has ${balance} credits available.`,
+      });
+    }
+
+    let taskCategory = 'CREDIT_MANAGEMENT';
+    let taskType = 'Add Credits';
+    let title = `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`;
+    let description = reason || `Requested credit top-up for ${buyer.organizationName}`;
+    let valueImpact = `${amount} RFQ Credits (${buyer.organizationName})`;
+    let quantity = amount || 1;
+    let effectiveAmount = amount || 0;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Credit Deletion';
+      title = `Credit Deduction Request: ${amount} Credits from ${buyer.organizationName}`;
+      description = reason || `Requested credit deduction for ${buyer.organizationName}`;
+      valueImpact = `-${amount} RFQ Credits (${buyer.organizationName})`;
+      quantity = amount;
+      effectiveAmount = amount;
+    } else if (requestType === 'Discounts') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Discounts';
+      const pct = discountPercentage || amount || 0;
+      title = `Discount Approval Request: ${pct}% for ${buyer.organizationName}`;
+      description = reason || `Requested ${pct}% discount for ${buyer.organizationName}`;
+      valueImpact = `${pct}% Subscription Discount (${buyer.organizationName})`;
+      effectiveAmount = pct;
+      quantity = 1;
+    } else if (requestType === 'Trial Periods') {
+      taskCategory = 'ONBOARDING';
+      taskType = 'Trial Periods';
+      const days = durationDays || amount || 30;
+      title = `Trial Period Request: ${days} Days for ${buyer.organizationName}`;
+      description = reason || `Requested ${days} days trial extension for ${buyer.organizationName}`;
+      valueImpact = `${days} Days Free Trial (${buyer.organizationName})`;
+      effectiveAmount = days;
+      quantity = 1;
+    } else if (requestType === 'Offline Payments') {
+      taskCategory = 'PAYMENT';
+      taskType = 'Offline Payments';
+      title = `Offline Payment Verification: ₹${effectiveAmount.toLocaleString('en-IN')} for ${buyer.organizationName}`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : 'Offline'}) for ${buyer.organizationName}`;
+      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : 'Offline Payment'})`;
+      quantity = 1;
+    }
+
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
-        taskCategory: 'CREDIT_MANAGEMENT',
-        taskType: 'Add Credits',
-        title: `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`,
-        description: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        taskCategory,
+        taskType,
+        title,
+        description,
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
@@ -818,12 +879,18 @@ async function requestCreditApproval(req, res, next) {
         creditAccountType: 'buyer',
         creditAccountId: buyer.id,
         creditAccountName: buyer.organizationName,
-        creditQuantity: amount,
+        creditQuantity: effectiveAmount,
         creditReason: reason,
         notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
+        raw: {
+          request_type: requestType,
+          discount_percentage: discountPercentage,
+          duration_days: durationDays,
+          payment_reference: paymentReference,
+        },
       },
       {
         fullName: makerName,
@@ -832,21 +899,21 @@ async function requestCreditApproval(req, res, next) {
         role: makerRole,
       },
       {
-        module: 'Buyer Credit Addition',
+        module: requestType,
         idempotencyKey,
-        request_type: 'Buyer Credit Addition',
+        request_type: requestType,
         project: buyer.organizationName,
         applicant_name: buyer.organizationName,
         applicant_email: buyer.corporateEmail || '',
-        value_impact: `${amount} RFQ Credits (${buyer.organizationName})`,
-        amount,
-        quantity: amount,
+        value_impact: valueImpact,
+        amount: effectiveAmount,
+        quantity,
         available_balance: balance,
         maker_name: makerName,
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        details: reason || description,
         buyer_id: buyer.id,
         history: [
           {
@@ -854,25 +921,30 @@ async function requestCreditApproval(req, res, next) {
             actor_name: makerName,
             actor_role: makerRole,
             timestamp: new Date().toISOString(),
-            remarks: reason || `Submitted for credit approval by ${approverName}.`,
+            remarks: reason || (requestType === 'Buyer Credit Addition'
+              ? `Submitted for credit approval by ${approverName}.`
+              : `Submitted for ${requestType} approval by ${approverName}.`),
           },
         ],
         raw: {
           buyer_id: buyer.id,
-          amount,
-          quantity: amount,
+          amount: effectiveAmount,
+          quantity,
           available_balance: balance,
           assigned_approver: approverName,
-          request_type: 'Buyer Credit Addition',
+          request_type: requestType,
+          discount_percentage: discountPercentage,
+          duration_days: durationDays,
+          payment_reference: paymentReference,
         },
       }
     );
 
-    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
+    logger.info(`Approval request created for ${requestType}: ${task.task_number} (${valueImpact}) assigned to ${approverName}`, { buyerId: id, requestType, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 
     return res.status(201).json({
       success: true,
-      message: `Credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      message: `${requestType} request submitted for approval by ${approverName}. Status: Pending Approval.`,
       task,
     });
   } catch (err) {
@@ -1267,6 +1339,89 @@ function getSubscriptionPricing(req, res) {
   }
 }
 
+async function getBuyerUploadedVendors(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      buyer = await domainQueries.getBuyerAccountByIdFromDB(id);
+    }
+    if (!buyer && req.user.role === 'buyer') {
+      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+    }
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.BUYER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    let dbVendors = [];
+    if (pool.hasStorage()) {
+      dbVendors = await domainQueries.getVendorsUploadedByBuyerFromDB(
+        buyer.id,
+        buyer.corporateEmail || buyer.email,
+        buyer.organizationName || buyer.companyName
+      );
+    }
+
+    const inMemVendors = (storeService.vendors || []).filter((v) => {
+      if (!v) return false;
+      const bId = String(buyer.id).toLowerCase();
+      const bEmail = buyer.corporateEmail ? String(buyer.corporateEmail).toLowerCase() : '';
+      const bOrg = buyer.organizationName ? String(buyer.organizationName).toLowerCase() : '';
+      const vBuyerId = v.buyerId ? String(v.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = v.buyerAccountId ? String(v.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = v.buyerEmail ? String(v.buyerEmail).toLowerCase() : '';
+      const vAddedBy = v.addedByBuyerCompany ? String(v.addedByBuyerCompany).toLowerCase() : '';
+      return (
+        (vBuyerId && vBuyerId === bId) ||
+        (vBuyerAccountId && vBuyerAccountId === bId) ||
+        (bEmail && vBuyerEmail && vBuyerEmail === bEmail) ||
+        (bOrg && vAddedBy && vAddedBy === bOrg)
+      );
+    });
+
+    const vendorMap = new Map();
+    for (const v of [...dbVendors, ...inMemVendors]) {
+      if (v?.id && !vendorMap.has(v.id)) {
+        vendorMap.set(v.id, {
+          id: v.id,
+          name: v.name || v.brandName || 'Unnamed Vendor',
+          companyName: v.companyName || v.name || v.brandName || 'Unnamed Vendor',
+          contactPerson: v.contactPerson || v.name || 'Primary Contact',
+          email: v.email || '',
+          phone: v.phone || v.contactPhone || v.mobileNumber || v.mobile || '',
+          createdAt: v.createdAt || v.created_at || new Date().toISOString(),
+          status: v.status || 'PENDING EVALUATION',
+          majorCategory: v.majorCategory || v.category || 'General',
+          minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : ''),
+          city: v.city || '',
+          state: v.state || '',
+          pincode: v.pincode || '',
+          source: v.source || 'buyer_uploaded',
+          score: v.score ?? v.score360 ?? null,
+          rating: v.rating ?? null,
+          gstin: v.gstin || v.gstNumber || '',
+          pan: v.pan || v.panNumber || '',
+          ...v,
+        });
+      }
+    }
+
+    const vendors = Array.from(vendorMap.values());
+    return res.status(200).json({
+      success: true,
+      count: vendors.length,
+      data: vendors,
+    });
+  } catch (err) {
+    logger.error('Error fetching buyer uploaded vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    return next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -1287,6 +1442,7 @@ module.exports = {
   getBuyerCommunications,
   recordBuyerCommunication,
   getBuyerPaymentHistory,
+  getBuyerUploadedVendors,
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrBuyer,
 };

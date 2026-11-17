@@ -397,7 +397,7 @@ interface AppContextType {
   isVendorEvaluationFeeWaived: boolean;
 }
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
+export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 /** Whole days from today until a target date, or 0 when there is no date. */
 function daysUntilDate(target?: string): number {
@@ -3008,4 +3008,8 @@ export function useApp() {
     throw new Error('useApp must be used within an AppProvider');
   }
   return context;
+}
+
+export function useOptionalApp(): AppContextType | null {
+  return useContext(AppContext) ?? null;
 }

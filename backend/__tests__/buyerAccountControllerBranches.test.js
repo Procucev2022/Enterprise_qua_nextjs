@@ -436,6 +436,145 @@ describe('buyerAccountController branches', () => {
       );
     });
 
+    test('refuses buyer credit deletion when deduction exceeds current balance', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([{
+        id: 'ba-del',
+        organizationName: 'Buyer Del Org',
+        creditBalance: 15,
+      }]);
+      const res = mockRes();
+
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Buyer Credit Deletion',
+          amount: 50,
+          approverName: APPROVER_NAME,
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(400);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        error: expect.stringContaining('Cannot delete 50 credits'),
+      }));
+    });
+
+    test('submits requests for Buyer Credit Deletion, Discounts, Trial Periods, and Offline Payments', async () => {
+      const taskSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockResolvedValue({ task_number: 'TSK-REQ-1' });
+
+      // 1. Buyer Credit Deletion
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([{
+        id: 'ba-del',
+        organizationName: 'Buyer Del Org',
+        creditBalance: 100,
+        corporateEmail: 'del@buyer.test',
+      }]);
+      let res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL, fullName: 'Staff Approver' },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Buyer Credit Deletion',
+          amount: 25,
+          approverName: APPROVER_NAME,
+          reason: 'Excess quota reduction',
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(taskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: 'Credit Deletion',
+          title: 'Credit Deduction Request: 25 Credits from Buyer Del Org',
+          description: 'Excess quota reduction',
+        }),
+        expect.anything(),
+        expect.objectContaining({
+          request_type: 'Buyer Credit Deletion',
+          value_impact: '-25 RFQ Credits (Buyer Del Org)',
+        })
+      );
+
+      // 2. Discounts
+      taskSpy.mockClear();
+      res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Discounts',
+          discountPercentage: 15,
+          approverName: APPROVER_NAME,
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(taskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: 'Discounts',
+          title: 'Discount Approval Request: 15% for Buyer Del Org',
+        }),
+        expect.anything(),
+        expect.objectContaining({
+          value_impact: '15% Subscription Discount (Buyer Del Org)',
+          amount: 15,
+        })
+      );
+
+      // 3. Trial Periods
+      taskSpy.mockClear();
+      res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Trial Periods',
+          durationDays: 45,
+          approverName: APPROVER_NAME,
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(taskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: 'Trial Periods',
+          title: 'Trial Period Request: 45 Days for Buyer Del Org',
+        }),
+        expect.anything(),
+        expect.objectContaining({
+          value_impact: '45 Days Free Trial (Buyer Del Org)',
+          amount: 45,
+        })
+      );
+
+      // 4. Offline Payments
+      taskSpy.mockClear();
+      res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Offline Payments',
+          amount: 50000,
+          paymentReference: 'NEFT-883924',
+          approverName: APPROVER_NAME,
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(taskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: 'Offline Payments',
+          title: expect.stringContaining('Offline Payment Verification: ₹50,000'),
+        }),
+        expect.anything(),
+        expect.objectContaining({
+          value_impact: expect.stringContaining('Ref: NEFT-883924'),
+        })
+      );
+    });
+
     test('answers 503 with the database message when the approval cannot be stored', async () => {
       jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockRejectedValue(
         Object.assign(new Error('storage down'), { code: 'PERSISTENCE_UNAVAILABLE' })

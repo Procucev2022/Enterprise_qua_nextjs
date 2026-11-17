@@ -54,6 +54,8 @@ jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCommunications: jest.fn(),
   recordSupplierCommunication: jest.fn(),
   fetchSupplierPaymentHistory: jest.fn(),
+  fetchSellerBuyerUploads: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
+  fetchSellerActiveRFQs: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -1957,4 +1959,329 @@ test('displays PAN in SupplierDossierDrawer Statutory Verification card without 
     />
   );
   expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
+});
+
+describe('SupplierDossierDrawer - Buyer Uploads Tab', () => {
+  const mockBuyerUploads = [
+    {
+      id: 'buyer-1',
+      name: 'Veera Enterprise',
+      companyName: 'Veera solutions pvt ltd',
+      contactPerson: 'Veera',
+      email: 'veerababuv2002@gmail.com',
+      phone: '+919381877013',
+      uploadDate: '2026-11-14T12:48:00.000Z',
+      status: 'ACTIVE_VERIFIED',
+      sourcingMode: 'Mode 1',
+      subscriptionPlan: 'Version_3',
+      location: 'Hyderabad, India',
+    },
+  ];
+
+  test('renders Buyer Uploads tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab} \\(1\\)`, 'i'),
+      })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+    expect(screen.getByText('veerababuv2002@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('+919381877013')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
+    expect(screen.getByText('Version_3')).toBeInTheDocument();
+
+    // Close modal
+    const closeBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(closeBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+  });
+
+  test('handles search filter and error/empty states for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    const searchInput = await screen.findByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.buyerUploads.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Backdrop click on buyer details modal and close footer
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    
+    // Close using the footer button
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+    }
+  });
+
+  test('handles tab navigation, refresh button, error responses, and exceptions for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to retrieve buyers',
+      })
+      .mockRejectedValueOnce(new Error('Network disconnected'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockBuyerUploads,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Click tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to retrieve buyers')).toBeInTheDocument();
+
+    // Click retry button in error banner
+    const retryBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(retryBtns[retryBtns.length - 1]);
+
+    // Displays network error message
+    expect(await screen.findByText('Network disconnected')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Successfully loads buyers
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+  });
+});
+
+describe('SupplierDossierDrawer - Active RFQs Tab', () => {
+  const mockActiveRfqs = [
+    {
+      id: 'rfq-act-1',
+      rfqNumber: 'RFQ-2026-999',
+      title: 'Centrifugal Industrial Pumps 50HP',
+      category: 'Mechanical & Fluid Equipment',
+      procurementCategory: 'Mechanical & Fluid Equipment',
+      buyerCompanyName: 'Veera solutions pvt ltd',
+      location: 'Bengaluru, KA',
+      publishedDate: '2026-11-15T09:00:00.000Z',
+      closingDate: '2026-11-30T18:00:00.000Z',
+      status: 'PUBLISHED',
+      budget: 1500000,
+      sourcingMode: 'Direct',
+      extractedEntities: [
+        {
+          itemDescription: '50HP Centrifugal Pump with starter',
+          quantity: 2,
+          unit: 'Units',
+          targetPrice: 750000,
+        },
+      ],
+    },
+  ];
+
+  test('renders Active RFQs tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockActiveRfqs,
+    });
+    const onSelectRFQMock = jest.fn();
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="active-rfqs"
+        onClose={jest.fn()}
+        onSelectRFQ={onSelectRFQMock}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.activeRfqsTab} \\(1\\)`, 'i'),
+      })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+    expect(screen.getByText('Centrifugal Industrial Pumps 50HP')).toBeInTheDocument();
+    expect(screen.getByText('Bengaluru, KA')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('50HP Centrifugal Pump with starter')).toBeInTheDocument();
+
+    // Close via header X button
+    const closeXBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+    fireEvent.click(closeXBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via footer close button
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[footerCloseBtns.length - 1]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+    }
+
+    // Reopen and Open in RFQ Workspace
+    fireEvent.click(viewBtn);
+    const openRfqBtn = await screen.findByRole('button', { name: /Open in RFQ Workspace/i });
+    fireEvent.click(openRfqBtn);
+    expect(onSelectRFQMock).toHaveBeenCalledWith(expect.objectContaining({ rfqNumber: 'RFQ-2026-999' }));
+  });
+
+  test('handles tab navigation, refresh, empty line items, error responses and exceptions for Active RFQs', async () => {
+    const mockRfqNoItems = [
+      {
+        ...mockActiveRfqs[0],
+        extractedEntities: [],
+        budget: 0,
+      },
+    ];
+
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to query active RFQs',
+      })
+      .mockRejectedValueOnce(new Error('Connection timed out'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockRfqNoItems,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Switch tab by clicking the tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to query active RFQs')).toBeInTheDocument();
+
+    // Click retry button in banner
+    const retryBannerBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(retryBannerBtns[retryBannerBtns.length - 1]);
+
+    // Displays timeout error
+    expect(await screen.findByText('Connection timed out')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Displays loaded table with RFQ
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+
+    // Search filter
+    const searchInput = screen.getByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Open View Details to verify empty line items message
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.noLineItems)).toBeInTheDocument();
+  });
 });

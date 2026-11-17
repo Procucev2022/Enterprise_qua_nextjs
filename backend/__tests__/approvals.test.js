@@ -263,6 +263,32 @@ describe('Approvals API & Controller', () => {
       expect(result.rows[0]).not.toHaveProperty('total');
     });
 
+    it('filters by the 7 request types supporting database module aliases and variants', async () => {
+      const types = [
+        'Buyer Credit Addition',
+        'Buyer Credit Deletion',
+        'Seller Credit Addition',
+        'Seller Credit Deletion',
+        'Discounts',
+        'Trial Periods',
+        'Offline Payments',
+      ];
+
+      for (const type of types) {
+        querySpy.mockResolvedValueOnce({ rows: [{ ...approvalRow({ module: type }), total: '1' }] });
+        const res = await approvalQueries.getApprovals({ module: type });
+        expect(res.rows).toHaveLength(1);
+        const [sql, params] = querySpy.mock.calls[querySpy.mock.calls.length - 1];
+        const variants = approvalQueries.getModuleFilterVariants(type);
+        if (variants.length === 1) {
+          expect(sql).toContain('lower(module) = $1');
+        } else {
+          expect(sql).toContain('lower(module) IN');
+        }
+        expect(params).toEqual(expect.arrayContaining([type.toLowerCase()]));
+      }
+    });
+
     it('falls back to the created_at sort for an unknown sort field and treats "all" as no filter', async () => {
       querySpy.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ total: '0' }] });
 

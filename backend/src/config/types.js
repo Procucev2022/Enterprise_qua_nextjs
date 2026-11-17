@@ -171,3 +171,46 @@ module.exports = {
  * @property {Object} [metadata]
  * @property {string} created_at
  */
+
+/**
+ * @typedef {Object} BuyerUploadedVendorEntity
+ * @property {string} id
+ * @property {string} name
+ * @property {string} companyName
+ * @property {string} contactPerson
+ * @property {string} email
+ * @property {string} phone
+ * @property {string} createdAt
+ * @property {string} status
+ * @property {string} [majorCategory]
+ * @property {string[]} [minorCategories]
+ * @property {string} [location]
+ */
+
+/**
+ * @typedef {Object} SellerBuyerUploadEntity
+ * @property {string} id
+ * @property {string} name
+ * @property {string} companyName
+ * @property {string} contactPerson
+ * @property {string} email
+ * @property {string} phone
+ * @property {string} uploadDate
+ * @property {string} status
+ * @property {string} [sourcingMode]
+ * @property {string} [subscriptionPlan]
+ */
+
+/**
+ * @typedef {Object} SellerActiveRFQEntity
+ * @property {string} id
+ * @property {string} rfqNumber
+ * @property {string} title
+ * @property {string} category
+ * @property {string} procurementCategory
+ * @property {string} buyerCompanyName
+ * @property {string} location
+ * @property {string} publishedDate
+ * @property {string} closingDate
+ * @property {string} status
+ */

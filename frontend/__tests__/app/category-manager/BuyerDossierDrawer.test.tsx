@@ -21,6 +21,7 @@ jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerCommunications: jest.fn(),
   fetchBuyerPaymentHistory: jest.fn(),
   recordBuyerCommunication: jest.fn(),
+  fetchBuyerUploadedVendors: jest.fn().mockResolvedValue({ success: true, data: [] }),
   fetchCategoryTaxonomy: jest.fn().mockResolvedValue({
     success: true,
     data: [
@@ -291,6 +292,11 @@ describe('BuyerDossierDrawer', () => {
       },
       payments: generateMockPayments(),
     });
+
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [],
+    });
   });
 
   afterEach(() => {
@@ -299,7 +305,7 @@ describe('BuyerDossierDrawer', () => {
     sessionSpy = undefined;
   });
 
-  test('1. Renders Buyer Profile Header without Buyer ID, with Company Name, Sourcing Mode, Add Credit button, and registration date', () => {
+  test('1. Renders Buyer Profile Header without Buyer ID, with Company Name, Sourcing Mode, Request Type button, and registration date', () => {
     render(
       <BuyerDossierDrawer
         buyer={mockBuyer}
@@ -311,7 +317,8 @@ describe('BuyerDossierDrawer', () => {
 
     expect(screen.getByText('Veera Babu Buyer Org')).toBeInTheDocument();
     expect(screen.getAllByText('Mode 1').length).toBeGreaterThan(0);
-    expect(screen.getByText('Add Credit')).toBeInTheDocument();
+    expect(screen.getByTestId('request-type-dropdown-btn')).toBeInTheDocument();
+    expect(screen.getByText('+ Request Type')).toBeInTheDocument();
     expect(screen.getByText(/Registered:/i)).toBeInTheDocument();
     expect(screen.queryByText(/ID: buyer-acc-1789811073812-ux3/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Audit/i })).toBeNull();
@@ -327,8 +334,12 @@ describe('BuyerDossierDrawer', () => {
       />
     );
 
-    const addCreditBtn = screen.getByText('Add Credit');
-    fireEvent.click(addCreditBtn);
+    const openRequestModal = (type = 'Buyer Credit Addition') => {
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: type }));
+    };
+
+    openRequestModal('Buyer Credit Addition');
 
     expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
 
@@ -337,20 +348,20 @@ describe('BuyerDossierDrawer', () => {
     expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test Cancel button
-    fireEvent.click(screen.getByText('Add Credit'));
+    openRequestModal('Buyer Credit Addition');
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
     expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test X button (line 1268)
-    fireEvent.click(screen.getByText('Add Credit'));
+    openRequestModal('Buyer Credit Addition');
     const xButtons = screen.getAllByRole('button');
     const modalX = xButtons.find(b => b.querySelector('.lucide-x') && b.closest('.max-w-md'));
     if (modalX) fireEvent.click(modalX);
     expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
     // Reopen and test amount <= 0 guard (line 207)
-    fireEvent.click(screen.getByText('Add Credit'));
+    openRequestModal('Buyer Credit Addition');
     const amountInput = screen.getByRole('spinbutton');
     fireEvent.change(amountInput, { target: { value: '0' } });
     const reasonInput = screen.getByPlaceholderText(/Reason for credit addition|business justification/i);
@@ -371,6 +382,7 @@ describe('BuyerDossierDrawer', () => {
       expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
         'buyer-acc-1789811073812-ux3',
         expect.objectContaining({
+          requestType: 'Buyer Credit Addition',
           amount: 10,
           reason: '',
           approverName: expect.any(String),
@@ -396,7 +408,8 @@ describe('BuyerDossierDrawer', () => {
       />
     );
 
-    fireEvent.click(screen.getByText('Add Credit'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '10' } });
     fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
@@ -1424,8 +1437,11 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
 
     // Test Add Credit modal edge cases
-    const addCreditHeaderBtn = screen.getByTitle('Add RFQ Sourcing Credits');
-    fireEvent.click(addCreditHeaderBtn);
+    const openAddCredit = () => {
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
+    };
+    openAddCredit();
     expect(screen.getByRole('heading', { name: 'Request Buyer Credit Approval' })).toBeInTheDocument();
 
     // Inner click does not close
@@ -1457,7 +1473,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     });
 
     // Reopen and test API failure with no custom error
-    fireEvent.click(addCreditHeaderBtn);
+    openAddCredit();
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
     (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: false });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1466,7 +1482,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     });
 
     // Reopen and test API rejection / throw
-    fireEvent.click(addCreditHeaderBtn);
+    openAddCredit();
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
     (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('DB failure'));
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1475,10 +1491,10 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     });
 
     // Close via backdrop click
-    fireEvent.click(addCreditHeaderBtn);
-    const creditDialog = screen.getByRole('heading', { name: /Request Buyer Credit Approval/i }).closest('[role="dialog"]');
+    openAddCredit();
+    const creditDialog = screen.getByRole('heading', { name: /Request Buyer Credit Addition Approval|Request Buyer Credit Approval/i }).closest('[role="dialog"]');
     if (creditDialog) fireEvent.click(creditDialog);
-    expect(screen.queryByRole('heading', { name: 'Request Buyer Credit Approval' })).toBeNull();
+    expect(screen.queryByRole('heading', { name: /Request Buyer Credit Addition Approval|Request Buyer Credit Approval/i })).toBeNull();
   });
 
   test('payments sort handles items without transactionDate or date', async () => {
@@ -1859,7 +1875,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       email: 'initiator@example.com',
     } as unknown as ReturnType<typeof authClient.getSessionUser>);
 
-    fireEvent.click(screen.getByText('Add Credit'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
     const form = screen.getByRole('button', { name: /Submit for Approval/i }).closest('form') as HTMLFormElement;
     fireEvent.submit(form);
@@ -1977,6 +1994,351 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     } finally {
       delete (globalThis.crypto as { randomUUID?: unknown }).randomUUID;
     }
+  });
+
+  describe('Buyer Uploaded Vendors Tab', () => {
+    const mockUploadedVendors = [
+      {
+        id: 'v-up-1',
+        name: 'GKS Enterprises',
+        companyName: 'GKS Enterprises Pvt Ltd',
+        contactPerson: 'Yuvraj Singh J',
+        email: 'gksenterprisesblr@gmail.com',
+        phone: '7760405823',
+        createdAt: '2026-11-14T12:48:00.000Z',
+        status: 'ACTIVE',
+        majorCategory: 'Mechanical & Fluid Equipment',
+        location: 'Bangalore, Karnataka',
+        gstin: '29ABCDE1234F1Z5',
+        pan: 'ABCDE1234F',
+        source: 'buyer_uploaded',
+      },
+      {
+        id: 'v-up-2',
+        name: 'Apex Tools Ltd',
+        companyName: 'Apex Precision Corp',
+        contactPerson: 'Ramesh Kumar',
+        email: 'ramesh@apextools.in',
+        phone: '9876543210',
+        createdAt: '2026-11-10T10:00:00.000Z',
+        status: 'PENDING',
+        majorCategory: 'Industrial Supplies',
+        location: 'Mumbai, Maharashtra',
+      },
+    ];
+
+    it('renders the Buyer Uploaded Vendors tab button with count', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: mockUploadedVendors,
+      });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      expect(
+        await screen.findByRole('button', {
+          name: new RegExp(`${UI_STRINGS.buyerDirectory.dossier.uploadedVendorsTab} \\(2\\)`, 'i'),
+        })
+      ).toBeInTheDocument();
+    });
+
+    it('displays the uploaded vendors table and filters by search and status', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValue({
+        success: true,
+        data: mockUploadedVendors,
+      });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+          initialTab="uploaded-vendors"
+        />
+      );
+
+      expect(await screen.findByText('GKS Enterprises')).toBeInTheDocument();
+      expect(screen.getByText('Apex Tools Ltd')).toBeInTheDocument();
+      expect(screen.getByText('Yuvraj Singh J')).toBeInTheDocument();
+      expect(screen.getByText('gksenterprisesblr@gmail.com')).toBeInTheDocument();
+      expect(screen.getByText('7760405823')).toBeInTheDocument();
+
+      // Search filter
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.searchPlaceholder);
+      fireEvent.change(searchInput, { target: { value: 'Apex' } });
+      expect(screen.getByText('Apex Tools Ltd')).toBeInTheDocument();
+      expect(screen.queryByText('GKS Enterprises')).not.toBeInTheDocument();
+
+      // Clear search and status filter
+      fireEvent.change(searchInput, { target: { value: '' } });
+      const statusSelect = screen.getByLabelText(/Filter by vendor status/i);
+      fireEvent.change(statusSelect, { target: { value: 'PENDING' } });
+      expect(screen.getByText('Apex Tools Ltd')).toBeInTheDocument();
+      expect(screen.queryByText('GKS Enterprises')).not.toBeInTheDocument();
+    });
+
+    it('opens vendor details modal when clicking View Details and closes it', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValue({
+        success: true,
+        data: mockUploadedVendors,
+      });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+          initialTab="uploaded-vendors"
+        />
+      );
+
+      const viewBtns = await screen.findAllByRole('button', {
+        name: new RegExp(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.viewDetails, 'i'),
+      });
+      fireEvent.click(viewBtns[0]);
+
+      expect(await screen.findByText(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.vendorDetailsTitle)).toBeInTheDocument();
+      expect(screen.getByText('29ABCDE1234F1Z5')).toBeInTheDocument();
+      expect(screen.getByText('Mechanical & Fluid Equipment')).toBeInTheDocument();
+
+      // Close modal
+      const closeBtns = screen.getAllByRole('button', {
+        name: UI_STRINGS.buyerDirectory.dossier.uploadedVendors.closeModal,
+      });
+      fireEvent.click(closeBtns[0]);
+      expect(screen.queryByText(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.vendorDetailsTitle)).not.toBeInTheDocument();
+    });
+
+    it('displays error state and retries fetching', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock)
+        .mockRejectedValueOnce(new Error('Network error'))
+        .mockResolvedValueOnce({ success: true, data: [] });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+          initialTab="uploaded-vendors"
+        />
+      );
+
+      expect(await screen.findByText('Network error')).toBeInTheDocument();
+      const retryBtns = screen.getAllByRole('button', {
+        name: UI_STRINGS.buyerDirectory.dossier.uploadedVendors.retry,
+      });
+      fireEvent.click(retryBtns[0]);
+
+      expect(
+        await screen.findByText(UI_STRINGS.buyerDirectory.dossier.uploadedVendors.emptyMessage)
+      ).toBeInTheDocument();
+    });
+  });
+
+  describe('Request Type dropdown and multiple approval request types', () => {
+    test('toggles Request Type dropdown and closes on click outside', () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      const dropdownBtn = screen.getByTestId('request-type-dropdown-btn');
+      fireEvent.click(dropdownBtn);
+      expect(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Buyer Credit Deletion' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Discounts' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Trial Periods' })).toBeInTheDocument();
+      expect(screen.getByRole('menuitem', { name: 'Offline Payments' })).toBeInTheDocument();
+
+      // Click outside
+      fireEvent.mouseDown(document.body);
+      expect(screen.queryByRole('menuitem', { name: 'Buyer Credit Addition' })).toBeNull();
+    });
+
+    test('validates and submits Buyer Credit Deletion', async () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Deletion' }));
+      signInAndChooseApprover();
+
+      expect(screen.getByText('Request Buyer Credit Deletion')).toBeInTheDocument();
+      const amountInput = screen.getByRole('spinbutton');
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+
+      // Exceed available credits
+      fireEvent.change(amountInput, { target: { value: '999' } });
+      const form = submitBtn.closest('form') as HTMLFormElement;
+      fireEvent.submit(form);
+      expect(
+        await screen.findByText(/Cannot deduct 999 credits/i)
+      ).toBeInTheDocument();
+
+      // Valid deduction
+      fireEvent.change(amountInput, { target: { value: '5' } });
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
+          'buyer-acc-1789811073812-ux3',
+          expect.objectContaining({
+            requestType: 'Buyer Credit Deletion',
+            amount: 5,
+          })
+        );
+      });
+    });
+
+    test('validates and submits Discounts request', async () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      signInAndChooseApprover();
+
+      expect(screen.getByText('Request Discount Approval')).toBeInTheDocument();
+      const amountInput = screen.getByRole('spinbutton');
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+
+      // Out of bounds: > 100
+      fireEvent.change(amountInput, { target: { value: '150' } });
+      const form = submitBtn.closest('form') as HTMLFormElement;
+      fireEvent.submit(form);
+      expect(
+        await screen.findByText('Please enter a valid discount percentage (1-100%).')
+      ).toBeInTheDocument();
+
+      // Valid discount: 25%
+      fireEvent.change(amountInput, { target: { value: '25' } });
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
+          'buyer-acc-1789811073812-ux3',
+          expect.objectContaining({
+            requestType: 'Discounts',
+            discountPercentage: 25,
+            amount: 25,
+          })
+        );
+      });
+    });
+
+    test('validates and submits Trial Periods request', async () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Periods' }));
+      signInAndChooseApprover();
+
+      expect(screen.getByText('Request Trial Period Approval')).toBeInTheDocument();
+      const amountInput = screen.getByRole('spinbutton');
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+
+      // Out of bounds: > 365
+      fireEvent.change(amountInput, { target: { value: '500' } });
+      const form = submitBtn.closest('form') as HTMLFormElement;
+      fireEvent.submit(form);
+      expect(
+        await screen.findByText('Please enter a valid trial extension period (1-365 days).')
+      ).toBeInTheDocument();
+
+      // Valid trial: 45 days
+      fireEvent.change(amountInput, { target: { value: '45' } });
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
+          'buyer-acc-1789811073812-ux3',
+          expect.objectContaining({
+            requestType: 'Trial Periods',
+            durationDays: 45,
+            amount: 45,
+          })
+        );
+      });
+    });
+
+    test('validates and submits Offline Payments request requiring reference', async () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+      signInAndChooseApprover();
+
+      expect(screen.getByText('Request Offline Payment Approval')).toBeInTheDocument();
+      const amountInput = screen.getByRole('spinbutton');
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+
+      // Valid amount but missing payment reference
+      fireEvent.change(amountInput, { target: { value: '25000' } });
+      expect(submitBtn).toBeDisabled();
+
+      const form = submitBtn.closest('form') as HTMLFormElement;
+      fireEvent.submit(form);
+      expect(
+        await screen.findByText('Please enter the payment reference or UTR number.')
+      ).toBeInTheDocument();
+
+      // Fill payment reference
+      const refInput = screen.getByPlaceholderText(/Enter UTR, cheque, or bank reference/i);
+      fireEvent.change(refInput, { target: { value: 'CHQ-987654' } });
+      expect(submitBtn).toBeEnabled();
+      fireEvent.submit(form);
+
+      await waitFor(() => {
+        expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalledWith(
+          'buyer-acc-1789811073812-ux3',
+          expect.objectContaining({
+            requestType: 'Offline Payments',
+            amount: 25000,
+            paymentReference: 'CHQ-987654',
+          })
+        );
+      });
+    });
   });
 
 });

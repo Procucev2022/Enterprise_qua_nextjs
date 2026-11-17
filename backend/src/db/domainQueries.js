@@ -1311,6 +1311,345 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   return rows;
 }
 
+/**
+ * Retrieves all vendors uploaded or added by a specific buyer.
+ * Scans DB vendors matching the buyer's ID, account ID, corporate email, or company name.
+ */
+async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyerOrgName = null, limit = 500) {
+  if (!pool.hasStorage()) return [];
+
+  const candidateSet = new Set();
+  const addCandidate = (val) => {
+    if (!val) return;
+    const s = String(val).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') {
+      candidateSet.add(s);
+    }
+  };
+
+  if (Array.isArray(buyerId)) {
+    buyerId.forEach(addCandidate);
+  } else {
+    addCandidate(buyerId);
+  }
+  addCandidate(buyerEmail);
+
+  for (const candidate of Array.from(candidateSet)) {
+    if (candidate.includes('@')) {
+      try {
+        const acc = await getBuyerAccountByEmailFromDB(candidate);
+        if (acc?.id) {
+          addCandidate(acc.id);
+        }
+        if (acc?.organizationName) {
+          addCandidate(acc.organizationName);
+        }
+      } catch (error) {
+        logger.warn('Buyer account lookup failed while resolving vendor upload ownership', { error }, 'DATABASE_QUERY');
+      }
+    }
+  }
+
+  if (buyerOrgName) {
+    addCandidate(buyerOrgName);
+  }
+
+  const ids = Array.from(candidateSet);
+  if (ids.length === 0) return [];
+
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
+  const cacheKey = `buyer_uploaded_vendors:${ids.sort().join(',')}:${maxLimit}`;
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const limitPlaceholder = `$${ids.length + 1}`;
+
+  const pgQuery = `SELECT id, created_at, updated_at, raw FROM vendors
+     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+        OR lower(raw->>'buyerAccountId') IN (${placeholders})
+        OR lower(raw->>'buyerEmail') IN (${placeholders})
+        OR lower(raw->>'addedByBuyerCompany') IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  const d1Query = `SELECT id, created_at, updated_at, raw FROM vendors
+     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.addedByBuyerCompany')) IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  let result;
+  try {
+    result = await pool.query(
+      pgQuery,
+      [...ids, maxLimit],
+      {
+        d1: true,
+        d1Text: d1Query,
+      }
+    );
+  } catch (err) {
+    const staleRows = getRetryableStaleCacheValue(cacheKey, err, 'getVendorsUploadedByBuyerFromDB');
+    if (staleRows !== null) return staleRows;
+    throw err;
+  }
+  const rows = result.rows.map((row) => {
+    const rawParsed = parseRaw(row.raw) || {};
+    const v = { ...rawParsed, ...(parseVendorRaw(row.raw) || {}) };
+    if (rawParsed.pan && !v.pan) v.pan = rawParsed.pan;
+    if (rawParsed.gstin && !v.gstin) v.gstin = rawParsed.gstin;
+    if (rawParsed.source && !v.source) v.source = rawParsed.source;
+    if (row.id && !v.id) v.id = row.id;
+    if (row.company_name && !v.companyName) v.companyName = row.company_name;
+    if (row.name && !v.name) v.name = row.name;
+    if (row.email && !v.email) v.email = row.email;
+    if (row.phone && !v.phone) v.phone = row.phone;
+    if (row.status && !v.status) v.status = row.status;
+    if (row.major_category && !v.majorCategory) v.majorCategory = row.major_category;
+    if (row.created_at && !v.created_at) v.created_at = row.created_at;
+    if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+    if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+    return v;
+  });
+  queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
+  return rows;
+}
+
+/**
+ * Retrieves all unique buyers who uploaded or added a specific seller/vendor.
+ */
+async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
+  if (!pool.hasStorage() || !vendor) return [];
+
+  const buyerIdCandidates = new Set();
+  const buyerEmailCandidates = new Set();
+  const buyerCompanyCandidates = new Set();
+
+  const addId = (id) => {
+    if (!id) return;
+    const s = String(id).trim();
+    if (s && s !== 'null' && s !== 'undefined') buyerIdCandidates.add(s);
+  };
+  const addEmail = (email) => {
+    if (!email) return;
+    const s = String(email).trim().toLowerCase();
+    if (s && s.includes('@')) buyerEmailCandidates.add(s);
+  };
+  const addCompany = (company) => {
+    if (!company) return;
+    const s = String(company).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') buyerCompanyCandidates.add(s);
+  };
+
+  addId(vendor.buyerId);
+  addId(vendor.buyerAccountId);
+  addEmail(vendor.buyerEmail);
+  addCompany(vendor.addedByBuyerCompany);
+
+  const vendorEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : null;
+  const vendorPhone = vendor.phone || vendor.contactPhone || null;
+
+  if (vendorEmail || vendorPhone) {
+    try {
+      const relatedResult = await pool.query(
+        `SELECT raw FROM vendors
+         WHERE (lower(email) = lower($1) OR (raw->>'phone' = $2 AND $2 IS NOT NULL))
+           AND (raw->>'buyerId' IS NOT NULL OR raw->>'buyerAccountId' IS NOT NULL OR raw->>'buyerEmail' IS NOT NULL OR raw->>'addedByBuyerCompany' IS NOT NULL)
+         LIMIT 25`,
+        [vendorEmail || '', vendorPhone || ''],
+        { d1: true }
+      );
+      for (const row of relatedResult.rows || []) {
+        const parsed = parseVendorRaw(row.raw) || {};
+        addId(parsed.buyerId);
+        addId(parsed.buyerAccountId);
+        addEmail(parsed.buyerEmail);
+        addCompany(parsed.addedByBuyerCompany);
+      }
+    } catch (err) {
+      logger.warn('Failed querying related vendor rows for buyer signals', { error: err.message }, 'DATABASE_QUERY');
+    }
+  }
+
+  if (vendorEmail) {
+    try {
+      const vmrResult = await pool.query(
+        `SELECT organization_id, created_at FROM vendor_master_records WHERE lower(email) = lower($1) LIMIT 20`,
+        [vendorEmail],
+        { d1: true }
+      );
+      for (const row of vmrResult.rows || []) {
+        addId(row.organization_id);
+      }
+    } catch {
+      // Optional vendor_master_records
+    }
+  }
+
+  const foundBuyers = new Map();
+  const allIds = Array.from(buyerIdCandidates);
+  const allEmails = Array.from(buyerEmailCandidates);
+  const allCompanies = Array.from(buyerCompanyCandidates);
+
+  if (allIds.length > 0 || allEmails.length > 0 || allCompanies.length > 0) {
+    const conditions = [];
+    const params = [];
+
+    if (allIds.length > 0) {
+      const idPlaceholders = allIds.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allIds);
+      conditions.push(`id IN (${idPlaceholders}) OR lower(raw->>'id') IN (${idPlaceholders.toLowerCase()})`);
+    }
+
+    if (allEmails.length > 0) {
+      const emailPlaceholders = allEmails.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allEmails);
+      conditions.push(`lower(corporate_email) IN (${emailPlaceholders})`);
+    }
+
+    if (allCompanies.length > 0) {
+      const compPlaceholders = allCompanies.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allCompanies);
+      conditions.push(`lower(raw->>'organizationName') IN (${compPlaceholders}) OR lower(raw->>'companyName') IN (${compPlaceholders})`);
+    }
+
+    if (conditions.length > 0) {
+      try {
+        const buyersResult = await pool.query(
+          `SELECT id, corporate_email, status, created_at, raw FROM buyer_accounts WHERE (${conditions.join(' OR ')}) LIMIT ${Number(limit) || 50}`,
+          params,
+          { d1: true }
+        );
+        for (const row of buyersResult.rows || []) {
+          const rawBuyer = parseRaw(row.raw) || {};
+          const buyerKey = String(row.id || rawBuyer.id || row.corporate_email).toLowerCase();
+          if (!foundBuyers.has(buyerKey)) {
+            foundBuyers.set(buyerKey, {
+              id: row.id || rawBuyer.id,
+              name: row.organization_name || rawBuyer.organizationName || rawBuyer.name || rawBuyer.contactPerson || row.corporate_email,
+              companyName: row.organization_name || rawBuyer.organizationName || rawBuyer.companyName || rawBuyer.name || 'Enterprise Buyer',
+              contactPerson: row.contact_person || rawBuyer.contactPerson || rawBuyer.name || 'Primary Contact',
+              email: row.corporate_email || rawBuyer.corporateEmail || rawBuyer.email || '',
+              phone: rawBuyer.mobileNumber || rawBuyer.phone || '',
+              uploadDate: vendor.createdAt || vendor.created_at || row.created_at || rawBuyer.createdAt,
+              status: row.status || rawBuyer.status || 'ACTIVE_VERIFIED',
+              sourcingMode: rawBuyer.sourcingMode || 'Mode 1',
+              subscriptionPlan: rawBuyer.subscriptionPlan || rawBuyer.subscriptionTier || 'Version_3',
+              location: rawBuyer.location || rawBuyer.city || '',
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed querying buyer accounts for associated buyers', { error: err.message }, 'DATABASE_QUERY');
+      }
+    }
+  }
+
+  if (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail) {
+    const fallbackKey = String(vendor.buyerId || vendor.buyerEmail || vendor.addedByBuyerCompany).toLowerCase();
+    if (!foundBuyers.has(fallbackKey)) {
+      foundBuyers.set(fallbackKey, {
+        id: vendor.buyerId || `buyer-ext-${fallbackKey.slice(0, 12)}`,
+        name: vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client',
+        companyName: vendor.addedByBuyerCompany || 'Enterprise Client',
+        contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Manager',
+        email: vendor.buyerEmail || '',
+        phone: '',
+        uploadDate: vendor.createdAt || vendor.created_at || new Date().toISOString(),
+        status: 'ACTIVE_VERIFIED',
+        sourcingMode: 'Mode 1',
+        subscriptionPlan: 'Enterprise',
+        location: vendor.city ? `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}` : '',
+      });
+    }
+  }
+
+  return Array.from(foundBuyers.values());
+}
+
+/**
+ * Retrieves active, category-matched RFQs for a seller/vendor.
+ * Excludes closed, expired, cancelled, and completed RFQs.
+ */
+async function getActiveCategoryMatchedRFQsForVendorFromDB(vendor, limit = 100) {
+  if (!pool.hasStorage() || !vendor) return [];
+
+  const storeService = require('../services/storeService');
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 200) : 100;
+  let rfqResult;
+  try {
+    rfqResult = await pool.query(
+      `SELECT id, rfq_number, category, status, created_at, updated_at, raw
+       FROM rfqs
+       WHERE status NOT ILIKE '%closed%'
+         AND status NOT ILIKE '%cancel%'
+         AND status NOT ILIKE '%expire%'
+         AND status NOT ILIKE '%complete%'
+       ORDER BY created_at DESC
+       LIMIT 300`,
+      [],
+      { d1: true }
+    );
+  } catch (err) {
+    logger.warn('Failed querying active RFQs from DB for vendor category matching', { error: err.message }, 'DATABASE_QUERY');
+    return [];
+  }
+
+  const now = Date.now();
+  const matched = [];
+
+  for (const row of rfqResult.rows || []) {
+    if (matched.length >= maxLimit) break;
+    const rfq = parseRaw(row.raw) || {};
+    rfq.id = row.id || rfq.id;
+    rfq.rfqNumber = row.rfq_number || rfq.rfqNumber || rfq.id;
+    rfq.status = row.status || rfq.status;
+    rfq.category = row.category || rfq.category;
+
+    const closingDate = rfq.closingDate || rfq.deadline || rfq.bidClosingDate;
+    if (closingDate) {
+      const parsedTime = new Date(closingDate).getTime();
+      if (!isNaN(parsedTime) && parsedTime < now) {
+        continue; // Expired
+      }
+    }
+
+    const rfqCategory = rfq.category || rfq.procurementCategory || rfq.majorCategory;
+    const matchesCategory =
+      storeService.vendorCoversCategory(vendor, rfqCategory) ||
+      (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) ||
+      (Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category)));
+
+    if (matchesCategory) {
+      matched.push({
+        id: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        title: rfq.title || `RFQ ${rfq.rfqNumber}`,
+        category: rfqCategory || 'General',
+        procurementCategory: rfqCategory || 'General',
+        buyerCompanyName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+        buyerCompany: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+        buyerName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
+        location: rfq.deliveryLocation || rfq.location || rfq.city || '—',
+        publishedDate: rfq.publishedDate || rfq.createdAt || rfq.created_at || row.created_at,
+        closingDate: closingDate || null,
+        status: rfq.status,
+        budget: rfq.budget ?? 0,
+        sourcingMode: rfq.sourcingMode || 'Mode 1',
+        extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : (Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
+        description: rfq.description || rfq.notes || '',
+        ...rfq,
+      });
+    }
+  }
+
+  return matched;
+}
+
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
  * on the primary key instead. storeService.getVendorById only searches the
  * in-memory this.vendors cache, which at 600k+ real vendors is a capped
@@ -3521,6 +3860,9 @@ module.exports = {
   getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,
   getVendorsByBuyerFromDB,
+  getVendorsUploadedByBuyerFromDB,
+  getAssociatedBuyersForVendorFromDB,
+  getActiveCategoryMatchedRFQsForVendorFromDB,
   getVendorByIdFromDB,
   getVendorSnapshotByIdFromDB,
   getVendorSnapshotByEmailFromDB,

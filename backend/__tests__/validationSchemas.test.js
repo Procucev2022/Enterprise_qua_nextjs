@@ -692,4 +692,82 @@ describe('Ticket and batch chaser schema contract', () => {
       });
     });
   });
+
+  describe('validateRFQLineItemsForCreate and custom validators coverage', () => {
+    const { validateRFQLineItemsForCreate } = require('../src/config/validationSchemas');
+
+    test('validates RFQ line items for create with empty, invalid, and category constraints', () => {
+      expect(validateRFQLineItemsForCreate(null).isValid).toBe(false);
+      expect(validateRFQLineItemsForCreate([]).isValid).toBe(false);
+
+      const invalidRow = validateRFQLineItemsForCreate([{}]);
+      expect(invalidRow.isValid).toBe(false);
+
+      const allCatWithMinor = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'All Categories',
+        minorCategory: 'Pipes',
+      }]);
+      expect(allCatWithMinor.isValid).toBe(false);
+      expect(allCatWithMinor.errors['lineItems[0].minorCategory']).toContain('does not apply to All Categories');
+
+      const majorWithoutMinor = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'Metals',
+      }]);
+      expect(majorWithoutMinor.isValid).toBe(false);
+      expect(majorWithoutMinor.errors['lineItems[0].minorCategory']).toContain('needs a minor category');
+
+      const validItems = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'Metals',
+        minorCategory: 'Steel Bars',
+      }]);
+      expect(validItems.isValid).toBe(true);
+    });
+
+    test('validates sellerAddQuoteCredits amount custom validator', () => {
+      const custom = VALIDATION_SCHEMAS.sellerAddQuoteCredits.amount.custom;
+      expect(custom(0)).toContain('must be an integer');
+      expect(custom(1.5)).toContain('must be an integer');
+      expect(custom(6)).toContain('must be an integer');
+      expect(custom(3)).toBeNull();
+    });
+
+    test('validates createRFQLineItem quantity custom validator', () => {
+      const custom = VALIDATION_SCHEMAS.createRFQLineItem.quantity.custom;
+      expect(custom(0)).toContain('needs a quantity above zero');
+      expect(custom(-5)).toContain('needs a quantity above zero');
+      expect(custom(10)).toBeNull();
+    });
+
+    test('validates bot email attachment byte size limit', () => {
+      const custom = VALIDATION_SCHEMAS.botBridgeEmail.attachments.custom;
+      // 5 MB = 5242880 bytes. Create base64 string exceeding this size.
+      const largeBase64 = 'AAAA'.repeat(1800000); // ~7.2 MB
+      const result = custom([{ fileName: 'large.bin', contentType: 'application/octet-stream', fileData: largeBase64 }]);
+      expect(result).toContain('smaller');
+    });
+
+    test('validates registrationList schema with date parameters', () => {
+      const res = validatePayload(VALIDATION_SCHEMAS.registrationList, {
+        startDate: '2026-11-06',
+        endDate: '2026-11-16',
+        dateRangePreset: 'last10',
+      });
+      expect(res.isValid).toBe(true);
+      expect(res.sanitizedData.startDate).toBe('2026-11-06');
+      expect(res.sanitizedData.endDate).toBe('2026-11-16');
+      expect(res.sanitizedData.dateRangePreset).toBe('last10');
+    });
+  });
 });

@@ -146,21 +146,24 @@ export default function TicketsDashboard() {
   const [newComment, setNewComment] = useState('');
 
   // Column Settings State
-  const [ticketColumns, setTicketColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(TICKET_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch { /* ignore */ }
-    }
-    return TICKET_DEFAULT_COLUMNS;
-  });
+  const [ticketColumns, setTicketColumns] = useState<ColumnDef[]>(TICKET_DEFAULT_COLUMNS);
   const [showTicketColumnSettings, setShowTicketColumnSettings] = useState<boolean>(false);
   const [ticketSortField, setTicketSortField] = useState<string>('createdAt');
   const [ticketSortOrder, setTicketSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Hydrate ticket column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(TICKET_COL_PREF_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setTicketColumns(parsed);
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   const showToast = useCallback((msg: string) => {
     setToastMessage(msg);

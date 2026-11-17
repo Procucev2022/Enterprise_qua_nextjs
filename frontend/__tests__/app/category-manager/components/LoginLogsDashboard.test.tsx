@@ -565,4 +565,47 @@ describe('LoginLogsDashboard', () => {
     const endInput = screen.getByLabelText(strings.filters.endDate);
     fireEvent.change(endInput, { target: { value: '2026-10-31' } });
   });
+
+  it('renders Category Manager role badge and details modal correctly', async () => {
+    const cmLogs: LoginLogEntry[] = [
+      {
+        id: 'log_cm_1',
+        userId: 'CM-001',
+        userName: 'Category Manager Admin',
+        email: 'cm@procucev.com',
+        phoneNumber: '+91 99999 00000',
+        companyName: 'Procucev Platform Staff',
+        userType: 'category_manager',
+        loginAt: new Date().toISOString(),
+        logoutAt: null,
+        durationSeconds: 600,
+        status: 'ACTIVE',
+        ipAddress: '10.0.0.1',
+        deviceInfo: 'Desktop (Internal Staff)',
+        location: 'Bangalore, India',
+        userAgent: 'Mozilla/5.0',
+        createdAt: new Date().toISOString(),
+      },
+    ];
+
+    (fetchLoginLogs as jest.Mock).mockResolvedValueOnce({
+      logs: cmLogs,
+      total: 1,
+      page: 1,
+      totalPages: 1,
+    });
+
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Category Manager Admin')).toBeInTheDocument();
+    });
+
+    // Badge
+    expect(screen.getByText(strings.roles.categoryManager)).toBeInTheDocument();
+
+    // Open details
+    fireEvent.click(screen.getByText('Category Manager Admin'));
+    expect(screen.getByText(strings.details.roleCategoryManager)).toBeInTheDocument();
+  });
 });
