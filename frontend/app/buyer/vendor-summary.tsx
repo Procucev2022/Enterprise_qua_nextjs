@@ -11,6 +11,7 @@ import {
   isPlaceholderVendorCategory,
   isProcucevNetworkVendor,
   loadVendorUploadHistoryFromStorage,
+  removeVendorsFromUploadHistoryInStorage,
   normalizeVendorCategoryList,
   reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
@@ -956,6 +957,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!selectedVendorForCrud) return;
     const vendorId = selectedVendorForCrud.id;
     try {
+      const identifiers = [
+        selectedVendorForCrud.id,
+        selectedVendorForCrud.email,
+        selectedVendorForCrud.name,
+      ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
+      removeVendorsFromUploadHistoryInStorage(identifiers);
+      loadUploadHistory();
       const res = await deleteBuyerVendor(vendorId);
       if (res !== false) {
         setDeleteModalOpen(false);
@@ -978,6 +986,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setIsDeletingBulk(true);
     try {
       const idsToDelete = [...selectedVendorIds];
+      const selectedVendors = mergedVendors.filter((v) => idsToDelete.includes(v.id));
+      const identifiers = Array.from(
+        new Set(
+          [
+            ...idsToDelete,
+            ...selectedVendors.map((v) => v.id),
+            ...selectedVendors.map((v) => v.email || ''),
+            ...selectedVendors.map((v) => v.name || ''),
+          ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+        )
+      );
+      removeVendorsFromUploadHistoryInStorage(identifiers);
+      loadUploadHistory();
       if (typeof deleteMultipleBuyerVendors === 'function') {
         await deleteMultipleBuyerVendors(idsToDelete);
       } else if (typeof deleteBuyerVendor === 'function') {

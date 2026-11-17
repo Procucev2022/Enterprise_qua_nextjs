@@ -422,10 +422,19 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
 
   for (let attempt = 1; attempt <= VENDOR_INGESTION_CONFIG.AI_MAX_ATTEMPTS; attempt += 1) {
     const startedAt = Date.now();
-    const result = await geminiService.generateJson({
-      prompt,
-      label: `vendor categorisation for ${mapping.vendorCode || mapping.companyName}`,
-    });
+    let result;
+    try {
+      result = await geminiService.generateJson({
+        prompt,
+        label: `vendor categorisation for ${mapping.vendorCode || mapping.companyName}`,
+        budgetMs: 15000,
+      });
+    } catch (apiErr) {
+      result = {
+        status: geminiService.EXTRACTION_STATUS.ERROR,
+        error: apiErr.message || 'Gemini API call failed',
+      };
+    }
     const durationMs = Date.now() - startedAt;
 
     if (result.status === geminiService.EXTRACTION_STATUS.NOT_CONFIGURED) {
@@ -569,53 +578,65 @@ async function runCategorizationBatch({ session, organizationId, mappings, profi
   const outcomes = [];
 
   for (const mapping of mappings) {
-    const vendorProfile = profilesByRecordId.get(mapping.vendorRecordId);
-    await vendorIngestionQueries.markMappingProcessing(mapping.id, organizationId);
+    try {
+      const vendorProfile = profilesByRecordId.get(mapping.vendorRecordId);
+      await vendorIngestionQueries.markMappingProcessing(mapping.id, organizationId);
 
-    const result = await classifyVendor({
-      session,
-      organizationId,
-      mapping,
-      vendorProfile,
-      categoryMaster,
-    });
+      const result = await classifyVendor({
+        session,
+        organizationId,
+        mapping,
+        vendorProfile,
+        categoryMaster,
+      });
 
-    if (result.status === CLASSIFICATION_STATUS.SUCCESS) {
-      const saved = await vendorIngestionQueries.saveAiSuggestion(mapping.id, organizationId, result.suggestion);
+      if (result.status === CLASSIFICATION_STATUS.SUCCESS) {
+        const saved = await vendorIngestionQueries.saveAiSuggestion(mapping.id, organizationId, result.suggestion);
+        outcomes.push({
+          mappingId: mapping.id,
+          vendorRecordId: mapping.vendorRecordId,
+          companyName: mapping.companyName,
+          status: CLASSIFICATION_STATUS.SUCCESS,
+          mapping: saved,
+          suggestion: result.suggestion,
+        });
+        logger.info(
+          `Categorised ${mapping.companyName} as ${result.suggestion.majorCategory || NEW_CATEGORY_SENTINEL}`,
+          {
+            mappingId: mapping.id,
+            confidence: result.suggestion.confidence,
+            band: result.suggestion.confidenceBand,
+            poCount: vendorProfile ? vendorProfile.poCount : 0,
+          },
+          LOG_CATEGORY
+        );
+        continue;
+      }
+
+      await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, result.error);
       outcomes.push({
         mappingId: mapping.id,
         vendorRecordId: mapping.vendorRecordId,
         companyName: mapping.companyName,
-        status: CLASSIFICATION_STATUS.SUCCESS,
-        mapping: saved,
-        suggestion: result.suggestion,
+        status: result.status,
+        error: result.error,
       });
-      logger.info(
-        `Categorised ${mapping.companyName} as ${result.suggestion.majorCategory || NEW_CATEGORY_SENTINEL}`,
-        {
-          mappingId: mapping.id,
-          confidence: result.suggestion.confidence,
-          band: result.suggestion.confidenceBand,
-          poCount: vendorProfile ? vendorProfile.poCount : 0,
-        },
+      logger.warn(
+        `Categorisation failed for ${mapping.companyName}`,
+        { mappingId: mapping.id, status: result.status, error: result.error },
         LOG_CATEGORY
       );
-      continue;
+    } catch (mappingErr) {
+      logger.error(`Unexpected failure categorising ${mapping.companyName}`, mappingErr, LOG_CATEGORY);
+      await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, mappingErr.message).catch(() => {});
+      outcomes.push({
+        mappingId: mapping.id,
+        vendorRecordId: mapping.vendorRecordId,
+        companyName: mapping.companyName,
+        status: CLASSIFICATION_STATUS.AI_FAILED,
+        error: mappingErr.message || 'Classification failed unexpectedly',
+      });
     }
-
-    await vendorIngestionQueries.markMappingFailed(mapping.id, organizationId, result.error);
-    outcomes.push({
-      mappingId: mapping.id,
-      vendorRecordId: mapping.vendorRecordId,
-      companyName: mapping.companyName,
-      status: result.status,
-      error: result.error,
-    });
-    logger.warn(
-      `Categorisation failed for ${mapping.companyName}`,
-      { mappingId: mapping.id, status: result.status, error: result.error },
-      LOG_CATEGORY
-    );
   }
 
   return outcomes;

@@ -527,6 +527,7 @@ export default function InitialSetupModal() {
         try {
           const res = await fetch(`/api/vendor-ingestion/${sessionId}/jobs/${job.id}`, {
             headers: authFetchHeaders(),
+            cache: 'no-store',
           });
           if (!res.ok || cancelled) continue;
           const json = await res.json();

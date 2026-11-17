@@ -65,6 +65,7 @@ import {
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   updateVendorInUploadHistoryStorage,
+  removeVendorsFromUploadHistoryInStorage,
 } from './constants';
 
 function logApiResponseFailure(
@@ -2325,6 +2326,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
+    const deletedVendor = buyerVendors.find((v) => v.id === vendorId || v.email === vendorId);
+    const identifiersToRemove = [vendorId, deletedVendor?.id, deletedVendor?.email, deletedVendor?.name].filter(
+      (val): val is string => typeof val === 'string' && Boolean(val.trim())
+    );
+    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
+
     setBuyerVendors((prev) => {
       const updated = prev.filter((v) => v.id !== vendorId && v.email !== vendorId);
       setSessionCache('vendors', updated);
@@ -2362,7 +2369,21 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const deletedIds: string[] = Array.isArray(json.deletedIds) ? json.deletedIds : [];
-    const deletedSet = new Set(deletedIds);
+    const deletedSet = new Set([...deletedIds, ...vendorIds]);
+    const matchedVendors = buyerVendors.filter((v) => deletedSet.has(v.id) || deletedSet.has(v.email || ''));
+    const identifiersToRemove = Array.from(
+      new Set(
+        [
+          ...vendorIds,
+          ...deletedIds,
+          ...matchedVendors.map((v) => v.id),
+          ...matchedVendors.map((v) => v.email || ''),
+          ...matchedVendors.map((v) => v.name || ''),
+        ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      )
+    );
+    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
+
     setBuyerVendors((prev) => {
       const updated = prev.filter((v) => !deletedSet.has(v.id) && !deletedSet.has(v.email || ''));
       setSessionCache('vendors', updated);

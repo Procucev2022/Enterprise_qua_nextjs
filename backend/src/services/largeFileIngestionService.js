@@ -1049,7 +1049,30 @@ async function getJobStatus(sessionUser, sessionId, jobId = null, jobType = null
   if (!organizationId) return null;
 
   if (jobId) {
-    return queries.findIngestionJob(jobId, organizationId);
+    const job = await queries.findIngestionJob(jobId, organizationId);
+    if (job && (job.status === 'PROCESSING' || job.status === 'PENDING')) {
+      const lastProgress = Date.parse(job.updatedAt || job.startedAt || '');
+      if (Number.isFinite(lastProgress) && Date.now() - lastProgress > 60000) {
+        await queries
+          .updateIngestionJobProgress(job.id, organizationId, {
+            status: 'FAILED',
+            errorMessage:
+              job.errorMessage ||
+              'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
+            completedAt: new Date().toISOString(),
+          })
+          .catch(() => {});
+        return {
+          ...job,
+          status: 'FAILED',
+          errorMessage:
+            job.errorMessage ||
+            'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
+          completedAt: new Date().toISOString(),
+        };
+      }
+    }
+    return job;
   }
 
   const activeJobs = await queries.findActiveIngestionJobs(sessionId, organizationId);

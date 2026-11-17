@@ -3002,7 +3002,7 @@ const VENDOR_INGESTION_CONFIG = {
   AI_MAX_ATTEMPTS: 2,
   // A background AI job whose progress has not moved for this long is treated as
   // abandoned (its worker was stopped mid-run), so a new run may start.
-  AI_JOB_STALE_AFTER_MS: 10 * 60 * 1000,
+  AI_JOB_STALE_AFTER_MS: 60 * 1000,
   // PO lines summarised into one vendor's purchasing profile. Enough to
   // characterise what a supplier sells without sending an entire spend history,
   // which is what makes this one call per vendor rather than one per PO row.
