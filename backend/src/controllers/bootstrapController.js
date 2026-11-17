@@ -10,6 +10,17 @@ const {
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
 } = require('../config/constants');
+const categoryTaxonomyMaster = require('../config/categoryTaxonomyMaster.json');
+
+const categoryTaxonomyMap = new Map();
+for (const entry of categoryTaxonomyMaster) {
+  const mKey = String(entry.majorCategory || '').trim().toLowerCase();
+  const minors = new Map();
+  for (const m of entry.minorCategories || []) {
+    minors.set(String(m).trim().toLowerCase(), m);
+  }
+  categoryTaxonomyMap.set(mKey, { major: entry.majorCategory, minors });
+}
 
 /**
  * Load vendor_master_records from the buyer's latest ingestion session when those uploaded
@@ -77,7 +88,24 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
           : !isRejectedMapping && Array.isArray(mapping?.aiSuggestion?.minorCategories) && mapping.aiSuggestion.minorCategories.length > 0
             ? mapping.aiSuggestion.minorCategories
             : rec.minorCategories;
-      const resolvedMinors = normalizeVendorCategoryList(rawMinors);
+      let resolvedMinors = normalizeVendorCategoryList(rawMinors);
+      if (resolvedMinors.length === 0 && resolvedMajor) {
+        const majorEntry = categoryTaxonomyMap.get(resolvedMajor.trim().toLowerCase());
+        if (majorEntry) {
+          const candidates = [
+            ...(Array.isArray(mapping?.aiSuggestion?.relevantProducts) ? mapping.aiSuggestion.relevantProducts : []),
+            ...(Array.isArray(rec.itemsSupplied) ? rec.itemsSupplied : []),
+          ];
+          for (const cand of candidates) {
+            const candKey = String(cand).trim().toLowerCase();
+            for (const [mKey, actualName] of majorEntry.minors.entries()) {
+              if (candKey.includes(mKey) || mKey.includes(candKey)) {
+                if (!resolvedMinors.includes(actualName)) resolvedMinors.push(actualName);
+              }
+            }
+          }
+        }
+      }
 
       const parsedRating = Number(rec.rating);
       const loc = resolveVendorLocationFields({

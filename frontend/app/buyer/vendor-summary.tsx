@@ -5,7 +5,7 @@ import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
-import { getMinorCategories } from '@/lib/categoryTaxonomy';
+import { getMinorCategories, findMajorForMinor, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
   isBuyerUploadedVendor,
   isPlaceholderVendorCategory,
@@ -1323,20 +1323,54 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       state: vendor.state,
       pincode: vendor.pincode,
     });
-    if (
-      loc.location === (vendor.location || '') &&
-      loc.city === (vendor.city || '') &&
-      loc.state === (vendor.state || '') &&
-      loc.pincode === (vendor.pincode || '')
-    ) {
+
+    let currentMinors = normalizeVendorCategoryList(vendor.minorCategories);
+    if (currentMinors.length === 0) {
+      if (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0) {
+        currentMinors = normalizeVendorCategoryList(vendor.clientMappedCategories);
+      } else if (Array.isArray((vendor as any).poMinorCategories) && (vendor as any).poMinorCategories.length > 0) {
+        currentMinors = normalizeVendorCategoryList((vendor as any).poMinorCategories);
+      } else if (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) {
+        currentMinors = normalizeVendorCategoryList(vendor.vendorSelectedCategories);
+      } else if (Array.isArray((vendor as any).itemsSupplied) && (vendor as any).itemsSupplied.length > 0) {
+        currentMinors = Array.from(
+          new Set(
+            ((vendor as any).itemsSupplied as string[])
+              .map((it) => resolveMinorCategory(String(it), '', vendor.majorCategory))
+              .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
+          )
+        );
+      }
+    }
+
+    let finalMajor = typeof vendor.majorCategory === 'string' && !isPlaceholderVendorCategory(vendor.majorCategory)
+      ? vendor.majorCategory.trim()
+      : '';
+    if (!finalMajor && currentMinors.length > 0) {
+      finalMajor = findMajorForMinor(currentMinors[0]) || '';
+    }
+
+    const hasLocChanges =
+      loc.location !== (vendor.location || '') ||
+      loc.city !== (vendor.city || '') ||
+      loc.state !== (vendor.state || '') ||
+      loc.pincode !== (vendor.pincode || '');
+    const hasCategoryChanges =
+      currentMinors.length !== (vendor.minorCategories || []).length ||
+      (finalMajor && finalMajor !== (vendor.majorCategory || ''));
+
+    if (!hasLocChanges && !hasCategoryChanges) {
       return vendor;
     }
+
     return {
       ...vendor,
       ...(loc.location ? { location: loc.location } : {}),
       ...(loc.city ? { city: loc.city } : {}),
       ...(loc.state ? { state: loc.state } : {}),
       ...(loc.pincode ? { pincode: loc.pincode } : {}),
+      ...(finalMajor ? { majorCategory: finalMajor } : {}),
+      ...(currentMinors.length > 0 ? { minorCategories: currentMinors } : {}),
     };
   };
   const mergedVendors = mergeWithEvaluations(reconciledBuyerVendors.map(normalizeBuyerVendorEntry));

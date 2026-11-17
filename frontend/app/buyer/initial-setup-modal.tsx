@@ -11,7 +11,14 @@ import {
   PERIOD_BY_VENDOR_INGESTION_HORIZON,
   VENDOR_INGESTION_HORIZON_BY_PERIOD,
   VENDOR_MAPPING_PAGE_SIZE,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
 } from '@/lib/constants';
+import {
+  resolveMinorCategory,
+  findMajorForMinor,
+  hasMajorCategory,
+} from '@/lib/categoryTaxonomy';
 import {
   VendorMasterUploadRecord,
   PurchaseOrderLineItemRecord,
@@ -403,6 +410,17 @@ export default function InitialSetupModal() {
         state: local?.state,
         pincode: local?.pincode,
       });
+      const localPoLines = local ? matchPoLinesForVendor(local) : [];
+      let finalMinors = normalizeVendorCategoryList(mapping.finalMinorCategories);
+      if (mapping.finalMajorCategory !== '' && finalMinors.length === 0 && localPoLines.length > 0) {
+        finalMinors = Array.from(
+          new Set(
+            localPoLines
+              .map((p) => resolveMinorCategory(p.itemName, p.specs, mapping.finalMajorCategory))
+              .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
+          )
+        );
+      }
       return {
         id: mapping.vendorRecordId,
         vendorCode: mapping.vendorCode || undefined,
@@ -418,13 +436,13 @@ export default function InitialSetupModal() {
         vendorRatingScore: local?.vendorRatingScore,
         hasPoHistory: mapping.hasPoHistory,
         categoriesMappedByBuyer: mapping.finalMajorCategory !== '',
-        itemsSupplied: local ? matchPoLinesForVendor(local).map((p) => p.itemName) : [],
+        itemsSupplied: localPoLines.map((p) => p.itemName),
         pastPoSpend: mapping.hasPoHistory
           ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
           : 'No PO History in Dump',
         poCount: mapping.poCount,
         firstSetMajorCategory: mapping.finalMajorCategory,
-        secondSetMinorCategories: mapping.finalMinorCategories,
+        secondSetMinorCategories: finalMinors,
         secondSetSecondaryMajors: [],
       };
     });
@@ -1487,8 +1505,7 @@ export default function InitialSetupModal() {
     }
   };
 
-  // Browser-side join between the Vendor Master and the PO lines. It records which suppliers have PO history and
-  // what they bought. It assigns no categories: categories come only from the server's AI category job.
+  // Browser-side join between the Vendor Master and the PO lines. Derives vendor categories from actual PO line items.
   const computeJoinedRecords = (): HistoricalPurchaseVendorRecord[] => {
     return storedVendors.map((v) => {
       const matchingPOs = matchPoLinesForVendor(v);
@@ -1505,6 +1522,7 @@ export default function InitialSetupModal() {
         state: v.state,
         pincode: v.pincode,
       });
+
       return {
         id: v.id,
         vendorCode: v.vendorCode,
