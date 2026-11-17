@@ -32,7 +32,25 @@ function serveDefaults(url: string) {
   if (url === '/api/bootstrap') {
     return respond(200, {
       success: true,
-      data: { buyerAccounts: [], vendors: [], evaluations: [], auditLogs: [], aiFeed: [], systemConfig: {} },
+      data: {
+        buyerAccounts: [],
+        vendors: [
+          { id: 'v-b-1', name: 'Vendor B1', email: 'b1@test.com' },
+          { id: 'v-b-2', name: 'Vendor B2 Name Match', email: 'b2@test.com' },
+          { id: 'v-b-3', name: 'Vendor B3', email: 'b3_email_match@test.com' },
+          { id: 'v-bulk-nm', name: 'Bulk Name Match', email: 'bulk_diff@test.com' },
+          { id: 'v-bulk-em', name: 'Bulk Other', email: 'bulk_email_match@test.com' },
+        ],
+        evaluations: [
+          { id: 'ev-1', vendorId: 'v-b-1', email: 'diff1@test.com' },
+          { id: 'ev-2', vendorId: 'diff-id', email: 'b3_email_match@test.com' },
+          { id: 'ev-3', vendorId: 'v-bulk-nm', email: 'diff3@test.com' },
+          { id: 'ev-4', vendorId: 'diff4', email: 'bulk_email_match@test.com' },
+        ],
+        auditLogs: [],
+        aiFeed: [],
+        systemConfig: {},
+      },
     });
   }
   if (/\/api\/rfqs(\?|$)/.test(url)) return respond(200, { success: true, data: [] });
@@ -491,5 +509,61 @@ describe('lib/store.tsx - remaining failure branches', () => {
       await app().deleteMultipleBuyerVendors(['v-1']);
     });
     expect(app().toastMessage?.title).toBe('Vendors Removed');
+  });
+
+  test('deleteBuyerVendor and deleteMultipleBuyerVendors with targetVendor and targetVendors exercise ID, email, name and evaluation removal', async () => {
+    const app = await mountStore();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (/\/api\/vendors\/v-del/.test(url)) {
+        return respond(200, { success: true });
+      }
+      if (url === '/api/vendors/bulk-delete') {
+        return respond(200, { success: true, deletedIds: ['v-bulk-1'] });
+      }
+      return serveDefaults(url);
+    });
+
+    await act(async () => {
+      await app().addBuyerVendor({
+        name: 'Target Vendor Alpha',
+        companyName: 'Alpha Corp',
+        email: 'alpha@vendor.test',
+        phone: '9999999999',
+        categories: ['IT'],
+      } as any);
+    });
+
+    await act(async () => {
+      const res = await app().deleteBuyerVendor('v-b-1', {
+        id: 'v-b-1',
+        email: 'b3_email_match@test.com',
+        name: 'Vendor B2 Name Match',
+      });
+      expect(res).toBe(true);
+    });
+
+    await act(async () => {
+      const res = await app().deleteBuyerVendor('v-del-2', {
+        id: '   ',
+        email: '',
+        name: undefined,
+      });
+      expect(res).toBe(true);
+    });
+
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(
+        ['v-bulk-1'],
+        [
+          { id: 'v-bulk-1', email: 'bulk_email_match@test.com', name: 'Bulk Name Match' },
+          { id: '', email: '   ', name: undefined },
+        ]
+      );
+    });
+
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(['v-bulk-3']);
+    });
   });
 });
