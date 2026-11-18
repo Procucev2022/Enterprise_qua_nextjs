@@ -753,9 +753,11 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [locallyDownloaded, setLocallyDownloaded] = useState(false);
   const [isDownloading, setIsDownloading] = useState(false);
+  const creditsLoadedRef = useRef(false);
 
   useEffect(() => {
-    if (isVendor && typeof refreshVendorCredits === 'function') {
+    if (isVendor && !creditsLoadedRef.current && typeof refreshVendorCredits === 'function') {
+      creditsLoadedRef.current = true;
       void refreshVendorCredits();
     }
   }, [isVendor, refreshVendorCredits]);

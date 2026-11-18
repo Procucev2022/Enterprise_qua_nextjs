@@ -3096,21 +3096,30 @@ class StoreService {
     const isNetworkMode = isV0 || isV2 || isV3;
 
     const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
+    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
+    const isInvited = this._isInvitedVendor(vendor, rfq);
+    const coversRfq = this.vendorCoversRFQ(vendor, rfq);
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
+    const normRfqId = String(rfq.id);
+    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
+    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
-    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
+    const hasAccess =
+      hasUnlimitedDownloads ||
+      isAlreadyUnlocked ||
+      isV0 ||
+      coversRfq ||
+      isDirect ||
+      isInvited ||
+      (isNetworkMode && categoryMatches);
+
+    if (!hasAccess) {
       return {
         success: false,
         error: RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED,
         unauthorized: true,
       };
     }
-
-    // Check if RFQ has already been unlocked for this vendor
-    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
-    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
-    const normRfqId = String(rfq.id);
-    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
-    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
     const creditInfo = this.getVendorRfqCredits(vendor.id);
 

@@ -335,12 +335,27 @@ describe('vendor categorization evidence, validation and persistence', () => {
 
     // 8. When gemini is NOT configured, falls back to classifyVendor
     jest.spyOn(gemini, 'isConfigured').mockReturnValue(false);
+    gemini.generateJson.mockResolvedValue({ status: gemini.EXTRACTION_STATUS.NOT_CONFIGURED });
     const unconfiguredRes = await service.classifyVendorsBatchDirect({
       ...args,
       mappings: [mapping],
       profilesByRecordId: new Map([['vm-1', profile]]),
     });
     expect(unconfiguredRes.length).toBe(1);
+    expect(unconfiguredRes[0].status).toBe(service.CLASSIFICATION_STATUS.NOT_CONFIGURED);
+
+    // 8b. When item is omitted from batch Gemini result, individual call succeeds
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockReset();
+    gemini.generateJson
+      .mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: [] })
+      .mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: reply });
+    const singleFallbackRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(singleFallbackRes[0].status).toBe(service.CLASSIFICATION_STATUS.SUCCESS);
 
     // 9. Exception in loop
     const throwingMapping = { ...mapping, id: 'throw-map', vendorRecordId: 'vm-throw' };
@@ -353,5 +368,67 @@ describe('vendor categorization evidence, validation and persistence', () => {
       profilesByRecordId: new Map([['vm-throw', profile]]),
     });
     expect(exRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+  });
+
+  test('heuristicClassifyVendor provides accurate fallback classification across diverse profiles', () => {
+    // 1. Guard conditions
+    expect(service.heuristicClassifyVendor(null, master)).toBeNull();
+    expect(service.heuristicClassifyVendor(profile, [])).toBeNull();
+    expect(service.heuristicClassifyVendor(profile, null)).toBeNull();
+
+    // 2. Direct minor match
+    const h1 = service.heuristicClassifyVendor(profile, master);
+    expect(h1).toMatchObject({
+      primaryCategory: 'Mechanical',
+      minorCategories: expect.arrayContaining(['Pumps', 'Bearings']),
+      confidenceScore: 82,
+    });
+
+    // 3. Technical keyword match
+    const keywordProf = {
+      companyName: 'Network Tech',
+      lineSummaries: ['24 port ethernet switch'],
+    };
+    const itMaster = [
+      { majorCategory: 'IT', minorCategories: ['Networking Equipment', 'Computer'] },
+      { majorCategory: 'Civil', minorCategories: ['Bricks'] },
+    ];
+    const h2 = service.heuristicClassifyVendor(keywordProf, itMaster);
+    expect(h2.primaryCategory).toBe('IT');
+    expect(h2.minorCategories).toContain('Networking Equipment');
+
+    // 4. Company name match with major
+    const nameProf = {
+      companyName: 'Civil Construction Co',
+      lineSummaries: [],
+    };
+    const h3 = service.heuristicClassifyVendor(nameProf, itMaster);
+    expect(h3.primaryCategory).toBe('Civil');
+
+    // 5. Fallback when no match scores
+    const unknownProf = {
+      companyName: 'XYZ Enterprise',
+      lineSummaries: ['mystery item'],
+    };
+    const otherMaster = [
+      { majorCategory: 'Others – New Product', minorCategories: ['Furniture'] },
+    ];
+    const h4 = service.heuristicClassifyVendor(unknownProf, otherMaster);
+    expect(h4.primaryCategory).toBe('Others – New Product');
+    expect(h4.confidenceScore).toBe(65);
+
+    // 6. Fallback with empty group minorCategories
+    const emptyMinorMaster = [
+      { majorCategory: 'General Supplies', minorCategories: [] },
+    ];
+    const h5 = service.heuristicClassifyVendor(unknownProf, emptyMinorMaster);
+    expect(h5.primaryCategory).toBe('General Supplies');
+    expect(h5.minorCategories).toEqual([]);
+
+    // 7. Profile without companyName or lineSummaries
+    const emptyProf = {};
+    const h6 = service.heuristicClassifyVendor(emptyProf, master);
+    expect(h6).toBeDefined();
+    expect(h6.relevantProducts).toContain('Supplies');
   });
 });

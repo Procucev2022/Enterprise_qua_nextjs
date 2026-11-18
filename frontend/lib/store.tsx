@@ -717,7 +717,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Balances are copied from the server response. A failed read clears them to null, so the header
   // shows "not loaded" instead of the last figure or a plan default.
-  const refreshVendorCredits = async () => {
+  // Wrapped in useCallback so that its reference remains stable across re-renders and does not cause infinite fetch loops in effect dependencies.
+  const refreshVendorCredits = useCallback(async () => {
     if (!authClient.getToken()) return;
     try {
       const res = await fetchVendorRfqCredits();
@@ -737,7 +738,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVendorFreeCreditsUsed(null);
       logger.log('ERROR', 'Failed to refresh vendor RFQ credits', { error: err }, 'VENDOR_CREDITS');
     }
-  };
+  }, []);
 
   // Reads the vendor's own rfqDownloadsUsed from its record, which is the only source for that counter.
   const refreshOwnVendorDownloadsUsed = async () => {

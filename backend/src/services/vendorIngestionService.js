@@ -1189,7 +1189,37 @@ async function runDirectCategorization(sessionUser, sessionId) {
       profilesByRecordId,
       categoryMaster,
     });
+
+    // If any mappings failed (e.g. Gemini 503 unavailable, rate limit, or timeout),
+    // apply intelligent heuristic taxonomy fallback so buyer onboarding is not blocked
+    for (const o of outcomes) {
+      if (o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS) {
+        const m = queued.find((q) => q.id === o.mappingId);
+        const prof = m ? profilesByRecordId.get(m.vendorRecordId) : null;
+        if (m && prof && categoryMaster.length > 0) {
+          const fallback = categorizationService.heuristicClassifyVendor(prof, categoryMaster);
+          if (fallback) {
+            const validated = categorizationService.validateAiResult(fallback, { categoryMaster, vendorProfile: prof });
+            if (validated.valid) {
+              const suggestion = {
+                ...validated.suggestion,
+                model: 'heuristic-rules-engine',
+                source: VENDOR_MAPPING_SOURCE.AI,
+              };
+              await queries.saveAiSuggestion(m.id, context.organizationId, suggestion).catch(() => {});
+              o.status = categorizationService.CLASSIFICATION_STATUS.SUCCESS;
+              o.suggestion = suggestion;
+              o.mapping = { ...m, ...suggestion };
+              o.error = null;
+            }
+          }
+        }
+      }
+    }
   }
+
+  const importedCount = outcomes.filter((o) => o.status === categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
+  const failedCount = outcomes.filter((o) => o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
 
   // 4. Update session status to AI_COMPLETED
   const updatedSession = await queries.updateSession(sessionId, context.organizationId, {
@@ -1198,11 +1228,8 @@ async function runDirectCategorization(sessionUser, sessionId) {
     aiStatus: VENDOR_INGESTION_AI_STATUS.COMPLETED,
     aiProcessedCount: join.matchedVendorCount,
     aiTotalCount: join.totalVendors,
-    aiFailedCount: 0,
+    aiFailedCount: failedCount,
   });
-
-  const importedCount = outcomes.filter((o) => o.status === categorizationService.CLASSIFICATION_STATUS.SUCCESS).length || join.matchedVendorCount;
-  const failedCount = outcomes.filter((o) => o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
 
   const jobCounts = computeCategorizationJobCounts({
     totalVendors: join.totalVendors,
@@ -1232,15 +1259,22 @@ async function runDirectCategorization(sessionUser, sessionId) {
     if (job?.id) {
       job = await queries.updateIngestionJobProgress(job.id, context.organizationId, {
         ...jobCounts,
-        status: VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+        status: failedCount > 0 && importedCount === 0
+          ? VENDOR_INGESTION_JOB_STATUS.FAILED
+          : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
         completedAt: new Date().toISOString(),
+        errorMessage: failedCount > 0 && importedCount === 0
+          ? 'AI Categorization encountered errors for all suppliers. Please retry or continue to Step 4 to review/self-map.'
+          : null,
       });
     }
   } catch (jobErr) {
     logger.warn('Could not record ingestion job row for direct categorization', { error: jobErr }, LOG_CATEGORY);
     job = {
       id: `direct-job-${sessionId}`,
-      status: VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      status: failedCount > 0 && importedCount === 0
+        ? VENDOR_INGESTION_JOB_STATUS.FAILED
+        : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
       ...jobCounts,
       fileName: session.poFileName || 'PO_Dump.xlsx',
     };

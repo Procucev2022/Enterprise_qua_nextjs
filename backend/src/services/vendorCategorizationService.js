@@ -627,6 +627,83 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
   return { status: lastStatus, error: lastError || VENDOR_INGESTION_MESSAGES.AI_INVALID_RESPONSE };
 }
 
+function heuristicClassifyVendor(profile, categoryMaster = []) {
+  if (!profile || !categoryMaster || categoryMaster.length === 0) return null;
+  const poSummaries = Array.isArray(profile.lineSummaries) ? profile.lineSummaries : [];
+  const existingCats = Array.isArray(profile.existingCategories) ? profile.existingCategories : [];
+  const depts = Array.isArray(profile.departments) ? profile.departments : [];
+  const companyName = String(profile.companyName || '').toLowerCase();
+
+  const combinedText = [
+    companyName,
+    ...existingCats,
+    ...depts,
+    ...poSummaries,
+  ].join(' ').toLowerCase();
+
+  let bestMajor = null;
+  let bestMajorScore = -1;
+  let bestMinors = [];
+
+  for (const group of categoryMaster) {
+    const majorName = String(group.majorCategory || '').trim();
+    if (!majorName) continue;
+    const majorLower = majorName.toLowerCase();
+    let score = 0;
+    const matchedMinors = [];
+
+    // Company name or existing category direct match
+    if (combinedText.includes(majorLower) || majorLower.includes(companyName)) {
+      score += 15;
+    }
+
+    const minorList = Array.isArray(group.minorCategories) ? group.minorCategories : [];
+    for (const minor of minorList) {
+      const minorLower = String(minor || '').trim().toLowerCase();
+      if (!minorLower) continue;
+
+      const stemMinor = stemCategoryToken(minorLower);
+      if (combinedText.includes(minorLower) || combinedText.includes(stemMinor)) {
+        score += 10;
+        if (!matchedMinors.includes(minor)) matchedMinors.push(minor);
+      } else {
+        // Keyword checks
+        for (const tk of MINOR_TECHNICAL_KEYWORDS) {
+          if (tk.words.some((w) => combinedText.includes(w)) && (categoryKey(tk.minor) === categoryKey(minor) || stemCategoryToken(categoryKey(tk.minor)) === stemMinor)) {
+            score += 8;
+            if (!matchedMinors.includes(minor)) matchedMinors.push(minor);
+          }
+        }
+      }
+    }
+
+    if (score > bestMajorScore) {
+      bestMajorScore = score;
+      bestMajor = majorName;
+      bestMinors = matchedMinors;
+    }
+  }
+
+  if (!bestMajor || bestMajorScore <= 0) {
+    const fallbackGroup = categoryMaster.find((g) => /others|general|raw/i.test(g.majorCategory)) || categoryMaster[0];
+    bestMajor = fallbackGroup ? fallbackGroup.majorCategory : 'Raw Material';
+    bestMinors = fallbackGroup && Array.isArray(fallbackGroup.minorCategories) && fallbackGroup.minorCategories.length > 0
+      ? [fallbackGroup.minorCategories[0]]
+      : [];
+  }
+
+  const sampleProducts = poSummaries.slice(0, 5).map((p) => String(p).split('|')[0].trim()).filter(Boolean);
+
+  return {
+    primaryCategory: bestMajor,
+    minorCategories: bestMinors.slice(0, 5),
+    relevantProducts: sampleProducts.length > 0 ? sampleProducts : [profile.companyName || 'Supplies'],
+    confidenceScore: bestMajorScore > 0 ? 82 : 65,
+    reason: `Classified based on purchasing history and supply data (${profile.companyName || 'Vendor'}).`,
+    suggestedNewCategory: null,
+  };
+}
+
 /** Record one classification attempt (delegates to vendorIngestionQueries; table dropped in DB per migration 0029). */
 async function logClassification({
   session,
@@ -809,7 +886,7 @@ async function classifyVendorsBatchDirect({ session, organizationId, mappings, p
       const result = await geminiService.generateJson({
         prompt,
         label: `batch vendor categorisation for ${eligibleMappings.length} suppliers`,
-        budgetMs: 30000,
+        budgetMs: 90000,
       });
       const durationMs = Date.now() - startedAt;
 
@@ -1011,6 +1088,7 @@ module.exports = {
   classifyVendor,
   classifyVendorsBatchDirect,
   buildBatchCategorizationPrompt,
+  heuristicClassifyVendor,
   logClassification,
   runCategorizationBatch,
 };

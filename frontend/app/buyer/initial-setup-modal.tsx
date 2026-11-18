@@ -14,7 +14,7 @@ import {
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
 } from '@/lib/constants';
-import { resolveMinorCategory } from '@/lib/categoryTaxonomy';
+import { autoCategorizeItem, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import type {
   HistoricalPurchaseVendorRecord,
   IngestionJobState,
@@ -551,13 +551,28 @@ export default function InitialSetupModal() {
         pincode: local?.pincode,
       });
       const localPoLines = local ? matchPoLinesForVendor(local) : [];
-      const isMappedVendor = mapping.hasPoHistory && mapping.finalMajorCategory !== '';
-      let finalMinors = isMappedVendor ? normalizeVendorCategoryList(mapping.finalMinorCategories) : [];
+      let derivedMajor = mapping.finalMajorCategory || mapping.buyerMajorCategory || mapping.aiSuggestion?.majorCategory || '';
+      let finalMinors = normalizeVendorCategoryList(mapping.finalMinorCategories || mapping.buyerMinorCategories || mapping.aiSuggestion?.minorCategories || []);
+
+      if (!derivedMajor && localPoLines.length > 0) {
+        for (const p of localPoLines) {
+          const auto = autoCategorizeItem(p.itemName, p.specs);
+          if (auto?.majorCategory) {
+            derivedMajor = auto.majorCategory;
+            if (auto.minorCategory && !finalMinors.includes(auto.minorCategory)) {
+              finalMinors.push(auto.minorCategory);
+            }
+            break;
+          }
+        }
+      }
+
+      const isMappedVendor = mapping.hasPoHistory && derivedMajor !== '';
       if (isMappedVendor && finalMinors.length === 0 && localPoLines.length > 0) {
         finalMinors = Array.from(
           new Set(
             localPoLines
-              .map((p) => resolveMinorCategory(p.itemName, p.specs, mapping.finalMajorCategory))
+              .map((p) => resolveMinorCategory(p.itemName, p.specs, derivedMajor))
               .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
           )
         );
@@ -582,7 +597,7 @@ export default function InitialSetupModal() {
           ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
           : 'No PO History in Dump',
         poCount: mapping.poCount,
-        firstSetMajorCategory: isMappedVendor ? mapping.finalMajorCategory : '',
+        firstSetMajorCategory: isMappedVendor ? derivedMajor : '',
         secondSetMinorCategories: finalMinors,
         secondSetSecondaryMajors: [],
       };
@@ -2955,7 +2970,7 @@ export default function InitialSetupModal() {
             )}
 
             {/* Failure of the AI category job, with the server's reason */}
-            {aiJob?.status === 'FAILED' && (
+            {(aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0) && (
               <div
                 data-testid="ai-job-error-banner"
                 className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
@@ -2965,7 +2980,7 @@ export default function InitialSetupModal() {
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
                     <p className="mt-0.5 text-[11px] leading-relaxed">
-                      {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
+                      {aiJob?.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
                     </p>
                   </div>
                 </div>
@@ -3178,7 +3193,7 @@ export default function InitialSetupModal() {
                 Back to Vendor Master
               </button>
               <div className="flex items-center gap-2">
-                {aiJob?.status === 'FAILED' && (
+                {(aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -3198,7 +3213,7 @@ export default function InitialSetupModal() {
                 >
                   {isProcessingPOJoin || isAiRunning
                     ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
-                    : aiJob?.status === 'FAILED'
+                    : (aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0)
                     ? 'Retry AI Category Cross-Match'
                     : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
                   <ArrowRight size={14} />
