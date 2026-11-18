@@ -3924,5 +3924,79 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         localStorage.removeItem('procucev_vendor_upload_history');
       }
     });
+
+    it('refreshRFQs updates open deep-dive and matrix selections and openRFQDeepDive refreshes authenticated live stats', async () => {
+      let currentSmsSent = 1;
+      const buildServerRfq = (smsSent: number): RFQItem => ({
+        ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+        id: 'rfq-refresh-sel-1',
+        rfqNumber: 'RFQ261711888111',
+        title: `Live Sync RFQ (${smsSent})`,
+        followUpData: {
+          rfqNumber: 'RFQ261711888111',
+          autoChasingEnabled: true,
+          totalInvited: 10,
+          respondedCount: 0,
+          callStats: { total: 0, connected: 0, avgDuration: '0s' },
+          whatsappStats: { total: 10, sent: 0, delivered: 0, read: 0, replied: 0 },
+          smsStats: { total: 10, sent: smsSent, delivered: 0, clicked: 0 },
+          emailStats: { total: 10, sent24h: 0, delivered: 0, opened: 0 },
+          vendors: [],
+        },
+      });
+
+      authClient.setSession(
+        { id: 'u-deepdive-1', email: 'buyer@procucev.com', name: 'Buyer One', role: 'buyer', orgId: 'org-1', orgName: 'Org One' },
+        'deepdive-refresh-token'
+      );
+
+      try {
+        const ctx = await mountStore(buildServerRfq(1));
+        mockFetch.mockImplementation((url: string) => {
+          if (/\/api\/rfqs(\?|$)/.test(String(url))) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                data: [buildServerRfq(currentSmsSent)],
+              }),
+            });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+        });
+
+        await waitFor(() => expect(ctx().rfqs.some((r: RFQItem) => r.rfqNumber === 'RFQ261711888111')).toBe(true));
+
+        const initial = ctx().rfqs.find((r: RFQItem) => r.rfqNumber === 'RFQ261711888111')!;
+        const unrelated: RFQItem = { ...initial, id: 'rfq-unrelated', rfqNumber: 'RFQ-UNRELATED' };
+
+        await act(async () => {
+          ctx().setSelectedRFQForMatrix(initial);
+          ctx().openRFQDeepDive({ ...initial, followUpData: { ...initial.followUpData!, smsStats: { total: 10, sent: 0, delivered: 0, clicked: 0 } } });
+        });
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(1);
+
+        currentSmsSent = 7;
+        await act(async () => {
+          await ctx().refreshRFQs();
+        });
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(7);
+        expect(ctx().selectedRFQForMatrix?.followUpData?.smsStats?.sent).toBe(7);
+
+        // Unrelated selections are preserved
+        await act(async () => {
+          ctx().setSelectedRFQForMatrix(unrelated);
+        });
+        currentSmsSent = 9;
+        await act(async () => {
+          await ctx().refreshRFQs();
+        });
+        expect(ctx().selectedRFQForMatrix?.rfqNumber).toBe('RFQ-UNRELATED');
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(9);
+      } finally {
+        authClient.setSession(null);
+      }
+    });
   });
 });

@@ -824,10 +824,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const reconcileSelectedRfq = (prev: RFQItem | null) =>
+        prev
+          ? result.rfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
+          : result.rfqs[0] || null;
       setRfqs(result.rfqs);
       setSessionCache('rfqs', result.rfqs);
-      setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
-      setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
+      setSelectedRFQForMatrix(reconcileSelectedRfq);
+      setSelectedRFQForDeepDive(reconcileSelectedRfq);
       setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
       loadedEntitiesRef.current.rfqs = true;
     } finally {
@@ -1469,8 +1473,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([]);
 
   const openRFQDeepDive = (rfq: RFQItem) => {
-    setSelectedRFQForDeepDive(rfq);
+    const latestRfq = rfqs.find((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id) || rfq;
+    setSelectedRFQForDeepDive(latestRfq);
     setDeepDiveModalOpen(true);
+    if (authClient.getToken()) {
+      void refreshRFQs();
+    }
   };
 
   const openVendorEvaluationSummary = (evalRecord: VendorEvaluationRecord) => {

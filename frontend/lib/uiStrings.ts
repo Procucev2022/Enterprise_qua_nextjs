@@ -815,6 +815,9 @@ export const UI_STRINGS = {
     noFileTitle: 'No Document Selected',
     noFileMessage: 'Upload a BOQ spreadsheet, PDF or scanned requirement before continuing.',
     extractAction: 'Extract Line Items with AI',
+    extractingButtonLabel: 'Extracting with AI...',
+    extractingStatus: 'AI Extracting...',
+    dropZoneIdlePrompt: 'Drag and drop BOQ spreadsheets or .eml / .msg emails here',
     extractingLabel: 'Reading your document with QUA AI…',
     extractingHint: 'Identifying line items, quantities, units and specifications.',
 
@@ -2402,6 +2405,8 @@ export const UI_STRINGS = {
     needSupport: 'Need Support?',
     /** Shown in place of a sourcing credit balance the server has not reported. */
     creditBalanceUnknown: '—',
+    profile: 'Profile',
+    openProfileTitle: 'Open profile page',
   },
 
   vendorDirectoryLogin: {

@@ -1473,7 +1473,7 @@ export default function IngestionWizard({
               className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
             >
               {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isExtracting ? 'Extracting with AI...' : 'Extract Line Items with AI'}
+              {isExtracting ? EXTRACTION.extractingButtonLabel : EXTRACTION.extractAction}
             </button>
           </div>
         </div>
@@ -1509,17 +1509,30 @@ export default function IngestionWizard({
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
             }`}
         >
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={18} />
+          {isExtracting ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-1" role="status" aria-live="polite">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
+              <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                {EXTRACTION.extractingStatus}
+              </h3>
             </div>
-            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={18} />
-            </div>
-          </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
-            {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
-          </h3>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={18} />
+                </div>
+                <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+                  <Mail size={18} />
+                </div>
+              </div>
+              <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
+                {EXTRACTION.dropZoneIdlePrompt}
+              </h3>
+            </>
+          )}
         </div>
 
         {/* Uploaded Files List */}

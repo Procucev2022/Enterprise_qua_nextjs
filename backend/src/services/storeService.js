@@ -604,9 +604,47 @@ class StoreService {
   _sendWithFeedOutcome(sendPromise, errorMessage, metadata, feedDetails) {
     const tracked = this._background(sendPromise, errorMessage, metadata);
     tracked
-      .then((result) => this._recordChannelFeedItem(feedDetails, toChannelOutcome(result)))
+      .then((result) => {
+        const outcome = toChannelOutcome(result);
+        this._recordChannelFeedItem(feedDetails, outcome);
+        if (
+          outcome.success &&
+          feedDetails?.rfqNumber &&
+          feedDetails?.vendor &&
+          (feedDetails.channel === 'sms' || feedDetails.channel === 'whatsapp')
+        ) {
+          this._recordDirectChannelSentOnRfq(feedDetails.rfqNumber, feedDetails.channel, feedDetails.vendor, outcome);
+        }
+      })
       .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
     return tracked;
+  }
+
+  /** Records a direct (initial) SMS or WhatsApp send onto RFQ follow-up vendor status and sent counter. */
+  _recordDirectChannelSentOnRfq(rfqNumber, channel, vendor, outcome) {
+    const stored = this.rfqs.find((candidate) => candidate.rfqNumber === rfqNumber || candidate.id === rfqNumber);
+    if (!stored) return;
+    this._reconcileRFQFollowUpStats(stored);
+    const followUp = stored.followUpData;
+    if (!followUp) return;
+
+    const record = this._followUpVendorRecord(followUp, vendor);
+    const recordedAt = new Date().toISOString();
+    const prevStatus = record?.[channel]?.status;
+    record[channel] = {
+      status: 'sent',
+      lastAttempt: recordedAt,
+      messageId: outcome.messageId,
+      error: null,
+    };
+    record.lastInteraction = recordedAt;
+
+    const statsKey = channel === 'whatsapp' ? 'whatsappStats' : 'smsStats';
+    if (!followUp[statsKey]) followUp[statsKey] = { total: 0, delivered: 0, sent: 0 };
+    if (!['sent', 'delivered', 'read', 'replied', 'clicked'].includes(prevStatus || '')) {
+      followUp[statsKey].sent = (followUp[statsKey].sent || 0) + 1;
+    }
+    this._persistRFQ(stored);
   }
 
   /** Adds one feed entry for a channel message, using the real outcome as its status. */
@@ -4232,11 +4270,41 @@ class StoreService {
     if (Array.isArray(fup.vendors)) {
       fup.vendors.forEach((v) => {
         if (!v) return;
+        if (!v.vendorId && v.id) v.vendorId = v.id;
+        if (!v.vendorName && v.name) v.vendorName = v.name;
+        if (!v.name && v.vendorName) v.name = v.vendorName;
+        if (!v.bidStatus) v.bidStatus = 'Pending';
+        if (!v.overallStatus) v.overallStatus = v.bidStatus === 'Submitted' ? 'Responded' : 'Pending';
         if (typeof v.emailSent !== 'boolean') v.emailSent = false;
-        if (!v.email24h) v.email24h = v.email ? { ...v.email } : { status: 'pending' };
+        if (!v.email24h) v.email24h = v.email && typeof v.email === 'object' ? { ...v.email } : { status: 'pending' };
         if (!v.sms) v.sms = { status: 'pending' };
         if (!v.whatsapp) v.whatsapp = { status: 'pending' };
       });
+      const smsSentVendorCount = fup.vendors.filter(
+        (v) => v?.sms && ['sent', 'delivered', 'clicked'].includes(v.sms.status)
+      ).length;
+      if (smsSentVendorCount > 0 || fup.smsStats.sent !== undefined) {
+        fup.smsStats.sent = Math.max(recordedCount(fup.smsStats.sent), smsSentVendorCount);
+      }
+      const waSentVendorCount = fup.vendors.filter(
+        (v) => v?.whatsapp && ['sent', 'delivered', 'read', 'replied'].includes(v.whatsapp.status)
+      ).length;
+      if (waSentVendorCount > 0 || fup.whatsappStats.sent !== undefined) {
+        fup.whatsappStats.sent = Math.max(recordedCount(fup.whatsappStats.sent), waSentVendorCount);
+      }
+      const waRepliedVendorCount = fup.vendors.filter((v) => v?.whatsapp?.status === 'replied').length;
+      if (waRepliedVendorCount > 0) {
+        fup.whatsappStats.replied = Math.max(recordedCount(fup.whatsappStats.replied), waRepliedVendorCount);
+      }
+      const email24hVendorCount = fup.vendors.filter(
+        (v) =>
+          v?.email24h?.is24hReminderSent ||
+          ['sent', 'delivered', 'reminded_24h'].includes(v?.email24h?.status || '') ||
+          (typeof v?.email === 'object' && v.email !== null && ['sent', 'delivered'].includes(v.email.status || ''))
+      ).length;
+      if (email24hVendorCount > 0) {
+        fup.emailStats.sent24h = Math.max(recordedCount(fup.emailStats.sent24h), email24hVendorCount);
+      }
     }
 
     return rfq;

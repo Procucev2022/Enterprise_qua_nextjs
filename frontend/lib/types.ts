@@ -140,6 +140,8 @@ export interface VendorChannelEmail {
 }
 
 export interface VendorFollowUpRecord {
+  id?: string;
+  name?: string;
   vendorId: string;
   vendorName: string;
   phone: string;
@@ -147,7 +149,7 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
-  email?: VendorChannelEmail;
+  email?: string | VendorChannelEmail;
   email24h?: VendorChannelEmail;
   emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
@@ -168,12 +170,14 @@ export interface RFQFollowUpBreakdown {
   };
   whatsappStats: {
     total: number;
+    sent?: number;
     delivered: number;
     read: number;
     replied: number;
   };
   smsStats: {
     total: number;
+    sent?: number;
     delivered: number;
     clicked: number;
   };
@@ -186,6 +190,24 @@ export interface RFQFollowUpBreakdown {
   vendors: VendorFollowUpRecord[];
   nextScheduledChaser?: string;
   autoChasingEnabled: boolean;
+}
+
+export interface RFQFollowUpMetrics {
+  hasFollowUp: boolean;
+  totalVendors: number;
+  totalInvited: number | undefined;
+  responded: number;
+  callConnected: number | undefined;
+  callTotal: number | undefined;
+  waRead: number | undefined;
+  waDelivered: number | undefined;
+  waReplied: number | undefined;
+  waTotal: number | undefined;
+  smsDelivered: number | undefined;
+  smsTotal: number | undefined;
+  emailEscalationsSent: number | undefined;
+  emailDelivered: number | undefined;
+  emailTotal: number | undefined;
 }
 
 /**

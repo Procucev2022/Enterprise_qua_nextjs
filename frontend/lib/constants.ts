@@ -771,6 +771,12 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
   admin: '/admin/infra-control',
 };
 
+/** Self-service profile routes exposed in the header dropdown for buyer and vendor roles. */
+export const ROLE_PROFILE_ROUTES: Partial<Record<UserRole, string>> = {
+  buyer: '/buyer/profile',
+  vendor: '/vendor/vendor-profile',
+};
+
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
 

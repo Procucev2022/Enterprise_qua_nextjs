@@ -6224,3 +6224,31 @@ In buyer uploaded vendor, there should not be a delete vendor option, the option
 Keep commiting & pushing the changes to "test-v3"
 ```
 ---
+
+### Prompt 259
+**Timestamp**: 2026-11-17T20:52:06+05:30
+```text
+The count are not getting updated. Please check
+```
+---
+
+### Prompt 260
+**Timestamp**: 2026-11-17T20:52:53+05:30
+```text
+Remove the password verified , Active workspace , Enterprise Buyer .7 module And add right corner side profile button if i click the button it goes to buyer profile page
+```
+---
+
+### Prompt 261
+**Timestamp**: 2026-11-17T20:54:30+05:30
+```text
+Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
+```
+---
+
+### Prompt 262
+**Timestamp**: 2026-11-18T05:24:20+05:30
+```text
+Keep commiting the changes directly to current "test-v3" branch & keep pushing them as soon as you achieve the task,
+```
+---

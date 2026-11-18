@@ -1121,5 +1121,42 @@ describe('QuoteMatrix Component Tests', () => {
       fireEvent.click(deepDiveBtn);
       expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(rfqWithFollowUp);
     });
+
+    it('renders zero-default follow-up telemetry without followUpData and falls back to totalPrice when unitPrice is 0', () => {
+      const bareRfq = {
+        ...mockRFQs[0],
+        id: 'rfq-bare-fup',
+        rfqNumber: 'RFQ-BARE-001',
+        followUpData: undefined,
+        extractedEntities: [{ id: 'li-bare', itemName: 'Steel Flange', quantity: 5, unit: 'Nos' }],
+        quotes: [
+          {
+            id: 'q-bare-1',
+            vendorId: 'v-bare-1',
+            vendorName: 'Bare Vendor One',
+            vendorCategory: 'Client List',
+            unitPrice: 0,
+            totalPrice: 2500,
+            leadTimeDays: 5,
+            complianceStatus: 'Compliant',
+            aiMatchScore: 88,
+            isPreferred: false,
+            lineItemQuotes: [],
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [bareRfq],
+        selectedRFQForMatrix: bareRfq,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getAllByText('Bare Vendor One').length).toBeGreaterThan(0);
+      expect(screen.queryByText('AI FOLLOW-UP STATUS:')).not.toBeInTheDocument();
+    });
   });
 });
