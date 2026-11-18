@@ -239,12 +239,16 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
       expect(screen.getByRole('heading', { name: /Submit Quotation/i })).toBeInTheDocument();
     });
 
-    // Enter Unit Price and the required lead time
-    const priceInput = screen.getByPlaceholderText(/e\.g\. 25000/i);
+    // 1-line-item RFQ reuses the multi-line-item pricing table
+    expect(screen.getByText(/Line Item Pricing \(1 item\)/i)).toBeInTheDocument();
+    const priceInput = screen.getByLabelText(/Rate for Submersible Pump 20HP/i);
     await act(async () => {
       fireEvent.change(priceInput, { target: { value: '120000' } });
       fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '21' } });
     });
+
+    // Live computed Amount/Total (120000 * qty 2 = 2,40,000)
+    expect(screen.getAllByText('2,40,000').length).toBeGreaterThanOrEqual(2);
 
     // Submit Quotation button in modal
     const modalButtons = screen.getAllByRole('button', { name: /Submit Quotation/i });
@@ -253,7 +257,7 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
       fireEvent.click(modalSubmitBtn);
     });
 
-    // Verification: API was called with quote payload
+    // Verification: API was called with quote payload including lineItemQuotes
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining('/quotes'),
@@ -261,6 +265,24 @@ describe('Buyer-Mapped Vendor Access & Unlimited Quotation in QuotationForm', ()
           method: 'POST',
         })
       );
+    });
+    const quoteCall = (global.fetch as jest.Mock).mock.calls.find(
+      ([url, init]) => typeof url === 'string' && url.includes('/quotes') && init?.method === 'POST'
+    );
+    const payload = JSON.parse(quoteCall[1].body);
+    expect(payload).toMatchObject({
+      unitPrice: 120000,
+      totalPrice: 240000,
+      leadTimeDays: 21,
+      lineItemQuotes: [
+        {
+          lineItemId: 'ent-a1',
+          itemName: 'Submersible Pump 20HP',
+          quantity: 2,
+          unitPrice: 120000,
+          totalPrice: 240000,
+        },
+      ],
     });
   });
 });

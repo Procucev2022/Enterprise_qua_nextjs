@@ -6363,3 +6363,10 @@ Please investigate and fix the bulk inactive functionality. Ensure that:
 Please identify and fix the root cause rather than applying a temporary workaround.
 ```
 ---
+
+### Prompt 276
+**Timestamp**: 2026-11-18T13:16:35+05:30
+```text
+For submit quotation, for one line item Rfq also, reuse the multiple line item details UI.
+```
+---

@@ -2413,6 +2413,8 @@ export const UI_STRINGS = {
     directClientBadge: 'Direct Client',
     directClientExclusive: 'Client Exclusive',
     myRequestsGroup: 'My Requests (Direct & Submitted)',
+    lineItemPricingHeadingSingular: 'Line Item Pricing ({count} item) *',
+    lineItemPricingHeadingPlural: 'Line Item Pricing ({count} items) *',
   },
 
   publicVendorDirectory: {
