@@ -794,6 +794,8 @@ async function classifyVendorsBatchDirect({ session, organizationId, mappings, p
   // Attempt batch Gemini call if configured
   const batchResultsMap = new Map();
   let batchSucceeded = false;
+  let batchApiFailed = false;
+  let batchApiErrorMessage = null;
 
   if (geminiService.isConfigured()) {
     try {
@@ -821,9 +823,15 @@ async function classifyVendorsBatchDirect({ session, organizationId, mappings, p
             }
           }
         }
+      } else {
+        batchApiFailed = true;
+        batchApiErrorMessage = result.error || 'Batch AI categorisation did not return a successful response';
+        logger.warn('Batch AI categorisation failed', { status: result.status, error: result.error }, LOG_CATEGORY);
       }
     } catch (batchErr) {
-      logger.warn('Batch AI categorisation encountered an error, will fall back to individual calls', { error: batchErr?.message }, LOG_CATEGORY);
+      batchApiFailed = true;
+      batchApiErrorMessage = batchErr?.message || 'Batch AI categorisation encountered an error';
+      logger.warn('Batch AI categorisation encountered an error', { error: batchErr?.message }, LOG_CATEGORY);
     }
   }
 
@@ -848,7 +856,21 @@ async function classifyVendorsBatchDirect({ session, organizationId, mappings, p
         }
       }
 
-      // Fallback: classify individually
+      // If the batch API call itself failed (service down, rate limit, timeout, etc.),
+      // avoid N+1 query and API storm by recording the failure directly without individual API calls
+      if (batchApiFailed) {
+        await vendorIngestionQueries.markMappingFailed(m.id, organizationId, batchApiErrorMessage).catch(() => {});
+        outcomes.push({
+          mappingId: m.id,
+          vendorRecordId: m.vendorRecordId,
+          companyName: m.companyName,
+          status: CLASSIFICATION_STATUS.AI_FAILED,
+          error: batchApiErrorMessage,
+        });
+        continue;
+      }
+
+      // Fallback: classify individually only when batch Gemini wasn't configured or specific item was omitted from batch result
       const singleResult = await classifyVendor({
         session,
         organizationId,

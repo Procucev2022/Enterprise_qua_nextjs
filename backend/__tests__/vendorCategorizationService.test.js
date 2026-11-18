@@ -304,5 +304,54 @@ describe('vendor categorization evidence, validation and persistence', () => {
     });
     expect(batchPrompt).toContain('Mechanical');
     expect(batchPrompt).toContain('vm-1');
+
+    // 6. When batch Gemini throws, avoid N+1 API storm and do not call gemini.generateJson for each individual mapping
+    gemini.generateJson.mockReset();
+    gemini.generateJson.mockRejectedValueOnce(new Error('Rate limit exceeded (HTTP 429)'));
+    const stormRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping, { ...mapping, id: 'map-2', vendorRecordId: 'vm-2' }],
+      profilesByRecordId: new Map([['vm-1', profile], ['vm-2', profile]]),
+    });
+    expect(stormRes.length).toBe(2);
+    expect(stormRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(stormRes[0].error).toContain('Rate limit exceeded');
+    expect(stormRes[1].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(gemini.generateJson).toHaveBeenCalledTimes(1);
+
+    // 7. When batch Gemini returns non-SUCCESS status
+    gemini.generateJson.mockReset();
+    gemini.generateJson.mockResolvedValueOnce({
+      status: gemini.EXTRACTION_STATUS.ERROR,
+      error: 'Model overload',
+    });
+    const errorStatusRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(errorStatusRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(errorStatusRes[0].error).toBe('Model overload');
+
+    // 8. When gemini is NOT configured, falls back to classifyVendor
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(false);
+    const unconfiguredRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(unconfiguredRes.length).toBe(1);
+
+    // 9. Exception in loop
+    const throwingMapping = { ...mapping, id: 'throw-map', vendorRecordId: 'vm-throw' };
+    queries.markMappingProcessing.mockRejectedValueOnce(new Error('Processing mark failed'));
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: [] });
+    const exRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [throwingMapping],
+      profilesByRecordId: new Map([['vm-throw', profile]]),
+    });
+    expect(exRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
   });
 });
