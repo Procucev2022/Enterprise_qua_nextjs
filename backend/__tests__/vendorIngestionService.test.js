@@ -6,7 +6,9 @@ jest.mock('../src/services/storeService', () => ({
   getVendorByIdWithDBFallback: jest.fn(), updateVendorDurably: jest.fn(), empanelIngestedVendor: jest.fn(),
   ensureBuyerAccountForUser: jest.fn(), getBuyerAccountByEmail: jest.fn(),
 }));
-jest.mock('../src/services/mailerService', () => ({}));
+jest.mock('../src/services/mailerService', () => ({
+  ...jest.requireActual('../src/services/mailerService'),
+}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
   ...jest.requireActual('../src/services/vendorCategorizationService'),
   runCategorizationBatch: jest.fn(), classifyVendor: jest.fn(),

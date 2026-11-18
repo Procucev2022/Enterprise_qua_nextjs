@@ -816,6 +816,8 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     mailTransport.resetCooldowns();
     jest.spyOn(mailTransport, 'loadPersistedCooldowns').mockResolvedValue(true);
     jest.spyOn(mailTransport, 'flushPendingCooldownWrites').mockResolvedValue();
+    if (typeof mailerService.getGmailOAuthClient !== 'function') mailerService.getGmailOAuthClient = () => ({});
+    if (typeof mailerService.getGmailProviderKey !== 'function') mailerService.getGmailProviderKey = () => '';
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(mailerService, 'getGmailProviderKey').mockReturnValue('gmail:buyer:testfp');
 

@@ -2,7 +2,9 @@ jest.mock('../src/db/vendorIngestionQueries');
 jest.mock('../src/db/buyerProfileQueries', () => ({ findProfileByUserId: jest.fn() }));
 jest.mock('../src/services/loggerService', () => ({ logger: { info: jest.fn(), warn: jest.fn(), error: jest.fn(), audit: jest.fn() } }));
 jest.mock('../src/services/storeService', () => ({ notifyBuyer: jest.fn() }));
-jest.mock('../src/services/mailerService', () => ({}));
+jest.mock('../src/services/mailerService', () => ({
+  ...jest.requireActual('../src/services/mailerService'),
+}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
   ...jest.requireActual('../src/services/vendorCategorizationService'),
   runCategorizationBatch: jest.fn(),
