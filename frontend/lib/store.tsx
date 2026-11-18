@@ -1603,18 +1603,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       subject = `[Action Required] Set Up Categories: ${buyerCompany} added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in to complete your enterprise compliance profile (factory specs, GSTIN/PAN, plant location, capacity).`;
-      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across the Major and Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
+      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across the Division and Category taxonomy in order to receive enquiries and RFQ opportunities.`;
       unmappedSelfServiceMessage = `The buyer didn't map any categories for you, so please map yourself in order to receive enquiries.`;
     } else if (isExisting) {
       subject = `[Network Association] ${buyerCompany} has added you to their Preferred Vendor Network on Procucev`;
       authInstructions = `A buyer from ${buyerCompany} has associated your verified enterprise profile into their private preferred supplier network. Sign in using your existing credentials or follow the account verification and password recovery steps on the portal.`;
       profileUpdateInstructions = `Please log in to review the buyer association and verify that your plant locations, operational capabilities, and statutory certifications are up to date.`;
-      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across the standard minor categories.`;
+      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Division): ${assignedMajor}\n• 2nd Set (Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across the standard categories.`;
     } else {
       subject = `[Action Required] Welcome to Procucev: ${buyerCompany} has added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in and complete your enterprise profile, including plant location, turnover, machinery, and statutory tax credentials (GSTIN / PAN).`;
-      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
+      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Division): ${assignedMajor}\n• 2nd Set (Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
     }
 
     return {
@@ -2932,12 +2932,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (mode === 'mode_1') {
       return vendorPool
         .filter(v => isRosterSource(v) && matchInfo(v).matched)
-        .map(v => withMatchReason(v, 'Buyer Approved Roster (Minor Category Match)'));
+        .map(v => withMatchReason(v, 'Buyer Approved Roster (Category Match)'));
     } else if (mode === 'mode_2') {
       // Buyer roster matches only. The hardcoded Procucev network vendors and the first-four fallback were removed.
       const matchedBuyer = vendorPool
         .filter(v => matchInfo(v).matched)
-        .map(v => withMatchReason(v, 'Buyer Roster (Minor Category Match)'));
+        .map(v => withMatchReason(v, 'Buyer Roster (Category Match)'));
       return dedupeAndRank(matchedBuyer);
     } else {
       const matched = vendorPool

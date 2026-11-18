@@ -364,8 +364,8 @@ export default function CategorySummaryDashboard() {
             </span>
           </div>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-slate-900 dark:text-white mono">{taxonomy.length} Major</span>
-            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">{totalMinorCategories} Minor</span>
+            <span className="text-xl font-black text-slate-900 dark:text-white mono">{taxonomy.length} Divisions</span>
+            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">{totalMinorCategories} Categories</span>
           </div>
         </button>
 
@@ -530,7 +530,7 @@ export default function CategorySummaryDashboard() {
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${item.majorCategory} minor categories`}
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${item.majorCategory} categories`}
                             onClick={() =>
                               setExpandedMajor((prev) => ({ ...prev, [item.majorCategory]: !prev[item.majorCategory] }))
                             }
@@ -544,7 +544,7 @@ export default function CategorySummaryDashboard() {
                             </span>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-[10px] text-slate-400 dark:text-gray-500 font-mono">
-                                {item.minorCount} Minor Categories
+                                {item.minorCount} Categories
                               </span>
                               <span
                                 className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold ${
@@ -639,7 +639,7 @@ export default function CategorySummaryDashboard() {
                         <td colSpan={7} className="p-4 space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                              Minor Categories in {item.majorCategory} ({catDetail.minorCategories.length})
+                              Categories in {item.majorCategory} ({catDetail.minorCategories.length})
                             </span>
                             <span className="text-[10px] text-slate-500 dark:text-gray-400">
                               RFQ counts reflect all-time activity, not the selected timeframe
@@ -686,7 +686,7 @@ export default function CategorySummaryDashboard() {
                 {selectedKpiModal === 'vendors' && <Building className="text-emerald-600 dark:text-emerald-400" size={20} />}
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                    {selectedKpiModal === 'categories' && `Active Categories Breakdown (${taxonomy.length} Major, ${totalMinorCategories} Minor)`}
+                    {selectedKpiModal === 'categories' && `Active Categories Breakdown (${taxonomy.length} Divisions, ${totalMinorCategories} Categories)`}
                     {selectedKpiModal === 'rfqs' && `RFQs Raised Breakdown — ${TIMEFRAME_LABELS[timeframe]} (${totalRfqsInTimeframe} RFQs)`}
                     {selectedKpiModal === 'quotes' && `Quotes Received Breakdown — ${TIMEFRAME_LABELS[timeframe]} (${totalQuotesReceivedInTimeframe} Quotes)`}
                     {selectedKpiModal === 'buyers' && `Active Enterprise Buyers (${buyerAccounts.length} Registered, ${activeBuyerPercent}% Active)`}
@@ -869,7 +869,7 @@ export default function CategorySummaryDashboard() {
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-gray-800 text-[10px] font-bold uppercase text-slate-500">
                         <th className="p-2.5">Supplier Name</th>
-                        <th className="p-2.5">Major Category</th>
+                        <th className="p-2.5">Division</th>
                         <th className="p-2.5 text-center">Score</th>
                         <th className="p-2.5">Location</th>
                         <th className="p-2.5">Contact</th>
@@ -951,7 +951,7 @@ export default function CategorySummaryDashboard() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    {selectedCategoryDetails.minorCount} Minor Categories · Telemetry scoped to active buyer demand and vendor network.
+                    {selectedCategoryDetails.minorCount} Categories · Telemetry scoped to active buyer demand and vendor network.
                   </p>
                 </div>
               </div>
@@ -1047,7 +1047,7 @@ export default function CategorySummaryDashboard() {
                     : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Layers size={14} /> Minor Categories ({categoryDetailObj?.minorCategories.length || 0})
+                <Layers size={14} /> Categories ({categoryDetailObj?.minorCategories.length || 0})
               </button>
             </div>
 

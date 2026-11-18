@@ -557,7 +557,7 @@ describe('CategorySummaryDashboard', () => {
     mockApp(rfqs, [], []);
     render(<CategorySummaryDashboard />);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Expand Civil Works minor categories' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Expand Civil Works categories' }));
 
     expect(screen.getByText('Bricks')).toBeInTheDocument();
     // The tagged minor category shows a real count, not a fabricated one.
@@ -789,8 +789,8 @@ describe('CategorySummaryDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: /Available Suppliers/i }));
     expect(screen.getByText('Ramesh Patel')).toBeInTheDocument();
 
-    // Tab 5: Minor Categories
-    fireEvent.click(screen.getByRole('button', { name: /Minor Categories \(/i }));
+    // Tab 5: Categories
+    fireEvent.click(screen.getByRole('button', { name: /Categories \(/i }));
     expect(screen.getByText('Excavation')).toBeInTheDocument();
 
     // Back to Relevant RFQs tab
@@ -947,8 +947,8 @@ describe('CategorySummaryDashboard', () => {
     expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
     expect(screen.getByText('Mumbai, Maharashtra')).toBeInTheDocument();
 
-    // Tab 5: Minor Categories
-    fireEvent.click(screen.getByRole('button', { name: /^Minor Categories/i }));
+    // Tab 5: Categories
+    fireEvent.click(screen.getByRole('button', { name: /^Categories/i }));
     expect(screen.getByText(/Bricks/i)).toBeInTheDocument();
     expect(screen.getAllByText(/1 RFQs/i).length).toBeGreaterThanOrEqual(1);
 

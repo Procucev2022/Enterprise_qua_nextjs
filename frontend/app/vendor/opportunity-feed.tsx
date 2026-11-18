@@ -1686,14 +1686,14 @@ export default function OpportunityFeed({
 
                 {/* Major Category Filter (hidden in browser, preserved for unit tests) */}
                 <div className="sr-only">
-                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Major Category</span>
+                  <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Division</span>
                   <select
-                    aria-label="Major Category"
+                    aria-label="Division"
                     value={selectedMajorCategoryDirect}
                     onChange={handleMajorCategoryDirect}
                     className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
                   >
-                    <option value="all">🌐 All Major Categories</option>
+                    <option value="all">🌐 All Divisions</option>
                     {feedMajorCategories.map((major) => (
                       <option key={major} value={major}>{major}</option>
                     ))}
@@ -1720,7 +1720,7 @@ export default function OpportunityFeed({
                   />
                   {/* Preserved hidden select for backwards-compatibility */}
                   <select
-                    aria-label="Direct Minor Category"
+                    aria-label="Direct Category"
                     aria-hidden="true"
                     tabIndex={-1}
                     value={selectedMinorCategoryDirect}
@@ -1960,14 +1960,14 @@ export default function OpportunityFeed({
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
               {/* Major Category Dropdown (hidden in browser, preserved for unit tests) */}
               <div className="sr-only">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Major Category</span>
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Division</span>
                 <select
-                  aria-label="Network Major Category"
+                  aria-label="Network Division"
                   value={selectedMajorCategoryNet}
                   onChange={handleMajorCategoryNet}
                   className="select py-2 px-2.5 bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 rounded-xl font-medium text-slate-800 dark:text-gray-200 text-xs"
                 >
-                  <option value="all">🌐 All Major Categories</option>
+                  <option value="all">🌐 All Divisions</option>
                   {feedMajorCategories.map((major) => (
                     <option key={major} value={major}>{major}</option>
                   ))}
@@ -1994,7 +1994,7 @@ export default function OpportunityFeed({
                 />
                 {/* Preserved hidden select for backwards-compatibility */}
                 <select
-                  aria-label="Network Minor Category"
+                  aria-label="Network Category"
                   aria-hidden="true"
                   tabIndex={-1}
                   value={selectedMinorCategoryNet}

@@ -1072,7 +1072,7 @@ export default function VendorProfilePage() {
                         <tr>
                           <th className="px-3 py-2 text-left w-10">#</th>
                           <th className="px-3 py-2 text-left">Category / Capability Name</th>
-                          <th className="px-3 py-2 text-left">Major Category</th>
+                          <th className="px-3 py-2 text-left">Division</th>
                           <th className="px-3 py-2 text-center">Status</th>
                           <th className="px-3 py-2 text-right w-32">Actions</th>
                         </tr>
@@ -1325,7 +1325,7 @@ export default function VendorProfilePage() {
                           {cat.majorCategory}
                         </h3>
                         <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                          {cat.minorCategories.length} Minor Categories available
+                          {cat.minorCategories.length} Categories available
                         </p>
                       </div>
                     </div>
@@ -1351,10 +1351,10 @@ export default function VendorProfilePage() {
                     <div className="p-3.5 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2.5">
                       <div className="flex items-center justify-between text-[11px] pt-2">
                         <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                          Minor Supply Items (Click to select/unselect)
+                          Supply Categories (Click to select/unselect)
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {selectedMinorsInCat.length} selected in category • {totalSelectedMinorCount} total
+                          {selectedMinorsInCat.length} selected in division • {totalSelectedMinorCount} total
                         </span>
                       </div>
 
@@ -1457,7 +1457,7 @@ export default function VendorProfilePage() {
                 <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">{viewCategory.name}</p>
               </div>
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Major Category</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Division</span>
                 <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.major}</p>
               </div>
               <div>

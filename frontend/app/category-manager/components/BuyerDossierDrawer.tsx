@@ -315,7 +315,7 @@ export default function BuyerDossierDrawer({
       if (res.success) {
         setCurrentCategories(selectedCategoriesDraft);
         setIsEditCategoriesOpen(false);
-        showToast('Supported major categories updated successfully.');
+        showToast('Supported divisions updated successfully.');
       } else {
         showToast(res.error || 'Failed to update categories', 'error');
       }
@@ -1748,7 +1748,7 @@ export default function BuyerDossierDrawer({
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Edit Supported Major Categories
+                  Edit Supported Divisions
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Select, add, or remove procurement categories for {buyer.organizationName}.
@@ -1798,7 +1798,7 @@ export default function BuyerDossierDrawer({
                 type="text"
                 value={newCategoryInput}
                 onChange={(e) => setNewCategoryInput(e.target.value)}
-                placeholder="Type custom major category..."
+                placeholder="Type custom division..."
                 className="flex-1 px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
               />
               <button

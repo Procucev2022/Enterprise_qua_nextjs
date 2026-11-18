@@ -458,10 +458,10 @@ const viewDetailsButtons = () => screen.getAllByTitle(/View RFQ Details/i);
 function selects() {
   return {
     directBuyer: screen.getByLabelText(UI_STRINGS.vendorFeed.buyerFilterLabel) as HTMLSelectElement,
-    directMajor: screen.getByLabelText('Major Category') as HTMLSelectElement,
-    directMinor: screen.getByLabelText('Direct Minor Category') as HTMLSelectElement,
-    netMajor: screen.getByLabelText('Network Major Category') as HTMLSelectElement,
-    netMinor: screen.getByLabelText('Network Minor Category') as HTMLSelectElement,
+    directMajor: screen.getByLabelText('Division') as HTMLSelectElement,
+    directMinor: screen.getByLabelText('Direct Category') as HTMLSelectElement,
+    netMajor: screen.getByLabelText('Network Division') as HTMLSelectElement,
+    netMinor: screen.getByLabelText('Network Category') as HTMLSelectElement,
   };
 }
 
@@ -2080,11 +2080,11 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const closeButtons = within(closedDialog).getAllByRole('button', { name: /Close/i });
     fireEvent.click(closeButtons[0]);
 
-    // 2. Switch to Public Enquiries to test Network major category options
+    // 2. Switch to Public Enquiries to test Network division options
     const publicTabBtn = screen.getByRole('button', { name: /Public Enquiries/i });
     fireEvent.click(publicTabBtn);
 
-    const netMajorSelect = screen.getByLabelText('Network Major Category');
+    const netMajorSelect = screen.getByLabelText('Network Division');
     fireEvent.change(netMajorSelect, { target: { value: 'Engineering Spares - Mechanical' } });
 
     // Test CategorySearchInput clearing back to all categories

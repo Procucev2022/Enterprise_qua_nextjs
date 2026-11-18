@@ -1676,7 +1676,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('Bare Minimum Traders').length).toBeGreaterThan(0);
       // Missing values show a dash, and no category is invented for a vendor that has none.
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
-      expect(screen.getByText('No specific minors tagged')).toBeInTheDocument();
+      expect(screen.getByText('No specific categories tagged')).toBeInTheDocument();
       expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
       // GSTIN, PAN, MSME and turnover are all missing for this vendor, so each one reads as not applicable.
       expect(screen.getAllByText(NOT_APPLICABLE)).toHaveLength(4);

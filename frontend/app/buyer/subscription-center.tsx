@@ -246,7 +246,7 @@ export default function SubscriptionCenter() {
         '✓ CUMULATIVE: Full access to BOTH Silver AND Gold features',
         'Silver Tier: Private approved roster sourcing & automated working-hour chasers',
         'Gold Tier: AI Hybrid Sourcing with Procucev verified network matching',
-        'Intelligent RFQ minor category matching & proximity filter',
+        'Intelligent RFQ category matching & proximity filter',
         'Automatic classification of Buyer Upload vs. Network Pool',
         'Post-bid vendor evaluation surveys to verify quality metrics',
         '🛡️ Zero Repetition: Cross-roster deduplication prevents duplicate emails',

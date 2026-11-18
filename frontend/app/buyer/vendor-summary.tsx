@@ -358,7 +358,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleDownloadBatchCsv = (batch: any) => {
     if (!batch) return;
     const records = batch.records || [];
-    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Major Category,Rating\n';
+    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Division,Rating\n';
     // Only the batch's real records become rows. A batch without records exports the header alone.
     records.forEach((r: any) => {
       csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating ?? ''}"\n`;
@@ -376,7 +376,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // the vendor record holds; nothing is added.
   const handleExportSelectedCsv = () => {
     const rows = buyerFilteredVendors.filter((v) => selectedVendorIds.includes(v.id));
-    const header = 'Vendor ID,Company Name,Major Category,Contact Person,Email ID,Phone,Location,Rating\n';
+    const header = 'Vendor ID,Company Name,Division,Contact Person,Email ID,Phone,Location,Rating\n';
     const body = rows
       .map((v) =>
         [v.id, v.name, v.majorCategory, v.contactPerson, v.email, v.phone, v.location, v.rating]
@@ -2909,7 +2909,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block text-[10px] font-semibold">Minor Line Items:</span>
+                    <span className="text-slate-400 block text-[10px] font-semibold">Categories:</span>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {(() => {
                         const viewMinors = normalizeVendorCategoryList(selectedVendorForCrud.minorCategories);
@@ -2923,7 +2923,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             </span>
                           ))
                         ) : (
-                          <span className="text-slate-400 italic">No specific minors tagged</span>
+                          <span className="text-slate-400 italic">No specific categories tagged</span>
                         );
                       })()}
                     </div>

@@ -100,7 +100,7 @@ export const UI_STRINGS = {
       closeDossier: 'Close Dossier',
       consoleTitle: 'Category Manager Operations Console',
       editCategories: 'Edit',
-      supportedMajorCategories: 'Supported Major Categories',
+      supportedMajorCategories: 'Supported Divisions',
       // Shown in the vault section of the dossier when the vault document list cannot be read.
       vaultLoadFailed: 'The Document Vault could not be loaded, so its documents cannot be attached here. Check your connection, then reopen this dossier to try again. A local file can still be attached.',
       corporateContact: 'Corporate Contact',
@@ -1082,12 +1082,12 @@ export const UI_STRINGS = {
     lineItemSearchAria: 'Search the line items of this RFQ',
     allMinorCategories: 'All Categories',
     minorFilterAria: 'Filter line items by category',
-    supplierMajorFilterLabel: 'Division (Major)',
-    supplierMajorFilterAria: 'Filter invited suppliers by major category division',
+    supplierMajorFilterLabel: 'Division',
+    supplierMajorFilterAria: 'Filter invited suppliers by division',
     allSupplierMajors: 'All Divisions',
-    supplierMinorFilterLabel: 'Minor Category',
-    supplierMinorFilterAria: 'Filter invited suppliers by minor category',
-    allSupplierMinors: 'All Minor Categories',
+    supplierMinorFilterLabel: 'Category',
+    supplierMinorFilterAria: 'Filter invited suppliers by category',
+    allSupplierMinors: 'All Categories',
     clearSupplierFiltersAction: 'Clear filter',
     showingSuppliersCount: 'Showing {shown} of {total} invited suppliers',
     exportCsvAction: 'Export CSV',
@@ -1404,10 +1404,10 @@ export const UI_STRINGS = {
     cityLabel: 'City',
     pincodeBadge: 'PIN: {pincode}',
     pincodeLabel: 'Pincode',
-    categoryLabel: 'Category',
-    allCategories: 'All categories',
-    minorCategoryLabel: 'Minor Category',
-    allMinorCategories: 'All minor categories',
+    categoryLabel: 'Division',
+    allCategories: 'All divisions',
+    minorCategoryLabel: 'Category',
+    allMinorCategories: 'All categories',
     maxSelectionWarning: 'Maximum of {max} vendors can be selected per invitation.',
     limitReachedNotice: 'Maximum 20 vendors limit reached. Remove some to select others.',
     duplicateIgnored: 'Vendor already invited',
@@ -1417,7 +1417,7 @@ export const UI_STRINGS = {
     contactPersonPlaceholder: 'Contact person full name',
     contactNumberPlaceholder: 'Phone number with country code',
     emailPlaceholder: 'name@company.com',
-    minorCategoryPlaceholder: 'Minor category',
+    minorCategoryPlaceholder: 'Category',
     cityPlaceholder: 'City',
     statePlaceholder: 'State',
     pincodePlaceholder: 'PIN code',
@@ -1777,13 +1777,13 @@ export const UI_STRINGS = {
       'Corporate Website must be a full URL beginning http:// or https://, for example https://example.com.',
     pincodeInvalid: 'PIN Code must be 6 digits and cannot start with 0, for example 400001.',
     categoriesRequired:
-      'Select at least one minor procurement category so RFQs can be matched to vendors.',
+      'Select at least one procurement category so RFQs can be matched to vendors.',
 
     // Cardinality caps
     maxMajorReached:
-      'You can select at most {max} major procurement categories. Clear one before adding another.',
+      'You can select at most {max} procurement divisions. Clear one before adding another.',
     maxMinorReached:
-      'You have selected {count} of {max} minor procurement categories. Clear one before adding another.',
+      'You have selected {count} of {max} procurement categories. Clear one before adding another.',
   },
 
   // ============================================================================
@@ -1863,8 +1863,8 @@ export const UI_STRINGS = {
   // extractor could not place, and who it came from.
   categoryManagerKanban: {
     buyerLabel: 'Buyer',
-    majorCategoryLabel: 'Major category',
-    minorCategoryLabel: 'Minor category',
+    majorCategoryLabel: 'Division',
+    minorCategoryLabel: 'Category',
     itemsLabel: 'Line items',
     receivedLabel: 'Received',
     confidenceLabel: 'Avg. extraction confidence',
@@ -1911,7 +1911,7 @@ export const UI_STRINGS = {
     // circulated the RFQ. It does neither: extraction and categorization are
     // automatic, release to vendors is a Category Manager decision.
     howItWorksAddressed:
-      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns major and minor categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
+      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns divisions and categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
 
     // The intake address buyers send TO. Distinct from the IMAP login below,
     // which is the account the backend reads and is an operational detail.
@@ -1933,7 +1933,7 @@ export const UI_STRINGS = {
 
     // What happens next, and explicitly what does not.
     nextStepsTitle: 'What happens next',
-    nextStepExtract: 'Line items and major/minor categories are extracted automatically.',
+    nextStepExtract: 'Line items, divisions, and categories are extracted automatically.',
     nextStepReview: 'The RFQ is created and appears on the Category Manager board for review.',
     nextStepNoVendors: 'No vendor is contacted from here. Releasing to vendors is the Category Manager\u2019s step.',
 

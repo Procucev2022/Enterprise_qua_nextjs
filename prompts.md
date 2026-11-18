@@ -6377,3 +6377,10 @@ For submit quotation, for one line item Rfq also, reuse the multiple line item d
 Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
 ```
 ---
+
+### Prompt 278
+**Timestamp**: 2026-11-18T14:31:36+05:30
+```text
+Everywhere in complete codebase UI, Replace major category with "Division" & minor Category to "Category",. UI change only
+```
+---

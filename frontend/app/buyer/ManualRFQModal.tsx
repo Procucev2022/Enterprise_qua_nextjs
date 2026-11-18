@@ -2016,7 +2016,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             </div>
                             <div className="p-2 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                               <strong className="text-emerald-800 dark:text-emerald-300 block mb-0.5">2. Multi-Signal Supplier Scoring</strong>
-                              Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                              Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                             </div>
                             <div className="p-2 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                               <strong className="text-emerald-800 dark:text-emerald-300 block mb-0.5">3. ≥80% Relevance Threshold</strong>
@@ -2399,7 +2399,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             </div>
                             <div className="p-2 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                               <strong className="text-indigo-800 dark:text-indigo-300 block mb-0.5">2. Multi-Signal Supplier Scoring</strong>
-                              Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                              Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                             </div>
                             <div className="p-2 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                               <strong className="text-indigo-800 dark:text-indigo-300 block mb-0.5">3. ≥80% Relevance Threshold</strong>

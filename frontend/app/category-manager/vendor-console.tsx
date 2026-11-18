@@ -1037,7 +1037,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               }}
               className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
             >
-              <option value="">All categories</option>
+              <option value="">All divisions</option>
               {effectiveCategoryOptions.map((c) => (
                 <option key={c} value={c}>
                   {c}
@@ -1045,21 +1045,21 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
               ))}
             </select>
 
-            {/* Minor category filter (scoped to the selected major) */}
+            {/* Category filter (scoped to the selected division) */}
             <select
-              aria-label="Minor category"
+              aria-label="Category"
               value={minorFilter}
               onChange={(e) => setMinorFilter(e.target.value)}
               disabled={!categoryFilter || minorCategoryOptions.length === 0}
-              title={!categoryFilter ? 'Select a category first' : undefined}
+              title={!categoryFilter ? 'Select a division first' : undefined}
               className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
             >
               <option value="">
                 {!categoryFilter
-                  ? 'Select category first'
+                  ? 'Select division first'
                   : minorCategoryOptions.length === 0
-                    ? 'No minor categories'
-                    : 'All minor categories'}
+                    ? 'No categories'
+                    : 'All categories'}
               </option>
               {minorCategoryOptions.map((m) => (
                 <option key={m} value={m}>
@@ -1104,7 +1104,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
             <Users size={32} className="mx-auto text-slate-400" />
             <h4 className="font-bold text-sm text-slate-800 dark:text-gray-200">No Vendors Found</h4>
             <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-              No vendors match the current search, category, minor category or pincode filters. Try clearing filters or use bulk upload.
+              No vendors match the current search, division, category or pincode filters. Try clearing filters or use bulk upload.
             </p>
           </div>
         )}

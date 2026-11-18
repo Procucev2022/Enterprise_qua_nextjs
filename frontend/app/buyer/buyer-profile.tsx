@@ -882,7 +882,7 @@ export default function BuyerProfilePage() {
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <div>
               <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Major & 120+ Minor)
+                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Divisions &amp; 120+ Categories)
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                 Select your organization&apos;s active procurement scopes. This governs automated AI vendor matching &amp; RFQ distribution.
@@ -891,7 +891,7 @@ export default function BuyerProfilePage() {
 
             <div className="flex items-center gap-2">
               <span className="badge badge-purple font-mono text-[11px]">
-                {selectedMajor.length} Major • {totalSelectedMinorCount} Minor Selected
+                {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
               </span>
             </div>
           </div>
@@ -903,7 +903,7 @@ export default function BuyerProfilePage() {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search across all 13 Major and 120+ Minor categories (e.g. Cables, Valves, Pumps, IT, Logistics)..."
+              placeholder="Search across all 13 Divisions and 120+ Categories (e.g. Cables, Valves, Pumps, IT, Logistics)..."
               className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
             />
           </div>
@@ -944,7 +944,7 @@ export default function BuyerProfilePage() {
                           {cat.majorCategory}
                         </h3>
                         <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                          {cat.minorCategories.length} Minor Categories available
+                          {cat.minorCategories.length} Categories available
                         </p>
                       </div>
                     </div>
@@ -970,7 +970,7 @@ export default function BuyerProfilePage() {
                     <div className="p-3 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2">
                       <div className="flex items-center justify-between text-[11px] pt-1.5">
                         <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px]">
-                          Minor Procurement Categories
+                          Procurement Categories
                         </span>
                         <div className="flex items-center gap-2">
                           <button

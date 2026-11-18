@@ -205,7 +205,7 @@ export default function SupplierDossierDrawer({
 
   const handleSaveCategories = async () => {
     if (editingCategories.length === 0) {
-      showToast('Please select at least one major category.', 'error');
+      showToast('Please select at least one division.', 'error');
       return;
     }
     setIsSavingCategories(true);
@@ -1063,7 +1063,7 @@ export default function SupplierDossierDrawer({
                     key={cat}
                     className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
                   >
-                    Major: {cat}
+                    Division: {cat}
                   </span>
                 ))}
               </div>
@@ -1777,7 +1777,7 @@ export default function SupplierDossierDrawer({
             {/* QUICK SELECTION CHECKBOXES */}
             <div className="space-y-2">
               <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Select Major Procurement Categories:
+                Select Procurement Divisions:
               </span>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-2 border border-slate-200 dark:border-slate-700 rounded-lg">
                 {majorCategoryError && majorCategoryOptions.length === 0 && (
