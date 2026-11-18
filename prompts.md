@@ -6132,7 +6132,86 @@ the Excel template has been updated, but the PO Dump upload page is still displa
 ```
 ---
 
-### Prompt 268
+### Prompt 248
+**Timestamp**: 2026-11-16T15:12:37+05:30
+```text
+Request Vendor Evaluation functionality is not working as expected.
+
+After clicking Request Vendor Evaluation, the request should be sent to the vendor, as it was working previously.
+
+After clicking the button, the popup should close automatically once the request is successfully submitted.
+```
+---
+
+### Prompt 249
+**Timestamp**: 2026-11-16T15:13:09+05:30
+```text
+ there are 11 vendors available in my Vendor Directory, but none of them are appearing in the Create RFQ page under Mode 1 – Internal Vendors , V2 and V3 also
+```
+---
+
+### Prompt 250
+**Timestamp**: 2026-11-16T15:13:59+05:30
+```text
+I closed this RFQ, and the status is showing Closed inside the RFQ details page. However, in the RFQ Summary list, it is still showing Quotes Pending. Please check and fix the status synchronization so that the correct RFQ status is reflected consistently both inside and outside.
+```
+---
+
+### Prompt 251
+**Timestamp**: 2026-11-16T15:14:36+05:30
+```text
+please fix these two issues in the Vendor Directory – Add Single Vendor popup:
+
+Phone Number Validation: The Phone field is accepting alphabets and special characters. Allow only numeric digits and validate the required mobile number length.
+
+Error Message Visibility: Validation error messages are appearing behind the popup or are hidden. Please ensure all error messages displayed clearly above the popup content and remain visible to the user.
+```
+---
+
+### Prompt 252
+**Timestamp**: 2026-11-16T17:22:31+05:30
+```text
+I entered my GST number and registered address during buyer registration, but these details are not appearing in the Buyer Profile.
+```
+---
+
+### Prompt 253
+**Timestamp**: 2026-11-16T18:00:52+05:30
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-16T12_21_04.549Z.csv] 
+
+Please check the errors & fix them
+
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-16T12_29_48.949Z.csv] 
+
+Also check warnings in logs file, & fix them
+```
+---
+
+### Prompt 254
+**Timestamp**: 2026-11-16T18:25:17+05:30
+```text
+in the Buyer's Vendor Directory, Some vendors do not have categories assigned. Ideally all vendors should have a category, without a category a vendor can't exist. please check & fix this, why the vendor got created without category, also make sure to give an option to edit or add or update category for a vendor for buyer's own vendor.
+```
+---
+### Prompt 255
+**Timestamp**: 2026-11-16T22:44:36+05:30
+```text
+in this image, we are always getting minor category shortfall "0" value for all or any RFQ invitations. 
+
+
+basically when a RFQ invitations is sent to minor category vendors, in case we have 4 minor category vendors for that pincode instead of 25, we send this email notifications, but the value is not coming correct, can you please check
+```
+---
+
+### Prompt 256
+**Timestamp**: 2026-11-17T18:16:16+05:30
+```text
+Please check once, all checks are failing, please fix them. Also, how can a commit happen without quality checks passing. Can you please check & fix
+```
+---
+
+### Prompt 257
 
 **Timestamp**: 2026-11-17T16:29:28+05:30
 
@@ -6143,3 +6222,24 @@ check this code and create the pr from this branch to test-v3 and pass all the c
 ```
 
 ---
+
+### Prompt 258
+
+**Timestamp**: 2026-11-17T22:50:55+05:30
+
+```text
+continue and solve and merge the pr
+```
+
+---
+
+### Prompt 259
+
+**Timestamp**: 2026-11-18T08:10:25+05:30
+
+```text
+continue
+```
+
+---
+
