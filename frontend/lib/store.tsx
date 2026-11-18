@@ -1649,18 +1649,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [onboardingEmailModalOpen, setOnboardingEmailModalOpen] = useState<boolean>(false);
 
   // Initial Setup State & Purchase Data Ingestion
-  const [initialSetupModalOpen, setInitialSetupModalOpenState] = useState<boolean>(false);
+  const [initialSetupModalOpen, setInitialSetupModalOpen] = useState<boolean>(false);
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
   const [lastIngestionSummary, setLastIngestionSummary] = useState<IngestionSummary | null>(null);
   const [lastIngestionError, setLastIngestionError] = useState<string | null>(null);
-
-  const hasCompletedBuyerVendorUpload =
-    initialSetupCompleted ||
-    currentUserSession?.vendorMasterUploaded === true ||
-    activeBuyerAccount?.initialSetupCompleted === true ||
-    (!initialSetupModalOpen &&
-      buyerVendors.some((v) => isBuyerUploadedVendor(v) && !String(v.id || '').startsWith('v-master-')));
 
   const markBuyerVendorSetupCompleted = useCallback(() => {
     setInitialSetupCompleted(true);
@@ -1672,23 +1665,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     setActiveBuyerAccount((prev) => (prev && !prev.initialSetupCompleted ? { ...prev, initialSetupCompleted: true } : prev));
   }, []);
-
-  useEffect(() => {
-    if (!isLoggedIn || currentRole !== 'buyer') return;
-    if (hasCompletedBuyerVendorUpload && !initialSetupCompleted) {
-      setInitialSetupCompleted(true);
-    }
-  }, [isLoggedIn, currentRole, hasCompletedBuyerVendorUpload, initialSetupCompleted]);
-
-  const setInitialSetupModalOpen = useCallback(
-    (open: boolean) => {
-      if (open && currentRole === 'buyer' && hasCompletedBuyerVendorUpload) {
-        return;
-      }
-      setInitialSetupModalOpenState(open);
-    },
-    [currentRole, hasCompletedBuyerVendorUpload]
-  );
 
   const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',

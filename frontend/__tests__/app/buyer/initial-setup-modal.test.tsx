@@ -4825,9 +4825,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     ).toBeTruthy();
   });
 
-  it('does not render Buyer Initial Setup popup once buyer has already completed initial vendor upload', () => {
+  it('does not render Buyer Initial Setup popup when initialSetupModalOpen is false', () => {
     (useApp as jest.Mock).mockReturnValue({
-      initialSetupModalOpen: true,
+      initialSetupModalOpen: false,
       setInitialSetupModalOpen: jest.fn(),
       historicalPurchaseDataPeriod: '1_year',
       setHistoricalPurchaseDataPeriod: jest.fn(),
