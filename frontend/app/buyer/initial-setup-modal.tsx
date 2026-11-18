@@ -1924,20 +1924,44 @@ export default function InitialSetupModal() {
     setIsProcessingPOJoin(true);
     setPoUploadError(null);
     try {
-      const res = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-job`, {
+      // 1. Direct AI categorization: classify all suppliers in one single request without multi-step polling
+      const directRes = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-direct`, {
         method: 'POST',
         headers: authFetchHeaders(),
       });
-      const json = await res.json().catch(() => null);
-      const job: IngestionJobState | undefined = json?.data?.job;
-      if (!res.ok || !job) {
-        const msg: string = json?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
-        setPoUploadError(msg);
-        showToast('AI Category Cross-Match', msg, 'warning');
+      const directJson = await directRes.json().catch(() => null);
+
+      if (directRes.ok && directJson?.data?.job) {
+        const directJob: IngestionJobState = directJson.data.job;
+        setAiJob({ ...directJob, fileName: directJob.fileName || poFileName });
+        setApiJoinedVendors(recordsFromMappings(directJson.data.mappings || []));
+        setStep(4);
+        logger.log('INFO', 'AI category direct execution finished', { sessionId, jobId: directJob.id, status: directJob.status }, 'VENDOR_INGESTION');
         return;
       }
-      setAiJob({ ...job, fileName: job.fileName || poFileName });
-      logger.log('INFO', 'AI category job started', { sessionId, jobId: job.id, status: job.status }, 'VENDOR_INGESTION');
+
+      // 2. Fallback to background job endpoint only if direct route is 404 (legacy server)
+      if (directRes.status === 404) {
+        const res = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-job`, {
+          method: 'POST',
+          headers: authFetchHeaders(),
+        });
+        const json = await res.json().catch(() => null);
+        const job: IngestionJobState | undefined = json?.data?.job;
+        if (!res.ok || !job) {
+          const msg: string = json?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
+          setPoUploadError(msg);
+          showToast('AI Category Cross-Match', msg, 'warning');
+          return;
+        }
+        setAiJob({ ...job, fileName: job.fileName || poFileName });
+        logger.log('INFO', 'AI category job started', { sessionId, jobId: job.id, status: job.status }, 'VENDOR_INGESTION');
+        return;
+      }
+
+      const msg: string = directJson?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
+      setPoUploadError(msg);
+      showToast('AI Category Cross-Match', msg, 'warning');
     } catch (err) {
       logger.log('ERROR', 'Could not start the AI category job', { error: err }, 'VENDOR_INGESTION');
       setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed);

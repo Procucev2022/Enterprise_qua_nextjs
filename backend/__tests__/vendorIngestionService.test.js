@@ -470,4 +470,44 @@ describe('mapping review reads', () => {
       selfMappingRequired: ['E', 'F', 'G'],
     });
   });
+
+  test('runDirectCategorization executes join, batch classification, and returns job and mappings', async () => {
+    queries.findSessionById.mockResolvedValue({
+      ...SESSION,
+      vendorMasterRowCount: 2,
+      poRowCount: 5,
+      horizonStart: '2025-01-01',
+      horizonEnd: '2025-12-31',
+    });
+    queries.matchPoLineItemsToVendors.mockResolvedValue({ byVendorCode: 1, byGstin: 0, byName: 0, unmatched: 0 });
+    queries.findVendorPurchasingProfiles.mockResolvedValue([
+      { vendorRecordId: 'vr-1', vendorCode: 'V1', companyName: 'Vendor 1', hasPoHistory: true, poCount: 1, poLineCount: 1, totalSpend: 100, lineSummaries: ['Pump'] },
+      { vendorRecordId: 'vr-2', vendorCode: 'V2', companyName: 'Vendor 2', hasPoHistory: false, poCount: 0, poLineCount: 0, totalSpend: 0, lineSummaries: [] },
+    ]);
+    queries.seedCategoryMappings.mockResolvedValue(null);
+    queries.findUnmatchedPoVendors.mockResolvedValue([]);
+    queries.updateSession.mockResolvedValue({ ...SESSION, status: 'AI_COMPLETED' });
+    queries.findQueuedCategoryMappings.mockResolvedValue([{ id: 'm-1', vendorRecordId: 'vr-1', companyName: 'Vendor 1' }]);
+    queries.createIngestionJob.mockResolvedValue({ id: 'job-direct-1' });
+    queries.updateIngestionJobProgress.mockResolvedValue({ id: 'job-direct-1', status: 'COMPLETED' });
+    queries.findCategoryMappings.mockResolvedValue([
+      {
+        id: 'm-1',
+        vendorRecordId: 'vr-1',
+        status: MAPPING_STATUS.AI_MAPPED,
+        aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'], confidence: 90 },
+        buyerMajorCategory: '',
+        buyerMinorCategories: [],
+      },
+    ]);
+
+    const result = await service.runDirectCategorization(USER, SESSION.id);
+    expect(result.job).toBeDefined();
+    expect(result.job.status).toBe('COMPLETED');
+    expect(result.totalVendors).toBe(2);
+    expect(result.matchedVendorCount).toBe(1);
+    expect(result.unmatchedVendorCount).toBe(1);
+    expect(result.mappings).toHaveLength(1);
+    expect(result.mappings[0].finalMajorCategory).toBe('Mechanical');
+  });
 });

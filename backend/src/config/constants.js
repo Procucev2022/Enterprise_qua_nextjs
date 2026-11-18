@@ -3041,9 +3041,8 @@ const VENDOR_INGESTION_CONFIG = {
   // 200,000 PO rows at a generous ~250 bytes/row is ~50MB; this leaves
   // headroom above that without risking an unbounded buffer.
   MAX_UPLOAD_BYTES: Number(process.env.VENDOR_INGESTION_MAX_UPLOAD_BYTES || 75 * 1024 * 1024),
-  // Vendors classified per AI batch. The job is chunked so a large run reports
-  // progress and can be resumed, rather than holding one long request open.
-  AI_BATCH_SIZE: 8,
+  // Vendors classified per AI batch. Increased to 50 so normal vendor batches (10-40) finish in 1 batch.
+  AI_BATCH_SIZE: 50,
   // A model reply that is not valid JSON of the expected shape is retried this
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.

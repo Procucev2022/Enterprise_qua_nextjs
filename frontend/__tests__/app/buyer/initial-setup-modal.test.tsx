@@ -172,8 +172,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     ...overrides,
   });
 
-  const jsonResponse = (body: unknown, ok = true) =>
-    Promise.resolve({ ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) });
+  const jsonResponse = (body: unknown, ok = true, status?: number) =>
+    Promise.resolve({ ok, status: status !== undefined ? status : (ok ? 200 : 500), json: () => Promise.resolve(body) });
 
   /**
    * Stands in for the ingestion server: a saved session, the AI category job and the supplier mappings it stores.
@@ -190,6 +190,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       horizonClearsPo?: boolean;
       createSessionFails?: boolean;
       horizonFails?: boolean;
+      useDirectAi?: boolean;
+      directAiFails?: string;
     } = {}
   ) => {
     const fetchMock = jest.fn<Promise<unknown>, [string, RequestInit?]>((url: string, init?: RequestInit) => {
@@ -205,6 +207,21 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       if (url.includes('/time-horizon')) {
         if (options.horizonFails) return jsonResponse({ success: false, error: 'Horizon store unavailable' }, false);
         return jsonResponse({ success: true, data: {}, poDataCleared: options.horizonClearsPo === true });
+      }
+      if (url.endsWith('/ai-categorize-direct')) {
+        if (options.directAiFails !== undefined) {
+          return jsonResponse({ success: false, error: options.directAiFails || null }, false, 500);
+        }
+        if (options.useDirectAi) {
+          return jsonResponse({
+            success: true,
+            data: {
+              job: options.startJob ?? completedAiJob({ fileName: '' }),
+              mappings: options.mappings === undefined ? [APEX_MAPPING] : options.mappings,
+            },
+          });
+        }
+        return jsonResponse({ success: false, error: 'Direct route not found' }, false, 404);
       }
       if (url.endsWith('/ai-categorize-job')) {
         if (options.startFails) return jsonResponse({ success: false, error: options.startFails }, false);
@@ -4198,6 +4215,58 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     runAiCategoryJob();
 
     expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.sessionNotReady)).toBeInTheDocument();
+  });
+
+  it('executes direct AI categorization in a single API call and opens Step 4 directly', async () => {
+    installIngestionServer({ useDirectAi: true });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization error when direct route fails with error message', async () => {
+    installIngestionServer({ directAiFails: 'Direct AI categorization failed on server' });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText('Direct AI categorization failed on server')).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization error when direct route fails with empty error message', async () => {
+    installIngestionServer({ directAiFails: '' });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization with custom file name and empty mappings', async () => {
+    installIngestionServer({ useDirectAi: true, startJob: completedAiJob({ fileName: 'custom_po.xlsx' }), mappings: [] });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization when mappings is null', async () => {
+    installIngestionServer({ useDirectAi: true, mappings: null as unknown as Record<string, unknown>[] });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
   });
 
   it('creates the session with the chosen period when the server has none', async () => {

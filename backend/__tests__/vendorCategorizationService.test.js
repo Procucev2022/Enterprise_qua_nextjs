@@ -245,4 +245,64 @@ describe('vendor categorization evidence, validation and persistence', () => {
       expect.objectContaining({ mappingId: 'map-2', status: service.CLASSIFICATION_STATUS.AI_FAILED, error: 'Classification failed unexpectedly' }),
     ]);
   });
+
+  test('classifyVendorsBatchDirect processes multiple suppliers in batch and falls back gracefully', async () => {
+    // 1. Empty mappings
+    expect(await service.classifyVendorsBatchDirect({ ...args, mappings: [] })).toEqual([]);
+
+    // 2. Mapping with no PO history
+    const noPoMapping = { ...mapping, id: 'map-nopo', vendorRecordId: 'vm-nopo', companyName: 'No PO Supplier' };
+    const noPoProfile = { ...profile, hasPoHistory: false };
+    const noPoRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [noPoMapping],
+      profilesByRecordId: new Map([['vm-nopo', noPoProfile]]),
+    });
+    expect(noPoRes[0].status).toBe(service.CLASSIFICATION_STATUS.NO_CONTENT);
+
+    // 3. Empty category master
+    const emptyMasterRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      categoryMaster: [],
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(emptyMasterRes[0].status).toBe(service.CLASSIFICATION_STATUS.NO_CONTENT);
+
+    // 4. Batch Gemini response success
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockResolvedValueOnce({
+      status: gemini.EXTRACTION_STATUS.SUCCESS,
+      model: 'gemini-2.0-flash',
+      data: [
+        {
+          vendorRecordId: 'vm-1',
+          vendorCode: 'V1',
+          primaryCategory: 'Mechanical',
+          minorCategories: ['Pumps'],
+          relevantProducts: ['Pump'],
+          confidenceScore: 90,
+          reason: 'Pumps purchases',
+        },
+      ],
+    });
+    queries.saveAiSuggestion.mockResolvedValueOnce({ id: 'map-1', majorCategory: 'Mechanical' });
+
+    const batchRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(batchRes[0].status).toBe(service.CLASSIFICATION_STATUS.SUCCESS);
+    expect(batchRes[0].suggestion.majorCategory).toBe('Mechanical');
+
+    // 5. Test buildBatchCategorizationPrompt
+    const batchPrompt = service.buildBatchCategorizationPrompt({
+      vendorProfiles: [{ ...profile, vendorRecordId: 'vm-1' }],
+      categoryMaster: args.categoryMaster,
+      horizon: { startDate: '2024-01-01', endDate: '2026-01-01' },
+    });
+    expect(batchPrompt).toContain('Mechanical');
+    expect(batchPrompt).toContain('vm-1');
+  });
 });
