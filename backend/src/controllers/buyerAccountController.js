@@ -14,6 +14,7 @@ const {
 } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const pool = require('../db/pool');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 
@@ -536,6 +537,14 @@ async function ingestHistoricalData(req, res, next) {
       (await storeService.ensureBuyerAccountForUser?.(req.user)) ||
       (await storeService.getBuyerAccountByEmail(req.user.email));
     const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
+    if (result?.success !== false && (result?.importedCount > 0 || (Array.isArray(vendorRecords) && vendorRecords.length > 0))) {
+      const organizationId = req.user?.orgId || req.user?.organizationId || requestingBuyerAccount?.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after historical ingestion', { error: markErr, organizationId }, 'BUYER_ACCOUNT_CONTROLLER');
+        });
+      }
+    }
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');

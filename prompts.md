@@ -6280,3 +6280,10 @@ i give the po data of 4 vendors only but it is showing 7 mapped and 3 unmapped. 
 Why it is showing 10 total empanelled and 1 ocr &360 for the first time addition. Change "total empanelled" to "total vendor".
 ```
 ---
+
+### Prompt 267
+**Timestamp**: 2026-11-17T21:03:19+05:30
+```text
+This functionality should come as popup for the new buyer only. after buyer uploaded their vendor. Again this buyer vendor master functionaliy should not come instead it should come as a add vendor bulk feature with required columns
+```
+---

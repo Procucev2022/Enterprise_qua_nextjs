@@ -4809,5 +4809,26 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText('4 Suppliers')).toBeInTheDocument();
     expect(screen.getByText('6 Suppliers')).toBeInTheDocument();
   });
+
+  it('does not render Buyer Initial Setup popup once buyer has already completed initial vendor upload', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn(),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: true,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: true },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: true },
+      buyerVendors: [],
+      showToast: jest.fn(),
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    expect(container).toBeEmptyDOMElement();
+  });
 });
 

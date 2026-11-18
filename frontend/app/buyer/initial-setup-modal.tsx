@@ -295,11 +295,19 @@ export default function InitialSetupModal() {
     processHistoricalPurchaseData,
     lastIngestionSummary,
     lastIngestionError,
+    initialSetupCompleted,
     setInitialSetupCompleted,
+    currentUserSession,
     activeBuyerAccount,
     buyerVendors,
     showToast,
   } = useApp();
+
+  const isSetupCompletedForBuyer = Boolean(
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true
+  );
 
   const [completionSummary, setCompletionSummary] = useState<IngestionSummary | null>(null);
   const [isRetryingFailedEmails, setIsRetryingFailedEmails] = useState(false);
@@ -618,7 +626,7 @@ export default function InitialSetupModal() {
   // Re-establish the session on open. A first visit has none, so one is created here: uploads and the AI
   // job are stored against it, and the server needs the chosen period as its time horizon.
   React.useEffect(() => {
-    if (!initialSetupModalOpen) {
+    if (!initialSetupModalOpen || (isSetupCompletedForBuyer && !completionSummary)) {
       setVendorJob(null);
       setPoJob(null);
       setAiJob(null);
@@ -696,7 +704,7 @@ export default function InitialSetupModal() {
 
 
 
-  if (!initialSetupModalOpen) return null;
+  if (!initialSetupModalOpen || (isSetupCompletedForBuyer && !completionSummary)) return null;
 
   const ALLOWED_UPLOAD_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.tsv', '.txt'];
   const isAllowedSpreadsheetFile = (file: File): boolean => {

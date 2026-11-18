@@ -52,11 +52,14 @@ jest.mock('@/lib/validationSchemas', () => {
   };
 });
 jest.mock('@/app/category-manager/VendorUploadModal', () => {
-  return function MockVendorUploadModal({ isOpen, onClose }: any) {
+  return function MockVendorUploadModal({ isOpen, onClose, onImportComplete }: any) {
     return (
-      <div data-testid="mock-vendor-upload-modal">
+      <div data-testid="mock-vendor-upload-modal" data-open={String(Boolean(isOpen))}>
         <button data-testid="trigger-bulk-modal-close" onClick={onClose}>
           Close Bulk
+        </button>
+        <button data-testid="trigger-bulk-modal-complete" onClick={() => onImportComplete?.()}>
+          Complete Bulk
         </button>
       </div>
     );
@@ -430,9 +433,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
 
-    // Click Upload Vendor button
-    fireEvent.click(screen.getByText(/Upload Vendor/i));
-    expect(mockOnNavigateToWizard).toHaveBeenCalled();
+    // Click Add Vendor Bulk button (when buyer already has uploaded vendors)
+    fireEvent.click(screen.getByTestId('open-add-vendor-bulk-modal'));
+    expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
+    expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByTestId('trigger-bulk-modal-complete'));
+    fireEvent.click(screen.getByTestId('trigger-bulk-modal-close'));
+    expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'false');
 
     // Search filter
     const searchInput = screen.getByPlaceholderText(/Search vendors by name, contact, category/i);
@@ -1201,10 +1208,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(searchInput, { target: { value: '' } });
       expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
 
-      // Navigate to Wizard button
-      const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
-      fireEvent.click(uploadBtn);
-      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
+      // Opens Add Vendor Bulk after buyer already has uploaded vendors
+      const bulkBtn = screen.getByRole('button', { name: UI_STRINGS.vendorBulkImport.buyerButtonLabel });
+      fireEvent.click(bulkBtn);
+      expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
+      expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
     });
 
     it('handles View Profile, Edit, and Mark Inactive modal cancel actions', () => {
@@ -2608,7 +2616,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     it('opens upload history modal with empty state and navigates to wizard', () => {
       localStorage.removeItem('procucev_vendor_upload_history');
 
-      render(
+      const { unmount: unmountExisting } = render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
           onNavigateToWizard={mockOnNavigateToWizard}
@@ -2620,9 +2628,43 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Vendor Template Upload History')).toBeInTheDocument();
       expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));
-      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
+      const bulkButtons = screen.getAllByRole('button', { name: UI_STRINGS.vendorBulkImport.buyerButtonLabel });
+      fireEvent.click(bulkButtons[bulkButtons.length - 1]);
+      expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
+      expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
       expect(screen.queryByText('Vendor Template Upload History')).not.toBeInTheDocument();
+      unmountExisting();
+
+      // New buyer with zero uploaded vendors still gets initial setup trigger from history & toolbar
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Fresh New Buyer' },
+        initialSetupCompleted: false,
+      });
+
+      const { unmount } = render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: /Upload Vendor/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Ingest Master \/ POs/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(3);
+      unmount();
     });
 
     it('safely handles corrupted localStorage JSON and close button', () => {

@@ -32,6 +32,10 @@ export const UI_STRINGS = {
     unexpectedFailureMessage: 'The request could not be completed. Check your connection and try again.',
   },
   vendorBulkImport: {
+    buyerButtonLabel: 'Add Vendor Bulk',
+    buyerModalTitle: 'Add Vendor Bulk',
+    buyerModalSubtitle: 'Bulk add vendors via Excel (.xlsx) with required columns and template validation.',
+    buyerRequiredColumnsSummary: 'Required: Company Name, Email Id, Mobile No & Category · Template includes Vendor Code, Person Name, GSTIN, Pin Code, City, State & Products',
     progressSummary: '{processed} of {total} processed — {imported} imported ({missingEmail} missing email), {duplicates} duplicate, {failed} failed, {onboardingFailed} credential email(s) failed, {onboardingSkipped} imported account(s) have no invitation email',
     onboardingSkippedSummary: '{count} vendor account(s) were imported without an invitation email. Bulk import intentionally does not send login credentials.',
     historyOnboardingSkipped: '{count} Not Invited',

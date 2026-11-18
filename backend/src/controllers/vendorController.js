@@ -983,6 +983,14 @@ async function createVendor(req, res, next) {
       : null;
     const persistedVendor = storeService.getVendorById(created.id, 'all') || created;
     const vendor = withoutTemporaryPassword(persistedVendor);
+    if (req.user.role === 'buyer') {
+      const organizationId = req.user.orgId || req.user.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after buyer vendor creation', { error: markErr, organizationId }, 'VENDOR_CONTROLLER');
+        });
+      }
+    }
     res.status(201).json({
       success: true,
       data: vendor,
@@ -2237,6 +2245,15 @@ async function bulkImportVendors(req, res, next) {
       duplicate: duplicateCount,
       invalid: issuesCount,
     });
+
+    if (req.user.role === 'buyer' && importedCount > 0) {
+      const organizationId = req.user.orgId || req.user.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after bulk vendor import', { error: markErr, organizationId }, 'VENDOR_CONTROLLER');
+        });
+      }
+    }
 
     res.json({
       success: true,

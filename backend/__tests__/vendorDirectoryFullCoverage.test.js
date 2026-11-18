@@ -2731,5 +2731,66 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         status: 'INACTIVE',
       });
     });
+
+    test('marks organization vendorMasterUploaded across buyer createVendor, bulkImportVendors, and ingestHistoricalData and logs warning on error', async () => {
+      const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+      const buyerUser = { role: 'buyer', email: 'buyer-upload-flag@corp.test', orgId: 'org-upload-flag-1' };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        id: 'ba-upload-flag-1',
+        corporateEmail: 'buyer-upload-flag@corp.test',
+        organizationName: 'Upload Flag Buyer',
+        organizationId: 'org-upload-flag-1',
+      });
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({
+        id: 'ba-upload-flag-1',
+        corporateEmail: 'buyer-upload-flag@corp.test',
+        organizationName: 'Upload Flag Buyer',
+        organizationId: 'org-upload-flag-1',
+      });
+      const markSpy = jest.spyOn(vendorIngestionQueries, 'markVendorMasterUploaded').mockRejectedValueOnce(new Error('D1 mark failed'));
+
+      jest.spyOn(storeService, 'addVendorDurably').mockResolvedValueOnce({
+        id: 'v-created-flag-1',
+        name: 'First Buyer Vendor',
+        email: 'firstv@corp.test',
+      });
+      jest.spyOn(storeService, 'provisionVendorOnboarding').mockResolvedValueOnce({ sent: true });
+      const createRes = mockRes();
+      await vendorController.createVendor({
+        user: buyerUser,
+        body: { name: 'First Buyer Vendor', email: 'firstv@corp.test', majorCategory: 'Mechanical' },
+      }, createRes, jest.fn());
+      expect(createRes.status).toHaveBeenCalledWith(201);
+      expect(markSpy).toHaveBeenCalledWith('org-upload-flag-1');
+
+      markSpy.mockRejectedValueOnce(new Error('D1 bulk mark failed'));
+      jest.spyOn(domainQueries, 'createBulkImportSessionInDB').mockResolvedValueOnce({ id: 'sess-flag-1', processed: 0, imported: 0 });
+      jest.spyOn(domainQueries, 'incrementBulkImportSessionInDB').mockResolvedValueOnce({ id: 'sess-flag-1', processed: 1, imported: 1 });
+      jest.spyOn(storeService, 'bulkAddVendors').mockResolvedValueOnce({
+        results: [{ rowNumber: 2, status: 'imported', vendor: { id: 'v-bulk-flag-1', name: 'Bulk Co' } }],
+        importedCount: 1,
+        duplicateCount: 0,
+        missingEmailCount: 0,
+      });
+      const bulkRes = mockRes();
+      await vendorController.bulkImportVendors({
+        user: buyerUser,
+        body: { vendors: [{ name: 'Bulk Co', email: 'bulkco@test.in', phone: '9876543210', majorCategory: 'Mechanical' }] },
+      }, bulkRes, jest.fn());
+      expect(bulkRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      markSpy.mockRejectedValueOnce(new Error('D1 hist mark failed'));
+      jest.spyOn(storeService, 'processHistoricalPurchaseData').mockResolvedValueOnce({
+        success: true,
+        importedCount: 1,
+      });
+      const histRes = mockRes();
+      await buyerAccountController.ingestHistoricalData({
+        user: buyerUser,
+        body: { period: '1_year', vendorRecords: [{ name: 'Hist Co', email: 'hist@test.in', majorCategory: 'Mechanical' }] },
+      }, histRes, jest.fn());
+      expect(histRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, importedCount: 1 }));
+      expect(markSpy).toHaveBeenCalledTimes(3);
+    });
   });
 });

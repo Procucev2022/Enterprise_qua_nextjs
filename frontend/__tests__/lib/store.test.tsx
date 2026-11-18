@@ -3998,5 +3998,41 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         authClient.setSession(null);
       }
     });
+
+    it('blocks reopening InitialSetupModal for a buyer once initialSetupCompleted or vendorMasterUploaded is true', async () => {
+      authClient.setSession(
+        {
+          id: 'u-lock-1',
+          email: 'buyer@locked.test',
+          name: 'Locked Buyer',
+          role: 'buyer',
+          orgId: 'org-lock-1',
+          orgName: 'Locked Org',
+          vendorMasterUploaded: false,
+        },
+        'lock-token'
+      );
+
+      try {
+        const ctx = await mountStore(STORE_RFQ_FIXTURES[0] as unknown as RFQItem);
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(true);
+        });
+        expect(ctx().initialSetupModalOpen).toBe(true);
+
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(false);
+          ctx().setInitialSetupCompleted(true);
+        });
+        expect(ctx().initialSetupCompleted).toBe(true);
+
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(true);
+        });
+        expect(ctx().initialSetupModalOpen).toBe(false);
+      } finally {
+        authClient.setSession(null);
+      }
+    });
   });
 });

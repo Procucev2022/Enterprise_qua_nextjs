@@ -61,6 +61,7 @@ import {
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
   isPlaceholderVendorCategory,
+  isBuyerUploadedVendor,
   normalizeVendorCategoryList,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
@@ -1642,11 +1643,46 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [onboardingEmailModalOpen, setOnboardingEmailModalOpen] = useState<boolean>(false);
 
   // Initial Setup State & Purchase Data Ingestion
-  const [initialSetupModalOpen, setInitialSetupModalOpen] = useState<boolean>(false);
+  const [initialSetupModalOpen, setInitialSetupModalOpenState] = useState<boolean>(false);
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
   const [lastIngestionSummary, setLastIngestionSummary] = useState<IngestionSummary | null>(null);
   const [lastIngestionError, setLastIngestionError] = useState<string | null>(null);
+
+  const hasCompletedBuyerVendorUpload =
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true ||
+    (!initialSetupModalOpen &&
+      buyerVendors.some((v) => isBuyerUploadedVendor(v) && !String(v.id || '').startsWith('v-master-')));
+
+  const markBuyerVendorSetupCompleted = useCallback(() => {
+    setInitialSetupCompleted(true);
+    setCurrentUserSession((prev) => {
+      if (!prev || prev.vendorMasterUploaded) return prev;
+      const updated = { ...prev, vendorMasterUploaded: true };
+      authClient.setSession(updated, authClient.getToken());
+      return updated;
+    });
+    setActiveBuyerAccount((prev) => (prev && !prev.initialSetupCompleted ? { ...prev, initialSetupCompleted: true } : prev));
+  }, []);
+
+  useEffect(() => {
+    if (!isLoggedIn || currentRole !== 'buyer') return;
+    if (hasCompletedBuyerVendorUpload && !initialSetupCompleted) {
+      setInitialSetupCompleted(true);
+    }
+  }, [isLoggedIn, currentRole, hasCompletedBuyerVendorUpload, initialSetupCompleted]);
+
+  const setInitialSetupModalOpen = useCallback(
+    (open: boolean) => {
+      if (open && currentRole === 'buyer' && hasCompletedBuyerVendorUpload) {
+        return;
+      }
+      setInitialSetupModalOpenState(open);
+    },
+    [currentRole, hasCompletedBuyerVendorUpload]
+  );
 
   const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
@@ -1740,7 +1776,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setLastIngestionSummary(summary);
 
     await refreshFromDB();
-    setInitialSetupCompleted(true);
+    markBuyerVendorSetupCompleted();
     // Note: Modal remains open so InitialSetupModal can display the Completion Summary to the user
 
     const deliverySummary = formatString(UI_STRINGS.historicalIngestion.deliverySummary, {
@@ -2191,6 +2227,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', updated);
       return updated;
     });
+    if (currentRole === 'buyer') {
+      markBuyerVendorSetupCompleted();
+    }
 
     addFeedItem(
       `Vendor Added: ${newV.name}`,
