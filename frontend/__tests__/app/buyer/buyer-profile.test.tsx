@@ -1403,6 +1403,108 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('42 Tech Park Road')).toBeInTheDocument();
     expect(screen.getByDisplayValue('560103')).toBeInTheDocument();
   });
+
+  it('hydrates address from primaryPlantLocation, derives PAN from GSTIN, and refreshes store after save', async () => {
+    const mockRefreshActiveBuyerAccount = jest.fn().mockResolvedValue(undefined);
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
+      activeBuyerAccount: {
+        organizationName: 'Veera solutions pvt ltd',
+        corporateEmail: 'veerababuv2002@gmail.com',
+        gstin: '27AAACK3921P1Z9',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+      },
+    });
+
+    mockLoad({
+      ...PROFILE,
+      companyName: 'Veera solutions pvt ltd',
+      gstNumber: '',
+      panNumber: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+
+    await renderLoaded();
+
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Bengaluru, Karnataka')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
+
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 2,
+      data: {
+        ...PROFILE,
+        companyName: 'Veera solutions pvt ltd',
+        gstNumber: '27AAACK3921P1Z9',
+        panNumber: 'AAACK3921P',
+        street: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(screen.getByDisplayValue('302 Sharada, AECS Layout')).toBeInTheDocument();
+    expect(mockRefreshActiveBuyerAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-populates empty PAN when a genuine GSTIN is entered on the form', async () => {
+    mockLoad({
+      ...PROFILE,
+      panNumber: '',
+      gstNumber: '',
+    });
+    await renderLoaded();
+
+    const gstInput = screen.getAllByRole('textbox').find((el) => (el as HTMLInputElement).maxLength === 15) as HTMLInputElement;
+    fireEvent.change(gstInput, { target: { value: '27aaack3921p1z9' } });
+
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+  });
+
+  it('retains local values when server returns partial fields and resets saving state if save throws', async () => {
+    await renderLoaded();
+
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 2,
+      data: {
+        companyName: 'Normalized Corp',
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(screen.getByDisplayValue('Normalized Corp')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('400001')).toBeInTheDocument();
+
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Unexpected transport error'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Unexpected transport error',
+      'warning'
+    );
+    expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled();
+  });
 });
 
 

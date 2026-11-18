@@ -16,6 +16,7 @@ const {
 } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const pool = require('../db/pool');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
@@ -241,6 +242,7 @@ async function createBuyerAccount(req, res, next) {
         organizationId: sanitizedUpdates.organizationId || existing.organizationId || null,
       });
       if (merged) {
+        await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
         return res.status(201).json({ success: true, data: merged });
       }
     }
@@ -272,6 +274,49 @@ function sanitizeBuyerAccountUpdates(updates, res) {
   return null;
 }
 
+/**
+ * Keep the canonical `organization` row aligned whenever statutory tax or
+ * address fields are saved through the buyer-account APIs.
+ */
+async function syncOrganizationFromBuyerAccount(account, userId = null, actorEmail = null) {
+  const organizationId = account && account.organizationId;
+  if (!pool.hasStorage() || !organizationId || typeof buyerProfileQueries.updateProfile !== 'function') {
+    return;
+  }
+  const patch = {};
+  if (account.organizationName) patch.companyName = account.organizationName;
+  if (account.brandName) patch.brandName = account.brandName;
+  if (account.contactPerson) patch.contactName = account.contactPerson;
+  if (account.contactDesignation) patch.contactDesignation = account.contactDesignation;
+  const street = account.street || account.address1 || account.address || '';
+  if (street) patch.street = street;
+  if (account.city) patch.city = account.city;
+  if (account.state) patch.state = account.state;
+  const pincode = account.pincode || account.zip_code || account.zipCode || '';
+  if (pincode) patch.pincode = pincode;
+  if (account.country) patch.country = account.country;
+  const gstin = (account.gstin || account.gstNumber || account.gst || '').trim().toUpperCase();
+  if (gstin) patch.gstNumber = gstin;
+  const pan = (account.pan || account.panNumber || '').trim().toUpperCase();
+  if (pan) patch.panNumber = pan;
+  if (Object.keys(patch).length === 0) return;
+
+  try {
+    await buyerProfileQueries.updateProfile({
+      organizationId,
+      userId: userId || account.userId || null,
+      patch,
+      actor: actorEmail || account.corporateEmail || 'buyer-account-sync',
+    });
+  } catch (err) {
+    logger.warn('Failed to synchronize organization profile from buyer account write', {
+      error: err.message,
+      organizationId,
+      accountId: account.id,
+    }, 'BUYER_ACCOUNT_CONTROLLER');
+  }
+}
+
 async function updateBuyerAccount(req, res, next) {
   try {
     const { id } = req.params;
@@ -284,6 +329,7 @@ async function updateBuyerAccount(req, res, next) {
       logger.warn(`Buyer account not found for update: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    await syncOrganizationFromBuyerAccount(updated, req.user && (req.user.sub || req.user.id), req.user && req.user.email);
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error('Error updating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');

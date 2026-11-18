@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor, isBuyerQuotesSealed } from '@/lib/constants';
 import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { RFQItem } from '@/lib/types';
 import {
@@ -82,7 +82,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce(
-    (acc, r) => acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesHidden ? 0 : (r.quotesCount || 0))),
+    (acc, r) => {
+      if (isBuyerQuotesSealed(r, 'buyer')) return acc;
+      return acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesCount || 0));
+    },
     0
   );
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
@@ -343,26 +346,18 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
 
       {/* ── Action Header Bar ── */}
       <div className="flex items-center justify-end gap-1.5 flex-wrap">
-        {hasCompletedVendorSetup ? (
-          <button
-            type="button"
-            onClick={() => onNavigateToDirectory?.()}
-            className="btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30"
-            title="Initial vendor setup completed — manage or bulk add vendors in Vendor Directory"
-          >
-            <FileSpreadsheet size={13} className="text-emerald-600" />
-            <span>✓ PO History Ingested</span>
-          </button>
-        ) : (
-          <button
-            onClick={() => setInitialSetupModalOpen(true)}
-            className="btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse"
-            title="Upload 1-3 Year Pre-Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
-          >
-            <FileSpreadsheet size={13} className="text-indigo-600" />
-            <span>⚡ 1-3 Yr Purchase Setup</span>
-          </button>
-        )}
+        <button
+          onClick={() => setInitialSetupModalOpen(true)}
+          className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
+            initialSetupCompleted
+              ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
+              : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
+          }`}
+          title="Upload 1-3 Year Pre-Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
+        >
+          <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
+          <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
+        </button>
 
         <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
           <Plus size={14} /> AI RFQ Generator

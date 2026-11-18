@@ -13,6 +13,8 @@ import {
   isDummyPincode,
   isDummyPan,
   usablePan,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
   FormSchema,
   resolveCityAndStateFromPostalResult,
   resolveLocationFromPostalResult,
@@ -876,6 +878,27 @@ describe('isDummyPan and usablePan', () => {
     expect(usablePan(undefined)).toBeNull();
     expect(usablePan(42)).toBeNull();
   });
+
+  it('derives non-dummy PAN from valid GSTIN and parses primaryPlantLocation', () => {
+    expect(derivePanFromGstin('27aaack3921p1z9')).toBe('AAACK3921P');
+    expect(derivePanFromGstin('27AAAAA0000A1Z5')).toBe('');
+    expect(derivePanFromGstin('27AAACL1234F1Z5')).toBe('');
+    expect(derivePanFromGstin('BAD')).toBe('');
+    expect(derivePanFromGstin(null)).toBe('');
+
+    expect(parsePrimaryPlantLocation('Bengaluru, Karnataka (560037)')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(parsePrimaryPlantLocation('Pune, Maharashtra')).toEqual({
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(parsePrimaryPlantLocation('')).toEqual({ city: '', state: '', pincode: '' });
+    expect(parsePrimaryPlantLocation(undefined)).toEqual({ city: '', state: '', pincode: '' });
+  });
 });
 
 describe('resolveCityAndStateFromPostalResult', () => {
@@ -914,5 +937,11 @@ describe('resolveCityAndStateFromPostalResult', () => {
   test('resolveLocationFromPostalResult joins the same city and state', () => {
     expect(resolveLocationFromPostalResult('560034', offices)).toBe('Bangalore Urban, Karnataka');
     expect(resolveLocationFromPostalResult('999999', [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[])).toBe('Dist');
+  });
+
+  test('EMAIL_PATTERN rejects URLs containing @ such as map links while accepting standard addresses', () => {
+    expect(EMAIL_PATTERN.test('http://www.google.co.in/maps/@17.038,82.123')).toBe(false);
+    expect(EMAIL_PATTERN.test('https://maps.example.com/@coord/place')).toBe(false);
+    expect(EMAIL_PATTERN.test('buyer.team+rfq@procucev.co.in')).toBe(true);
   });
 });

@@ -2238,5 +2238,39 @@ describe('mailerService', () => {
       expect(req.html).toContain('box-sizing: border-box');
       expect(req.html).toContain('role="presentation"');
     });
+
+    test('buildRfqClosedVendorEmail and sendRfqClosedVendorEmail format buyer-uploaded and double-blind notices', async () => {
+      const buyerEmail = mailerService.buildRfqClosedVendorEmail('inv1@test.com', {
+        rfq: {
+          rfqNumber: 'RFQ-CLS-101',
+          title: 'Electrical Switchgear',
+          category: 'Electrical',
+          deliveryLocation: 'Pune',
+          buyerAccountName: 'Veera Solutions Pvt Ltd',
+        },
+        recipientName: 'Suresh',
+        vendor: { id: 'v-1', source: 'buyer_uploaded' },
+      });
+      expect(buyerEmail.to).toBe('inv1@test.com');
+      expect(buyerEmail.subject).toBe('RFQ Closed: RFQ-CLS-101 – Electrical Switchgear');
+      expect(buyerEmail.html).toContain('Veera Solutions Pvt Ltd');
+      expect(buyerEmail.html).toContain('permanently closed and can no longer be reopened');
+
+      const doubleBlindEmail = mailerService.buildRfqClosedVendorEmail('inv2@test.com', {
+        rfq: {
+          id: 'rfq-cls-id-2',
+          buyerAccountName: 'Secret Buyer Corp',
+        },
+        vendor: { id: 'v-2', source: 'procucev_network' },
+      });
+      expect(doubleBlindEmail.subject).toBe('RFQ Closed: rfq-cls-id-2');
+      expect(doubleBlindEmail.html).not.toContain('Secret Buyer Corp');
+      expect(doubleBlindEmail.html).toContain('the buyer');
+
+      const sendResult = await mailerService.sendRfqClosedVendorEmail('inv1@test.com', {
+        rfq: { rfqNumber: 'RFQ-CLS-101', title: 'Electrical Switchgear' },
+      });
+      expect(sendResult).toHaveProperty('sent', false);
+    });
   });
 });

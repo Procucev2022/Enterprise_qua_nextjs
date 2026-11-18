@@ -207,6 +207,99 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
         organizationId: 'org-merge-1',
       }));
       expect(mergeRes.status).toHaveBeenCalledWith(201);
+
+      // Syncs statutory/address updates from updateBuyerAccount to canonical organization row when storage is configured
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const updatedBuyerPayload = {
+        id: 'u-buyer-existing',
+        organizationId: 'org-merge-1',
+        corporateEmail: 'merge@test.com',
+        organizationName: 'Veera Solutions Pvt Ltd',
+        brandName: 'Veera Brand',
+        contactPerson: 'Veera',
+        contactDesignation: 'Director',
+        gstin: '27AAACK3921P1Z9',
+        pan: 'AAACK3921P',
+        street: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+      };
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValue(updatedBuyerPayload);
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue(updatedBuyerPayload);
+      const syncOrgSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({ updated: true });
+      const syncRes = mockRes();
+      await buyerAccountController.updateBuyerAccount(
+        {
+          user: { role: 'admin', sub: 'u-admin', email: 'admin@procucev.com' },
+          params: { id: 'u-buyer-existing' },
+          body: {
+            organizationName: 'Veera Solutions Pvt Ltd',
+            brandName: 'Veera Brand',
+            contactPerson: 'Veera',
+            contactDesignation: 'Director',
+            gstin: '27AAACK3921P1Z9',
+            pan: 'AAACK3921P',
+            street: '302 Sharada, AECS Layout',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560037',
+            country: 'India',
+          },
+        },
+        syncRes,
+        next
+      );
+      expect(syncOrgSpy).toHaveBeenCalledWith(expect.objectContaining({
+        organizationId: 'org-merge-1',
+        patch: expect.objectContaining({
+          companyName: 'Veera Solutions Pvt Ltd',
+          brandName: 'Veera Brand',
+          contactName: 'Veera',
+          contactDesignation: 'Director',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          country: 'India',
+        }),
+      }));
+
+      // Logs warning fail-open when organization sync throws
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValueOnce(new Error('org sync failed'));
+      const warnRes = mockRes();
+      await buyerAccountController.updateBuyerAccount(
+        {
+          user: { role: 'admin', sub: 'u-admin', email: 'admin@procucev.com' },
+          params: { id: 'u-buyer-existing' },
+          body: { city: 'Pune' },
+        },
+        warnRes,
+        next
+      );
+      expect(warnRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Skips organization sync cleanly when account has no syncable statutory or address fields
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({
+        id: 'u-buyer-existing',
+        organizationId: 'org-merge-1',
+      });
+      const noOpRes = mockRes();
+      await buyerAccountController.updateBuyerAccount(
+        {
+          user: { role: 'admin', sub: 'u-admin', email: 'admin@procucev.com' },
+          params: { id: 'u-buyer-existing' },
+          body: {},
+        },
+        noOpRes,
+        next
+      );
+      expect(noOpRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
     });
 
     test('updateBuyerAccount not found, success, and error', async () => {
@@ -2791,6 +2884,40 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }, histRes, jest.fn());
       expect(histRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, importedCount: 1 }));
       expect(markSpy).toHaveBeenCalledTimes(3);
+    });
+
+    test('resolves promoted v-master-<id> vendor via masterRecordId and falls back to buyerAccount.id org scope', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const account = {
+        id: 'buyer-org-fallback-1',
+        corporateEmail: 'fallback-org@buyer.test',
+      };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(account);
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(account);
+      const promoted = {
+        id: 'v-promoted-real-1',
+        masterRecordId: 'vmr-promoted-99',
+        name: 'Promoted Master Vendor',
+        email: 'promoted@vendor.test',
+        buyerAccountId: 'buyer-org-fallback-1',
+        majorCategory: 'IT',
+      };
+      storeService.vendors = [promoted];
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      const updDurable = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({
+        ...promoted,
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+
+      const res = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmr-promoted-99' },
+        user: { role: 'buyer', email: 'fallback-org@buyer.test' },
+        body: { majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Bearings'] },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      expect(updDurable).toHaveBeenCalledWith('v-promoted-real-1', expect.any(Object));
     });
   });
 });

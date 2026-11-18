@@ -433,13 +433,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
 
-    // Click Add Vendor Bulk button (when buyer already has uploaded vendors)
-    fireEvent.click(screen.getByTestId('open-add-vendor-bulk-modal'));
-    expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
-    expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByTestId('trigger-bulk-modal-complete'));
-    fireEvent.click(screen.getByTestId('trigger-bulk-modal-close'));
-    expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'false');
+    // Click Upload Vendor button
+    fireEvent.click(screen.getByText(/Upload Vendor/i));
+    expect(mockOnNavigateToWizard).toHaveBeenCalled();
 
     // Search filter
     const searchInput = screen.getByPlaceholderText(/Search vendors by name, contact, category/i);
@@ -1208,11 +1204,10 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(searchInput, { target: { value: '' } });
       expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
 
-      // Opens Add Vendor Bulk after buyer already has uploaded vendors
-      const bulkBtn = screen.getByRole('button', { name: UI_STRINGS.vendorBulkImport.buyerButtonLabel });
-      fireEvent.click(bulkBtn);
-      expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
-      expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
+      // Navigate to Wizard button
+      const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
+      fireEvent.click(uploadBtn);
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
     });
 
     it('handles View Profile, Edit, and Mark Inactive modal cancel actions', () => {
@@ -2628,10 +2623,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Vendor Template Upload History')).toBeInTheDocument();
       expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
 
-      const bulkButtons = screen.getAllByRole('button', { name: UI_STRINGS.vendorBulkImport.buyerButtonLabel });
-      fireEvent.click(bulkButtons[bulkButtons.length - 1]);
-      expect(screen.getByTestId('mock-vendor-upload-modal')).toHaveAttribute('data-open', 'true');
-      expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(1);
       expect(screen.queryByText('Vendor Template Upload History')).not.toBeInTheDocument();
       unmountExisting();
 
@@ -2663,7 +2656,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /Ingest Master \/ POs/i }));
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
       fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));
-      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(3);
+      expect(mockOnNavigateToWizard).toHaveBeenCalledTimes(4);
       unmount();
     });
 
@@ -5230,6 +5223,35 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(ocrLabel.parentElement).toHaveTextContent('1');
       expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
       expect(screen.getByText('84%')).toBeInTheDocument();
+    });
+
+    it('skips buyer profile pincode lookup when currentUserSession role is not buyer', async () => {
+      mockFetchBuyerProfile.mockClear();
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        currentUserSession: { email: 'v@vendor.test', role: 'vendor', name: 'Vendor' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      await Promise.resolve();
+      expect(mockFetchBuyerProfile).not.toHaveBeenCalled();
     });
   });
 });

@@ -3,7 +3,7 @@
  * Single source of truth for all API payload, query parameter, and entity boundaries.
  */
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_REGEX = /^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -194,6 +194,36 @@ function clearDummyPanFields(record) {
   if (isDummyPan(record.pan)) delete record.pan;
   if (isDummyPan(record.panNumber)) delete record.panNumber;
   return record;
+}
+
+/**
+ * Extract the 10-character PAN embedded at characters 2..12 of a valid Indian GSTIN,
+ * ignoring synthetic/placeholder PANs used in tests or incomplete entries.
+ */
+function derivePanFromGstin(gstin) {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_REGEX.test(clean)) return '';
+  return usablePan(clean.slice(2, 12)) || '';
+}
+
+/**
+ * Parse a legacy primaryPlantLocation label such as "Pune, Maharashtra (411001)"
+ * into structured { city, state, pincode } fields without inventing values.
+ */
+function parsePrimaryPlantLocation(location) {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
 }
 
 // MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
@@ -1866,6 +1896,8 @@ module.exports = {
   isDummyPan,
   usablePan,
   clearDummyPanFields,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,

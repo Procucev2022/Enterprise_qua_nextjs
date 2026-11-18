@@ -10,6 +10,9 @@ const {
   RFQ_MINOR_SHORTFALL_ALERT,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   VENDOR_FREE_CREDITS_LIMIT,
+  EMAIL_REGEX,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
   formatMessage,
 } = require('../config/constants');
 const {
@@ -492,6 +495,11 @@ function gmailProviderKey(identity) {
   return `gmail:${identity.id}:${tokenFingerprint(identity.refreshToken)}`;
 }
 
+function getGmailProviderKey(identityId = 'buyer') {
+  const identity = findGmailIdentity(identityId);
+  return identity ? gmailProviderKey(identity) : null;
+}
+
 /** True when the buyer/system Gmail identity (GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN) is set. */
 function isGmailApiConfigured() {
   const hasClientId = Boolean(getGmailClientId());
@@ -618,9 +626,11 @@ function deliveryPlan(channel, critical) {
   // hours while the quote-alert mailbox sat idle). The vendor mailbox is never
   // borrowed for buyer mail — its quota is kept for vendor RFQ invites. Replies
   // are pointed back at the buyer mailbox.
-  if (channel === DELIVERY_CHANNEL.BUYER && !critical) {
+  if ((channel === DELIVERY_CHANNEL.BUYER || channel === DELIVERY_CHANNEL.VENDOR) && !critical) {
     const used = new Set(route.map((identity) => identity.id));
-    ['quoteAlert']
+    const fallbackIds = channel === DELIVERY_CHANNEL.VENDOR ? ['quoteAlert', 'otp'] : ['quoteAlert'];
+    const fallbackReplyTo = channel === DELIVERY_CHANNEL.VENDOR ? vendorGatewayAddress() : buyerReplyAddress();
+    fallbackIds
       .filter((id) => !used.has(id))
       .map((id) => findGmailIdentity(id))
       .filter(Boolean)
@@ -629,7 +639,10 @@ function deliveryPlan(channel, critical) {
           key: gmailProviderKey(identity),
           label: `Gmail API (${identity.id}, borrowed)`,
           run: (message) =>
-            sendViaGmailIdentity(identity, { ...message, replyTo: message.replyTo || buyerReplyAddress() }),
+            sendViaGmailIdentity(identity, {
+              ...message,
+              ...(message.replyTo || fallbackReplyTo ? { replyTo: message.replyTo || fallbackReplyTo } : {}),
+            }),
         });
       });
   }
@@ -672,7 +685,18 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
     return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   }
 
-  const outgoing = { ...message };
+  const validTo = mailTransport
+    .toAddressList(message.to)
+    .filter((entry) => EMAIL_REGEX.test(mailTransport.bareAddress(entry)));
+  if (validTo.length === 0) {
+    logger.warn(`${label} not sent: invalid recipient email address`, { to: message.to, channel }, 'MAILER_SERVICE');
+    return { sent: false, success: false, status: 'skipped', reason: 'invalid recipient email' };
+  }
+
+  const outgoing = {
+    ...message,
+    to: Array.isArray(message.to) ? validTo : validTo.join(', '),
+  };
   // Vendor replies must reach the vendor gateway inbox even when the message is
   // sent from a borrowed (buyer/pool) mailbox, or quote replies are lost.
   const gatewayAddress = vendorGatewayAddress();
@@ -699,9 +723,9 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
       }
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
-          logger.info(`Dispatching ${label} to ${message.to} via ${step.label}`, { subject: message.subject }, 'MAILER_SERVICE');
+          logger.info(`Dispatching ${label} to ${outgoing.to} via ${step.label}`, { subject: outgoing.subject }, 'MAILER_SERVICE');
           const result = await step.run(outgoing);
-          logger.info(`${label} sent successfully to ${message.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
+          logger.info(`${label} sent successfully to ${outgoing.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
           return { sent: true, success: true, status: 'sent', messageId: result.messageId };
         } catch (err) {
           lastError = err;
@@ -1523,11 +1547,9 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
     String(rfq.sourcingMode || '').toLowerCase().includes('version 0') ||
     String(rfq.sourcingMode || '').toLowerCase().includes('mode_0') ||
     String(rfq.sourcingModeName || '').toLowerCase().includes('version 0');
-  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-  const isWithin48h = !isEmailSource && !isV0 && ((createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS) || Boolean(rfq.quotesHidden));
-  const isClosed = rfq.status === 'Closed';
-  const isSealed = isWithin48h && !isClosed;
+  const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+  const isWithin48h = !isEmailSource && !isV0 && (windowEndMs > 0 ? Date.now() < windowEndMs : Boolean(rfq.quotesHidden));
+  const isSealed = isWithin48h && !isRfqConcluded(rfq);
 
   const frontendUrl = getPublicFrontendUrl();
   const matrixUrl = `${frontendUrl}/buyer/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
@@ -1545,8 +1567,8 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
   }
 
   if (isSealed) {
-    const unsealDateStr = createdAtMs > 0
-      ? new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toLocaleString('en-IN')
+    const unsealDateStr = windowEndMs > 0
+      ? new Date(windowEndMs).toLocaleString('en-IN')
       : 'in 48 hours';
 
     const inner = `
@@ -1774,6 +1796,58 @@ function buildRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) {
 
 async function sendRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext) {
   return deliver(buildRfqAutoClosureAcknowledgementEmail(toOrParams, maybeContext), 'RFQ auto-closure acknowledgement email');
+}
+
+// ── RFQ Closed Notice → invited vendors ──────────────────────────────────────
+
+function buildRfqClosedVendorEmail(toOrParams, maybeContext) {
+  const { to, context } = normalizeToAndContext(toOrParams, maybeContext);
+  const { rfq = {}, recipientName, vendor } = context;
+  const rfqNumber = requireMailText(rfq.rfqNumber || rfq.id, 'rfq.rfqNumber', 'RFQ closed vendor notice');
+  const rfqTitle = rfq.title ? String(rfq.title) : MAILER_NOT_SPECIFIED;
+  const isBuyerVendor = isBuyerUploadedVendor(vendor, context, rfq);
+  const buyerName = isBuyerVendor && rfq.buyerAccountName ? String(rfq.buyerAccountName).trim() : null;
+  const portalUrl = `${getPublicFrontendUrl()}/vendor/opportunity-feed`;
+  const subject = `RFQ Closed: ${rfqNumber}${rfq.title ? ` – ${rfq.title}` : ''}`;
+
+  const closedByLabel = buyerName ? `<strong>${escapeHtml(buyerName)}</strong>` : 'the buyer';
+  const greeting = recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,';
+
+  const inner = `
+    <p>${greeting}</p>
+    <p>Please note that RFQ <strong>#${escapeHtml(rfqNumber)}</strong> (<em>${escapeHtml(rfqTitle)}</em>) has been closed by ${closedByLabel}.</p>
+
+    <div style="background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; padding: 14px; border-radius: 6px; margin: 16px 0;">
+      <strong>RFQ Bidding Concluded</strong><br/>
+      This requisition is permanently closed and can no longer be reopened. No further quotations or revisions can be submitted for this RFQ.
+    </div>
+
+    <div style="background: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 14px; margin: 16px 0;">
+      <table style="width: 100%; border-collapse: collapse;">
+        ${row('RFQ Number', escapeHtml(rfqNumber))}
+        ${row('Requirement', escapeHtml(rfqTitle))}
+        ${row('Category', rfq.category ? escapeHtml(rfq.category) : '-')}
+        ${row('Delivery Location', rfq.deliveryLocation ? escapeHtml(rfq.deliveryLocation) : '-')}
+        ${row('Status', 'Closed (Bidding Concluded)')}
+      </table>
+    </div>
+
+    <div style="text-align: center; margin: 24px 0;">
+      <a href="${portalUrl}" style="background: #0284c7; color: #ffffff; padding: 12px 24px; border-radius: 6px; text-decoration: none; font-weight: bold; display: inline-block; font-size: 14px;">View Enquiries in Vendor Portal</a>
+    </div>
+    <p style="font-size: 12px; color: #64748b; text-align: center;">Thank you for participating on Procucev Enterprise.</p>
+  `;
+
+  return {
+    from: vendorFromAddress(),
+    to,
+    subject,
+    html: wrapEmail('PROCUCEV ENTERPRISE', 'RFQ Closed Notice', inner),
+  };
+}
+
+async function sendRfqClosedVendorEmail(toOrParams, maybeContext) {
+  return deliverVendor(asAutoReply(buildRfqClosedVendorEmail(toOrParams, maybeContext)), 'RFQ closed vendor notice email');
 }
 
 // ── Complex RFQ (>10 items) Portal Redirection Email → vendor ───────────────
@@ -2909,6 +2983,8 @@ module.exports = {
   sendRfqFinalComparisonEmail,
   buildRfqAutoClosureAcknowledgementEmail,
   sendRfqAutoClosureAcknowledgementEmail,
+  buildRfqClosedVendorEmail,
+  sendRfqClosedVendorEmail,
   buildComplexRfqPortalRedirectEmail,
   sendComplexRfqPortalRedirectEmail,
   buildVendorIssueAcknowledgementEmail,
@@ -2925,6 +3001,7 @@ module.exports = {
   getVendorGmailOAuthClient,
   isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
+  getGmailProviderKey,
   deliver,
   getDeliveryHealth,
   DELIVERY_CHANNEL,

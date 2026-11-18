@@ -972,7 +972,7 @@ describe('QuoteMatrix Component Tests', () => {
     });
 
     it('renders followUpData AI strip with accurate responded and total invited counts and L2 rank badge', () => {
-      const pastTime = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+      const pastTime = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
       const rfqWithFollowUp: RFQItem = {
         ...mockRFQs[0],
         id: 'rfq-fup-deep',
@@ -1157,6 +1157,31 @@ describe('QuoteMatrix Component Tests', () => {
       render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
       expect(screen.getAllByText('Bare Vendor One').length).toBeGreaterThan(0);
       expect(screen.queryByText('AI FOLLOW-UP STATUS:')).not.toBeInTheDocument();
+    });
+
+    it('hides quotations on buyer view for In Evaluation RFQs before closing or 48h/deadline expiration', () => {
+      const sealedInEvalRfq = {
+        ...mockRFQs[0],
+        id: 'rfq-sealed-uneval',
+        rfqNumber: 'RFQ-SEALED-48H',
+        status: 'In Evaluation' as const,
+        quotesHidden: false,
+        createdAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+        closingDeadline: new Date(Date.now() + 72 * 3600 * 1000).toISOString(),
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [sealedInEvalRfq],
+        selectedRFQForMatrix: sealedInEvalRfq,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getByText(/Quotes Sealed — 48-Hour Bidding Period Active/i)).toBeInTheDocument();
+      expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
     });
   });
 });

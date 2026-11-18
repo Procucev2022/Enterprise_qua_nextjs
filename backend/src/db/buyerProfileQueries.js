@@ -253,8 +253,11 @@ async function loadCategories(organizationId, userId) {
  * "no such user" and "user has no organisation" onto different HTTP statuses and
  * different remediation advice.
  */
-async function hydrateFoundProfile(row, { swallowAllCategoryErrors = false } = {}) {
+async function hydrateFoundProfile(row, { swallowAllCategoryErrors = false, includeCategories = true } = {}) {
   const profile = mapRowToProfile(row);
+  if (!includeCategories) {
+    return { found: true, profile };
+  }
   try {
     profile.categories = await loadCategories(profile.organizationId, profile.userId);
   } catch (catErr) {
@@ -279,8 +282,9 @@ function tryOverloadCachedProfile(err, lookup, operation, context = {}) {
   return { found: true, profile: cached };
 }
 
-async function findProfileByUserId(userId) {
+async function findProfileByUserId(userId, options = {}) {
   if (!userId) return { found: false, reason: 'NO_USER_ID' };
+  const includeCategories = options?.includeCategories !== false;
 
   let rows;
   try {
@@ -305,7 +309,7 @@ async function findProfileByUserId(userId) {
     return { found: false, reason: 'ORG_NOT_LINKED' };
   }
 
-  return hydrateFoundProfile(rows[0]);
+  return hydrateFoundProfile(rows[0], { includeCategories });
 }
 
 /**
@@ -524,9 +528,10 @@ async function replaceCategories(client, organizationId, userId, categories) {
 
 /**
  * Build D1 category replacement statements for updateProfile's atomic batch.
- * Every insert has an organization existence guard. D1 expands repeated `$n`
- * placeholders to positional bindings, so each 16-row INSERT SELECT stays
- * below the 100-parameter statement limit even with the repeated guard value.
+ * Every insert has an organization existence guard. Each row uses its own
+ * single-row INSERT SELECT inside the atomic `db.batch()` call rather than
+ * `UNION ALL` compound selects, which hit D1's low SQLITE_MAX_COMPOUND_SELECT
+ * compile limit (`D1_ERROR: too many terms in compound SELECT`).
  */
 function buildD1CategoryStatements(organizationId, userId, categories) {
   const statements = [{
@@ -545,50 +550,90 @@ function buildD1CategoryStatements(organizationId, userId, categories) {
   }
 
   const normalizedCategories = normalizeCategories(categories);
-  for (let offset = 0; offset < normalizedCategories.length; offset += 16) {
-    const chunk = normalizedCategories.slice(offset, offset + 16);
-    const params = [];
-    const inserts = chunk.map((entry) => {
-      const base = params.length;
-      params.push(crypto.randomUUID(), entry.major, entry.minor, organizationId, userId || null);
-      return `select $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5},
-                     true, strftime('%Y-%m-%dT%H:%M:%fZ','now')
-               where exists (select 1 from organization where uuid = $${base + 4})`;
-    });
+  normalizedCategories.forEach((entry) => {
     statements.push({
       text: `insert into org_division_category
                (uuid, division, category, organization_id, user_id, is_active, created_ts)
-             ${inserts.join('\nUNION ALL\n')}`,
-      params,
+             select $1, $2, $3, $4, $5, true, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where exists (select 1 from organization where uuid = $4)`,
+      params: [crypto.randomUUID(), entry.major, entry.minor, organizationId, userId || null],
     });
-  }
+  });
 
   return { statements, categoryCount: normalizedCategories.length };
 }
 
-function buildD1ProfileMutations({ organizationId, userId, patch, categories, actor }) {
+function buildD1ProfileUpdateClause(patch, orgCols = null) {
+  if (!orgCols) return buildProfileUpdate(patch);
+
+  const assignments = [];
+  const params = [];
+  let next = 1;
+
+  PROFILE_COLUMN_MAP.forEach(({ field, column, aliasColumn, transform }) => {
+    const incoming = patch ? patch[field] : undefined;
+    if (incoming === undefined || incoming === null) return;
+    if (!orgCols.has(column)) return;
+
+    const value = transform ? transform(text(incoming)) : text(incoming);
+    assignments.push(`${column} = $${next}`);
+    params.push(value);
+    next += 1;
+
+    if (aliasColumn && orgCols.has(aliasColumn)) {
+      assignments.push(`${aliasColumn} = $${next}`);
+      params.push(value);
+      next += 1;
+    }
+  });
+
+  return { assignments, params, nextIndex: next };
+}
+
+function buildD1ProfileMutations({ organizationId, userId, patch, categories, actor }, schemaColumns = null) {
+  const orgCols = schemaColumns?.organization || null;
+  const userCols = schemaColumns?.user || null;
   const statements = [];
-  const { assignments, params, nextIndex } = buildProfileUpdate(patch);
+  const { assignments, params, nextIndex } = buildD1ProfileUpdateClause(patch, orgCols);
   if (assignments.length > 0) {
-    const actorIndex = nextIndex;
-    const uuidIndex = nextIndex + 1;
-    assignments.push(`last_modified_by = $${actorIndex}`, `last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
-    params.push(actor || 'enterprise-workspace', organizationId);
+    let paramIndex = nextIndex;
+    if (!orgCols || orgCols.has('last_modified_by')) {
+      assignments.push(`last_modified_by = $${paramIndex}`);
+      params.push(actor || 'enterprise-workspace');
+      paramIndex += 1;
+    }
+    if (!orgCols || orgCols.has('last_modified_ts')) {
+      assignments.push(`last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+    }
+    params.push(organizationId);
     statements.push({
-      text: `update organization set ${assignments.join(', ')} where uuid = $${uuidIndex}`,
+      text: `update organization set ${assignments.join(', ')} where uuid = $${paramIndex}`,
       params,
     });
   }
 
   if (userId && patch.contactName !== undefined && patch.contactName !== null) {
     const contactName = text(patch.contactName);
-    if (contactName !== '') {
+    if (contactName !== '' && (!userCols || userCols.has('full_name'))) {
+      const userAssignments = ['full_name = $1'];
+      const userParams = [contactName];
+      let userIndex = 2;
+      if (!userCols || userCols.has('last_modified_by')) {
+        userAssignments.push(`last_modified_by = $${userIndex}`);
+        userParams.push(actor || 'enterprise-workspace');
+        userIndex += 1;
+      }
+      if (!userCols || userCols.has('last_modified_ts')) {
+        userAssignments.push(`last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')`);
+      }
+      const userWhereUuidIndex = userIndex;
+      const orgExistsUuidIndex = userIndex + 1;
+      userParams.push(userId, organizationId);
       statements.push({
-        text: `update "user" set full_name = $1, last_modified_by = $2,
-                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-              where uuid = $3
-                and exists (select 1 from organization where uuid = $4)`,
-        params: [contactName, actor || 'enterprise-workspace', userId, organizationId],
+        text: `update "user" set ${userAssignments.join(', ')}
+              where uuid = $${userWhereUuidIndex}
+                and exists (select 1 from organization where uuid = $${orgExistsUuidIndex})`,
+        params: userParams,
       });
     }
   }
@@ -603,6 +648,27 @@ function buildD1ProfileMutations({ organizationId, userId, patch, categories, ac
   return { statements, fieldsUpdated: assignments.length, categoryCount };
 }
 
+function isMissingD1ColumnError(err) {
+  return /no such column:/i.test(String(err?.message || ''));
+}
+
+async function inspectD1TableColumns(db) {
+  const results = await batchD1(db, [
+    { text: 'PRAGMA table_info(organization)', params: [] },
+    { text: 'PRAGMA table_info("user")', params: [] },
+  ]);
+  const toColumnSet = (rows) => new Set(
+    (rows || []).map((row) => String(row?.name || '').trim().toLowerCase()).filter(Boolean)
+  );
+  const orgCols = toColumnSet(results?.[0]?.rows);
+  const userCols = toColumnSet(results?.[1]?.rows);
+  if (orgCols.size === 0) return null;
+  return {
+    organization: orgCols,
+    user: userCols.size > 0 ? userCols : null,
+  };
+}
+
 function createD1AtomicityError(statementCount) {
   const error = new Error('This buyer profile change needs an atomic Workers D1 batch; the D1 HTTP adapter cannot guarantee multi-statement atomicity.');
   logger.error('Buyer profile update rejected because the D1 HTTP adapter cannot guarantee atomicity', {
@@ -614,7 +680,7 @@ function createD1AtomicityError(statementCount) {
 }
 
 async function updateProfileInD1({ organizationId, userId, patch, categories, actor }) {
-  const plan = buildD1ProfileMutations({ organizationId, userId, patch, categories, actor });
+  let plan = buildD1ProfileMutations({ organizationId, userId, patch, categories, actor });
   const d1Binding = getD1Binding();
 
   if (!d1Binding) {
@@ -631,12 +697,38 @@ async function updateProfileInD1({ organizationId, userId, patch, categories, ac
 
   const db = d1Binding || getD1HttpClient();
   const startedAt = Date.now();
-  const statements = [
+  let statements = [
     { text: 'select uuid from organization where uuid = $1 limit 1', params: [organizationId] },
     ...plan.statements,
   ];
   try {
-    const results = await batchD1(db, statements);
+    let results;
+    try {
+      results = await batchD1(db, statements);
+    } catch (err) {
+      if (!isMissingD1ColumnError(err)) throw err;
+      const schemaColumns = await inspectD1TableColumns(db);
+      if (!schemaColumns) throw err;
+      const alignedPlan = buildD1ProfileMutations(
+        { organizationId, userId, patch, categories, actor },
+        schemaColumns
+      );
+      const alignedStatements = [
+        { text: 'select uuid from organization where uuid = $1 limit 1', params: [organizationId] },
+        ...alignedPlan.statements,
+      ];
+      if (alignedStatements.map((s) => s.text).join('\n') === statements.map((s) => s.text).join('\n')) {
+        throw err;
+      }
+      logger.warn('Retrying atomic D1 buyer profile update using verified schema columns', {
+        operation: 'updateBuyerProfile',
+        organizationId,
+        error: err.message,
+      }, 'BUYER_PROFILE_D1');
+      plan = alignedPlan;
+      statements = alignedStatements;
+      results = await batchD1(db, statements);
+    }
     const durationMs = Date.now() - startedAt;
     if (!results[0]?.rows?.[0]) return { updated: false, reason: 'ORG_NOT_FOUND' };
 

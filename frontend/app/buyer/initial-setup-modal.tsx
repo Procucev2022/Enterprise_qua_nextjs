@@ -303,12 +303,6 @@ export default function InitialSetupModal() {
     showToast,
   } = useApp();
 
-  const isSetupCompletedForBuyer = Boolean(
-    initialSetupCompleted ||
-    currentUserSession?.vendorMasterUploaded === true ||
-    activeBuyerAccount?.initialSetupCompleted === true
-  );
-
   const [completionSummary, setCompletionSummary] = useState<IngestionSummary | null>(null);
   const [isRetryingFailedEmails, setIsRetryingFailedEmails] = useState(false);
 
@@ -626,7 +620,7 @@ export default function InitialSetupModal() {
   // Re-establish the session on open. A first visit has none, so one is created here: uploads and the AI
   // job are stored against it, and the server needs the chosen period as its time horizon.
   React.useEffect(() => {
-    if (!initialSetupModalOpen || (isSetupCompletedForBuyer && !completionSummary)) {
+    if (!initialSetupModalOpen) {
       setVendorJob(null);
       setPoJob(null);
       setAiJob(null);
@@ -704,7 +698,7 @@ export default function InitialSetupModal() {
 
 
 
-  if (!initialSetupModalOpen || (isSetupCompletedForBuyer && !completionSummary)) return null;
+  if (!initialSetupModalOpen) return null;
 
   const ALLOWED_UPLOAD_EXTENSIONS = ['.xlsx', '.xls', '.csv', '.tsv', '.txt'];
   const isAllowedSpreadsheetFile = (file: File): boolean => {
@@ -3052,6 +3046,38 @@ export default function InitialSetupModal() {
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
                 The platform will dispatch tailored credentials and category notices based on PO correlation.
               </p>
+            </div>
+
+            {/* Dispatch Communication Information Boxes */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-left">
+              <div
+                data-testid="step4-mapped-vendors-info"
+                className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/50 flex items-start gap-2.5"
+              >
+                <Mail size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-xs font-extrabold text-emerald-800 dark:text-emerald-300">
+                    {UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoTitle}
+                  </h4>
+                  <p className="text-[11px] text-emerald-900/90 dark:text-emerald-200/90 mt-0.5 leading-relaxed">
+                    {UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoBody}
+                  </p>
+                </div>
+              </div>
+              <div
+                data-testid="step4-unmapped-vendors-info"
+                className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/50 flex items-start gap-2.5"
+              >
+                <AlertCircle size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                <div>
+                  <h4 className="text-xs font-extrabold text-amber-800 dark:text-amber-300">
+                    {UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoTitle}
+                  </h4>
+                  <p className="text-[11px] text-amber-900/90 dark:text-amber-200/90 mt-0.5 leading-relaxed">
+                    {UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoBody}
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Ingestion Totals Grid */}

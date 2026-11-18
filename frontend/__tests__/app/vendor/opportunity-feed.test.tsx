@@ -2353,4 +2353,170 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
       if (closeBidBtns.length > 0) fireEvent.click(closeBidBtns[closeBidBtns.length - 1]);
     }
   });
+
+  test('covers All Enquiries combined dashboard view, filters, search, pincodes, catalogue matches toggle, pagination, and sorting', async () => {
+    const rfq1: RFQFixture = {
+      ...DIRECT_OWN,
+      id: 'rfq-all-1',
+      rfqNumber: 'RFQ-ALL-1',
+      title: 'Centrifugal Water Pumps',
+      deliveryLocation: 'Mumbai 400001',
+      createdAt: '2026-05-01T10:00:00.000Z',
+    };
+    const rfq2: RFQFixture = {
+      ...DIRECT_STEEL,
+      id: 'rfq-all-2',
+      rfqNumber: 'RFQ-ALL-2',
+      title: 'Structural Steel Beams',
+      deliveryLocation: 'Pune 411001',
+      minorCategory: 'Structural Steel & Beams',
+      createdAt: '2026-05-02T10:00:00.000Z',
+    };
+    const rfq3: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-all-3',
+      rfqNumber: 'RFQ-ALL-3',
+      title: 'Stainless Steel Flanges',
+      deliveryLocation: 'Bangalore 560001',
+      minorCategory: 'Structural Steel & Beams',
+      createdAt: '2026-05-02T10:00:00.000Z',
+    };
+    const rfq4: RFQFixture = {
+      ...NETWORK_HVAC_QUOTED,
+      id: 'rfq-all-4',
+      rfqNumber: 'RFQ-ALL-4',
+      title: 'HVAC Air Filter Units',
+      deliveryLocation: 'Delhi 110001',
+      createdAt: undefined as any,
+    };
+    const rfq5: RFQFixture = {
+      ...NETWORK_HVAC_QUOTED,
+      id: 'rfq-all-5',
+      rfqNumber: 'RFQ-ALL-5',
+      title: 'No Date Equipment',
+      deliveryLocation: 'Kolkata 700001',
+      createdAt: undefined as any,
+    };
+    const rfqMatched: RFQFixture = {
+      ...NETWORK_STEEL,
+      id: 'rfq-m0-match-all',
+      rfqNumber: 'RFQ-MODE0-MATCH-ALL',
+      sourcingMode: 'mode_0',
+      category: 'Engineering Spares - Mechanical',
+      deliveryLocation: 'Mumbai 400001',
+      lineItems: [
+        {
+          id: 'li-m0-1',
+          itemName: 'Steel Beam',
+          description: 'Structural Steel & Beams section',
+          minorCategory: 'Structural Steel & Beams',
+          category: 'Structural Steel & Beams',
+          quantity: 1,
+          targetPrice: 1000,
+        },
+      ],
+      createdAt: '2026-05-04T10:00:00.000Z',
+    };
+
+    serveRFQs([rfq1, rfq2, rfq3, rfq4, rfq5, rfqMatched]);
+    await renderFeed();
+
+    // Click "All Enquiries" tab
+    const allTabBtn = screen.getByRole('button', { name: /All Enquiries/i });
+    fireEvent.click(allTabBtn);
+    expect(screen.getByText(/All Sourcing Enquiries/i)).toBeInTheDocument();
+
+    // Toggle catalogue matches
+    const catMatchesBtn = screen.getByRole('button', { name: /Catalogue Matches/i });
+    fireEvent.click(catMatchesBtn);
+    fireEvent.click(catMatchesBtn);
+
+    // Pincode filter
+    const pincodeBtn = screen.getByRole('button', { name: 'Pincode Filter' });
+    fireEvent.click(pincodeBtn);
+    const pinCheckboxes = screen.getAllByRole('checkbox');
+    if (pinCheckboxes.length > 0) {
+      fireEvent.click(pinCheckboxes[0]);
+      fireEvent.click(pinCheckboxes[0]);
+      fireEvent.click(pinCheckboxes[0]);
+      const clearBtns = screen.queryAllByRole('button', { name: /Clear/i });
+      if (clearBtns.length > 0) fireEvent.click(clearBtns[0]);
+    }
+    fireEvent.click(pincodeBtn);
+
+    // Status filter
+    const statusSelects = screen.getAllByRole('listbox', { name: 'Status' });
+    const statusSelect = statusSelects[statusSelects.length - 1];
+    fireEvent.change(statusSelect, { target: { value: 'open' } });
+    fireEvent.change(statusSelect, { target: { value: 'submitted' } });
+    fireEvent.change(statusSelect, { target: { value: 'closed' } });
+    fireEvent.change(statusSelect, { target: { value: 'other' } });
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
+
+    // Category search input
+    const catInput = screen.getByRole('combobox', { name: 'Category' });
+    fireEvent.click(catInput);
+    fireEvent.change(catInput, { target: { value: 'pum' } });
+    fireEvent.keyDown(catInput, { key: 'ArrowDown' });
+    fireEvent.keyDown(catInput, { key: 'Enter' });
+    const clearCatBtns = screen.queryAllByTitle(UI_STRINGS.categorySearch.clearAria);
+    if (clearCatBtns.length > 0) fireEvent.click(clearCatBtns[0]);
+
+    // Search specs input
+    const searchSpecsInput = screen.getByPlaceholderText('Specs, location, keywords...');
+    fireEvent.change(searchSpecsInput, { target: { value: 'Pumps' } });
+    expect(searchSpecsInput).toHaveValue('Pumps');
+
+    // Click row interactions in combined view: RFQ number, download, submit quote
+    const rfqNumBtn = screen.queryByRole('button', { name: 'RFQ-ALL-1' });
+    if (rfqNumBtn) fireEvent.click(rfqNumBtn);
+    const downloadBtns = screen.queryAllByRole('button', { name: 'Download RFQ' });
+    if (downloadBtns.length > 0) fireEvent.click(downloadBtns[0]);
+    const submitQuoteBtns = screen.queryAllByRole('button', { name: 'Submit Quote' });
+    if (submitQuoteBtns.length > 0) fireEvent.click(submitQuoteBtns[0]);
+
+    // Reset button
+    const resetBtn = screen.getByRole('button', { name: 'Clear Filters' });
+    fireEvent.click(resetBtn);
+
+    // Empty search state
+    fireEvent.change(searchSpecsInput, { target: { value: 'NONEXISTENT_KEYWORD_FOR_EMPTY_STATE' } });
+    expect(screen.getByText(/No matching open sourcing opportunities or enquiries found/i)).toBeInTheDocument();
+    fireEvent.click(resetBtn);
+
+    // Pagination controls in combined view
+    const rowsPerPageSelects = screen.getAllByRole('listbox', { name: 'Rows per page' });
+    const allRowsSelect = rowsPerPageSelects[rowsPerPageSelects.length - 1];
+    fireEvent.change(allRowsSelect, { target: { value: '10' } });
+
+    // Test pagination page navigation buttons
+    const prevPageBtns = screen.queryAllByRole('button', { name: '‹' });
+    if (prevPageBtns.length > 0) fireEvent.click(prevPageBtns[prevPageBtns.length - 1]);
+    const firstPageBtns = screen.queryAllByRole('button', { name: '«' });
+    if (firstPageBtns.length > 0) fireEvent.click(firstPageBtns[firstPageBtns.length - 1]);
+    const nextPageBtns = screen.queryAllByRole('button', { name: '›' });
+    if (nextPageBtns.length > 0) fireEvent.click(nextPageBtns[nextPageBtns.length - 1]);
+    const lastPageBtns = screen.queryAllByRole('button', { name: '»' });
+    if (lastPageBtns.length > 0) fireEvent.click(lastPageBtns[lastPageBtns.length - 1]);
+
+    // Upgrade modal interaction if present
+    const upgradeBtns = screen.queryAllByRole('button', { name: /🔒 Upgrade|Upgrade/i });
+    if (upgradeBtns.length > 0) {
+      fireEvent.click(upgradeBtns[0]);
+      const retryBtn = screen.queryByRole('button', { name: /Retry/i });
+      if (retryBtn) fireEvent.click(retryBtn);
+      const closeBtns = screen.queryAllByRole('button', { name: /^Close$/i });
+      if (closeBtns.length > 0) fireEvent.click(closeBtns[closeBtns.length - 1]);
+    }
+
+    // Also cover isDirectOpportunity in production mode
+    const origEnv = process.env.NODE_ENV;
+    try {
+      (process.env as any).NODE_ENV = 'production';
+      const allTabBtn2 = screen.getByRole('button', { name: /All Enquiries/i });
+      fireEvent.click(allTabBtn2);
+    } finally {
+      (process.env as any).NODE_ENV = origEnv;
+    }
+  });
 });

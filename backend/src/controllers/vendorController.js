@@ -1489,6 +1489,9 @@ async function resolveBuyerOrgIdForScope(user, buyerAccount) {
       resolvedOrgId = profileLookup.profile.organizationId;
     }
   }
+  if (!resolvedOrgId && buyerAccount?.id) {
+    resolvedOrgId = buyerAccount.id;
+  }
   return resolvedOrgId;
 }
 
@@ -1550,6 +1553,10 @@ async function resolveFallbackVendorRecord({
 }) {
   let vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
   if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX)) {
+    const byMasterId = storeService.getVendorById(id, buyerScope);
+    if (byMasterId) return { vendor: byMasterId, missingEmail: false, missingCategory: false, promoted: false };
+  }
 
   const sanitizedVendorEmail = String(bodyData.vendorEmail || updates?.email || bodyData.email || '').trim().toLowerCase();
   if (sanitizedVendorEmail) {

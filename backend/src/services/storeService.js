@@ -23,6 +23,9 @@ const {
   PERSISTENCE_MESSAGES,
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_REASON,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
+  RFQ_CLOSURE_MESSAGES,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   RFQ_NOTIFICATION_MESSAGES,
@@ -30,6 +33,7 @@ const {
   EVENT_OUTBOX_TYPES,
   EVENT_OUTBOX_MAX_BATCH_SIZE,
   EMAIL_REGEX,
+  CHANNEL_DISPATCH_CONCURRENCY,
   MAJOR_CATEGORY_ALIASES,
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
@@ -619,6 +623,28 @@ class StoreService {
       })
       .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
     return tracked;
+  }
+
+  /**
+   * Drain queued channel notifications with bounded concurrency so large RFQ
+   * fan-outs never exhaust Worker outbound socket pools and abort in-flight SMS/HTTP calls.
+   */
+  _dispatchChannelWave(tasks) {
+    if (!Array.isArray(tasks) || tasks.length === 0) return Promise.resolve([]);
+    let nextIndex = 0;
+    const workerCount = Math.min(CHANNEL_DISPATCH_CONCURRENCY, tasks.length);
+    const workers = [];
+    for (let i = 0; i < workerCount; i += 1) {
+      workers.push((async () => {
+        while (nextIndex < tasks.length) {
+          const runTask = tasks[nextIndex];
+          nextIndex += 1;
+          const { promise, errorMessage, metadata, feedDetails } = runTask();
+          await this._sendWithFeedOutcome(promise, errorMessage, metadata, feedDetails);
+        }
+      })());
+    }
+    return this._background(Promise.all(workers), 'Failed to drain queued channel dispatches');
   }
 
   /** Records a direct (initial) SMS or WhatsApp send onto RFQ follow-up vendor status and sent counter. */
@@ -1756,7 +1782,10 @@ class StoreService {
   }
 
   getVendorById(id, scopedBuyerId = null) {
-    const vendor = this.vendors.find((v) => v.id === id || v.email === id);
+    const masterSuffix = typeof id === 'string' && id.startsWith('v-master-') ? id.slice('v-master-'.length) : '';
+    const vendor = this.vendors.find(
+      (v) => v.id === id || v.email === id || (masterSuffix && v.masterRecordId === masterSuffix)
+    );
     if (!vendor) return undefined;
     if (scopedBuyerId === 'all') return vendor;
     if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
@@ -5515,7 +5544,7 @@ class StoreService {
       const resolved = vendor && vendor.id ? this.getVendorById(vendor.id, 'all') : null;
       if (isVendorInactive(resolved || vendor)) continue;
       const recipientEmail = resolveVendorEmail(vendor);
-      if (!recipientEmail) continue;
+      if (!recipientEmail || !EMAIL_REGEX.test(recipientEmail)) continue;
 
       const emailKey = recipientEmail.toLowerCase();
       if (targetsByEmail.has(emailKey)) continue;
@@ -8407,6 +8436,7 @@ class StoreService {
     }
 
     const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    const v0ChannelTasks = [];
 
     for (const vendor of resolvedAdditions) {
       const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -8441,7 +8471,7 @@ class StoreService {
       }
 
       const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
-      if (vendor.email && !sendEmailViaOutboxOnly) {
+      if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8465,21 +8495,24 @@ class StoreService {
       }
 
       if (vendor.phone) {
-        const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-        this._sendWithFeedOutcome(
-          smsService.sendRFQChaserSms({
-            mobile: vendor.phone,
-            vendorName: vendor.name,
-            rfqNumber: updated.rfqNumber,
-            rfqTitle: updated.title,
-            bidLink: bidUrl,
-          }),
-          'Failed to dispatch initial SMS alert',
-          {},
-          { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-        );
+        v0ChannelTasks.push(() => {
+          const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+          return {
+            promise: smsService.sendRFQChaserSms({
+              mobile: vendor.phone,
+              vendorName: vendor.name,
+              rfqNumber: updated.rfqNumber,
+              rfqTitle: updated.title,
+              bidLink: bidUrl,
+            }),
+            errorMessage: 'Failed to dispatch initial SMS alert',
+            metadata: {},
+            feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+          };
+        });
       }
     }
+    this._dispatchChannelWave(v0ChannelTasks);
 
     if (updated.followUpData) {
       const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
@@ -8772,6 +8805,7 @@ class StoreService {
       }
 
       const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      const autoChannelTasks = [];
       try {
         for (const vendor of resolvedAdditions) {
           const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -8806,7 +8840,7 @@ class StoreService {
           }
 
           const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
-          if (vendor.email && !sendEmailViaOutboxOnly) {
+          if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
               mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8830,23 +8864,25 @@ class StoreService {
           }
 
           if (vendor.phone) {
-            const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-            this._sendWithFeedOutcome(
-              smsService.sendRFQChaserSms({
-                mobile: vendor.phone,
-                vendorName: vendor.name,
-                rfqNumber: updated.rfqNumber,
-                rfqTitle: updated.title,
-                bidLink: bidUrl,
-              }),
-              'Failed to dispatch initial SMS alert',
-              {},
-              { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-            );
+            autoChannelTasks.push(() => {
+              const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+              return {
+                promise: smsService.sendRFQChaserSms({
+                  mobile: vendor.phone,
+                  vendorName: vendor.name,
+                  rfqNumber: updated.rfqNumber,
+                  rfqTitle: updated.title,
+                  bidLink: bidUrl,
+                }),
+                errorMessage: 'Failed to dispatch initial SMS alert',
+                metadata: {},
+                feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              };
+            });
 
             if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
-              this._sendWithFeedOutcome(
-                whatsAppService.sendRFQInvitationWhatsApp({
+              autoChannelTasks.push(() => ({
+                promise: whatsAppService.sendRFQInvitationWhatsApp({
                   phone: vendor.phone,
                   vendorName: vendor.name,
                   contactPerson: vendor.contactPerson,
@@ -8856,13 +8892,14 @@ class StoreService {
                   deliveryDate: updated.targetDeliveryDate || updated.deadline,
                   deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
                 }),
-                'Failed to dispatch initial WhatsApp prompt',
-                {},
-                { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-              );
+                errorMessage: 'Failed to dispatch initial WhatsApp prompt',
+                metadata: {},
+                feedDetails: { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              }));
             }
           }
         }
+        this._dispatchChannelWave(autoChannelTasks);
       } catch (dispatchError) {
         logger.error('RFQ assignments were saved but automatic vendor dispatch failed', {
           rfqId: updated.id,
@@ -9495,7 +9532,205 @@ class StoreService {
     return notification;
   }
 
+  _normalizeClosureVendorEntry(rawEntry) {
+    if (!rawEntry) return null;
+    if (typeof rawEntry === 'string') {
+      const token = rawEntry.trim();
+      if (!token) return null;
+      const resolved = this.getVendorById(token, 'all');
+      if (resolved) return { ...resolved };
+      return token.includes('@') ? { email: token } : { id: token };
+    }
+    if (typeof rawEntry !== 'object') return null;
+
+    const candidateId = String(rawEntry.id || rawEntry.vendorId || '').trim() || null;
+    const candidateEmail = resolveVendorEmail(rawEntry) || null;
+    const resolved =
+      (candidateId ? this.getVendorById(candidateId, 'all') : null) ||
+      (candidateEmail ? this.getVendorById(candidateEmail, 'all') : null);
+
+    const id = candidateId || (resolved && resolved.id) || null;
+    const email = candidateEmail || (resolved && resolveVendorEmail(resolved)) || null;
+    const phone =
+      rawEntry.phone ||
+      rawEntry.mobile ||
+      rawEntry.mobileNumber ||
+      (resolved && (resolved.phone || resolved.mobile || resolved.mobileNumber)) ||
+      null;
+    const name = rawEntry.name || rawEntry.vendorName || (resolved && resolved.name) || null;
+    const contactPerson = rawEntry.contactPerson || (resolved && resolved.contactPerson) || null;
+
+    return {
+      ...(resolved || {}),
+      ...rawEntry,
+      ...(id ? { id, vendorId: id } : {}),
+      ...(email ? { email } : {}),
+      ...(phone ? { phone } : {}),
+      ...(name ? { name } : {}),
+      ...(contactPerson ? { contactPerson } : {}),
+    };
+  }
+
+  _resolveInvitedVendorEntries(rfq) {
+    const rawLists = [
+      ...(Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []),
+      ...((rfq.followUpData && Array.isArray(rfq.followUpData.vendors)) ? rfq.followUpData.vendors : []),
+      ...(Array.isArray(this.vendors) ? this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq)) : []),
+    ];
+
+    const merged = [];
+    const indexById = new Map();
+    const indexByEmail = new Map();
+    const indexByName = new Map();
+
+    for (const rawEntry of rawLists) {
+      const entry = this._normalizeClosureVendorEntry(rawEntry);
+      if (!entry) continue;
+
+      const idKey = entry.id ? String(entry.id).trim().toLowerCase() : '';
+      const emailKey = entry.email ? String(entry.email).trim().toLowerCase() : '';
+      const nameKey = entry.name ? String(entry.name).trim().toLowerCase() : '';
+      if (!idKey && !emailKey && !nameKey) continue;
+
+      let existingIdx = idKey && indexById.has(idKey) ? indexById.get(idKey) : undefined;
+      if (existingIdx === undefined && emailKey && indexByEmail.has(emailKey)) existingIdx = indexByEmail.get(emailKey);
+      if (existingIdx === undefined && nameKey && indexByName.has(nameKey)) existingIdx = indexByName.get(nameKey);
+
+      if (existingIdx !== undefined) {
+        const current = merged[existingIdx];
+        merged[existingIdx] = {
+          ...entry,
+          ...current,
+          id: current.id || entry.id,
+          vendorId: current.vendorId || entry.vendorId,
+          email: current.email || entry.email,
+          phone: current.phone || entry.phone,
+          name: current.name || entry.name,
+          contactPerson: current.contactPerson || entry.contactPerson,
+        };
+        if (idKey && !indexById.has(idKey)) indexById.set(idKey, existingIdx);
+        if (emailKey && !indexByEmail.has(emailKey)) indexByEmail.set(emailKey, existingIdx);
+        if (nameKey && !indexByName.has(nameKey)) indexByName.set(nameKey, existingIdx);
+      } else {
+        const idx = merged.length;
+        merged.push(entry);
+        if (idKey) indexById.set(idKey, idx);
+        if (emailKey) indexByEmail.set(emailKey, idx);
+        if (nameKey) indexByName.set(nameKey, idx);
+      }
+    }
+
+    const missingDbIds = Array.from(
+      new Set(
+        merged
+          .filter((v) => v.id && (!v.email || !v.phone))
+          .map((v) => String(v.id).trim())
+      )
+    );
+
+    return { vendors: merged, missingDbIds };
+  }
+
+  _dispatchVendorClosureMessages(rfq, vendors, tracking = {}) {
+    const notifiedIds = tracking.notifiedIds || new Set();
+    const emailedKeys = tracking.emailedKeys || new Set();
+    const messagedPhones = tracking.messagedPhones || new Set();
+
+    const rfqNumber = rfq.rfqNumber || rfq.id || '';
+    const rfqTitle = rfq.title || 'Requisition';
+    const notifTitle = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_TITLE, { rfqNumber });
+    const notifMessage = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_MESSAGE, { rfqNumber, rfqTitle });
+
+    const vendorNotifs = [];
+    for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      if (!vendor) continue;
+      if (vendor.id && !notifiedIds.has(vendor.id)) {
+        notifiedIds.add(vendor.id);
+        vendorNotifs.push(
+          this._buildNotification({
+            recipientType: 'vendor',
+            recipientId: vendor.id,
+            kind: 'rfq_closed',
+            rfq,
+            title: notifTitle,
+            message: notifMessage,
+            meta: {
+              rfqNumber: rfq.rfqNumber,
+              closedReason: rfq.closedReason || null,
+              closedAt: rfq.closedAt || null,
+            },
+          })
+        );
+      }
+
+      const email = resolveVendorEmail(vendor);
+      const emailKey = email ? email.toLowerCase() : '';
+      if (emailKey && !emailedKeys.has(emailKey)) {
+        emailedKeys.add(emailKey);
+        const isBuyerUploaded = this.isBuyerUploaded(vendor);
+        this._background(
+          mailerService.sendRfqClosedVendorEmail(email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            vendor,
+            isBuyerUploaded,
+          }),
+          'Failed to send RFQ closed notification email to invited vendor',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-closed-vendor-email',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            vendorId: vendor.id || null,
+          }
+        );
+      }
+
+      const rawPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      const phoneKey = rawPhone ? String(rawPhone).replace(/\D/g, '') : '';
+      if (phoneKey && phoneKey.length >= 10 && !messagedPhones.has(phoneKey)) {
+        messagedPhones.add(phoneKey);
+        const smsText = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_SMS_MESSAGE, { rfqNumber });
+        if (typeof smsService.sendActionCenterSms === 'function') {
+          this._background(
+            smsService.sendActionCenterSms({
+              mobile: rawPhone,
+              recipientName: vendor.contactPerson || vendor.name,
+              message: smsText,
+              entityType: 'rfq_closed',
+            }),
+            'Failed to send RFQ closed SMS alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+        if (typeof whatsAppService.sendRFQClosedWhatsApp === 'function') {
+          this._background(
+            whatsAppService.sendRFQClosedWhatsApp({
+              phone: rawPhone,
+              contactPerson: vendor.contactPerson || vendor.name,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+            }),
+            'Failed to send RFQ closed WhatsApp alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+      }
+    }
+
+    if (vendorNotifs.length > 0) {
+      this.notifications.unshift(...vendorNotifs);
+      this._persistNotificationBatch(vendorNotifs);
+    }
+  }
+
   notifyOfRFQClosure(rfq) {
+    if (!rfq) return;
+
+    if (rfq.rfqNumber && typeof rfqChaserScheduler.clearScheduledChasers === 'function') {
+      rfqChaserScheduler.clearScheduledChasers(rfq.rfqNumber);
+    }
+
     if (rfq.buyerAccountId) {
       const buyerNotif = this._buildNotification({
         recipientType: 'buyer',
@@ -9538,21 +9773,29 @@ class StoreService {
         this._delayedQuoteTimers.delete(rfq.id);
       }
     }
-    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
-    if (matches.length > 0) {
-      const vendorNotifs = matches.map((vendor) =>
-        this._buildNotification({
-          recipientType: 'vendor',
-          recipientId: vendor.id,
-          kind: 'rfq_closed',
-          rfq,
-          title: `RFQ Closed: ${rfq.rfqNumber}`,
-          message: `Requisition ${rfq.rfqNumber} has been closed by the buyer. Bidding is now concluded.`,
-          meta: { rfqNumber: rfq.rfqNumber },
-        })
+
+    const tracking = {
+      notifiedIds: new Set(),
+      emailedKeys: new Set(),
+      messagedPhones: new Set(),
+    };
+    const { vendors, missingDbIds } = this._resolveInvitedVendorEntries(rfq);
+    this._dispatchVendorClosureMessages(rfq, vendors, tracking);
+
+    if (
+      pool.hasStorage() &&
+      missingDbIds.length > 0 &&
+      typeof domainQueries.getVendorsByIdsFromDB === 'function'
+    ) {
+      this._background(
+        domainQueries.getVendorsByIdsFromDB(missingDbIds).then((dbVendors) => {
+          if (Array.isArray(dbVendors) && dbVendors.length > 0) {
+            this._dispatchVendorClosureMessages(rfq, dbVendors, tracking);
+          }
+        }),
+        'Failed to resolve missing invited vendor contacts for RFQ closure alert',
+        { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, missingCount: missingDbIds.length }
       );
-      this.notifications.unshift(...vendorNotifs);
-      this._persistNotificationBatch(vendorNotifs);
     }
   }
 
@@ -9749,40 +9992,24 @@ class StoreService {
    * Whether an RFQ is currently within its 48-hour bidding integrity window.
    */
   isWithin48HourWindow(rfq) {
-    if (!rfq || rfq.status === 'Closed' || rfq.status === 'PO Generated' || rfq.poFinalised || Boolean(rfq.poNumber) || rfq.status === 'Expired') return false;
+    if (!rfq || isRfqConcluded(rfq)) return false;
     const isV0 =
       rfq.sourcingMode === 'mode_0' ||
       rfq.sourcingMode === 'v0' ||
       rfq.sourcingMode === 'version_0';
     if (isV0) return false;
-    if (rfq.quotesHidden) return true;
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return true;
-    return Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return true;
+    return Date.now() < windowEndMs;
   }
 
   /**
    * Calculates the remaining milliseconds in the 48-hour bidding window.
    */
   getRemaining48HourMs(rfq) {
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq && rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return FORTY_EIGHT_HOURS_MS;
-    const elapsed = Date.now() - createdAtMs;
-    return Math.max(0, FORTY_EIGHT_HOURS_MS - elapsed);
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return RFQ_AUTO_CLOSE_AFTER_MS;
+    return Math.max(0, windowEndMs - Date.now());
   }
 
   /**

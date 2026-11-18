@@ -346,6 +346,49 @@ const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
 const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
 const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
 const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_QUOTES_SEALED_REASON = 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.';
+
+function parseRfqTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0;
+  const trimmed = String(value).trim();
+  if (!trimmed) return 0;
+  let parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    parsed = Date.parse(trimmed.replace(' ', 'T').replace(/\s+UTC$/i, 'Z'));
+  }
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isRfqConcluded(rfq) {
+  return Boolean(
+    rfq && (
+      rfq.status === 'Closed' ||
+      rfq.status === 'PO Generated' ||
+      rfq.poFinalised ||
+      rfq.poNumber ||
+      rfq.status === 'Expired'
+    )
+  );
+}
+
+function resolveRfqBiddingWindowEndMs(rfq) {
+  if (!rfq) return 0;
+  const createdAtMs = parseRfqTimestampMs(rfq.createdAt);
+  const closingDeadlineMs = parseRfqTimestampMs(rfq.closingDeadline);
+  const defaultEndMs = createdAtMs > 0 ? createdAtMs + RFQ_AUTO_CLOSE_AFTER_MS : 0;
+  return Math.max(defaultEndMs, closingDeadlineMs);
+}
+const RFQ_CLOSURE_MESSAGES = Object.freeze({
+  REOPEN_FORBIDDEN: 'After close, this RFQ cannot be opened again.',
+  BUYER_CLOSE_REASON: 'Closed by buyer',
+  CM_CLOSE_REASON: 'Closed by procurement team',
+  VENDOR_NOTIFICATION_TITLE: 'RFQ Closed: {rfqNumber}',
+  VENDOR_NOTIFICATION_MESSAGE: 'Requisition {rfqNumber} ({rfqTitle}) has been closed by the buyer. Bidding is now concluded and no further quotations will be accepted.',
+  VENDOR_EMAIL_SUBJECT: 'RFQ Closed: {rfqNumber}',
+  VENDOR_SMS_MESSAGE: 'RFQ {rfqNumber} is closed by the buyer. Bidding is concluded.',
+  VENDOR_WHATSAPP_MESSAGE: 'Update on RFQ {rfqNumber} ({rfqTitle}): This RFQ has been closed by the buyer. Bidding is now concluded and no further quotations are needed.',
+});
 const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
 const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
 const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
@@ -477,6 +520,7 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/zoho',
   ]),
   DIRECT_GET_PATH_PATTERNS: Object.freeze([
+    /^\/api\/rfqs\/[^/]+\/vendor-candidates$/,
     /^\/api\/vendors\/[^/]+$/,
     /^\/api\/vendors\/[^/]+\/rfq-credits$/,
     /^\/api\/vendors\/[^/]+\/payment-links$/,
@@ -485,6 +529,7 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
   ]),
   UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
 });
+const CHANNEL_DISPATCH_CONCURRENCY = 4;
 const QUALIFICATION_PILLARS = [
   { id: 'M1', name: 'Commercial Terms', weight: 25, color: '#3b82f6' },
   { id: 'M2', name: 'Technical Capabilities', weight: 15, color: '#06b6d4' },
@@ -2416,6 +2461,8 @@ const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
     'The email provider accepted the vendor category update request.',
   VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
     'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE:
+    'Unable to deliver the vendor category update email right now because outbound mail provider authentication is unavailable or cooling down. Please refresh mail credentials and retry.',
   BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',
 });
 
@@ -4294,6 +4341,7 @@ module.exports = {
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
+  CHANNEL_DISPATCH_CONCURRENCY,
   D1_OVERLOAD_CONFIG,
   D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
@@ -4433,6 +4481,11 @@ module.exports = {
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
   RFQ_AUTO_CLOSE_REASON,
+  RFQ_QUOTES_SEALED_REASON,
+  parseRfqTimestampMs,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
+  RFQ_CLOSURE_MESSAGES,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,

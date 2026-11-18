@@ -4808,11 +4808,26 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText('10 Vendors')).toBeInTheDocument();
     expect(screen.getByText('4 Suppliers')).toBeInTheDocument();
     expect(screen.getByText('6 Suppliers')).toBeInTheDocument();
+
+    const mappedInfoBox = screen.getByTestId('step4-mapped-vendors-info');
+    const unmappedInfoBox = screen.getByTestId('step4-unmapped-vendors-info');
+    const totalSummaryLabel = screen.getByText('Total Stored');
+
+    expect(mappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoTitle);
+    expect(mappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoBody);
+    expect(unmappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoTitle);
+    expect(unmappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoBody);
+    expect(
+      mappedInfoBox.compareDocumentPosition(totalSummaryLabel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      unmappedInfoBox.compareDocumentPosition(totalSummaryLabel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
   });
 
-  it('does not render Buyer Initial Setup popup once buyer has already completed initial vendor upload', () => {
+  it('does not render Buyer Initial Setup popup when initialSetupModalOpen is false', () => {
     (useApp as jest.Mock).mockReturnValue({
-      initialSetupModalOpen: true,
+      initialSetupModalOpen: false,
       setInitialSetupModalOpen: jest.fn(),
       historicalPurchaseDataPeriod: '1_year',
       setHistoricalPurchaseDataPeriod: jest.fn(),

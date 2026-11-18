@@ -696,7 +696,8 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   id="rfq-edit-status"
                   value={form.status}
                   onChange={(e) => patch('status', e.target.value as RFQItem['status'])}
-                  className="font-semibold"
+                  disabled={rfq.status === 'Closed'}
+                  className="font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {RFQ_STATUSES.map((status) => (
                     <option key={status} value={status}>
@@ -704,6 +705,11 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                     </option>
                   ))}
                 </select>
+                {rfq.status === 'Closed' && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                    {EDIT.closedStatusLockedNote}
+                  </p>
+                )}
               </div>
 
               <div>

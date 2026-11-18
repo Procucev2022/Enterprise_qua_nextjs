@@ -1195,6 +1195,7 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
 
   if (Array.isArray(eventIds) && eventIds.length > EVENT_OUTBOX_MAX_BATCH_SIZE) {
     const aggregate = { claimed: 0, completed: 0, retried: 0, dead: 0, completedIds: [] };
+    let authUnavailable = false;
     for (let i = 0; i < eventIds.length; i += EVENT_OUTBOX_MAX_BATCH_SIZE) {
       const slice = eventIds.slice(i, i + EVENT_OUTBOX_MAX_BATCH_SIZE);
       const step = await dispatchDueEventOutboxBatch(slice.length, slice);
@@ -1203,6 +1204,10 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
       aggregate.retried += step.retried;
       aggregate.dead += step.dead;
       if (Array.isArray(step.completedIds)) aggregate.completedIds.push(...step.completedIds);
+      if (step.authUnavailable) authUnavailable = true;
+    }
+    if (authUnavailable) {
+      Object.defineProperty(aggregate, 'authUnavailable', { value: true, enumerable: false });
     }
     return aggregate;
   }
@@ -1226,6 +1231,7 @@ async function dispatchDueEventOutboxBatch(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, 
   let completed = 0;
   let retried = 0;
   let dead = 0;
+  let authUnavailable = false;
   const completedIds = [];
   for (const job of jobs) {
     try {
@@ -1243,6 +1249,11 @@ async function dispatchDueEventOutboxBatch(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, 
       completedIds.push(job.id);
     } catch (error) {
       const permanentFailure = error?.code === 'INVALID_EVENT_OUTBOX_TYPE' || error?.code === 'INVALID_PERSISTED_RECORD';
+      const isAuthFailure =
+        error?.code === 'MAIL_PROVIDERS_COOLING_DOWN' ||
+        error?.code === 'AUTH_REVOKED' ||
+        (Array.isArray(error?.deliveryAttempts) && error.deliveryAttempts.some((attempt) => attempt && attempt.kind === 'AUTH_REVOKED'));
+      if (isAuthFailure) authUnavailable = true;
       const isDead = permanentFailure || job.attempts >= EVENT_OUTBOX_MAX_ATTEMPTS;
       const availableAt = new Date(Date.now() + getRetryDelayMs(job.attempts)).toISOString();
       if (
@@ -1370,7 +1381,11 @@ async function dispatchDueEventOutboxBatch(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, 
       dead,
     }, 'EVENT_OUTBOX');
   }
-  return { claimed: jobs.length, completed, retried, dead, completedIds };
+  const summary = { claimed: jobs.length, completed, retried, dead, completedIds };
+  if (authUnavailable) {
+    Object.defineProperty(summary, 'authUnavailable', { value: true, enumerable: false });
+  }
+  return summary;
 }
 
 async function purgeExpiredEventOutboxRows() {

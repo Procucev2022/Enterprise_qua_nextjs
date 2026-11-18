@@ -12,6 +12,7 @@ import {
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
   GSTIN_PATTERN,
+  derivePanFromGstin,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -532,7 +533,7 @@ function LoginPageContent() {
     try {
       const email = regEmail.trim().toLowerCase();
       const cleanGstin = regGstin.trim().toUpperCase();
-      const derivedPan = '';
+      const derivedPan = derivePanFromGstin(cleanGstin);
       const cleanCity = regCity.trim();
       const cleanState = regState.trim();
       const cleanStreet = regStreet.trim();
@@ -574,13 +575,17 @@ function LoginPageContent() {
             contactPerson: regName.trim(),
             mobileNumber: regMobile.trim(),
             gstin: cleanGstin,
+            gstNumber: cleanGstin,
             pan: derivedPan,
+            panNumber: derivedPan,
             street: resolvedStreet,
             address1: resolvedStreet,
+            address: resolvedStreet,
             city: cleanCity,
             state: cleanState,
             pincode: cleanPincode,
             zip_code: cleanPincode,
+            zipCode: cleanPincode,
             country: 'India',
             primaryPlantLocation: plantLocation,
             // Not asked at registration, so it is sent empty rather than a guessed sector.

@@ -486,7 +486,7 @@ describe('app/buyer/command-center.tsx', () => {
 
     expect(screen.getByText(/PO History Ingested/i)).toBeInTheDocument();
     fireEvent.click(screen.getByText(/PO History Ingested/i));
-    expect(mockSetInitialSetupModalOpen).not.toHaveBeenCalled();
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(true);
     // Banner is removed completely
     expect(screen.queryByText(/Sourcing Plan:/i)).not.toBeInTheDocument();
   });
@@ -1584,5 +1584,32 @@ describe('app/buyer/command-center.tsx outreach figures come only from server da
     expect(screen.getByText('Just now')).toBeInTheDocument();
     const outreachCard = screen.getByTitle('Click to open vendor follow-up details');
     expect(outreachCard).toHaveTextContent('15');
+  });
+
+  it('excludes sealed within-48h RFQs from visible supplier quote counts on buyer dashboard', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      ...baseApp,
+      rfqs: [
+        {
+          id: 'rfq-cc-sealed',
+          rfqNumber: 'RFQ-CC-SEALED',
+          title: 'Sealed Quotes RFQ',
+          category: 'IT',
+          createdAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+          targetDeliveryDate: '2026-12-20',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 2,
+          quotes: [{ vendorId: 'v1', vendorName: 'Secret', unitPrice: 100 }],
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [],
+        },
+      ],
+    });
+
+    renderCommandCenter();
+    const quotesCard = screen.getByTitle('Click to view Supplier Quotes');
+    expect(quotesCard).toHaveTextContent('01 in evaluation');
   });
 });

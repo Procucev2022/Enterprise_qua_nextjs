@@ -700,7 +700,7 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(statements.map((statement) => statement._sql).join('\n')).not.toContain('insert into');
     });
 
-    test('collapses duplicate selections and splits inserts at D1 parameter limits', async () => {
+    test('collapses duplicate selections into single-row D1 inserts without compound SELECTs', async () => {
       const categories = Array.from({ length: 17 }, (_, index) => ({ major: 'IT', minor: `Item ${index}` }));
       categories.push({ major: ' it ', minor: ' item 0 ' });
 
@@ -714,8 +714,8 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(result.categoryCount).toBe(17);
       const statements = d1Binding.batch.mock.calls[0][0];
       const inserts = statements.filter((statement) => statement._sql.includes('insert into org_division_category'));
-      expect(inserts).toHaveLength(2);
-      expect(inserts.map((statement) => statement._params.length)).toEqual([96, 6]);
+      expect(inserts).toHaveLength(17);
+      expect(inserts.every((statement) => statement._params.length === 6 && !/UNION ALL/i.test(statement._sql))).toBe(true);
     });
 
     test('rolls back the complete batch when any D1 write fails', async () => {
@@ -1327,6 +1327,181 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       jest.spyOn(dbPool, 'rows').mockResolvedValue([]);
       const evictedEmail = await buyerProfileQueries.findProfileByIdentifier({ email: 'bulk-u-0@bulk.example.com' });
       expect(evictedEmail).toEqual({ found: false, reason: 'USER_NOT_FOUND' });
+    });
+
+    test('findProfileByUserId with includeCategories: false skips category queries', async () => {
+      const rowsSpy = jest.spyOn(dbPool, 'rows').mockResolvedValueOnce([
+        {
+          user_uuid: 'u-skip-cat',
+          org_uuid: 'org-skip-cat',
+          organization_name: 'Skip Cat Corp',
+          username: 'skipcat@acme.com',
+        },
+      ]);
+
+      const result = await buyerProfileQueries.findProfileByUserId('u-skip-cat', { includeCategories: false });
+      expect(result.found).toBe(true);
+      expect(result.profile.organizationId).toBe('org-skip-cat');
+      expect(result.profile.categories).toEqual([]);
+      expect(rowsSpy).toHaveBeenCalledTimes(1);
+    });
+
+    test('updateProfile on D1 retries cleanly when an optional or alias column is absent in the target D1 schema', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      let batchCallCount = 0;
+      const d1Binding = {
+        prepare: jest.fn((sql) => ({
+          bind: (...params) => ({ _sql: sql, _params: params }),
+        })),
+        batch: jest.fn(async (statements) => {
+          batchCallCount += 1;
+          if (batchCallCount === 1) {
+            throw new Error('D1_ERROR: no such column: last_modified_by: SQLITE_ERROR');
+          }
+          if (batchCallCount === 2) {
+            // PRAGMA table_info(organization) and PRAGMA table_info("user")
+            return [
+              {
+                results: [
+                  { name: 'uuid' },
+                  { name: 'organization_name' },
+                  { name: 'brand_name' },
+                  { name: 'pan' },
+                  { name: 'gstin' },
+                  { name: 'contact_person' },
+                ],
+                meta: { changes: 0 },
+              },
+              {
+                results: [{ name: 'uuid' }, { name: 'full_name' }],
+                meta: { changes: 0 },
+              },
+            ];
+          }
+          return statements.map((_, idx) => ({
+            results: idx === 0 ? [{ uuid: 'org-col-1' }] : [],
+            meta: { changes: idx === 0 ? 0 : 1 },
+          }));
+        }),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        const res = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-col-1',
+          userId: 'user-col-1',
+          patch: {
+            companyName: 'Column Resilient Corp',
+            brandName: 'Brand',
+            panNumber: 'aaacl1234f',
+            contactName: 'Owner',
+          },
+          categories: [{ major: 'IT', minor: 'Laptop' }],
+          actor: 'owner@acme.com',
+        });
+
+        expect(res).toEqual({ updated: true, fieldsUpdated: 4, categoryCount: 1 });
+        expect(batchCallCount).toBe(3);
+        const retrySql = d1Binding.batch.mock.calls[2][0].map((s) => s._sql).join('\n');
+        expect(retrySql).not.toContain('last_modified_by');
+        expect(retrySql).not.toContain('refference');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
+    });
+
+    test('updateProfile on D1 rethrows missing-column errors when PRAGMA metadata is unavailable or unchanged', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      let batchCallCount = 0;
+      const d1Binding = {
+        prepare: jest.fn((sql) => ({
+          bind: (...params) => ({ _sql: sql, _params: params }),
+        })),
+        batch: jest.fn(async () => {
+          batchCallCount += 1;
+          if (batchCallCount === 1 || batchCallCount === 3) {
+            throw new Error('no such column: unexpected_col');
+          }
+          if (batchCallCount === 2) {
+            return [{ results: [] }, { results: [] }];
+          }
+          return [
+            { results: [{ name: 'uuid' }, { name: 'organization_name' }, { name: 'last_modified_by' }, { name: 'last_modified_ts' }] },
+            { results: [{ name: 'uuid' }, { name: 'full_name' }, { name: 'last_modified_by' }, { name: 'last_modified_ts' }] },
+          ];
+        }),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        await expect(
+          buyerProfileQueries.updateProfile({
+            organizationId: 'org-err-1',
+            userId: 'user-err-1',
+            patch: { companyName: 'Err Corp' },
+          })
+        ).rejects.toThrow('no such column: unexpected_col');
+
+        await expect(
+          buyerProfileQueries.updateProfile({
+            organizationId: 'org-err-1',
+            userId: 'user-err-1',
+            patch: { companyName: 'Err Corp' },
+          })
+        ).rejects.toThrow('no such column: unexpected_col');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
+    });
+
+    test('emits single-row INSERT statements without UNION ALL compound SELECTs for atomic D1 category replacement', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      const preparedSqls = [];
+      const d1Binding = {
+        prepare: jest.fn((sql) => {
+          preparedSqls.push(sql);
+          return {
+            bind: (...params) => ({ _sql: sql, _params: params }),
+          };
+        }),
+        batch: jest.fn(async (stmts) =>
+          stmts.map((s, idx) => (idx === 0 ? { results: [{ uuid: 'org-cat-1' }] } : { results: [], meta: { changes: 1 } }))
+        ),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        const categories = Array.from({ length: 10 }, (_, idx) => ({
+          major: 'Engineering',
+          minor: `Minor-${idx + 1}`,
+        }));
+        const result = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-cat-1',
+          userId: 'user-cat-1',
+          patch: { companyName: 'Atomic Categories Corp' },
+          categories,
+        });
+
+        expect(result).toEqual({ updated: true, fieldsUpdated: 3, categoryCount: 10 });
+        expect(d1Binding.batch).toHaveBeenCalledTimes(1);
+        const categoryInserts = preparedSqls.filter((sql) => /insert into org_division_category/i.test(sql));
+        expect(categoryInserts).toHaveLength(10);
+        expect(categoryInserts.some((sql) => /UNION ALL/i.test(sql))).toBe(false);
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
     });
   });
 });

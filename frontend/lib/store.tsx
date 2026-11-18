@@ -158,6 +158,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
     sourcingMode: rfq.sourcingMode,
     assignedVendors: rfq.assignedVendors,
+    createdAt: rfq.createdAt,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -825,15 +826,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const sortedRfqs = [...result.rfqs].sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
       const reconcileSelectedRfq = (prev: RFQItem | null) =>
         prev
-          ? result.rfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
-          : result.rfqs[0] || null;
-      setRfqs(result.rfqs);
-      setSessionCache('rfqs', result.rfqs);
+          ? sortedRfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
+          : sortedRfqs[0] || null;
+      setRfqs(sortedRfqs);
+      setSessionCache('rfqs', sortedRfqs);
       setSelectedRFQForMatrix(reconcileSelectedRfq);
       setSelectedRFQForDeepDive(reconcileSelectedRfq);
-      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      setVendorOpportunities(sortedRfqs.map(buildOpportunityFromRFQ));
       loadedEntitiesRef.current.rfqs = true;
     } finally {
       setIsLoadingRFQs(false);
@@ -1217,9 +1221,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // In unit test environment without browser routing shell, hydrate test fixtures:
     if (process.env.NODE_ENV === 'test') {
       void dataLoadersRef.current.refreshFromDB();
-      void dataLoadersRef.current.refreshActiveBuyerAccount();
+      if (currentRole === 'buyer') {
+        void dataLoadersRef.current.refreshActiveBuyerAccount();
+      }
       void dataLoadersRef.current.refreshCategoryTaxonomy();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const lastUserSessionIdRef = useRef<string | null>(null);
@@ -1253,7 +1260,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     lastUserSessionIdRef.current = currentUserSession?.id || null;
 
-    void loaders.ensureActiveBuyerAccount(true);
+    if (currentRole === 'buyer') {
+      void loaders.ensureActiveBuyerAccount(true);
+    }
 
     if (currentRole === 'vendor') {
       void loaders.refreshVendorCredits();
@@ -1326,6 +1335,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const created: BuyerAccount = json.data;
     setBuyerAccounts((prev) => [created, ...prev]);
     setActiveBuyerAccount(created);
+    setSessionCache('activeBuyerAccount', created);
     loadedEntitiesRef.current.activeBuyerAccount = true;
 
     void addAuditLog(`Created buyer account for ${created.organizationName}`);
@@ -1367,6 +1377,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setBuyerAccounts((prev) => prev.map((acc) => (acc.id === id ? updatedAcc : acc)));
         if (activeBuyerAccount?.id === id) {
           setActiveBuyerAccount(updatedAcc);
+          setSessionCache('activeBuyerAccount', updatedAcc);
         }
         addAuditLog(`Updated account specifications for buyer ID ${id}`);
         showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
@@ -1643,18 +1654,11 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [onboardingEmailModalOpen, setOnboardingEmailModalOpen] = useState<boolean>(false);
 
   // Initial Setup State & Purchase Data Ingestion
-  const [initialSetupModalOpen, setInitialSetupModalOpenState] = useState<boolean>(false);
+  const [initialSetupModalOpen, setInitialSetupModalOpen] = useState<boolean>(false);
   const [initialSetupCompleted, setInitialSetupCompleted] = useState<boolean>(false);
   const [historicalPurchaseDataPeriod, setHistoricalPurchaseDataPeriod] = useState<'1_year' | '2_years' | '3_years'>('1_year');
   const [lastIngestionSummary, setLastIngestionSummary] = useState<IngestionSummary | null>(null);
   const [lastIngestionError, setLastIngestionError] = useState<string | null>(null);
-
-  const hasCompletedBuyerVendorUpload =
-    initialSetupCompleted ||
-    currentUserSession?.vendorMasterUploaded === true ||
-    activeBuyerAccount?.initialSetupCompleted === true ||
-    (!initialSetupModalOpen &&
-      buyerVendors.some((v) => isBuyerUploadedVendor(v) && !String(v.id || '').startsWith('v-master-')));
 
   const markBuyerVendorSetupCompleted = useCallback(() => {
     setInitialSetupCompleted(true);
@@ -1666,23 +1670,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     });
     setActiveBuyerAccount((prev) => (prev && !prev.initialSetupCompleted ? { ...prev, initialSetupCompleted: true } : prev));
   }, []);
-
-  useEffect(() => {
-    if (!isLoggedIn || currentRole !== 'buyer') return;
-    if (hasCompletedBuyerVendorUpload && !initialSetupCompleted) {
-      setInitialSetupCompleted(true);
-    }
-  }, [isLoggedIn, currentRole, hasCompletedBuyerVendorUpload, initialSetupCompleted]);
-
-  const setInitialSetupModalOpen = useCallback(
-    (open: boolean) => {
-      if (open && currentRole === 'buyer' && hasCompletedBuyerVendorUpload) {
-        return;
-      }
-      setInitialSetupModalOpenState(open);
-    },
-    [currentRole, hasCompletedBuyerVendorUpload]
-  );
 
   const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
@@ -2282,18 +2269,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         : undefined) ||
       hintVendor;
     const resolvedEmailLower = String(matchedVendor?.email || hintVendor?.email || '').trim().toLowerCase();
-    const persistedByEmail =
-      isSyntheticId && resolvedEmailLower
+    const masterIdSuffix = vendorId.startsWith('v-master-') ? vendorId.slice('v-master-'.length) : '';
+    const persistedMatch =
+      isSyntheticId
         ? buyerVendors.find(
           (v) =>
             !String(v.id || '').startsWith('v-master-') &&
             !String(v.id || '').startsWith('v-hist-local-') &&
-            String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+            ((masterIdSuffix && v.masterRecordId === masterIdSuffix) ||
+              (resolvedEmailLower && String(v.email || '').trim().toLowerCase() === resolvedEmailLower))
         )
         : undefined;
-    const targetVendorId = persistedByEmail?.id || vendorId;
+    const targetVendorId = persistedMatch?.id || vendorId;
     const syntheticHints: Record<string, unknown> = {};
-    if (isSyntheticId && !persistedByEmail && matchedVendor) {
+    if (isSyntheticId && !persistedMatch && matchedVendor) {
       const hintMapping: ReadonlyArray<readonly [keyof VendorEntry, string]> = [
         ['email', 'vendorEmail'],
         ['name', 'vendorName'],
