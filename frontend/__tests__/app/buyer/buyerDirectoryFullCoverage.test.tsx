@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import VendorSummary from '@/app/buyer/vendor-summary';
 import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
@@ -36,6 +36,8 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
   const mockShowToast = jest.fn();
   const mockAddBuyerVendor = jest.fn();
   const mockUpdateBuyerVendor = jest.fn();
+  const mockSetBuyerVendorActiveStatus = jest.fn().mockResolvedValue(true);
+  const mockSetMultipleBuyerVendorsActiveStatus = jest.fn().mockResolvedValue(true);
   const mockDeleteBuyerVendor = jest.fn();
   const mockReviseVendorRating = jest.fn();
   const mockOpenRatingRevisionEmailModal = jest.fn();
@@ -138,6 +140,8 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       buyerVendors: mockBuyerVendors,
       addBuyerVendor: mockAddBuyerVendor,
       updateBuyerVendor: mockUpdateBuyerVendor,
+      setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+      setMultipleBuyerVendorsActiveStatus: mockSetMultipleBuyerVendorsActiveStatus,
       deleteBuyerVendor: mockDeleteBuyerVendor,
       categoryTaxonomy: [
         { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
@@ -279,12 +283,15 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       fireEvent.click(closeBtn);
     }
 
-    // Delete Modal
-    const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
-    if (deleteBtns.length > 0) {
-      fireEvent.click(deleteBtns[0]);
-      const confirmDeleteBtn = screen.getByRole('button', { name: /Delete Vendor/i });
-      fireEvent.click(confirmDeleteBtn);
+    // Buyer uploaded vendors expose Mark Inactive rather than Delete
+    expect(screen.queryByRole('button', { name: /^Delete$/i })).not.toBeInTheDocument();
+    const disableBtns = screen.getAllByRole('button', { name: /Mark Inactive/i });
+    if (disableBtns.length > 0) {
+      fireEvent.click(disableBtns[0]);
+      const confirmDisableBtn = screen.getByTestId('confirm-vendor-status-button');
+      await act(async () => {
+        fireEvent.click(confirmDisableBtn);
+      });
     }
 
     // View 360 Evaluation. The status filter is reset first so the evaluated vendor is listed.
@@ -300,10 +307,11 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     // The roster has no trigger action: no evaluation is started without a real endpoint behind it.
     expect(screen.queryAllByRole('button', { name: /Trigger Evaluation/i })).toHaveLength(0);
 
-    // Upload Vendor button
-    const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
+    // After buyer has uploaded vendors, opens Add Vendor Bulk modal instead of wizard
+    const uploadBtn = screen.getByTestId('open-add-vendor-bulk-modal');
     fireEvent.click(uploadBtn);
-    expect(mockOnNavigateToWizard).toHaveBeenCalled();
+    expect(screen.getByTestId('vendor-upload-modal')).toBeInTheDocument();
+    expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
   });
 
   it('exercises IngestionWizard line item mutations, auto categorization, and resets', async () => {

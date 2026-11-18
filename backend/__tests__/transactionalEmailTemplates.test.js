@@ -170,6 +170,32 @@ describe('Qua AI Transactional Email Templates Suite', () => {
         "Email template EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED requires 'rfq_id'"
       );
     });
+
+    test('renders placeholder mobile number badge and note when 9999999999 is supplied', () => {
+      const result = buildEmail1_RfqCreatedAccountAutoCreated({
+        first_name: 'Pooja',
+        rfq_id: 'RFQ-PH-99',
+        rfq_title: 'Pipes',
+        email: 'pooja@infra.test',
+        mobile_number: '9999999999',
+        temp_password: 'FreshTemp#2026',
+        login_url: 'https://procucev.com/login',
+        review_url: 'https://procucev.com/buyer/rfq-summary',
+      });
+      expect(result.text).toContain('Registered Mobile: 9999999999 (placeholder — please update after login)');
+      expect(result.html).toContain('Placeholder — update after login');
+      expect(result.html).toContain('9999999999');
+      expect(result.text).toContain('placeholder: 9999999999');
+
+      const resultCamel = buildEmail1_RfqCreatedAccountAutoCreated({
+        rfq_id: 'RFQ-PH-100',
+        email: 'pooja2@infra.test',
+        mobileNumber: '+919999999999',
+        temp_password: 'FreshTemp#2026B',
+      });
+      expect(resultCamel.text).toContain('Registered Mobile: +919999999999 (placeholder — please update after login)');
+      expect(resultCamel.html).toContain('Placeholder — update after login');
+    });
   });
 
   describe('Email 2 : RFQ created', () => {
@@ -705,18 +731,27 @@ describe('Qua AI Transactional Email Templates Suite', () => {
 
       expect(() => buildEmail1_RfqCreatedAccountAutoCreated()).toThrow(/requires 'rfq_id'/);
       expect(buildEmail2_RfqCreated({ rfq_id: 'RFQ-D2', suppliers_invited: 0, items: [] })).toBeDefined();
-      expect(buildEmail2_RfqCreated({ rfq_id: 'RFQ-D2B', suppliers_invited: 1, item_count: undefined, items: [{ item_name: 'Tool', item_spec: 'Steel', qty: 2, uom: 'Nos' }] })).toBeDefined();
-      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3', item_count: 0 })).toBeDefined();
-      expect(buildEmail4_NewRfqToQuote({ rfq_id: 'RFQ-D4', item_count: 0, credit_balance: 0 })).toBeDefined();
-      expect(buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-D5', quote_count: 0 })).toBeDefined();
-      expect(buildEmail6_ActivateYourAccount({ rfq_id: 'RFQ-D6' })).toBeDefined();
-      expect(buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-D7', missing_fields: ['Quantity'] })).toBeDefined();
-      expect(buildEmail8_NoQuotesYet({ rfq_id: 'RFQ-D8' })).toBeDefined();
-      expect(buildEmail9_QuoteDeadlineReminder({ rfq_id: 'RFQ-D9', quote_count: 0 })).toBeDefined();
-      expect(buildEmail10_LowOrZeroCredits({ credit_balance: 0, matched_rfq_count: 0 })).toBeDefined();
-      expect(buildEmail11_QuoteSubmitted({ rfq_id: 'RFQ-D11' })).toBeDefined();
-      expect(buildEmail12_RfqRevisedBuyerQuestion({ rfq_id: 'RFQ-D12' })).toBeDefined();
-      expect(buildEmail13_CompleteYourProfile()).toBeDefined();
+      expect(buildEmail2_RfqCreated({ rfq_id: 'RFQ-D2B', suppliers_invited: '1', item_count: undefined, items: [{ item_name: 'Tool', item_spec: 'Steel', qty: 2, uom: 'Nos' }] })).toBeDefined();
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3', item_count: '2', cta_url: 'https://custom.test/cta' })).toBeDefined();
+      expect(buildEmail4_NewRfqToQuote({ rfq_id: 'RFQ-D4', item_count: 0, credit_balance: '10', quote_url: 'https://custom.test/quote' })).toBeDefined();
+      expect(buildEmail5_QuotationsReadyToCompare({ rfq_id: 'RFQ-D5', quote_count: '3', compare_url: 'https://custom.test/compare' })).toBeDefined();
+      expect(buildEmail6_ActivateYourAccount({ rfq_id: 'RFQ-D6', cta_url: 'https://custom.test/activate' })).toBeDefined();
+      expect(buildEmail7_RfqNeedsMoreInformation({ rfq_id: 'RFQ-D7', missing_fields: ['Quantity'], cta_url: 'https://custom.test/edit' })).toBeDefined();
+      expect(buildEmail8_NoQuotesYet({ rfq_id: 'RFQ-D8', cta_url: 'https://custom.test/extend' })).toBeDefined();
+      expect(buildEmail9_QuoteDeadlineReminder({ rfq_id: 'RFQ-D9', quote_count: '4', cta_url: 'https://custom.test/review' })).toBeDefined();
+      expect(buildEmail10_LowOrZeroCredits({ credit_balance: '0', matched_rfq_count: '5', cta_url: 'https://custom.test/credits' })).toBeDefined();
+      expect(buildEmail11_QuoteSubmitted({ rfq_id: 'RFQ-D11', cta_url: 'https://custom.test/myquotes' })).toBeDefined();
+      expect(buildEmail12_RfqRevisedBuyerQuestion({ rfq_id: 'RFQ-D12', cta_url: 'https://custom.test/update' })).toBeDefined();
+      expect(buildEmail13_CompleteYourProfile({ cta_url: 'https://custom.test/profile', rfq_id: 'RFQ-D13' })).toBeDefined();
+
+      // Buyer uploaded vendor checks
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3B', item_count: 1, isBuyerUploaded: true, buyer_company: 'Tata Motors' }).text).toContain('Tata Motors');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3C', item_count: 1, vendor: { isBuyerUploaded: true }, buyer_account_name: 'Reliance' }).text).toContain('Reliance');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3D', item_count: 1, vendor: { addedByBuyerCompany: true }, buyer_name: 'L&T' }).text).toContain('L&T');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3E', item_count: 1, vendor: { buyerAccountId: 'b-1' }, buyer_company: 'Mahindra' }).text).toContain('Mahindra');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3F', item_count: 1, vendor: { buyerId: 'u-1' }, buyer_company: 'Adani' }).text).toContain('Adani');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3G', item_count: 1, vendor_source: 'buyer_invitation', buyer_company: 'Godrej' }).text).toContain('Godrej');
+      expect(buildEmail3_NewRfqIntimation({ rfq_id: 'RFQ-D3H', item_count: 1, is_buyer_uploaded: true, buyer_company: '' }).text).toContain('Not specified');
 
       // Alias resolution with exact-case keys
       expect(resolveTemplateKey('email_1')).toBe('EMAIL_1_RFQ_CREATED_ACCOUNT_AUTO_CREATED');

@@ -770,6 +770,24 @@ async function requestCreditApproval(req, res, next) {
   }
 }
 
+function matchesVendorBuyer(vendor, buyer) {
+  if (!buyer) return false;
+  const bId = String(buyer.id || '').toLowerCase();
+  const bEmail = String(buyer.corporateEmail || '').toLowerCase();
+  const bOrg = String(buyer.organizationName || '').toLowerCase();
+
+  const vBuyerId = String(vendor.buyerId || '').toLowerCase();
+  const vBuyerAccountId = String(vendor.buyerAccountId || '').toLowerCase();
+  const vBuyerEmail = String(vendor.buyerEmail || '').toLowerCase();
+  const vAddedBy = String(vendor.addedByBuyerCompany || '').toLowerCase();
+
+  if (vBuyerId && vBuyerId === bId) return true;
+  if (vBuyerAccountId && vBuyerAccountId === bId) return true;
+  if (vBuyerEmail && bEmail && vBuyerEmail === bEmail) return true;
+  if (vAddedBy && bOrg && vAddedBy === bOrg) return true;
+  return false;
+}
+
 async function getSellerBuyerUploads(req, res, next) {
   try {
     if (!assertCategoryManagerOrVendor(req, res)) return;
@@ -785,34 +803,26 @@ async function getSellerBuyerUploads(req, res, next) {
       dbBuyers = await domainQueries.getAssociatedBuyersForVendorFromDB(vendor, 100);
     }
 
-    const inMemBuyers = (storeService.getBuyerAccounts() || []).filter((b) => {
-      if (!b) return false;
-      const bId = String(b.id).toLowerCase();
-      const bEmail = b.corporateEmail ? String(b.corporateEmail).toLowerCase() : '';
-      const bOrg = b.organizationName ? String(b.organizationName).toLowerCase() : '';
-      const vBuyerId = vendor.buyerId ? String(vendor.buyerId).toLowerCase() : '';
-      const vBuyerAccountId = vendor.buyerAccountId ? String(vendor.buyerAccountId).toLowerCase() : '';
-      const vBuyerEmail = vendor.buyerEmail ? String(vendor.buyerEmail).toLowerCase() : '';
-      const vAddedBy = vendor.addedByBuyerCompany ? String(vendor.addedByBuyerCompany).toLowerCase() : '';
-      return (
-        (vBuyerId && vBuyerId === bId) ||
-        (vBuyerAccountId && vBuyerAccountId === bId) ||
-        (bEmail && vBuyerEmail && vBuyerEmail === bEmail) ||
-        (bOrg && vAddedBy && vAddedBy === bOrg)
-      );
-    }).map((b) => ({
-      id: b.id,
-      name: b.organizationName || b.name || b.contactPerson || b.corporateEmail,
-      companyName: b.organizationName || b.companyName || b.name || 'Enterprise Buyer',
-      contactPerson: b.contactPerson || b.name || 'Primary Contact',
-      email: b.corporateEmail || b.email || '',
-      phone: b.mobileNumber || b.phone || '',
-      uploadDate: vendor.createdAt || vendor.created_at || b.createdAt,
-      status: b.status || 'ACTIVE_VERIFIED',
-      sourcingMode: b.sourcingMode || 'Mode 1',
-      subscriptionPlan: b.subscriptionPlan || b.subscriptionTier || 'Version_3',
-      location: b.location || b.city || '',
-    }));
+    const inMemBuyers = (storeService.getBuyerAccounts() || []).filter((b) => matchesVendorBuyer(vendor, b)).map((b) => {
+      const company = b.organizationName || b.companyName || b.name || 'Enterprise Buyer';
+      const contact = b.contactPerson || b.name || 'Primary Contact';
+      const email = b.corporateEmail || b.email || '';
+      const phone = b.mobileNumber || b.phone || '';
+      const uploadDate = vendor.createdAt || vendor.created_at || b.createdAt;
+      return {
+        id: b.id,
+        name: company,
+        companyName: company,
+        contactPerson: contact,
+        email,
+        phone,
+        uploadDate,
+        status: b.status || 'ACTIVE_VERIFIED',
+        sourcingMode: b.sourcingMode || 'Mode 1',
+        subscriptionPlan: b.subscriptionPlan || b.subscriptionTier || 'Version_3',
+        location: b.location || b.city || '',
+      };
+    });
 
     const buyerMap = new Map();
     for (const b of [...dbBuyers, ...inMemBuyers]) {
@@ -823,15 +833,16 @@ async function getSellerBuyerUploads(req, res, next) {
     }
 
     if (buyerMap.size === 0 && (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail)) {
-      const key = String(vendor.buyerId || vendor.buyerEmail || vendor.addedByBuyerCompany).toLowerCase();
+      const clientName = vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client';
+      const key = String(vendor.buyerId || vendor.buyerEmail || clientName).toLowerCase();
       buyerMap.set(key, {
         id: vendor.buyerId || `buyer-ext-${key.slice(0, 10)}`,
-        name: vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client',
-        companyName: vendor.addedByBuyerCompany || 'Enterprise Client',
+        name: clientName,
+        companyName: clientName,
         contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Contact',
         email: vendor.buyerEmail || '',
         phone: '',
-        uploadDate: vendor.createdAt || vendor.created_at || new Date().toISOString(),
+        uploadDate: vendor.createdAt || new Date().toISOString(),
         status: 'ACTIVE_VERIFIED',
         sourcingMode: 'Mode 1',
         subscriptionPlan: 'Enterprise',
@@ -879,31 +890,36 @@ async function getSellerActiveRFQs(req, res, next) {
         if (!isNaN(time) && time < now) return false;
       }
       const rfqCat = rfq.category || rfq.procurementCategory || rfq.majorCategory;
-      return (
-        storeService.vendorCoversCategory(vendor, rfqCat) ||
-        (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) ||
-        (Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category)))
-      );
-    }).map((rfq) => ({
-      id: rfq.id,
-      rfqNumber: rfq.rfqNumber || rfq.id,
-      title: rfq.title || `RFQ ${rfq.rfqNumber}`,
-      category: rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General',
-      procurementCategory: rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General',
-      buyerCompanyName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
-      buyerCompany: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
-      buyerName: rfq.buyerAccountName || rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || 'Buyer Enterprise',
-      location: rfq.deliveryLocation || rfq.location || rfq.city || '—',
-      publishedDate: rfq.publishedDate || rfq.createdAt || rfq.created_at || new Date().toISOString(),
-      closingDate: rfq.closingDate || rfq.deadline || rfq.bidClosingDate || null,
-      status: rfq.status || 'Quotes Pending',
-      budget: rfq.budget ?? 0,
-      sourcingMode: rfq.sourcingMode || 'Mode 1',
-      extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
-      lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : (Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
-      description: rfq.description || rfq.notes || '',
-      ...rfq,
-    }));
+      if (storeService.vendorCoversCategory(vendor, rfqCat)) return true;
+      if (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+      if (Array.isArray(rfq.extractedEntities)) {
+        return rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category));
+      }
+      return false;
+    }).map((rfq) => {
+      const cat = rfq.category || 'General';
+      const buyerName = rfq.buyerAccountName || 'Buyer Enterprise';
+      return {
+        id: rfq.id,
+        rfqNumber: rfq.rfqNumber || rfq.id,
+        title: rfq.title || `RFQ ${rfq.rfqNumber || rfq.id}`,
+        category: cat,
+        procurementCategory: cat,
+        buyerCompanyName: buyerName,
+        buyerCompany: buyerName,
+        buyerName,
+        location: rfq.deliveryLocation || '—',
+        publishedDate: rfq.publishedDate || rfq.createdAt || new Date().toISOString(),
+        closingDate: rfq.closingDate || null,
+        status: rfq.status || 'Quotes Pending',
+        budget: rfq.budget ?? 0,
+        sourcingMode: rfq.sourcingMode || 'Mode 1',
+        extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : [],
+        description: rfq.description || '',
+        ...rfq,
+      };
+    });
 
     const rfqMap = new Map();
     for (const rfq of [...dbMatchedRFQs, ...inMemRFQs]) {

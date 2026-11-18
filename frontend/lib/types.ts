@@ -143,6 +143,8 @@ export interface VendorChannelEmail {
 }
 
 export interface VendorFollowUpRecord {
+  id?: string;
+  name?: string;
   vendorId: string;
   vendorName: string;
   phone: string;
@@ -150,7 +152,7 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
-  email?: VendorChannelEmail;
+  email?: string | VendorChannelEmail;
   email24h?: VendorChannelEmail;
   emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
@@ -171,12 +173,14 @@ export interface RFQFollowUpBreakdown {
   };
   whatsappStats: {
     total: number;
+    sent?: number;
     delivered: number;
     read: number;
     replied: number;
   };
   smsStats: {
     total: number;
+    sent?: number;
     delivered: number;
     clicked: number;
   };
@@ -189,6 +193,24 @@ export interface RFQFollowUpBreakdown {
   vendors: VendorFollowUpRecord[];
   nextScheduledChaser?: string;
   autoChasingEnabled: boolean;
+}
+
+export interface RFQFollowUpMetrics {
+  hasFollowUp: boolean;
+  totalVendors: number;
+  totalInvited: number | undefined;
+  responded: number;
+  callConnected: number | undefined;
+  callTotal: number | undefined;
+  waRead: number | undefined;
+  waDelivered: number | undefined;
+  waReplied: number | undefined;
+  waTotal: number | undefined;
+  smsDelivered: number | undefined;
+  smsTotal: number | undefined;
+  emailEscalationsSent: number | undefined;
+  emailDelivered: number | undefined;
+  emailTotal: number | undefined;
 }
 
 /**
@@ -1197,7 +1219,22 @@ export interface VendorEntry {
     | 'self_onboarded'
     | 'category_manager_upload'
     | string;
-  status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
+  status?:
+    | 'PREFERRED ENTERPRISE SUPPLIER'
+    | 'CONDITIONAL / UNDER REVIEW'
+    | 'REGISTERED / NOT EVALUATED'
+    | 'DISQUALIFIED SUPPLIER'
+    | 'INACTIVE'
+    | 'ACTIVE'
+    | 'PENDING EVALUATION';
+  isActive?: boolean;
+  disabled?: boolean;
+  disabledAt?: string | null;
+  disabledBy?: string | null;
+  previousStatus?: string | null;
+  reactivatedAt?: string | null;
+  reactivatedBy?: string | null;
+  masterRecordId?: string | null;
   score?: number | null;
   evaluated?: boolean;
   evaluationRequested?: boolean;
@@ -1235,6 +1272,9 @@ export interface VendorEntry {
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories?: string[]; // Categories assigned by buyer (from PO / vendor master upload)
   vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (max 10)
+  poMajorCategory?: string; // Major category derived from historical PO records
+  poMinorCategories?: string[]; // Minor categories derived from historical PO records
+  itemsSupplied?: string[]; // Historical item descriptions supplied by vendor
   isCategoryAligned?: boolean; // True if vendor selected matches client mapped
   categoryMismatchDetails?: {
     clientOnly: string[];
@@ -1416,6 +1456,73 @@ export interface VendorMasterUploadRecord {
   vendorRatingScore?: number; // 0 to 100 (Optional)
 }
 
+export interface VendorDuplicatePartitionCandidate {
+  vendor: VendorMasterUploadRecord;
+  rowNumber: number;
+  explicitVendorCode?: string;
+}
+
+export interface ExistingVendorDedupeCandidate {
+  vendorCode?: string | null;
+  companyName?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  gstNumber?: string | null;
+  gstin?: string | null;
+}
+
+export interface SkippedDuplicateVendorRecord {
+  rowNumber: number;
+  vendorCode?: string;
+  companyName: string;
+  email: string;
+  phone?: string;
+  gstNumber?: string;
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_VENDOR';
+}
+
+export interface VendorDuplicatePartitionResult {
+  uniqueRecords: VendorMasterUploadRecord[];
+  skippedDuplicates: SkippedDuplicateVendorRecord[];
+}
+
+export interface IngestionJobErrorDetail {
+  rowNumber?: number;
+  vendorCode?: string;
+  companyName?: string;
+  vendorName?: string;
+  email?: string;
+  phone?: string;
+  gstNumber?: string;
+  status?: string;
+  reason?: string;
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR';
+}
+
+export interface IngestionJobState {
+  id: string;
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP' | 'AI_CATEGORY';
+  fileName: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  totalRecords: number;
+  processedRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  failedRecords: number;
+  errorMessage?: string | null;
+  errorDetails?: IngestionJobErrorDetail[];
+}
+
+export interface VendorDedupeSummary {
+  fileName: string;
+  totalCount: number;
+  skippedCount: number;
+  isExcelOnly: boolean;
+  allSkippedClientSide: boolean;
+}
+
 export interface PurchaseOrderLineItemRecord {
   id: string;
   poNumber: string;
@@ -1461,6 +1568,8 @@ export interface VendorUploadHistoryBatch {
   id?: string | number;
   fileName?: string;
   uploadedAt?: string;
+  buyerId?: string;
+  buyerEmail?: string;
   records?: Array<Record<string, unknown>> | null;
 }
 

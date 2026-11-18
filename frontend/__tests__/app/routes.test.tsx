@@ -384,13 +384,30 @@ describe('Role screen routes', () => {
       expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-summary');
     });
 
-    it('vendor summary opens the evaluation and the wizard', () => {
+    it('vendor summary opens the evaluation and the wizard only for new buyers without uploaded vendors', () => {
       render(<BuyerVendorSummaryPage />);
       clickCallback('vendor-summary:onViewEvaluation');
       expect(mockPush).toHaveBeenCalledWith('/buyer/vendor-evaluation-summary');
 
       clickCallback('vendor-summary:onNavigateToWizard');
       expect(setInitialSetupModalOpen).toHaveBeenCalledWith(true);
+
+      setInitialSetupModalOpen.mockClear();
+      mockStore({
+        initialSetupCompleted: false,
+        buyerVendors: [{ id: 'v-custom-1', companyName: 'Uploaded Vendor', source: 'buyer_uploaded' }],
+      });
+      render(<BuyerVendorSummaryPage />);
+      const wizardButtons = screen.getAllByRole('button', { name: 'vendor-summary:onNavigateToWizard' });
+      expect(wizardButtons).toHaveLength(2);
+      fireEvent.click(wizardButtons[1]);
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
+
+      mockStore({ initialSetupCompleted: true });
+      render(<BuyerVendorSummaryPage />);
+      const allWizardButtons = screen.getAllByRole('button', { name: 'vendor-summary:onNavigateToWizard' });
+      fireEvent.click(allWizardButtons[2]);
+      expect(setInitialSetupModalOpen).not.toHaveBeenCalled();
     });
 
     it.each<[string, React.ComponentType, string]>([

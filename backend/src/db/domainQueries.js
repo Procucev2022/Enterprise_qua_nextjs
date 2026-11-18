@@ -43,6 +43,7 @@ const {
   exclusiveDigitPrefixUpperBound,
   exclusiveNocasePrefixUpperBound,
   expandCategoryDashVariants,
+  isVendorInactive,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -252,7 +253,7 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false, activeOnly = false } = {}) {
   // Pincode prefix (3–6 digits). Anything else is ignored rather than turned into a LIKE pattern.
   const cleanPincode = /^\d{3,6}$/.test(String(pincode || '').replace(/\s+/g, '')) ? String(pincode).replace(/\s+/g, '') : '';
   if (!pool.hasStorage()) return { rows: [], total: 0 };
@@ -271,9 +272,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     publicOnly,
     scopedBuyerId,
     skipCount,
-    // Appended only when set so existing (minor-less) cache keys are unchanged.
+    // Appended only when set so existing (minor-less / activeOnly-less) cache keys are unchanged.
     ...(cleanMinorTerms.length > 0 ? [`minors:${cleanMinorTerms.join('|')}`] : []),
     ...(cleanPincode ? [`pincode:${cleanPincode}`] : []),
+    ...(activeOnly ? ['activeOnly'] : []),
   ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
@@ -543,6 +545,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
     )`);
   }
+  if (publicOnly || activeOnly) {
+    conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+    d1Conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const rawD1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
   const d1Where = rawD1Where.replace(/__D1_EXTRA_(\d+)__/g, (_, idx) => `$${params.length + 1 + Number(idx)}`);
@@ -630,14 +636,15 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     if (staleResponse !== null) return staleResponse;
     throw err;
   }
+  const mappedRows = dataResult.rows.map((row) => {
+    const v = parseVendorRaw(row.raw);
+    if (row.created_at && !v.created_at) v.created_at = row.created_at;
+    if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+    if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+    return v;
+  });
   const response = {
-    rows: dataResult.rows.map((row) => {
-      const v = parseVendorRaw(row.raw);
-      if (row.created_at && !v.created_at) v.created_at = row.created_at;
-      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-      return v;
-    }),
+    rows: (publicOnly || activeOnly) ? mappedRows.filter((v) => !isVendorInactive(v)) : mappedRows,
     total,
   };
   if (countFailed) {
@@ -712,17 +719,19 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   }
 
-  // Public-only: a vendor tagged to a specific buyer is never in the network pool.
-  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  // Public-only: a vendor tagged to a specific buyer or marked inactive is never in the network pool.
+  const activeStatusPredicate = `(status IS NULL OR upper(status) != 'INACTIVE')`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL AND ${activeStatusPredicate}`;
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
+  const activeWhereD1 = `${whereD1} AND ${activeStatusPredicate}`;
 
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
     params,
     {
       d1: true,
-      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${activeWhereD1}`,
       d1Params,
       useCache: true,
       tag: 'vendors',
@@ -764,7 +773,7 @@ function appendUniqueVendors(collected, seenKeys, rows, maxCount) {
   for (const row of Array.isArray(rows) ? rows : []) {
     if (collected.length >= maxCount) break;
     const vendor = parseVendorRaw(row?.raw ?? row);
-    if (!vendor) continue;
+    if (!vendor || isVendorInactive(vendor)) continue;
     const key = String(vendor.id || vendor.email || vendor.name || '').trim().toLowerCase();
     if (!key || seenKeys.has(key)) continue;
     seenKeys.add(key);
@@ -1267,7 +1276,7 @@ async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
   // the primary email lookup above is indexed and the fallback could read every vendor row.
   const d1Active = Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
   if (d1Active) {
-    if (!fresh && process.env.NODE_ENV !== 'test') {
+    if (!fresh) {
       if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
       nonVendorEmailCache.set(cleanEmail, now);
     }
@@ -1287,7 +1296,7 @@ async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
     }
   );
   const found = result && result.rows && result.rows[0] ? parseVendorRaw(result.rows[0].raw) : null;
-  if (!found && !fresh && process.env.NODE_ENV !== 'test') {
+  if (!found && !fresh) {
     if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
     nonVendorEmailCache.set(cleanEmail, now);
   }
@@ -1470,22 +1479,29 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
     throw err;
   }
   const rows = result.rows.map((row) => {
-    const rawParsed = parseRaw(row.raw) || {};
-    const v = { ...rawParsed, ...(parseVendorRaw(row.raw) || {}) };
-    if (rawParsed.pan && !v.pan) v.pan = rawParsed.pan;
-    if (rawParsed.gstin && !v.gstin) v.gstin = rawParsed.gstin;
-    if (rawParsed.source && !v.source) v.source = rawParsed.source;
-    if (row.id && !v.id) v.id = row.id;
-    if (row.company_name && !v.companyName) v.companyName = row.company_name;
-    if (row.name && !v.name) v.name = row.name;
-    if (row.email && !v.email) v.email = row.email;
-    if (row.phone && !v.phone) v.phone = row.phone;
-    if (row.status && !v.status) v.status = row.status;
-    if (row.major_category && !v.majorCategory) v.majorCategory = row.major_category;
-    if (row.created_at && !v.created_at) v.created_at = row.created_at;
-    if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-    if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-    return v;
+    const rawParsed = typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw ? { ...row.raw } : {});
+    const parsedVendor = parseVendorRaw(row.raw) || {};
+    const pan = rawParsed.pan || parsedVendor.pan || '';
+    const gstin = rawParsed.gstin || parsedVendor.gstin || '';
+    const source = rawParsed.source || parsedVendor.source || 'buyer_uploaded';
+    return {
+      ...parsedVendor,
+      ...rawParsed,
+      id: row.id || parsedVendor.id || rawParsed.id,
+      name: row.name || parsedVendor.name || rawParsed.name || 'Vendor Name',
+      companyName: row.company_name || parsedVendor.companyName || rawParsed.companyName || 'Vendor Company',
+      email: row.email || parsedVendor.email || rawParsed.email || '',
+      phone: row.phone || parsedVendor.phone || rawParsed.phone || '',
+      majorCategory: row.major_category || parsedVendor.majorCategory || rawParsed.majorCategory || 'General',
+      status: row.status || parsedVendor.status || rawParsed.status || 'ACTIVE',
+      source,
+      pan,
+      gstin,
+      created_at: row.created_at || parsedVendor.created_at || rawParsed.created_at,
+      createdAt: row.created_at || parsedVendor.createdAt || rawParsed.createdAt,
+      updated_at: row.updated_at || parsedVendor.updated_at || rawParsed.updated_at,
+      raw: rawParsed,
+    };
   });
   queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
   return rows;
@@ -3787,12 +3803,14 @@ async function getPublicVendorsPageFromDB({
   }
 
   const params = [];
-  // Rule: public listing NEVER exposes private buyer rosters.
+  // Rule: public listing NEVER exposes private buyer rosters or inactive suppliers.
   const pgConditions = [
     `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
   const d1Conditions = [
     `lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
 
   if (search) {

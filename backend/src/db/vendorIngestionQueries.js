@@ -545,6 +545,7 @@ function mapRowToVendorMaster(row) {
     pincode: loc.pincode,
     gstin: text(row.gstin),
     rating: numeric(row.rating),
+    ...(rawMeta.isActive === false ? { isActive: false, disabled: true, status: rawMeta.status || 'INACTIVE' } : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -731,6 +732,17 @@ async function countVendorMasterRecords(sessionId, organizationId) {
     }
   );
   return rows.length > 0 ? counter(rows[0].total) : 0;
+}
+
+/** Clear all category mappings for a session when the vendor master is replaced wholesale. */
+async function deleteCategoryMappingsForSession(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    'delete from vendor_category_mappings where session_id = $1 and organization_id = $2',
+    [sessionId, organizationId],
+    { d1: true }
+  );
+  return result.rowCount || 0;
 }
 
 /** Clear a session's vendor master so a corrected file replaces it wholesale. */
@@ -1402,6 +1414,12 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      returning *`,
         params: [
@@ -1486,6 +1504,12 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
            updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
@@ -1668,6 +1692,59 @@ async function requeueMapping(mappingId, organizationId) {
     { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
+}
+
+/** Reset non-approved mappings back to QUEUED and clear stale PO/AI derivations when PO data changes. */
+async function resetCategoryMappingsForReclassification(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]'::jsonb,
+            ai_relevant_products = '[]'::jsonb,
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = false,
+            po_count = 0,
+            total_spend = 0,
+            updated_at = CURRENT_TIMESTAMP
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    [
+      sessionId,
+      organizationId,
+      VENDOR_AI_PROCESSING_STATUS.QUEUED,
+      VENDOR_MAPPING_STATUS.BUYER_APPROVED,
+      VENDOR_MAPPING_STATUS.REJECTED,
+      VENDOR_MAPPING_STATUS.PENDING_REVIEW,
+    ],
+    {
+      d1: true,
+      d1Text: `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]',
+            ai_relevant_products = '[]',
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = 0,
+            po_count = 0,
+            total_spend = 0,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    }
+  );
+  return result.rowCount || 0;
 }
 
 /**
@@ -2387,6 +2464,8 @@ module.exports = {
   saveAiSuggestion,
   markMappingFailed,
   requeueMapping,
+  resetCategoryMappingsForReclassification,
+  deleteCategoryMappingsForSession,
   saveBuyerReview,
   attachVendorId,
   summarizeCategoryMappings,

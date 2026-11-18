@@ -32,6 +32,10 @@ export const UI_STRINGS = {
     unexpectedFailureMessage: 'The request could not be completed. Check your connection and try again.',
   },
   vendorBulkImport: {
+    buyerButtonLabel: 'Add Vendor Bulk',
+    buyerModalTitle: 'Add Vendor Bulk',
+    buyerModalSubtitle: 'Bulk add vendors via Excel (.xlsx) with required columns and template validation.',
+    buyerRequiredColumnsSummary: 'Required: Company Name, Email Id, Mobile No & Category · Template includes Vendor Code, Person Name, GSTIN, Pin Code, City, State & Products',
     progressSummary: '{processed} of {total} processed — {imported} imported ({missingEmail} missing email), {duplicates} duplicate, {failed} failed, {onboardingFailed} credential email(s) failed, {onboardingSkipped} imported account(s) have no invitation email',
     onboardingSkippedSummary: '{count} vendor account(s) were imported without an invitation email. Bulk import intentionally does not send login credentials.',
     historyOnboardingSkipped: '{count} Not Invited',
@@ -930,6 +934,9 @@ export const UI_STRINGS = {
     noFileTitle: 'No Document Selected',
     noFileMessage: 'Upload a BOQ spreadsheet, PDF or scanned requirement before continuing.',
     extractAction: 'Extract Line Items with AI',
+    extractingButtonLabel: 'Extracting with AI...',
+    extractingStatus: 'AI Extracting...',
+    dropZoneIdlePrompt: 'Drag and drop BOQ spreadsheets or .eml / .msg emails here',
     extractingLabel: 'Reading your document with QUA AI…',
     extractingHint: 'Identifying line items, quantities, units and specifications.',
 
@@ -2146,6 +2153,34 @@ export const UI_STRINGS = {
       columnGstin: 'GSTIN / Address',
       columnRating: 'Rating',
       ratingNotProvided: 'Not provided',
+      duplicatesSkippedBannerTitle: '{count} Duplicate {rowWord} Skipped',
+      duplicatesSkippedBannerHint:
+        'The following duplicate vendor records were detected and skipped so they will not be imported again:',
+      allDuplicatesBannerTitle: 'No New Vendors Imported ({count} Duplicates Skipped)',
+      allDuplicatesBannerHint:
+        'Every supplier row in "{fileName}" already exists in your Vendor Directory or is duplicated within the file.',
+      allDuplicatesError:
+        'All {count} supplier rows in "{fileName}" are duplicates of existing or earlier rows and were skipped.',
+      duplicatesSummaryInline: ' ({count} duplicate(s) skipped)',
+      duplicateRowSingular: 'Row',
+      duplicateRowPlural: 'Rows',
+      duplicateColumnRow: 'Row #',
+      duplicateColumnReason: 'Skip Reason',
+      duplicateReasonEmailExisting: 'Duplicate email ({value}) — already exists in Buyer Directory',
+      duplicateReasonEmailFile: 'Duplicate email ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonGstinExisting: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+      duplicateReasonGstinFile: 'Duplicate GSTIN ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonCodeExisting: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+      duplicateReasonCodeFile: 'Duplicate vendor code ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonCompanyPhoneExisting:
+        'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+      duplicateReasonCompanyPhoneFile:
+        'Duplicate company & phone ({company} / {phone}) — already present at row {firstRow} of this file',
+      duplicatesWarningToastTitle: 'Duplicate Vendors Skipped',
+      duplicatesWarningToastBody:
+        '{imported} new vendors loaded from {fileName}. {skipped} duplicate record(s) skipped.',
+      allDuplicatesToastBody:
+        'All {skipped} rows in {fileName} matched existing or earlier duplicate records and were skipped.',
     },
 
     poDump: {
@@ -2517,6 +2552,8 @@ export const UI_STRINGS = {
     needSupport: 'Need Support?',
     /** Shown in place of a sourcing credit balance the server has not reported. */
     creditBalanceUnknown: '—',
+    profile: 'Profile',
+    openProfileTitle: 'Open profile page',
   },
 
   vendorDirectoryLogin: {
@@ -3594,6 +3631,58 @@ export const UI_STRINGS = {
     quickAgentPrompt: 'Connect me with a support agent.',
   },
 
+  vendorStatusControl: {
+    filterAllStatuses: 'All Statuses',
+    filterActiveOnly: 'Active Suppliers Only',
+    filterInactiveOnly: 'Inactive / Disabled',
+    inactiveBadge: 'INACTIVE',
+    inactiveTooltip: 'Marked inactive — excluded from future RFQs, invitations, and evaluation flows while preserving historical records',
+    markInactiveButton: 'Mark Inactive',
+    markInactiveTitle: 'Mark vendor inactive (preserves history; excludes from future RFQs and invitations)',
+    markActiveButton: 'Mark Active',
+    markActiveTitle: 'Reactivate vendor and restore eligibility for future RFQs and invitations',
+    bulkDisableButton: 'Mark Inactive ({count})',
+    bulkEnableButton: 'Mark Active ({count})',
+    singleDisableTitle: 'Mark Vendor Inactive',
+    singleEnableTitle: 'Reactivate Vendor',
+    singleDisableBanner: 'Deactivation (History Preserved):',
+    singleDisableDescription: 'Are you sure you want to mark {vendorName} ({vendorId}) as inactive?',
+    singleDisableImpactNote: 'Historical RFQs, invitations, quotes, purchase orders, and evaluations remain intact. This vendor will NOT appear in future Create RFQ flows, RFQ invitations, or sourcing lists until reactivated.',
+    singleEnableBanner: 'Restore to Future Flows:',
+    singleEnableDescription: 'Reactivate {vendorName} ({vendorId}) so it becomes eligible for future RFQ creation and vendor invitations?',
+    confirmDisableButton: 'Mark Inactive',
+    confirmEnableButton: 'Mark Active',
+    bulkDisableModalTitle: 'Mark {count} Vendor{plural} Inactive',
+    bulkEnableModalTitle: 'Reactivate {count} Vendor{plural}',
+    bulkModalSubtitle: 'Non-destructive status update — historical RFQs and records remain untouched.',
+    bulkDisableBannerTitle: 'Future Flows Excluded & History Preserved:',
+    bulkDisableBannerText: 'Marking selected vendor(s) inactive preserves all historical RFQs, quotations, evaluations, and upload batches, while excluding these vendors from all future Create RFQ and invitation workflows.',
+    bulkEnableBannerTitle: 'Restore Future Sourcing Eligibility:',
+    bulkEnableBannerText: 'Selected inactive vendor(s) will be marked active and included again in future Create RFQ and vendor invitation workflows.',
+    bulkDisableListHeading: 'Vendors to Mark Inactive',
+    bulkEnableListHeading: 'Vendors to Reactivate',
+    bulkUpdatingButton: 'Updating status...',
+    bulkConfirmDisableButton: 'Mark {count} Vendor{plural} Inactive',
+    bulkConfirmEnableButton: 'Reactivate {count} Vendor{plural}',
+    statusUpdatedTitle: 'Vendor Status Updated',
+    singleDisabledToast: '{vendorName} has been marked inactive and excluded from future RFQ flows.',
+    singleEnabledToast: '{vendorName} has been reactivated for future sourcing flows.',
+    bulkDisabledToast: 'Marked {count} vendor(s) inactive. Historical data is preserved.',
+    bulkEnabledToast: 'Reactivated {count} vendor(s) for future sourcing flows.',
+    updateFailedTitle: 'Status Update Failed',
+    singleUpdateFailedMessage: 'Failed to update vendor active status. Please retry.',
+    bulkUpdateFailedMessage: 'Failed to update status for selected vendors. Please try again.',
+    networkErrorMessage: 'The server could not be reached to update vendor status. Check your connection and retry.',
+    inactiveVendorEvalBlocked: 'This vendor is marked inactive. Reactivate the vendor before sending a new evaluation request.',
+    activeCountSummary: '{activeCount} active · {inactiveCount} inactive',
+  },
+
+  vendorSummaryStats: {
+    totalVendorLabel: 'Total Vendor',
+    ocrEvaluatedLabel: 'OCR & 360° Evaluated',
+    preferredStatusLabel: 'Preferred Status',
+    selectedSuppliersLabel: 'Selected Suppliers',
+  },
 
 };
 

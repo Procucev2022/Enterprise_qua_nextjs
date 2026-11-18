@@ -51,6 +51,10 @@ const {
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
   resolveValidVendorCategories,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  VENDOR_INGESTION_MESSAGES,
+  isVendorInactive,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -601,9 +605,47 @@ class StoreService {
   _sendWithFeedOutcome(sendPromise, errorMessage, metadata, feedDetails) {
     const tracked = this._background(sendPromise, errorMessage, metadata);
     tracked
-      .then((result) => this._recordChannelFeedItem(feedDetails, toChannelOutcome(result)))
+      .then((result) => {
+        const outcome = toChannelOutcome(result);
+        this._recordChannelFeedItem(feedDetails, outcome);
+        if (
+          outcome.success &&
+          feedDetails?.rfqNumber &&
+          feedDetails?.vendor &&
+          (feedDetails.channel === 'sms' || feedDetails.channel === 'whatsapp')
+        ) {
+          this._recordDirectChannelSentOnRfq(feedDetails.rfqNumber, feedDetails.channel, feedDetails.vendor, outcome);
+        }
+      })
       .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
     return tracked;
+  }
+
+  /** Records a direct (initial) SMS or WhatsApp send onto RFQ follow-up vendor status and sent counter. */
+  _recordDirectChannelSentOnRfq(rfqNumber, channel, vendor, outcome) {
+    const stored = this.rfqs.find((candidate) => candidate.rfqNumber === rfqNumber || candidate.id === rfqNumber);
+    if (!stored) return;
+    this._reconcileRFQFollowUpStats(stored);
+    const followUp = stored.followUpData;
+    if (!followUp) return;
+
+    const record = this._followUpVendorRecord(followUp, vendor);
+    const recordedAt = new Date().toISOString();
+    const prevStatus = record?.[channel]?.status;
+    record[channel] = {
+      status: 'sent',
+      lastAttempt: recordedAt,
+      messageId: outcome.messageId,
+      error: null,
+    };
+    record.lastInteraction = recordedAt;
+
+    const statsKey = channel === 'whatsapp' ? 'whatsappStats' : 'smsStats';
+    if (!followUp[statsKey]) followUp[statsKey] = { total: 0, delivered: 0, sent: 0 };
+    if (!['sent', 'delivered', 'read', 'replied', 'clicked'].includes(prevStatus || '')) {
+      followUp[statsKey].sent = (followUp[statsKey].sent || 0) + 1;
+    }
+    this._persistRFQ(stored);
   }
 
   /** Adds one feed entry for a channel message, using the real outcome as its status. */
@@ -1813,13 +1855,13 @@ class StoreService {
     );
     const resolvedLocation = hasLocationInput
       ? resolveVendorLocationFields({
-          location: safeVendorData.location,
-          address: safeVendorData.address,
-          factoryAddress: safeVendorData.factoryAddress,
-          city: safeVendorData.city,
-          state: safeVendorData.state,
-          pincode: safeVendorData.pincode,
-        })
+        location: safeVendorData.location,
+        address: safeVendorData.address,
+        factoryAddress: safeVendorData.factoryAddress,
+        city: safeVendorData.city,
+        state: safeVendorData.state,
+        pincode: safeVendorData.pincode,
+      })
       : null;
     const cleanCategories = resolveValidVendorCategories(safeVendorData);
     const resolvedMajorCategory = cleanCategories.majorCategory ||
@@ -2540,6 +2582,63 @@ class StoreService {
       persistError.code = isUniqueConflict ? 'VENDOR_EMAIL_CONFLICT' : 'PERSISTENCE_UNAVAILABLE';
       throw persistError;
     }
+  }
+
+  /**
+   * Builds normalized state fields when toggling a vendor between active and inactive.
+   * Preserves prior evaluation/approval status across deactivation so reactivation restores it.
+   */
+  buildVendorActiveStatusUpdates(currentVendor, isActive, actorEmail = null) {
+    const active = Boolean(isActive);
+    const nowIso = new Date().toISOString();
+    const currentStatus = String(currentVendor?.status || '').trim();
+    if (!active) {
+      const preservedStatus =
+        currentStatus && currentStatus.toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+          ? currentStatus
+          : (currentVendor?.previousStatus || 'REGISTERED / NOT EVALUATED');
+      return {
+        isActive: false,
+        disabled: true,
+        status: VENDOR_ACTIVE_STATUSES.INACTIVE,
+        previousStatus: preservedStatus,
+        disabledAt: nowIso,
+        disabledBy: actorEmail || null,
+      };
+    }
+
+    const restoredStatus =
+      currentVendor?.previousStatus &&
+      String(currentVendor.previousStatus).trim().toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+        ? currentVendor.previousStatus
+        : (currentStatus && currentStatus.toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+          ? currentStatus
+          : 'REGISTERED / NOT EVALUATED');
+    return {
+      isActive: true,
+      disabled: false,
+      status: restoredStatus,
+      previousStatus: null,
+      disabledAt: null,
+      disabledBy: null,
+      reactivatedAt: nowIso,
+      reactivatedBy: actorEmail || null,
+    };
+  }
+
+  async updateVendorActiveStatusDurably(id, isActive, actorEmail = null) {
+    const existing = await this.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+    if (!existing) return null;
+    const statusUpdates = this.buildVendorActiveStatusUpdates(existing, isActive, actorEmail);
+    const updated = await this.updateVendorDurably(existing.id, statusUpdates);
+    if (!updated) return null;
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: isActive
+        ? `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) ACTIVE and eligible for future workflows`
+        : `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) INACTIVE (historical data preserved; excluded from future flows)`,
+    });
+    return updated;
   }
 
   deleteVendor(id, actorEmail = null, { deferPersistence = false, deferAudit = false } = {}) {
@@ -4045,7 +4144,7 @@ class StoreService {
     }
 
     if (pool.hasStorage() && closedList.length > 0 && !this.isHydratedFromDB) {
-      await this.hydrateFromDB().catch(() => {});
+      await this.hydrateFromDB().catch(() => { });
     }
 
     for (const updated of closedList) {
@@ -4172,11 +4271,41 @@ class StoreService {
     if (Array.isArray(fup.vendors)) {
       fup.vendors.forEach((v) => {
         if (!v) return;
+        if (!v.vendorId && v.id) v.vendorId = v.id;
+        if (!v.vendorName && v.name) v.vendorName = v.name;
+        if (!v.name && v.vendorName) v.name = v.vendorName;
+        if (!v.bidStatus) v.bidStatus = 'Pending';
+        if (!v.overallStatus) v.overallStatus = v.bidStatus === 'Submitted' ? 'Responded' : 'Pending';
         if (typeof v.emailSent !== 'boolean') v.emailSent = false;
-        if (!v.email24h) v.email24h = v.email ? { ...v.email } : { status: 'pending' };
+        if (!v.email24h) v.email24h = v.email && typeof v.email === 'object' ? { ...v.email } : { status: 'pending' };
         if (!v.sms) v.sms = { status: 'pending' };
         if (!v.whatsapp) v.whatsapp = { status: 'pending' };
       });
+      const smsSentVendorCount = fup.vendors.filter(
+        (v) => v?.sms && ['sent', 'delivered', 'clicked'].includes(v.sms.status)
+      ).length;
+      if (smsSentVendorCount > 0 || fup.smsStats.sent !== undefined) {
+        fup.smsStats.sent = Math.max(recordedCount(fup.smsStats.sent), smsSentVendorCount);
+      }
+      const waSentVendorCount = fup.vendors.filter(
+        (v) => v?.whatsapp && ['sent', 'delivered', 'read', 'replied'].includes(v.whatsapp.status)
+      ).length;
+      if (waSentVendorCount > 0 || fup.whatsappStats.sent !== undefined) {
+        fup.whatsappStats.sent = Math.max(recordedCount(fup.whatsappStats.sent), waSentVendorCount);
+      }
+      const waRepliedVendorCount = fup.vendors.filter((v) => v?.whatsapp?.status === 'replied').length;
+      if (waRepliedVendorCount > 0) {
+        fup.whatsappStats.replied = Math.max(recordedCount(fup.whatsappStats.replied), waRepliedVendorCount);
+      }
+      const email24hVendorCount = fup.vendors.filter(
+        (v) =>
+          v?.email24h?.is24hReminderSent ||
+          ['sent', 'delivered', 'reminded_24h'].includes(v?.email24h?.status || '') ||
+          (typeof v?.email === 'object' && v.email !== null && ['sent', 'delivered'].includes(v.email.status || ''))
+      ).length;
+      if (email24hVendorCount > 0) {
+        fup.emailStats.sent24h = Math.max(recordedCount(fup.emailStats.sent24h), email24hVendorCount);
+      }
     }
 
     return rfq;
@@ -4515,23 +4644,48 @@ class StoreService {
     };
 
     // Private vendor records belong only to the buyer account that uploaded
-    // them. Never carry another buyer's private roster entry onto this RFQ.
+    // them, and inactive vendors cannot be included in new RFQs or invitations.
     const foreignPrivateVendors = [];
+    const inactiveExcludedVendors = [];
     newRFQ.assignedVendors = newRFQ.assignedVendors.filter((entry) => {
       const vendor = entry && entry.id ? this.getVendorById(entry.id, 'all') : null;
-      if (!this.isVendorPrivateToDifferentBuyer(vendor || entry, newRFQ)) return true;
-      foreignPrivateVendors.push(vendor || entry);
-      return false;
+      const targetVendor = vendor || entry;
+      if (this.isVendorPrivateToDifferentBuyer(targetVendor, newRFQ)) {
+        foreignPrivateVendors.push(targetVendor);
+        return false;
+      }
+      if (isVendorInactive(targetVendor)) {
+        inactiveExcludedVendors.push(targetVendor);
+        return false;
+      }
+      return true;
     });
-    if (foreignPrivateVendors.length > 0) {
-      logger.warn(
-        `Excluded ${foreignPrivateVendors.length} private vendor(s) owned by another buyer from RFQ ${newRFQ.rfqNumber}.`,
-        {
-          rfqNumber: newRFQ.rfqNumber,
-          vendorIds: foreignPrivateVendors.map((vendor) => vendor.id).filter(Boolean),
-        },
-        'STORE_SERVICE'
-      );
+    if (foreignPrivateVendors.length > 0 || inactiveExcludedVendors.length > 0) {
+      if (foreignPrivateVendors.length > 0) {
+        logger.warn(
+          `Excluded ${foreignPrivateVendors.length} private vendor(s) owned by another buyer from RFQ ${newRFQ.rfqNumber}.`,
+          {
+            rfqNumber: newRFQ.rfqNumber,
+            vendorIds: foreignPrivateVendors.map((vendor) => vendor.id).filter(Boolean),
+          },
+          'STORE_SERVICE'
+        );
+      }
+      if (inactiveExcludedVendors.length > 0) {
+        logger.warn(
+          `Excluded ${inactiveExcludedVendors.length} inactive vendor(s) from RFQ ${newRFQ.rfqNumber}.`,
+          {
+            rfqNumber: newRFQ.rfqNumber,
+            vendorIds: inactiveExcludedVendors.map((vendor) => vendor.id).filter(Boolean),
+          },
+          'STORE_SERVICE'
+        );
+        this.addAuditLog({
+          userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Excluded ${inactiveExcludedVendors.length} inactive vendor(s) from new RFQ ${newRFQ.rfqNumber}`,
+          rfqNumber,
+        });
+      }
       if (newRFQ.followUpData) {
         newRFQ.followUpData.vendors = newRFQ.assignedVendors;
         const remCount = newRFQ.assignedVendors.length;
@@ -4672,7 +4826,7 @@ class StoreService {
         };
         // A minor-level RFQ reads every in-memory vendor of the buyer, so the major top-up can reach them.
         const clientCandidates = (minorScoped ? this.vendors : this.candidateVendorsForRFQ(newRFQ)).filter(
-          (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
+          (v) => !isVendorInactive(v) && !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
         );
         let clientMatches = minorScoped
           ? this.planMinorInvites(newRFQ, { candidatePool: clientCandidates, targetLocation: v1Location, limit: maxClientPerCat }).selected
@@ -5358,6 +5512,8 @@ class StoreService {
   _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false } = {}) {
     const targetsByEmail = new Map();
     for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      const resolved = vendor && vendor.id ? this.getVendorById(vendor.id, 'all') : null;
+      if (isVendorInactive(resolved || vendor)) continue;
       const recipientEmail = resolveVendorEmail(vendor);
       if (!recipientEmail) continue;
 
@@ -7977,9 +8133,9 @@ class StoreService {
     return rows;
   }
 
-  /** Every in-memory vendor the RFQ may see, before any category match. Other buyers' private vendors are left out. */
+  /** Every active in-memory vendor the RFQ may see, before any category match. Other buyers' private vendors are left out. */
   _visibleVendorsForRFQ(rfq) {
-    return this.vendors.filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq));
+    return this.vendors.filter((v) => !isVendorInactive(v) && !this.isVendorPrivateToDifferentBuyer(v, rfq));
   }
 
   /** The full in-memory record behind an assignment entry, or the entry itself when that vendor is not in memory. */
@@ -8147,7 +8303,9 @@ class StoreService {
       dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
     }
 
-    const network = (Array.isArray(dbMatches) ? dbMatches : []).filter((v) => this.isProcucevVendor(v));
+    const network = (Array.isArray(dbMatches) ? dbMatches : []).filter(
+      (v) => !isVendorInactive(v) && this.isProcucevVendor(v)
+    );
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
 
     let sorted;
@@ -8424,6 +8582,7 @@ class StoreService {
       ];
       const seenClient = new Set();
       for (const v of rawClient) {
+        if (isVendorInactive(v)) continue;
         const k = (v.id || v.email || v.name || '').toLowerCase();
         if (k && !seenClient.has(k)) {
           seenClient.add(k);
@@ -8511,7 +8670,7 @@ class StoreService {
         dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
       }
 
-      const network = (dbMatches || []).filter((v) => this.isProcucevVendor(v));
+      const network = (dbMatches || []).filter((v) => !isVendorInactive(v) && this.isProcucevVendor(v));
       if (minorScoped) {
         const plan = this.planMinorInvites(rfq, {
           candidatePool: network,
@@ -8762,6 +8921,9 @@ class StoreService {
    */
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
+    if (isVendorInactive(vendor)) {
+      return this._isInvitedVendor(vendor, rfq);
+    }
     if (rfq.needsCategoryManagerAssignment || rfq.categoryNotAvailable) {
       return this._isInvitedVendor(vendor, rfq);
     }
@@ -8837,7 +8999,7 @@ class StoreService {
     const destination = this._extractTargetLocation(rfq);
     const matches = this._rfqVendorMatcher(rfq);
     const candidates = this.vendors
-      .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
+      .filter((v) => !isVendorInactive(v) && !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.length === 0 || matches(v))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
 
@@ -8869,7 +9031,7 @@ class StoreService {
           const dbVendors = this._narrowDbVendorsToRFQ(
             rfq,
             await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit, ...pinOpts)
-          );
+          ).filter((v) => !isVendorInactive(v));
           if (Array.isArray(dbVendors) && dbVendors.length > 0) {
             candidates = dbVendors.map((v) => ({
               ...v,
@@ -8927,6 +9089,19 @@ class StoreService {
         }
       }
       if (!vendor) continue;
+      if (isVendorInactive(vendor)) {
+        excludedVendors.push({
+          id: vendor.id,
+          name: vendor.name,
+          reason: VENDOR_STATUS_MESSAGES.INACTIVE_RFQ_INVITE_BLOCKED,
+        });
+        logger.warn(
+          `Rejected invitation of inactive vendor ${vendor.id} to RFQ ${rfq.rfqNumber}.`,
+          { rfqNumber: rfq.rfqNumber, vendorId: vendor.id },
+          'STORE_SERVICE'
+        );
+        continue;
+      }
       if (this.isVendorPrivateToDifferentBuyer(vendor, rfq)) {
         excludedVendors.push({
           id: vendor.id,
@@ -9169,7 +9344,7 @@ class StoreService {
    */
   notifyVendorsOfNewRFQ(rfq) {
     if (!rfq || rfq.needsCategoryManagerAssignment || rfq.categoryNotAvailable) return [];
-    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
+    const matches = this.vendors.filter((v) => !isVendorInactive(v) && this.vendorCoversRFQ(v, rfq));
     if (matches.length === 0) return [];
 
     const categoryLabel = rfq.category || this._rfqCategorySignals(rfq)[0] || 'your categories';
@@ -9450,7 +9625,7 @@ class StoreService {
         (Number(v.rating) || 0),
     });
 
-    const eligible = this.vendors.filter((v) => v.email && this.vendorCoversRFQ(v, rfq));
+    const eligible = this.vendors.filter((v) => !isVendorInactive(v) && v.email && this.vendorCoversRFQ(v, rfq));
 
     if (distinctSignals.length > 3) {
       const selected = new Map();
@@ -9524,8 +9699,9 @@ class StoreService {
 
     for (const vendor of assigned) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
-        allEmails.add(vendor.email.toLowerCase());
         const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all') || vendor;
+        if (isVendorInactive(resolvedVendor)) continue;
+        allEmails.add(vendor.email.toLowerCase());
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
@@ -10439,6 +10615,7 @@ class StoreService {
     let unmappedEmailsQueued = 0;
     const failedEmails = [];
     const vendorsToEmail = [];
+    const seenBatchEmails = new Set();
 
     for (let idx = 0; idx < vendorRecords.length; idx++) {
       const rec = vendorRecords[idx];
@@ -10456,6 +10633,18 @@ class StoreService {
         });
         continue;
       }
+
+      const normalizedBatchEmail = email.toLowerCase();
+      if (seenBatchEmails.has(normalizedBatchEmail)) {
+        skipped.push({
+          row: idx + 1,
+          vendorName: name,
+          email,
+          reason: VENDOR_INGESTION_MESSAGES.DUPLICATE_EMAIL_BATCH_SKIPPED.replace('{value}', normalizedBatchEmail),
+        });
+        continue;
+      }
+      seenBatchEmails.add(normalizedBatchEmail);
 
       const isMapped = isMappedRecord(rec);
       if (isMapped) mappedCount++;
@@ -10900,9 +11089,9 @@ class StoreService {
    * stays absent: rating, score and evaluated are null/false until a real
    * evaluation produces them.
    */
-  async empanelIngestedVendor(vendorData, actorEmail = null) {
+  async empanelIngestedVendor(vendorData, actorEmail = null, { allowUnassignedCategory = false } = {}) {
     const cleanCategories = resolveValidVendorCategories(vendorData);
-    if (!cleanCategories.hasCategory) {
+    if (!allowUnassignedCategory && !cleanCategories.hasCategory) {
       const categoryError = new Error(VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED);
       categoryError.statusCode = 400;
       categoryError.code = 'VENDOR_CATEGORY_REQUIRED';
@@ -10921,8 +11110,11 @@ class StoreService {
       state: vendorData.state,
       pincode: vendorData.pincode,
     });
+    const isDeactivated = vendorData.isActive === false || vendorData.disabled === true ||
+      String(vendorData.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
     const newVendor = {
       id: `v-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ...(vendorData.masterRecordId ? { masterRecordId: vendorData.masterRecordId } : {}),
       name: vendorData.name,
       email: vendorData.email,
       contactPerson: vendorData.contactPerson || null,
@@ -10947,7 +11139,16 @@ class StoreService {
       evaluated: false,
       hasRecord: true,
       isExistingInDatabase: true,
-      status: 'REGISTERED / NOT EVALUATED',
+      status: isDeactivated ? VENDOR_ACTIVE_STATUSES.INACTIVE : 'REGISTERED / NOT EVALUATED',
+      ...(isDeactivated
+        ? {
+            isActive: false,
+            disabled: true,
+            previousStatus: vendorData.previousStatus || 'REGISTERED / NOT EVALUATED',
+            disabledAt: vendorData.disabledAt || new Date().toISOString(),
+            disabledBy: vendorData.disabledBy || actorEmail || null,
+          }
+        : {}),
       source: 'vendor_master_ingestion',
       onboardingEmailStatus: 'pending',
       profileCompletionStatus: 'pending',

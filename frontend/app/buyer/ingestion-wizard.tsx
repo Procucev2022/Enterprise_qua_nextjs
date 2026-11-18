@@ -12,6 +12,7 @@ import {
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
   entitledSourcingModes,
+  isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   subscribeVendorUploadHistory,
@@ -337,6 +338,12 @@ export default function IngestionWizard({
     [buyerVendors, uploadHistoryList, activeBuyerAccount]
   );
 
+  // Exclude inactive/disabled vendors from all future RFQ creation and invitation flows
+  const activeReconciledVendors = useMemo<VendorEntry[]>(
+    () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
+    [reconciledBuyerVendors]
+  );
+
   const effectivePlan = forceSubscription ?? activeBuyerAccount?.subscriptionPlan ?? storeSubscription ?? 'free_trial';
   const effectiveRemaining =
     forceRemainingFreeRFQs !== undefined
@@ -629,7 +636,7 @@ export default function IngestionWizard({
     ).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList(result.candidates);
+        setAllVendorsList(result.candidates.filter((v) => isVendorActive(v)));
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoading(false);
@@ -651,7 +658,7 @@ export default function IngestionWizard({
     }).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList((prev) => [...prev, ...result.candidates]);
+        setAllVendorsList((prev) => [...prev, ...result.candidates.filter((v) => isVendorActive(v))]);
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoadingMore(false);
@@ -691,7 +698,7 @@ export default function IngestionWizard({
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
         const ranked = selectTopProcucevVendorsForMode3(
-          result.candidates,
+          result.candidates.filter((v) => isVendorActive(v)),
           form,
           VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
         );
@@ -1243,10 +1250,10 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(reconciledBuyerVendors)) {
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(activeReconciledVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? reconciledBuyerVendors.filter((v) => isBuyerUploaded(v))
-          : reconciledBuyerVendors;
+          ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
+          : activeReconciledVendors;
         const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
@@ -1466,7 +1473,7 @@ export default function IngestionWizard({
               className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
             >
               {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isExtracting ? 'Extracting with AI...' : 'Extract Line Items with AI'}
+              {isExtracting ? EXTRACTION.extractingButtonLabel : EXTRACTION.extractAction}
             </button>
           </div>
         </div>
@@ -1502,17 +1509,30 @@ export default function IngestionWizard({
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
             }`}
         >
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={18} />
+          {isExtracting ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-1" role="status" aria-live="polite">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
+              <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                {EXTRACTION.extractingStatus}
+              </h3>
             </div>
-            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={18} />
-            </div>
-          </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
-            {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
-          </h3>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={18} />
+                </div>
+                <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+                  <Mail size={18} />
+                </div>
+              </div>
+              <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
+                {EXTRACTION.dropZoneIdlePrompt}
+              </h3>
+            </>
+          )}
         </div>
 
         {/* Uploaded Files List */}
@@ -2047,7 +2067,7 @@ export default function IngestionWizard({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                       <span className="badge badge-blue text-[10px] font-bold">
-                        {reconciledBuyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                        {activeReconciledVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -2081,7 +2101,7 @@ export default function IngestionWizard({
               </div>
 
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2393,7 +2413,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_2' && (
             <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2779,7 +2799,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_3' && (
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter(isBuyerUploaded);
+                const allMyVendors = activeReconciledVendors.filter(isBuyerUploaded);
                 const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
                 const lineItemMinors = Array.from(
                   new Set(

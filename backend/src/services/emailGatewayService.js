@@ -711,23 +711,26 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
 
   let tempPassword = null;
   if (isOnboardingPending) {
+    // Always generate a fresh password while the buyer is still PENDING_ONBOARDING,
+    // so every subsequent RFQ email carries a valid, up-to-date credential.
     let idUser = null;
     try {
       idUser = await identityQueries.findUserByEmail(address);
-      if (isIdentityOnboardingPending(idUser)) {
-        tempPassword = idUser.password || null;
-      }
     } catch (err) {
-      logger.warn('Failed to query identity user password in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
+      logger.warn('Failed to query identity user in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
     }
     // A login that has finished onboarding holds the buyer's real password:
     // never overwrite it or mail out a fresh one.
-    if (!tempPassword && !hasCompletedIdentity(idUser)) {
+    if (!hasCompletedIdentity(idUser)) {
       tempPassword = storeService._generateTempPassword();
       try {
         await identityQueries.updateUserPassword(address, tempPassword);
       } catch (pwErr) {
         logger.warn('Failed to persist fresh temp password in resolveSenderAuthorisation', { address, error: pwErr.message }, 'EMAIL_GATEWAY');
+        // Fall back to the stored password rather than sending nothing.
+        if (idUser && isIdentityOnboardingPending(idUser)) {
+          tempPassword = idUser.password || tempPassword;
+        }
       }
     }
   }
@@ -843,21 +846,27 @@ async function getOrCreateBuyerAccount(email) {
     );
     let tempPassword = null;
     if (isPending) {
+      // Always generate a fresh password for every subsequent RFQ email while
+      // the buyer is still PENDING_ONBOARDING. This ensures the buyer always
+      // receives a valid, up-to-date credential with each new RFQ notification
+      // until they complete onboarding (set their own password / verify profile).
       let idUser = null;
       try {
         idUser = await identityQueries.findUserByEmail(normEmail);
-        if (isIdentityOnboardingPending(idUser)) {
-          tempPassword = idUser.password || null;
-        }
       } catch (err) {
-        logger.warn('Failed to resolve identity user temp password in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
+        logger.warn('Failed to resolve identity user in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
       }
-      if (!tempPassword && !hasCompletedIdentity(idUser)) {
+      if (!hasCompletedIdentity(idUser)) {
+        // Always mint a new password so each re-send carries a fresh credential.
         tempPassword = storeService._generateTempPassword();
         try {
           await identityQueries.updateUserPassword(normEmail, tempPassword);
         } catch (pwErr) {
           logger.warn('Failed to persist fresh temp password in getOrCreateBuyerAccount', { email: normEmail, error: pwErr.message }, 'EMAIL_GATEWAY');
+          // Fall back to the stored password rather than sending nothing.
+          if (idUser && isIdentityOnboardingPending(idUser)) {
+            tempPassword = idUser.password || tempPassword;
+          }
         }
       }
     }

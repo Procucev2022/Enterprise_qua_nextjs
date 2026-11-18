@@ -312,6 +312,13 @@ const MINOR_TECHNICAL_KEYWORDS = [
   { words: ['film', 'wrapping', 'stretch wrap'], minor: 'Plastic Packaging' },
 ];
 
+function stemCategoryToken(token) {
+  if (token.endsWith('ies')) return token.slice(0, -3) + 'y';
+  if (token.endsWith('es')) return token.slice(0, -2);
+  if (token.endsWith('s')) return token.slice(0, -1);
+  return token;
+}
+
 function matchMinorCategory(candidate, matchedMajor) {
   if (!candidate || !matchedMajor || !matchedMajor.minors) return null;
   const rawKey = categoryKey(candidate);
@@ -352,10 +359,10 @@ function matchMinorCategory(candidate, matchedMajor) {
     const mTokens = mKey.split(/[^a-z0-9]+/).filter((t) => t.length >= 3);
     for (const ct of candidateTokens) {
       if (GENERIC_CATEGORY_STOP_WORDS.has(ct)) continue;
-      const ctStem = ct.endsWith('ies') ? ct.slice(0, -3) + 'y' : ct.endsWith('es') ? ct.slice(0, -2) : ct.endsWith('s') ? ct.slice(0, -1) : ct;
+      const ctStem = stemCategoryToken(ct);
       for (const mt of mTokens) {
         if (GENERIC_CATEGORY_STOP_WORDS.has(mt)) continue;
-        const mtStem = mt.endsWith('ies') ? mt.slice(0, -3) + 'y' : mt.endsWith('es') ? mt.slice(0, -2) : mt.endsWith('s') ? mt.slice(0, -1) : mt;
+        const mtStem = stemCategoryToken(mt);
         if (ct === mt || ctStem === mt || ct === mtStem || ctStem === mtStem) {
           return actualName;
         }

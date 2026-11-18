@@ -1,14 +1,12 @@
 const supertest = require('supertest');
-const request = (app) => {
-  const agent = supertest(app);
-  return {
-    get: (path) => agent.get(path).set('Authorization', 'Bearer ticket-test-token'),
-    post: (path) => agent.post(path).set('Authorization', 'Bearer ticket-test-token'),
-    put: (path) => agent.put(path).set('Authorization', 'Bearer ticket-test-token'),
-    delete: (path) => agent.delete(path).set('Authorization', 'Bearer ticket-test-token'),
-  };
-};
 const app = require('../src/app');
+const agent = supertest(app);
+const request = () => ({
+  get: (path) => agent.get(path).set('Authorization', 'Bearer ticket-test-token'),
+  post: (path) => agent.post(path).set('Authorization', 'Bearer ticket-test-token'),
+  put: (path) => agent.put(path).set('Authorization', 'Bearer ticket-test-token'),
+  delete: (path) => agent.delete(path).set('Authorization', 'Bearer ticket-test-token'),
+});
 const ticketQueries = require('../src/db/ticketQueries');
 const ticketController = require('../src/controllers/ticketController');
 const pool = require('../src/db/pool');

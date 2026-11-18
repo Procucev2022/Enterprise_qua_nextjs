@@ -3062,6 +3062,77 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(false);
     });
 
+    it('cleans up buyerVendors, vendorEvaluations, and upload history using targetVendor/targetVendors hints across single and bulk delete', async () => {
+      const ctx = await mountStore();
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: sent.email === 'hint1@vendor.com' ? 'v-hint-1' : 'v-hint-2' } }),
+          });
+        }
+        if (String(url).startsWith('/api/vendors/v-hint-') && init?.method === 'DELETE') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+        }
+        if (url === '/api/vendors/bulk-delete' && init?.method === 'POST') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, deletedIds: [] }) });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      await act(async () => {
+        await ctx().addBuyerVendor({ name: 'Hint Vendor One', majorCategory: 'Mechanical', email: 'hint1@vendor.com' } as any);
+        await ctx().addBuyerVendor({ name: 'Hint Vendor Two', majorCategory: 'Electrical', email: 'hint2@vendor.com' } as any);
+        await ctx().addBuyerVendor({ name: 'Kept Vendor', majorCategory: 'Civil', email: 'kept@vendor.com' } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-hint-1',
+          vendorId: 'v-hint-1',
+          vendorName: 'Hint Vendor One',
+          email: 'hint1@vendor.com',
+          overallScore: 88,
+        } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-hint-2',
+          vendorId: 'v-other-id',
+          vendorName: 'Hint Vendor Two',
+          email: 'hint2@vendor.com',
+          overallScore: 84,
+        } as any);
+        await ctx().addVendorEvaluation({
+          id: 'eval-kept',
+          vendorId: 'v-kept-eval',
+          vendorName: 'Kept Vendor',
+          email: 'kept@vendor.com',
+          overallScore: 91,
+        } as any);
+      });
+
+      // Single delete passing targetVendor hints removes matching evaluation and vendor
+      await act(async () => {
+        const ok = await ctx().deleteBuyerVendor('hint1@vendor.com', {
+          id: 'v-hint-1',
+          email: 'hint1@vendor.com',
+          name: 'Hint Vendor One',
+        });
+        expect(ok).toBe(true);
+      });
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-hint-1')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-kept')).toBe(true);
+
+      // Bulk delete passing targetVendors hints with empty deletedIds from server falls back to vendorIds.length
+      await act(async () => {
+        await ctx().deleteMultipleBuyerVendors(['hint2@vendor.com'], [
+          { id: 'v-hint-2', email: 'hint2@vendor.com', name: 'Hint Vendor Two' },
+          {},
+        ]);
+      });
+      expect(ctx().buyerVendors.some((v: any) => v.email === 'hint2@vendor.com')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-hint-2')).toBe(false);
+      expect(ctx().vendorEvaluations.some((e: any) => e.id === 'eval-kept')).toBe(true);
+    });
+
     it('keeps every vendor and logs the failure when bulk deletion is refused', async () => {
       const ctx = await mountStore();
       const countBefore = ctx().buyerVendors.length;
@@ -3676,6 +3747,291 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         expect(persistedEvalRes.success).toBe(true);
       } finally {
         localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
+
+    it('marks vendors inactive/active via setBuyerVendorActiveStatus & setMultipleBuyerVendorsActiveStatus and excludes inactive vendors from matchSuitableVendors', async () => {
+      const ctx = await mountStore();
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-active-toggle',
+            records: [
+              { id: 'v-tog-1', name: 'Active Pump Co', email: 'tog1@vendor.test', category: 'Mechanical' },
+            ],
+          },
+        ])
+      );
+
+      let toggleMode: 'ok' | 'http_fail' | 'network_fail' = 'ok';
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: sent.email === 'tog1@vendor.test' ? 'v-tog-1' : 'v-tog-2' } }),
+          });
+        }
+        if (String(url).includes('/status') && init?.method === 'PATCH') {
+          const body = JSON.parse(init.body || '{}');
+          if (toggleMode === 'network_fail') return Promise.reject(new Error('offline'));
+          if (toggleMode === 'http_fail') {
+            return Promise.resolve({ ok: false, status: 400, json: async () => ({ success: false, error: 'Status rejected' }) });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                id: 'v-tog-1',
+                name: 'Active Pump Co',
+                email: 'tog1@vendor.test',
+                isActive: body.isActive,
+                disabled: !body.isActive,
+                status: body.isActive ? 'REGISTERED / NOT EVALUATED' : 'INACTIVE',
+              },
+            }),
+          });
+        }
+        if (url === '/api/vendors/bulk-status' && init?.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          if (toggleMode === 'network_fail') return Promise.reject(new Error('bulk offline'));
+          if (toggleMode === 'http_fail') {
+            return Promise.resolve({ ok: false, status: 500, json: async () => ({ success: false, error: 'Bulk status failed' }) });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              updatedIds: ['v-tog-2'],
+              skippedIds: [],
+              data: [
+                {
+                  id: 'v-tog-2',
+                  name: 'Second Valve Co',
+                  email: 'tog2@vendor.test',
+                  isActive: body.isActive,
+                  disabled: !body.isActive,
+                  status: body.isActive ? 'REGISTERED / NOT EVALUATED' : 'INACTIVE',
+                },
+              ],
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      try {
+        await act(async () => {
+          await ctx().addBuyerVendor({ name: 'Active Pump Co', majorCategory: 'Mechanical', minorCategories: ['Pumps'], email: 'tog1@vendor.test', source: 'buyer_manual' } as any);
+          await ctx().addBuyerVendor({ name: 'Second Valve Co', majorCategory: 'Mechanical', minorCategories: ['Valves'], email: 'tog2@vendor.test', source: 'buyer_manual' } as any);
+        });
+
+        let okSingle = false;
+        await act(async () => {
+          okSingle = await ctx().setBuyerVendorActiveStatus('v-tog-1', false);
+        });
+        expect(okSingle).toBe(true);
+        const disabledVendor = ctx().buyerVendors.find((v: any) => v.id === 'v-tog-1');
+        expect(disabledVendor?.isActive).toBe(false);
+        expect(disabledVendor?.status).toBe('INACTIVE');
+
+        // Upload history is preserved with isActive: false
+        const historyAfterDisable = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+        expect(historyAfterDisable).toHaveLength(1);
+        expect(historyAfterDisable[0].records[0].isActive).toBe(false);
+
+        // Inactive vendor is excluded from matchSuitableVendors across Mode 1 / 2 / 3 while active remains
+        const sampleEntities: any[] = [{ id: 'ent-1', itemName: 'Pump & Valve', quantity: 1, unit: 'Nos', targetDate: '', technicalSpecs: '', confidence: 90, category: 'Mechanical', majorCategory: 'Mechanical', minorCategory: '' }];
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_1').map((v: any) => v.id)).not.toContain('v-tog-1');
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_2').map((v: any) => v.id)).not.toContain('v-tog-1');
+        expect(ctx().matchSuitableVendors(sampleEntities, 'mode_3').map((v: any) => v.id)).toContain('v-tog-2');
+
+        // Reactivate single vendor
+        await act(async () => {
+          await ctx().setBuyerVendorActiveStatus('v-tog-1', true);
+        });
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-1')?.isActive).toBe(true);
+
+        // Bulk disable & empty guard
+        let emptyBulk = true;
+        await act(async () => {
+          emptyBulk = await ctx().setMultipleBuyerVendorsActiveStatus([], false);
+        });
+        expect(emptyBulk).toBe(false);
+
+        let okBulk = false;
+        await act(async () => {
+          okBulk = await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2'], false);
+        });
+        expect(okBulk).toBe(true);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-2')?.isActive).toBe(false);
+
+        // Error and network failure branches
+        toggleMode = 'http_fail';
+        await act(async () => {
+          expect(await ctx().setBuyerVendorActiveStatus('v-tog-1', false)).toBe(false);
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2'], true)).toBe(false);
+        });
+        toggleMode = 'network_fail';
+        await act(async () => {
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-offline-1', false, { name: 'Master Co', email: 'm@co.test', vendorCode: 'MC1', phone: '9999999999', city: 'Pune', state: 'Maharashtra', pincode: '411001', gstin: '27AAAAA0000A1Z5', contactPerson: 'Lead', location: 'Pune' })).toBe(false);
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-master-offline-1'], false, [{ id: 'v-master-offline-1', name: 'Master Co', email: 'm@co.test' }])).toBe(false);
+        });
+
+        // Synthetic fallback status change (history lookup + persistedByEmail + omitted json.data + bulk reactivation/fallback)
+        toggleMode = 'ok';
+        mockFetch.mockImplementation((url: string, init?: { method?: string }) => {
+          if (String(url).includes('/status') && init?.method === 'PATCH') {
+            return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true }) });
+          }
+          if (url === '/api/vendors/bulk-status' && init?.method === 'POST') {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                skippedIds: ['v-skip-1'],
+              }),
+            });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+        });
+        localStorage.setItem(
+          'procucev_vendor_upload_history',
+          JSON.stringify([
+            {
+              id: 'batch-syn-tog',
+              records: [{ id: 'syn-tog-rec', name: 'Upload History Vendor', email: 'hist-tog@vendor.test', category: 'Mechanical' }],
+            },
+          ])
+        );
+        await act(async () => {
+          // Synthetic not in buyerVendors prepends updated record even when response omits data
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-syn-tog-rec', false)).toBe(true);
+          // Synthetic with email matching persisted vendor in buyerVendors redirects to persisted ID
+          expect(await ctx().setBuyerVendorActiveStatus('v-master-redirect', false, { email: 'tog1@vendor.test' })).toBe(true);
+          // Bulk reactivate when backend omits updatedIds/data and skips one ID
+          expect(await ctx().setMultipleBuyerVendorsActiveStatus(['v-tog-2', 'v-skip-1'], true)).toBe(true);
+        });
+        expect(ctx().buyerVendors.some((v: any) => v.id === 'v-master-syn-tog-rec' && v.isActive === false)).toBe(true);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-2')?.isActive).toBe(true);
+      } finally {
+        localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
+
+    it('refreshRFQs updates open deep-dive and matrix selections and openRFQDeepDive refreshes authenticated live stats', async () => {
+      let currentSmsSent = 1;
+      const buildServerRfq = (smsSent: number): RFQItem => ({
+        ...(STORE_RFQ_FIXTURES[0] as unknown as RFQItem),
+        id: 'rfq-refresh-sel-1',
+        rfqNumber: 'RFQ261711888111',
+        title: `Live Sync RFQ (${smsSent})`,
+        followUpData: {
+          rfqNumber: 'RFQ261711888111',
+          autoChasingEnabled: true,
+          totalInvited: 10,
+          respondedCount: 0,
+          callStats: { total: 0, connected: 0, avgDuration: '0s' },
+          whatsappStats: { total: 10, sent: 0, delivered: 0, read: 0, replied: 0 },
+          smsStats: { total: 10, sent: smsSent, delivered: 0, clicked: 0 },
+          emailStats: { total: 10, sent24h: 0, delivered: 0, opened: 0 },
+          vendors: [],
+        },
+      });
+
+      authClient.setSession(
+        { id: 'u-deepdive-1', email: 'buyer@procucev.com', name: 'Buyer One', role: 'buyer', orgId: 'org-1', orgName: 'Org One' },
+        'deepdive-refresh-token'
+      );
+
+      try {
+        const ctx = await mountStore(buildServerRfq(1));
+        mockFetch.mockImplementation((url: string) => {
+          if (/\/api\/rfqs(\?|$)/.test(String(url))) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                data: [buildServerRfq(currentSmsSent)],
+              }),
+            });
+          }
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+        });
+
+        await waitFor(() => expect(ctx().rfqs.some((r: RFQItem) => r.rfqNumber === 'RFQ261711888111')).toBe(true));
+
+        const initial = ctx().rfqs.find((r: RFQItem) => r.rfqNumber === 'RFQ261711888111')!;
+        const unrelated: RFQItem = { ...initial, id: 'rfq-unrelated', rfqNumber: 'RFQ-UNRELATED' };
+
+        await act(async () => {
+          ctx().setSelectedRFQForMatrix(initial);
+          ctx().openRFQDeepDive({ ...initial, followUpData: { ...initial.followUpData!, smsStats: { total: 10, sent: 0, delivered: 0, clicked: 0 } } });
+        });
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(1);
+
+        currentSmsSent = 7;
+        await act(async () => {
+          await ctx().refreshRFQs();
+        });
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(7);
+        expect(ctx().selectedRFQForMatrix?.followUpData?.smsStats?.sent).toBe(7);
+
+        // Unrelated selections are preserved
+        await act(async () => {
+          ctx().setSelectedRFQForMatrix(unrelated);
+        });
+        currentSmsSent = 9;
+        await act(async () => {
+          await ctx().refreshRFQs();
+        });
+        expect(ctx().selectedRFQForMatrix?.rfqNumber).toBe('RFQ-UNRELATED');
+        expect(ctx().selectedRFQForDeepDive?.followUpData?.smsStats?.sent).toBe(9);
+      } finally {
+        authClient.setSession(null);
+      }
+    });
+
+    it('blocks reopening InitialSetupModal for a buyer once initialSetupCompleted or vendorMasterUploaded is true', async () => {
+      authClient.setSession(
+        {
+          id: 'u-lock-1',
+          email: 'buyer@locked.test',
+          name: 'Locked Buyer',
+          role: 'buyer',
+          orgId: 'org-lock-1',
+          orgName: 'Locked Org',
+          vendorMasterUploaded: false,
+        },
+        'lock-token'
+      );
+
+      try {
+        const ctx = await mountStore(STORE_RFQ_FIXTURES[0] as unknown as RFQItem);
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(true);
+        });
+        expect(ctx().initialSetupModalOpen).toBe(true);
+
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(false);
+          ctx().setInitialSetupCompleted(true);
+        });
+        expect(ctx().initialSetupCompleted).toBe(true);
+
+        await act(async () => {
+          ctx().setInitialSetupModalOpen(true);
+        });
+        expect(ctx().initialSetupModalOpen).toBe(false);
+      } finally {
+        authClient.setSession(null);
       }
     });
   });

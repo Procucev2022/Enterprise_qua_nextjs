@@ -2,7 +2,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { RFQItem } from '@/lib/types';
 import {
   RFQFollowUpDeepDiveModal,
@@ -47,10 +48,19 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     setDeepDiveModalOpen,
     openRFQDeepDive,
     activeBuyerAccount,
+    buyerVendors,
+    currentUserSession,
     setInitialSetupModalOpen,
     initialSetupCompleted,
     isLoadingRFQs,
   } = useApp();
+
+  const hasCompletedVendorSetup = Boolean(
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true ||
+    (Array.isArray(buyerVendors) && buyerVendors.some((v) => isBuyerUploadedVendor(v)))
+  );
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry' | 'ai_extraction'>('all');
@@ -333,18 +343,26 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
 
       {/* ── Action Header Bar ── */}
       <div className="flex items-center justify-end gap-1.5 flex-wrap">
-        <button
-          onClick={() => setInitialSetupModalOpen(true)}
-          className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all ${
-            initialSetupCompleted
-              ? 'btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30'
-              : 'btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse'
-          }`}
-          title="Upload 1-3 Year Pre-Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
-        >
-          <FileSpreadsheet size={13} className={initialSetupCompleted ? 'text-emerald-600' : 'text-indigo-600'} />
-          <span>{initialSetupCompleted ? '✓ PO History Ingested' : '⚡ 1-3 Yr Purchase Setup'}</span>
-        </button>
+        {hasCompletedVendorSetup ? (
+          <button
+            type="button"
+            onClick={() => onNavigateToDirectory?.()}
+            className="btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all btn-secondary text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-700 bg-emerald-50/50 dark:bg-emerald-950/30"
+            title="Initial vendor setup completed — manage or bulk add vendors in Vendor Directory"
+          >
+            <FileSpreadsheet size={13} className="text-emerald-600" />
+            <span>✓ PO History Ingested</span>
+          </button>
+        ) : (
+          <button
+            onClick={() => setInitialSetupModalOpen(true)}
+            className="btn btn-sm font-bold flex items-center gap-1.5 shadow-sm transition-all btn-secondary text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 bg-indigo-50/70 dark:bg-indigo-950/40 animate-pulse"
+            title="Upload 1-3 Year Pre-Purchase Orders to extract approved vendors, contact details & categorize into 1st/2nd sets"
+          >
+            <FileSpreadsheet size={13} className="text-indigo-600" />
+            <span>⚡ 1-3 Yr Purchase Setup</span>
+          </button>
+        )}
 
         <button onClick={onNavigateToWizard} className="btn btn-primary btn-sm font-bold shadow-md">
           <Plus size={14} /> AI RFQ Generator
@@ -645,56 +663,16 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {(() => {
                         const followUp = rfq.followUpData;
-                        const vCount = Math.max(
-                          rfq.assignedVendors?.length || 0,
-                          rfq.procucevVendorCount || 0,
-                          followUp?.totalInvited || 0,
-                          followUp?.whatsappStats?.total || 0,
-                          followUp?.smsStats?.total || 0,
-                          followUp?.emailStats?.total || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                        );
-
-                        // Read and delivered counts come only from the server's
-                        // stats and per-vendor statuses. Time since creation is
-                        // not evidence that a message was read or delivered.
-                        const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                        const waRead = Math.max(
-                          followUp?.whatsappStats?.read || 0,
-                          followUp?.whatsappStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-                        );
-
-                        const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                        const smsDelivered = Math.max(
-                          followUp?.smsStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-                        );
-
-                        const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                        const emailDelivered = Math.max(
-                          followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
-                        );
-                        const totalInvited = Math.max(
-                          followUp?.totalInvited || 0,
-                          vCount,
-                          waTotal,
-                          smsTotal,
-                          emailTotal
-                        );
-                        const quotesCount = Math.max(
-                          Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
-                          rfq.quotesCount || 0
-                        );
-                        const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                          ? followUp.vendors.filter((v) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-                          : 0;
-                        const responded = Math.max(
-                          followUp?.respondedCount || 0,
-                          quotesCount,
-                          vendorRespondedCount
-                        );
+                        const metrics = computeRFQFollowUpMetrics(rfq);
+                        const vCount = metrics.totalVendors;
+                        const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+                        const waRead = metrics.waDelivered ?? 0;
+                        const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+                        const smsDelivered = metrics.smsDelivered ?? 0;
+                        const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+                        const emailDelivered = metrics.emailDelivered ?? 0;
+                        const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
+                        const responded = metrics.responded;
 
                         if (!followUp && vCount === 0) {
                           return <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>;

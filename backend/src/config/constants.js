@@ -3087,6 +3087,15 @@ const VENDOR_INGESTION_MESSAGES = {
   DISPATCH_ALREADY_SENT:
     '{count} of the selected suppliers have already received this email and will be skipped. Use Retry Failed to re-attempt only the failures.',
   DISPATCH_NOTHING_TO_RETRY: 'There are no failed emails to retry for this session.',
+  DUPLICATE_EMAIL_EXISTING: 'Duplicate email ({value}) — already exists in Buyer Directory',
+  DUPLICATE_EMAIL_FILE: 'Duplicate email ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_GSTIN_EXISTING: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+  DUPLICATE_GSTIN_FILE: 'Duplicate GSTIN ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_CODE_EXISTING: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+  DUPLICATE_CODE_FILE: 'Duplicate vendor code ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_COMPANY_PHONE_EXISTING: 'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+  DUPLICATE_COMPANY_PHONE_FILE: 'Duplicate company & phone ({company} / {phone}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_EMAIL_BATCH_SKIPPED: 'Skipped duplicate email in uploaded batch: {value}',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
@@ -3609,6 +3618,35 @@ const VENDOR_DIRECTORY_SESSION_STATUS = Object.freeze({
   ACTIVE: 'ACTIVE',
   CLOSED: 'CLOSED',
 });
+
+const VENDOR_ACTIVE_STATUSES = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+});
+
+const VENDOR_STATUS_MESSAGES = Object.freeze({
+  INVALID_ACTIVE_FLAG: 'Specify whether the vendor should be active or inactive (isActive boolean).',
+  BULK_VENDOR_IDS_REQUIRED: 'Select at least one vendor to update active status.',
+  VENDOR_ROLE_FORBIDDEN: 'Vendors cannot change their own active status.',
+  INACTIVE_EVALUATION_BLOCKED: 'This vendor is marked inactive and cannot receive new evaluation requests. Reactivate the vendor first to request an evaluation.',
+  INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
+  MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
+  MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+});
+
+/** Returns true when a vendor record has been disabled / marked inactive. */
+function isVendorInactive(vendor) {
+  if (!vendor || typeof vendor !== 'object') return false;
+  if (vendor.isActive === false || vendor.disabled === true || vendor.active === false) {
+    return true;
+  }
+  return String(vendor.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+/** Returns true when a vendor object is present and eligible for active workflows. */
+function isVendorActive(vendor) {
+  return Boolean(vendor) && !isVendorInactive(vendor);
+}
 
 const VENDOR_DIRECTORY_LOGOUT_REASONS = Object.freeze({
   MANUAL: 'MANUAL',
@@ -4439,5 +4477,9 @@ module.exports = {
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,
   DOSSIER_MESSAGES,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  isVendorInactive,
+  isVendorActive,
 };
 

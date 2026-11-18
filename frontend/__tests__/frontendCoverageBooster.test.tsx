@@ -21,6 +21,7 @@ import * as storeModule from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import * as rfqClientModule from '@/lib/rfqClient';
 import * as buyerProfileClientModule from '@/lib/buyerProfileClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, VendorOpportunity, BuyerProfile } from '@/lib/types';
 
 jest.mock('@/lib/store');
@@ -682,7 +683,7 @@ describe('Frontend Master Coverage Booster Suite', () => {
       <VendorSummary onViewEvaluation={onViewEval} onNavigateToWizard={onWizard} />
     );
 
-    expect(screen.getByText(/Total Empanelled/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
     const searchInputs = screen.queryAllByRole('textbox');
     if (searchInputs.length > 0) {
       fireEvent.change(searchInputs[0], { target: { value: 'Apex' } });

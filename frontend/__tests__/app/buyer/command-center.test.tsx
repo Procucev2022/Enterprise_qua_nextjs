@@ -485,6 +485,8 @@ describe('app/buyer/command-center.tsx', () => {
     );
 
     expect(screen.getByText(/PO History Ingested/i)).toBeInTheDocument();
+    fireEvent.click(screen.getByText(/PO History Ingested/i));
+    expect(mockSetInitialSetupModalOpen).not.toHaveBeenCalled();
     // Banner is removed completely
     expect(screen.queryByText(/Sourcing Plan:/i)).not.toBeInTheDocument();
   });
@@ -1487,5 +1489,100 @@ describe('app/buyer/command-center.tsx outreach figures come only from server da
     expect(screen.queryByText(/Autonomous Sourcing Engine Initialized/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/On Schedule/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/24\/7 Active/i)).not.toBeInTheDocument();
+  });
+
+  it('counts sent SMS/WhatsApp/24h Email dispatches and handles zero-vendor RFQs with raw feed timestamps', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      ...baseApp,
+      aiFeed: [
+        {
+          id: 'feed-raw-ts',
+          type: 'sms',
+          channel: 'sms',
+          title: 'Raw timestamp SMS',
+          message: 'Direct SMS sent.',
+          recipient: 'Vendor Raw',
+          timestamp: 'Just now',
+          timeAgo: 'Sent',
+          rfqNumber: 'RFQ-ZERO-V',
+          buyerAccountId: 'acc-1',
+          status: 'sent',
+        },
+        {
+          id: 'feed-empty-ts',
+          type: 'email',
+          channel: 'email',
+          title: 'Empty timestamp Email',
+          message: 'Direct Email sent.',
+          recipient: 'Vendor Empty',
+          timestamp: '',
+          timeAgo: 'Sent',
+          rfqNumber: 'RFQ-ZERO-V',
+          buyerAccountId: 'acc-1',
+          status: 'sent',
+        },
+      ],
+      rfqs: [
+        {
+          id: 'r-zero-v',
+          rfqNumber: 'RFQ-ZERO-V',
+          title: 'Zero Vendor Bare RFQ',
+          category: 'Services',
+          createdAt: '2026-08-29',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 0,
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [],
+          followUpData: undefined,
+        },
+        {
+          id: 'r-sent-counts',
+          rfqNumber: 'RFQ-SENT-CTS',
+          title: 'Sent Telemetry RFQ',
+          category: 'Services',
+          createdAt: '2026-08-29',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          quotesCount: 0,
+          source: 'web_portal',
+          extractedEntities: [],
+          assignedVendors: [{ id: 'v-s1', name: 'Sent Vendor', email: 's@v.test', phone: '' }],
+          followUpData: {
+            rfqNumber: 'RFQ-SENT-CTS',
+            autoChasingEnabled: true,
+            totalInvited: 5,
+            respondedCount: 0,
+            callStats: { total: 1, connected: 1, avgDuration: '12s' },
+            whatsappStats: { total: 5, sent: 2, delivered: 0, read: 0, replied: 0 },
+            smsStats: { total: 5, sent: 4, delivered: 0, clicked: 0 },
+            emailStats: { total: 5, sent24h: 3, delivered: 0, opened: 0 },
+            vendors: [
+              {
+                vendorId: 'v-s1',
+                vendorName: 'Sent Vendor',
+                phone: '9988776655',
+                contactPerson: 'S1',
+                overallStatus: 'Pending',
+                lastInteraction: '',
+                bidStatus: 'Pending',
+                call: { status: 'connected', lastAttempt: '' },
+                whatsapp: { status: 'delivered', lastAttempt: '' },
+                sms: { status: 'sent', lastAttempt: '' },
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    renderCommandCenter();
+
+    expect(screen.getByText('Raw timestamp SMS')).toBeInTheDocument();
+    expect(screen.getByText('Empty timestamp Email')).toBeInTheDocument();
+    expect(screen.getByText('Just now')).toBeInTheDocument();
+    const outreachCard = screen.getByTitle('Click to open vendor follow-up details');
+    expect(outreachCard).toHaveTextContent('15');
   });
 });

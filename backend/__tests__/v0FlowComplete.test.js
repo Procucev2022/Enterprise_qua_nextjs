@@ -22,6 +22,10 @@ describe('V0 Flow E2E - 7-Step Actual Flow Verification', () => {
     storeService.reset();
     smsService.clearSmsThrottleCache();
     whatsAppService.clearWhatsAppThrottleCache();
+    jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-v0-test' });
+    jest.spyOn(whatsAppService, 'sendRFQInvitationWhatsApp').mockResolvedValue({ success: true, messageId: 'wa-v0-test' });
+    jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ success: true, messageId: 'mail-v0-test' });
+    jest.spyOn(domainQueries, 'insertChaserJobInDB').mockResolvedValue({ id: 'job-1' });
 
     // 1. Create an unverified buyer account with 0 free credits and free trial plan
     buyerAccount = storeService.addBuyerAccount({

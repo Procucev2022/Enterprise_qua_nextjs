@@ -122,4 +122,129 @@ describe('vendor categorization evidence, validation and persistence', () => {
     expect(queries.markMappingFailed).toHaveBeenCalledWith('map-2', 'org1', expect.any(String));
     expect(await service.runCategorizationBatch({ ...args, mappings: [], profilesByRecordId: new Map() })).toEqual([]);
   });
+
+  test('fuzzy minor category matching resolves plural variants, technical keywords, stop-words, and lineSummaries fallbacks', () => {
+    const richMaster = [
+      {
+        majorCategory: 'Engineering & Spares',
+        minorCategories: [
+          'Battery',
+          'Box',
+          'Valve',
+          'Pump',
+          'Sensors',
+          'Switches',
+          'Motors',
+          'Circuit Breakers',
+          'Hydraulic Cylinders',
+          'Electrical Fittings',
+          'Cooling Towers',
+          'Battery Pack',
+          'Valve Assembly',
+          'Industrial Fasteners',
+        ],
+      },
+    ];
+
+    // Plural/singular variants: -ies -> -y, -es -> -2, -es -> -1, -s -> -1, +s, +es
+    const variantResult = service.validateAiResult(
+      {
+        primaryCategory: 'Engineering & Spares',
+        minorCategories: ['batteries', 'boxes', 'valves', 'pumps', 'sensor', 'switch'],
+        relevantProducts: [],
+        confidenceScore: 92,
+      },
+      { categoryMaster: richMaster }
+    );
+    expect(variantResult.valid).toBe(true);
+    expect(variantResult.suggestion.minorCategories).toEqual(
+      expect.arrayContaining(['Battery', 'Box', 'Valve', 'Pump', 'Sensors'])
+    );
+
+    // Keyword match + unmatched keyword fallback + substring match + token stemming + stop-word skipping
+    const keywordAndTokenResult = service.validateAiResult(
+      {
+        primaryCategory: 'Engineering & Spares',
+        minorCategories: [
+          '16A MCB unit',
+          'heavy hydraulic cylinders assembly',
+          'hydraulic',
+          'electrical steel fitting',
+          'tower unit',
+          'coolings',
+        ],
+        relevantProducts: [],
+        confidenceScore: 90,
+      },
+      { categoryMaster: richMaster }
+    );
+    expect(keywordAndTokenResult.suggestion.minorCategories).toEqual(
+      expect.arrayContaining(['Circuit Breakers', 'Hydraulic Cylinders', 'Electrical Fittings', 'Cooling Towers'])
+    );
+
+    // Stems ending in -ies and -es on candidate tokens + fallback from relevantProducts & lineSummaries
+    const fallbackResult = service.validateAiResult(
+      {
+        primaryCategory: 'Engineering & Spares',
+        minorCategories: ['unknown unmapped', 'industrial bolts'],
+        relevantProducts: ['Corrugated carton', 'batteries kit', 'switches board'],
+        confidenceScore: 88,
+      },
+      {
+        categoryMaster: richMaster,
+        vendorProfile: {
+          lineSummaries: [
+            'Induction motor 5HP | 2 nos',
+            'Induction motor 5HP | 4 nos',
+            'Valve Assembly kit | 1 ea',
+            'Sensors module | 1 ea',
+            'Pumps unit | 1 ea',
+            'Box pack | 1 ea',
+          ],
+        },
+      }
+    );
+    expect(fallbackResult.suggestion.minorCategories.length).toBeGreaterThan(0);
+    expect(fallbackResult.suggestion.minorCategories.length).toBeLessThanOrEqual(
+      config.MAX_MINOR_CATEGORIES_PER_VENDOR
+    );
+    expect(fallbackResult.suggestion.minorCategories).toEqual(
+      expect.arrayContaining(['Battery', 'Motors'])
+    );
+
+    // Non-matching candidate returns empty minorCategories
+    const emptyMinorRes = service.validateAiResult(
+      {
+        primaryCategory: 'Engineering & Spares',
+        minorCategories: ['completely unrelated xyz'],
+        relevantProducts: ['nothing matches'],
+        confidenceScore: 85,
+      },
+      { categoryMaster: richMaster, vendorProfile: { lineSummaries: ['   '] } }
+    );
+    expect(emptyMinorRes.suggestion.minorCategories).toEqual([]);
+  });
+
+  test('handles thrown errors from gemini.generateJson and unexpected persistence errors in runCategorizationBatch', async () => {
+    gemini.generateJson
+      .mockRejectedValueOnce(new Error('network timeout'))
+      .mockRejectedValue({});
+    const failedClassify = await service.classifyVendor(args);
+    expect(failedClassify.status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(failedClassify.error).toContain('Gemini API call failed');
+
+    gemini.generateJson.mockResolvedValue({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: reply, model: 'test-model' });
+    queries.saveAiSuggestion
+      .mockRejectedValueOnce(new Error('DB write error'))
+      .mockRejectedValueOnce({});
+    const outcomes = await service.runCategorizationBatch({
+      ...args,
+      mappings: [mapping, { ...mapping, id: 'map-2', vendorRecordId: 'vm-2' }],
+      profilesByRecordId: new Map([['vm-1', profile], ['vm-2', profile]]),
+    });
+    expect(outcomes).toEqual([
+      expect.objectContaining({ mappingId: 'map-1', status: service.CLASSIFICATION_STATUS.AI_FAILED, error: 'DB write error' }),
+      expect.objectContaining({ mappingId: 'map-2', status: service.CLASSIFICATION_STATUS.AI_FAILED, error: 'Classification failed unexpectedly' }),
+    ]);
+  });
 });

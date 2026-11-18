@@ -35,7 +35,14 @@ import {
   calculateExtendedDeadline,
   resolveRfqClosingDeadline,
   RFQ_AUTO_CLOSE_HOURS,
+  VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  isVendorActive,
+  isVendorInactive,
+  setVendorsActiveStateInStorage,
 } from '@/lib/constants';
+import type { BuyerAccount } from '@/lib/types';
 
 
 describe('lib/constants', () => {
@@ -1050,5 +1057,72 @@ describe('Indian address location extraction helpers', () => {
     expect(updated[0].records[1]).toMatchObject({ id: 'v-other', category: 'Electrical' });
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('tracks active/inactive vendor states via isVendorInactive, isVendorActive, setVendorsActiveStateInStorage, and reconciliation', () => {
+    expect(isVendorInactive(null)).toBe(false);
+    expect(isVendorActive(null)).toBe(false);
+    expect(isVendorActive({ id: 'v-1', status: 'REGISTERED / NOT EVALUATED' })).toBe(true);
+    expect(isVendorInactive({ id: 'v-2', isActive: false })).toBe(true);
+    expect(isVendorInactive({ id: 'v-3', disabled: true })).toBe(true);
+    expect(isVendorInactive({ id: 'v-4', status: 'INACTIVE' })).toBe(true);
+    expect(isVendorActive({ id: 'v-4', status: 'INACTIVE' })).toBe(false);
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-status-sync',
+          records: [
+            { id: 'rec-a', vendorName: 'Inactive Master Co', email: 'inactive@master.test', category: 'Mechanical' },
+            { id: 'rec-b', vendorName: 'Active Master Co', email: 'active@master.test', category: 'Mechanical' },
+          ],
+        },
+      ])
+    );
+
+    setVendorsActiveStateInStorage(['inactive@master.test'], false);
+    let stored = loadVendorUploadHistoryFromStorage();
+    expect(stored[0].records).toHaveLength(2);
+    expect((stored[0].records ?? [])[0]).toMatchObject({ isActive: false, disabled: true, status: 'INACTIVE' });
+    expect((stored[0].records ?? [])[1].isActive).toBeUndefined();
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], stored, {
+      id: 'buyer-1',
+      organizationName: 'Acme Buyer',
+    } as unknown as BuyerAccount);
+    expect(isVendorInactive(reconciled[0])).toBe(true);
+    expect(isVendorActive(reconciled[1])).toBe(true);
+
+    setVendorsActiveStateInStorage(['inactive@master.test'], true);
+    stored = loadVendorUploadHistoryFromStorage();
+    expect((stored[0].records ?? [])[0]).toMatchObject({ isActive: true, disabled: false, status: 'REGISTERED / NOT EVALUATED' });
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('scopes upload history reconciliation to matching buyer identity and excludes other buyers batches', () => {
+    const activeBuyer = {
+      id: 'buyer-owner-a',
+      organizationName: 'Owner A Corp',
+      corporateEmail: 'a@ownera.com',
+    } as unknown as BuyerAccount;
+
+    const batches = [
+      {
+        id: 'batch-other-buyer',
+        buyerId: 'buyer-owner-b',
+        buyerEmail: 'b@ownerb.com',
+        records: [{ vendorName: 'Other Buyer Vendor', email: 'other@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-same-buyer',
+        buyerId: 'buyer-owner-a',
+        records: [{ vendorName: 'Same Buyer Vendor', email: 'same@vendor.test', category: 'Mechanical' }],
+      },
+    ];
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyer);
+    expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor']);
   });
 });
