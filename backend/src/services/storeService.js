@@ -23,6 +23,7 @@ const {
   PERSISTENCE_MESSAGES,
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_REASON,
+  RFQ_CLOSURE_MESSAGES,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   RFQ_NOTIFICATION_MESSAGES,
@@ -9467,7 +9468,205 @@ class StoreService {
     return notification;
   }
 
+  _normalizeClosureVendorEntry(rawEntry) {
+    if (!rawEntry) return null;
+    if (typeof rawEntry === 'string') {
+      const token = rawEntry.trim();
+      if (!token) return null;
+      const resolved = this.getVendorById(token, 'all');
+      if (resolved) return { ...resolved };
+      return token.includes('@') ? { email: token } : { id: token };
+    }
+    if (typeof rawEntry !== 'object') return null;
+
+    const candidateId = String(rawEntry.id || rawEntry.vendorId || '').trim() || null;
+    const candidateEmail = resolveVendorEmail(rawEntry) || null;
+    const resolved =
+      (candidateId ? this.getVendorById(candidateId, 'all') : null) ||
+      (candidateEmail ? this.getVendorById(candidateEmail, 'all') : null);
+
+    const id = candidateId || (resolved && resolved.id) || null;
+    const email = candidateEmail || (resolved && resolveVendorEmail(resolved)) || null;
+    const phone =
+      rawEntry.phone ||
+      rawEntry.mobile ||
+      rawEntry.mobileNumber ||
+      (resolved && (resolved.phone || resolved.mobile || resolved.mobileNumber)) ||
+      null;
+    const name = rawEntry.name || rawEntry.vendorName || (resolved && resolved.name) || null;
+    const contactPerson = rawEntry.contactPerson || (resolved && resolved.contactPerson) || null;
+
+    return {
+      ...(resolved || {}),
+      ...rawEntry,
+      ...(id ? { id, vendorId: id } : {}),
+      ...(email ? { email } : {}),
+      ...(phone ? { phone } : {}),
+      ...(name ? { name } : {}),
+      ...(contactPerson ? { contactPerson } : {}),
+    };
+  }
+
+  _resolveInvitedVendorEntries(rfq) {
+    const rawLists = [
+      ...(Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []),
+      ...((rfq.followUpData && Array.isArray(rfq.followUpData.vendors)) ? rfq.followUpData.vendors : []),
+      ...(Array.isArray(this.vendors) ? this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq)) : []),
+    ];
+
+    const merged = [];
+    const indexById = new Map();
+    const indexByEmail = new Map();
+    const indexByName = new Map();
+
+    for (const rawEntry of rawLists) {
+      const entry = this._normalizeClosureVendorEntry(rawEntry);
+      if (!entry) continue;
+
+      const idKey = entry.id ? String(entry.id).trim().toLowerCase() : '';
+      const emailKey = entry.email ? String(entry.email).trim().toLowerCase() : '';
+      const nameKey = entry.name ? String(entry.name).trim().toLowerCase() : '';
+      if (!idKey && !emailKey && !nameKey) continue;
+
+      let existingIdx = idKey && indexById.has(idKey) ? indexById.get(idKey) : undefined;
+      if (existingIdx === undefined && emailKey && indexByEmail.has(emailKey)) existingIdx = indexByEmail.get(emailKey);
+      if (existingIdx === undefined && nameKey && indexByName.has(nameKey)) existingIdx = indexByName.get(nameKey);
+
+      if (existingIdx !== undefined) {
+        const current = merged[existingIdx];
+        merged[existingIdx] = {
+          ...entry,
+          ...current,
+          id: current.id || entry.id,
+          vendorId: current.vendorId || entry.vendorId,
+          email: current.email || entry.email,
+          phone: current.phone || entry.phone,
+          name: current.name || entry.name,
+          contactPerson: current.contactPerson || entry.contactPerson,
+        };
+        if (idKey && !indexById.has(idKey)) indexById.set(idKey, existingIdx);
+        if (emailKey && !indexByEmail.has(emailKey)) indexByEmail.set(emailKey, existingIdx);
+        if (nameKey && !indexByName.has(nameKey)) indexByName.set(nameKey, existingIdx);
+      } else {
+        const idx = merged.length;
+        merged.push(entry);
+        if (idKey) indexById.set(idKey, idx);
+        if (emailKey) indexByEmail.set(emailKey, idx);
+        if (nameKey) indexByName.set(nameKey, idx);
+      }
+    }
+
+    const missingDbIds = Array.from(
+      new Set(
+        merged
+          .filter((v) => v.id && (!v.email || !v.phone))
+          .map((v) => String(v.id).trim())
+      )
+    );
+
+    return { vendors: merged, missingDbIds };
+  }
+
+  _dispatchVendorClosureMessages(rfq, vendors, tracking = {}) {
+    const notifiedIds = tracking.notifiedIds || new Set();
+    const emailedKeys = tracking.emailedKeys || new Set();
+    const messagedPhones = tracking.messagedPhones || new Set();
+
+    const rfqNumber = rfq.rfqNumber || rfq.id || '';
+    const rfqTitle = rfq.title || 'Requisition';
+    const notifTitle = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_TITLE, { rfqNumber });
+    const notifMessage = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_MESSAGE, { rfqNumber, rfqTitle });
+
+    const vendorNotifs = [];
+    for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      if (!vendor) continue;
+      if (vendor.id && !notifiedIds.has(vendor.id)) {
+        notifiedIds.add(vendor.id);
+        vendorNotifs.push(
+          this._buildNotification({
+            recipientType: 'vendor',
+            recipientId: vendor.id,
+            kind: 'rfq_closed',
+            rfq,
+            title: notifTitle,
+            message: notifMessage,
+            meta: {
+              rfqNumber: rfq.rfqNumber,
+              closedReason: rfq.closedReason || null,
+              closedAt: rfq.closedAt || null,
+            },
+          })
+        );
+      }
+
+      const email = resolveVendorEmail(vendor);
+      const emailKey = email ? email.toLowerCase() : '';
+      if (emailKey && !emailedKeys.has(emailKey)) {
+        emailedKeys.add(emailKey);
+        const isBuyerUploaded = this.isBuyerUploaded(vendor);
+        this._background(
+          mailerService.sendRfqClosedVendorEmail(email, {
+            rfq,
+            recipientName: vendor.contactPerson || vendor.name,
+            vendor,
+            isBuyerUploaded,
+          }),
+          'Failed to send RFQ closed notification email to invited vendor',
+          {
+            deliveryChannel: 'email',
+            operation: 'rfq-closed-vendor-email',
+            rfqId: rfq.id,
+            rfqNumber: rfq.rfqNumber,
+            vendorId: vendor.id || null,
+          }
+        );
+      }
+
+      const rawPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      const phoneKey = rawPhone ? String(rawPhone).replace(/\D/g, '') : '';
+      if (phoneKey && phoneKey.length >= 10 && !messagedPhones.has(phoneKey)) {
+        messagedPhones.add(phoneKey);
+        const smsText = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_SMS_MESSAGE, { rfqNumber });
+        if (typeof smsService.sendActionCenterSms === 'function') {
+          this._background(
+            smsService.sendActionCenterSms({
+              mobile: rawPhone,
+              recipientName: vendor.contactPerson || vendor.name,
+              message: smsText,
+              entityType: 'rfq_closed',
+            }),
+            'Failed to send RFQ closed SMS alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+        if (typeof whatsAppService.sendRFQClosedWhatsApp === 'function') {
+          this._background(
+            whatsAppService.sendRFQClosedWhatsApp({
+              phone: rawPhone,
+              contactPerson: vendor.contactPerson || vendor.name,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+            }),
+            'Failed to send RFQ closed WhatsApp alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+      }
+    }
+
+    if (vendorNotifs.length > 0) {
+      this.notifications.unshift(...vendorNotifs);
+      this._persistNotificationBatch(vendorNotifs);
+    }
+  }
+
   notifyOfRFQClosure(rfq) {
+    if (!rfq) return;
+
+    if (rfq.rfqNumber && typeof rfqChaserScheduler.clearScheduledChasers === 'function') {
+      rfqChaserScheduler.clearScheduledChasers(rfq.rfqNumber);
+    }
+
     if (rfq.buyerAccountId) {
       const buyerNotif = this._buildNotification({
         recipientType: 'buyer',
@@ -9510,21 +9709,29 @@ class StoreService {
         this._delayedQuoteTimers.delete(rfq.id);
       }
     }
-    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
-    if (matches.length > 0) {
-      const vendorNotifs = matches.map((vendor) =>
-        this._buildNotification({
-          recipientType: 'vendor',
-          recipientId: vendor.id,
-          kind: 'rfq_closed',
-          rfq,
-          title: `RFQ Closed: ${rfq.rfqNumber}`,
-          message: `Requisition ${rfq.rfqNumber} has been closed by the buyer. Bidding is now concluded.`,
-          meta: { rfqNumber: rfq.rfqNumber },
-        })
+
+    const tracking = {
+      notifiedIds: new Set(),
+      emailedKeys: new Set(),
+      messagedPhones: new Set(),
+    };
+    const { vendors, missingDbIds } = this._resolveInvitedVendorEntries(rfq);
+    this._dispatchVendorClosureMessages(rfq, vendors, tracking);
+
+    if (
+      pool.hasStorage() &&
+      missingDbIds.length > 0 &&
+      typeof domainQueries.getVendorsByIdsFromDB === 'function'
+    ) {
+      this._background(
+        domainQueries.getVendorsByIdsFromDB(missingDbIds).then((dbVendors) => {
+          if (Array.isArray(dbVendors) && dbVendors.length > 0) {
+            this._dispatchVendorClosureMessages(rfq, dbVendors, tracking);
+          }
+        }),
+        'Failed to resolve missing invited vendor contacts for RFQ closure alert',
+        { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, missingCount: missingDbIds.length }
       );
-      this.notifications.unshift(...vendorNotifs);
-      this._persistNotificationBatch(vendorNotifs);
     }
   }
 

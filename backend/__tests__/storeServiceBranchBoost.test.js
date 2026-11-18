@@ -2810,6 +2810,97 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(reactivated).toMatchObject({ id: inactiveVendor.id, isActive: true, disabled: false });
       expect(storeService.vendorCoversRFQ(reactivated, futureOpenRfq)).toBe(true);
     });
+
+    test('notifyOfRFQClosure resolves all invited vendor formats, cancels chasers, and falls back to DB contacts', async () => {
+      const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+      storeService.notifyOfRFQClosure(null);
+
+      const clearSpy = jest.spyOn(rfqChaserScheduler, 'clearScheduledChasers').mockImplementation(() => {});
+      const sendVendorEmailSpy = jest.spyOn(mailerService, 'sendRfqClosedVendorEmail').mockResolvedValue({ sent: true });
+      const sendSmsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: true });
+      const sendWaSpy = jest.spyOn(whatsAppService, 'sendRFQClosedWhatsApp').mockResolvedValue({ success: true });
+
+      storeService.vendors = [
+        {
+          id: 'v-mem-1',
+          name: 'Memory Invited Vendor',
+          email: 'mem@vendor.test',
+          phone: '9876543201',
+          source: 'buyer_uploaded',
+        },
+      ];
+
+      const rfq = {
+        id: 'rfq-close-invited-1',
+        rfqNumber: 'RFQ-CLOSE-INV-1',
+        title: 'Heavy Valves Package',
+        sourcingMode: 'mode_1',
+        buyerAccountId: 'buyer-c-1',
+        buyerEmail: 'buyer@c.test',
+        assignedVendors: [
+          'v-mem-1',
+          'direct@string.test',
+          '  ',
+          null,
+          42,
+          { vendorId: 'v-db-only-1', name: 'DB Cold Vendor' },
+          { id: 'v-mem-1', email: 'mem@vendor.test' },
+          { email: 'mem@vendor.test', phone: '9876543201', contactPerson: 'Lead Contact' },
+          {},
+        ],
+        followUpData: {
+          vendors: [
+            { id: 'v-fup-1', vendorName: 'FollowUp Vendor', email: 'fup@vendor.test', mobile: '9876543202' },
+            { name: 'FollowUp Vendor', email: 'fup@vendor.test' },
+          ],
+        },
+        status: 'Closed',
+      };
+
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const getDbVendorsSpy = jest.spyOn(domainQueries, 'getVendorsByIdsFromDB').mockResolvedValue([
+        {
+          id: 'v-db-only-1',
+          name: 'DB Cold Vendor',
+          email: 'db-cold@vendor.test',
+          mobileNumber: '9876543203',
+          source: 'procucev_network',
+        },
+      ]);
+
+      storeService.notifyOfRFQClosure(rfq);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(clearSpy).toHaveBeenCalledWith('RFQ-CLOSE-INV-1');
+      expect(getDbVendorsSpy).toHaveBeenCalledWith(expect.arrayContaining(['v-db-only-1']));
+
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('mem@vendor.test', expect.objectContaining({ recipientName: expect.any(String) }));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('direct@string.test', expect.any(Object));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('fup@vendor.test', expect.any(Object));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('db-cold@vendor.test', expect.any(Object));
+
+      expect(sendSmsSpy).toHaveBeenCalledTimes(3);
+      expect(sendWaSpy).toHaveBeenCalledTimes(3);
+
+      const closedNotifs = storeService.notifications.filter((n) => n.recipientType === 'vendor' && n.kind === 'rfq_closed');
+      expect(closedNotifs.map((n) => n.recipientId)).toEqual(
+        expect.arrayContaining(['v-mem-1', 'v-db-only-1', 'v-fup-1'])
+      );
+
+      // Missing/empty DB vendor list and empty dispatch coverage
+      getDbVendorsSpy.mockResolvedValueOnce([]);
+      storeService.notifyOfRFQClosure({ id: 'rfq-no-inv', title: 'Empty', assignedVendors: [] });
+      storeService._dispatchVendorClosureMessages({ id: 'rfq-null-v' }, [null]);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      hasStorageSpy.mockRestore();
+      getDbVendorsSpy.mockRestore();
+      clearSpy.mockRestore();
+      sendVendorEmailSpy.mockRestore();
+      sendSmsSpy.mockRestore();
+      sendWaSpy.mockRestore();
+    });
   });
 });
 

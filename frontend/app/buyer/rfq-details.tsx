@@ -539,6 +539,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   // The day count typed in the extension dialog, and its parsed value (null while blank, fractional or out of range).
   const [extensionDaysInput, setExtensionDaysInput] = useState<string>(String(DEFAULT_EXTENSION_DAYS));
@@ -597,19 +598,29 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     await refreshFromDB();
   };
 
+  const openCloseModal = () => {
+    setCloseModalOpen(true);
+  };
+
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
       if (result.success) {
-        showToast('RFQ Closed', `RFQ ${activeRfq.rfqNumber} has been officially closed.`, 'success');
+        showToast(
+          DETAILS.closeSuccessTitle,
+          formatString(DETAILS.closeSuccessMessage, { rfqNumber: activeRfq.rfqNumber }),
+          'success'
+        );
+        setCloseModalOpen(false);
         await syncUpdatedRfq(result.rfq);
       } else {
-        throw new Error(result.error || 'Failed to close RFQ.');
+        throw new Error(result.error || DETAILS.closeFailedMessage);
       }
-    } catch (err: any) {
-      showToast('Action Failed', err?.message || 'Failed to close RFQ.', 'warning');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : DETAILS.closeFailedMessage;
+      showToast(DETAILS.closeFailedTitle, message, 'warning');
     } finally {
       setIsClosing(false);
     }
@@ -1524,12 +1535,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               !isVendor && (
               <button
                 type="button"
-                onClick={handleCloseRFQ}
+                onClick={openCloseModal}
                 disabled={isClosing}
                 className="btn btn-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-50"
-                title="Close RFQ and conclude bidding"
+                title={formatString(DETAILS.closeRfqAria, { rfqNumber: activeRfq.rfqNumber })}
               >
-                <Lock size={12} /> {isClosing ? 'Closing...' : 'Close RFQ'}
+                <Lock size={12} /> {isClosing ? DETAILS.closeRfqClosingAction : DETAILS.closeRfqAction}
               </button>
             )}
             {onEdit && (
@@ -1553,6 +1564,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       </header>
+
+      {/* Closed RFQ Banner (cannot be reopened) */}
+      {activeRfq.status === 'Closed' && !Boolean((activeRfq as any).poFinalised) && (
+        <div
+          role="status"
+          className="p-3.5 sm:p-4 rounded-xl bg-slate-100 dark:bg-gray-800/80 border border-slate-300 dark:border-gray-700 text-slate-800 dark:text-gray-200 text-xs flex items-start gap-3 shadow-xs"
+        >
+          <span className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center justify-center shrink-0">
+            <Lock size={16} />
+          </span>
+          <div>
+            <div className="font-extrabold text-sm text-slate-900 dark:text-white">
+              {DETAILS.closedPermanentBannerTitle}
+            </div>
+            <p className="text-slate-600 dark:text-gray-300 text-xs mt-0.5">
+              {isVendor ? DETAILS.closedPermanentBannerVendor : DETAILS.closedPermanentBannerBuyer}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Finalised PO Banner */}
       {(activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)) && (
@@ -3595,6 +3626,82 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         />
       )}
 
+
+      {/* Close RFQ Confirmation Modal */}
+      {closeModalOpen && activeRfq && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="close-rfq-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
+                  <Lock size={20} />
+                </div>
+                <div>
+                  <h3 id="close-rfq-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {DETAILS.closeModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {formatString(DETAILS.closeModalSubtitle, { rfqNumber: activeRfq.rfqNumber })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                aria-label={UI_STRINGS.actions.cancel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200/80 dark:border-gray-700/60 space-y-2 text-xs">
+              <div className="flex justify-between items-center gap-3">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRfqNumberLabel}</span>
+                <span className="mono font-semibold text-slate-800 dark:text-gray-200">{activeRfq.rfqNumber}</span>
+              </div>
+              <div className="flex justify-between items-center gap-3 pt-2 border-t border-slate-200 dark:border-gray-700">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRequirementLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-gray-200 truncate text-right">{activeRfq.title}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-rose-50/90 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 leading-relaxed">
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+              <div className="space-y-0.5">
+                <p className="font-bold">{DETAILS.closeModalWarningTitle}</p>
+                <p>{DETAILS.closeModalWarningBody}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="btn btn-ghost btn-sm text-xs font-semibold"
+              >
+                {UI_STRINGS.actions.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseRFQ}
+                disabled={isClosing}
+                className="btn btn-sm text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Lock size={12} />
+                <span>{isClosing ? DETAILS.closeModalConfirmingAction : DETAILS.closeModalConfirmAction}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Extend RFQ Modal */}
       {extendModalOpen && activeRfq && (

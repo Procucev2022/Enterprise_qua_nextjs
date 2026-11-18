@@ -6287,3 +6287,10 @@ Why it is showing 10 total empanelled and 1 ocr &360 for the first time addition
 This functionality should come as popup for the new buyer only. after buyer uploaded their vendor. Again this buyer vendor master functionaliy should not come instead it should come as a add vendor bulk feature with required columns
 ```
 ---
+
+### Prompt 268
+**Timestamp**: 2026-11-17T21:09:07+05:30
+```text
+When we click the close rfq button, it should show warning "after close not able to open again" and if the buyer closes the RFQ, the rfq close message should go to all invited vendors for that rfq.
+```
+---

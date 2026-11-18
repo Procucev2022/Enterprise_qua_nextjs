@@ -1192,6 +1192,29 @@ export const UI_STRINGS = {
     alreadyExtendedTooltip: 'A one-time extension of {duration} has already been applied to this RFQ.',
     revisedDeadlineNote: 'One-time extension applied',
 
+    // Close RFQ confirmation modal and permanent-closure notices
+    closeRfqAction: 'Close RFQ',
+    closeRfqAria: 'Close RFQ {rfqNumber} and conclude bidding',
+    closeRfqClosingAction: 'Closing…',
+    closeModalTitle: 'Close RFQ',
+    closeModalSubtitle: 'Conclude bidding and close {rfqNumber}.',
+    closeModalWarningTitle: 'Warning: Cannot Be Reopened',
+    closeModalWarningBody:
+      'After close, you will not be able to open this RFQ again. Bidding will permanently conclude and the RFQ close message will be sent to all invited vendors.',
+    closeModalRfqNumberLabel: 'RFQ Number',
+    closeModalRequirementLabel: 'Requirement',
+    closeModalConfirmAction: 'Confirm Close RFQ',
+    closeModalConfirmingAction: 'Closing RFQ…',
+    closeSuccessTitle: 'RFQ Closed',
+    closeSuccessMessage: 'RFQ {rfqNumber} has been officially closed and all invited vendors have been notified.',
+    closeFailedTitle: 'Action Failed',
+    closeFailedMessage: 'Failed to close RFQ.',
+    closedPermanentBannerTitle: 'RFQ Closed',
+    closedPermanentBannerBuyer:
+      'This RFQ has been closed and cannot be opened again. All invited vendors have received the RFQ close message.',
+    closedPermanentBannerVendor:
+      'This RFQ has been closed by the buyer and cannot be reopened. Bidding has concluded and no further quotations are accepted.',
+
     // Vendor clarifications and buyer replies. A message counts as sent only after the server confirms it.
     clarificationSentTitle: 'Clarification Sent',
     clarificationSentToBuyer: 'Your query has been dispatched to the procurement officer.',
@@ -1571,6 +1594,7 @@ export const UI_STRINGS = {
     titleLabel: 'RFQ Title',
     categoryLabel: 'RFQ Division',
     statusLabel: 'Status',
+    closedStatusLockedNote: 'After close, this RFQ cannot be opened again.',
     budgetLabel: 'Estimated Budget ({symbol})',
     targetDateLabel: 'Target Delivery Date',
     deliveryLocationLabel: 'Delivery Location',

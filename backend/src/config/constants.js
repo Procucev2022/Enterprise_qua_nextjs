@@ -346,6 +346,16 @@ const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
 const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
 const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
 const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_CLOSURE_MESSAGES = Object.freeze({
+  REOPEN_FORBIDDEN: 'After close, this RFQ cannot be opened again.',
+  BUYER_CLOSE_REASON: 'Closed by buyer',
+  CM_CLOSE_REASON: 'Closed by procurement team',
+  VENDOR_NOTIFICATION_TITLE: 'RFQ Closed: {rfqNumber}',
+  VENDOR_NOTIFICATION_MESSAGE: 'Requisition {rfqNumber} ({rfqTitle}) has been closed by the buyer. Bidding is now concluded and no further quotations will be accepted.',
+  VENDOR_EMAIL_SUBJECT: 'RFQ Closed: {rfqNumber}',
+  VENDOR_SMS_MESSAGE: 'RFQ {rfqNumber} is closed by the buyer. Bidding is concluded.',
+  VENDOR_WHATSAPP_MESSAGE: 'Update on RFQ {rfqNumber} ({rfqTitle}): This RFQ has been closed by the buyer. Bidding is now concluded and no further quotations are needed.',
+});
 const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
 const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
 const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
@@ -4358,6 +4368,7 @@ module.exports = {
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
   RFQ_AUTO_CLOSE_REASON,
+  RFQ_CLOSURE_MESSAGES,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,

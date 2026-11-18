@@ -1893,6 +1893,59 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       expect(res.statusCode).toBe(200);
       expect(res.body.data.title).toBe('Mechanical Spares Procurement');
     });
+
+    test('closes an RFQ for a buyer, notifies all invited vendors, and prevents reopening after close', async () => {
+      const mailerService = require('../src/services/mailerService');
+      const { RFQ_CLOSURE_MESSAGES } = require('../src/config/constants');
+      const rfq = await createOwnRFQ({
+        sourcingMode: 'mode_1',
+        assignedVendors: [
+          { id: 'v-inv-1', name: 'Invited Supplier A', email: 'invited-a@test.com', phone: '9876500001' },
+          { id: 'v-inv-2', name: 'Invited Supplier B', email: 'invited-b@test.com', phone: '9876500002' },
+        ],
+      });
+      const emailSpy = jest.spyOn(mailerService, 'sendRfqClosedVendorEmail').mockResolvedValue({ sent: true });
+
+      const closeRes = await request(app)
+        .put(`/api/rfqs/${rfq.id}`)
+        .set(authHeader('buyer'))
+        .send({ status: 'Closed' });
+
+      expect(closeRes.statusCode).toBe(200);
+      expect(closeRes.body.data.status).toBe('Closed');
+      expect(closeRes.body.data.closedByRole).toBe('buyer');
+      expect(closeRes.body.data.closedReason).toBe(RFQ_CLOSURE_MESSAGES.BUYER_CLOSE_REASON);
+      expect(closeRes.body.data.closedAt).toBeTruthy();
+
+      await new Promise((resolve) => setImmediate(resolve));
+      expect(emailSpy).toHaveBeenCalledWith('invited-a@test.com', expect.objectContaining({ rfq: expect.objectContaining({ id: rfq.id }) }));
+      expect(emailSpy).toHaveBeenCalledWith('invited-b@test.com', expect.objectContaining({ rfq: expect.objectContaining({ id: rfq.id }) }));
+      expect(storeService.notifications.some((n) => n.recipientType === 'vendor' && n.recipientId === 'v-inv-1' && n.kind === 'rfq_closed')).toBe(true);
+      expect(storeService.notifications.some((n) => n.recipientType === 'vendor' && n.recipientId === 'v-inv-2' && n.kind === 'rfq_closed')).toBe(true);
+
+      // Reopening after close is rejected with HTTP 400
+      const reopenRes = await request(app)
+        .put(`/api/rfqs/${rfq.id}`)
+        .set(authHeader('buyer'))
+        .send({ status: 'Quotes Pending' });
+
+      expect(reopenRes.statusCode).toBe(400);
+      expect(reopenRes.body.success).toBe(false);
+      expect(reopenRes.body.error).toBe(RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN);
+      expect(reopenRes.body.fieldErrors).toEqual({ status: RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN });
+      expect(storeService.getRFQById(rfq.id).status).toBe('Closed');
+
+      // Closing idempotently or by category_manager records CM close metadata
+      const cmRfq = await createOwnRFQ({ title: 'CM Close RFQ' });
+      const cmCloseRes = await request(app)
+        .put(`/api/rfqs/${cmRfq.id}`)
+        .set(authHeader('category_manager'))
+        .send({ status: 'Closed' });
+      expect(cmCloseRes.statusCode).toBe(200);
+      expect(cmCloseRes.body.data.closedReason).toBe(RFQ_CLOSURE_MESSAGES.CM_CLOSE_REASON);
+
+      emailSpy.mockRestore();
+    });
   });
 
   describe('DELETE /api/rfqs/:id', () => {
