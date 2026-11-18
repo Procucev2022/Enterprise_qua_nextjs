@@ -2450,24 +2450,42 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   ): Promise<boolean> => {
     if (!Array.isArray(vendorIds) || vendorIds.length === 0) return false;
     const extraVendors = Array.isArray(targetVendors) ? targetVendors : [];
-    const hintPayload = vendorIds.map((rawId) => {
-      const { matchedVendor, syntheticHints } = resolveVendorMutationTarget(
+    const targetResolutions = vendorIds.map((rawId) => {
+      const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(
         rawId,
         extraVendors.find((item) => item?.id === rawId)
       );
-      return {
-        id: rawId,
-        ...(matchedVendor ? { vendorName: matchedVendor.name, vendorEmail: matchedVendor.email, vendorCode: matchedVendor.vendorCode } : {}),
-        ...syntheticHints,
-      };
+      return { rawId, targetVendorId, matchedVendor, syntheticHints };
     });
+
+    const requestVendorIds = Array.from(
+      new Set(targetResolutions.map((item) => item.targetVendorId).filter(Boolean))
+    );
+
+    const hintByTargetId = new Map<string, Record<string, unknown>>();
+    for (const item of targetResolutions) {
+      if (!hintByTargetId.has(item.targetVendorId)) {
+        hintByTargetId.set(item.targetVendorId, {
+          id: item.targetVendorId,
+          ...(item.matchedVendor
+            ? {
+                vendorName: item.matchedVendor.name,
+                vendorEmail: item.matchedVendor.email,
+                vendorCode: item.matchedVendor.vendorCode,
+              }
+            : {}),
+          ...item.syntheticHints,
+        });
+      }
+    }
+    const hintPayload = Array.from(hintByTargetId.values());
 
     let res: Response;
     try {
       res = await fetch('/api/vendors/bulk-status', {
         method: 'POST',
         headers: authFetchHeaders(),
-        body: JSON.stringify({ vendorIds, isActive, vendors: hintPayload }),
+        body: JSON.stringify({ vendorIds: requestVendorIds, isActive, vendors: hintPayload }),
       });
     } catch (err) {
       logger.log('ERROR', 'Failed to sync bulk vendor status update to backend', { error: err, isActive }, 'VENDOR_PROFILE');
@@ -2478,7 +2496,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.success) {
       logApiResponseFailure('Bulk vendor active status update request failed', res, 'VENDOR_PROFILE', {
-        requestedCount: vendorIds.length,
+        requestedCount: requestVendorIds.length,
         isActive,
         responseError: json?.error,
       });
@@ -2490,62 +2508,203 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
 
+    const hasExplicitUpdatedIds = Array.isArray(json.updatedIds);
+    const hasExplicitUpdatedCount = typeof json.updatedCount === 'number';
     const updatedRows: Partial<VendorEntry>[] = Array.isArray(json.data) ? json.data : [];
-    const updatedIds: string[] = Array.isArray(json.updatedIds) ? json.updatedIds : [];
-    const skippedIds: string[] = Array.isArray(json.skippedIds) ? json.skippedIds : [];
-    const skippedSet = new Set(skippedIds);
-    const affectedIds = updatedIds.length > 0 ? updatedIds : vendorIds.filter((id) => !skippedSet.has(id));
-    const affectedSet = new Set([...affectedIds, ...vendorIds.filter((id) => !skippedSet.has(id))]);
-    const updatedByEmail = new Map<string, Partial<VendorEntry>>();
+    const updatedIds: string[] = hasExplicitUpdatedIds ? json.updatedIds : [];
+    const skippedSet = new Set<string>(Array.isArray(json.skippedIds) ? json.skippedIds : []);
+    const idMappings: Record<string, string> =
+      json.idMappings && typeof json.idMappings === 'object' ? json.idMappings : {};
+
+    const mappedUpdatedTargets = Object.entries(idMappings)
+      .filter(([, persistedId]) => Boolean(persistedId))
+      .map(([requestedId]) => requestedId);
+    const fallbackUnskippedIds = requestVendorIds.filter((id) => !skippedSet.has(id));
+    const hasZeroUpdates =
+      json.updatedCount === 0 ||
+      (hasExplicitUpdatedIds && updatedIds.length === 0 && updatedRows.length === 0);
+
+    if (hasZeroUpdates) {
+      logger.log(
+        'WARN',
+        'Bulk vendor active status update returned zero updated vendors',
+        { requestedCount: requestVendorIds.length, skippedIds: Array.from(skippedSet), isActive },
+        'VENDOR_PROFILE'
+      );
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.bulkUpdateNoneUpdatedMessage,
+        'warning'
+      );
+      return false;
+    }
+
     const updatedById = new Map<string, Partial<VendorEntry>>();
+    const updatedByEmail = new Map<string, Partial<VendorEntry>>();
+    const updatedByMasterId = new Map<string, Partial<VendorEntry>>();
     updatedRows.forEach((row) => {
       if (row.id) updatedById.set(row.id, row);
       if (row.email) updatedByEmail.set(row.email.trim().toLowerCase(), row);
+      if (row.masterRecordId) {
+        const masterKey = String(row.masterRecordId);
+        updatedByMasterId.set(masterKey, row);
+        updatedById.set(`v-master-${masterKey}`, row);
+      }
+    });
+    Object.entries(idMappings).forEach(([requestedId, persistedId]) => {
+      const matchedRow = updatedById.get(persistedId);
+      if (matchedRow) updatedById.set(requestedId, matchedRow);
     });
 
-    const matchedVendors = buyerVendors.filter((v) => affectedSet.has(v.id) || (v.email && affectedSet.has(v.email)));
+    const unskippedResolutions = targetResolutions.filter(
+      (item) => !skippedSet.has(item.targetVendorId) && !skippedSet.has(item.rawId)
+    );
+    const updatedIdSet = new Set(updatedIds);
+    const confirmedResolutions = hasExplicitUpdatedIds && updatedIds.length > 0
+      ? unskippedResolutions.filter((item) =>
+          [idMappings[item.targetVendorId], idMappings[item.rawId], item.targetVendorId, item.rawId].some(
+            (cand) => Boolean(cand && updatedIdSet.has(cand))
+          ) ||
+          (item.matchedVendor?.email && updatedByEmail.has(item.matchedVendor.email.trim().toLowerCase())) ||
+          (item.rawId.startsWith('v-master-') && updatedByMasterId.has(item.rawId.slice('v-master-'.length)))
+        )
+      : unskippedResolutions;
+
+    const affectedIds = updatedIds.length > 0
+      ? Array.from(new Set([...updatedIds, ...mappedUpdatedTargets]))
+      : fallbackUnskippedIds;
+    const affectedSet = new Set([
+      ...affectedIds,
+      ...confirmedResolutions.flatMap((item) => [item.targetVendorId, item.rawId]),
+    ]);
+
+    const findMatchingUpdatedRow = (vendor: Partial<VendorEntry>): Partial<VendorEntry> | undefined => {
+      const vMasterSuffix =
+        typeof vendor.id === 'string' && vendor.id.startsWith('v-master-')
+          ? vendor.id.slice('v-master-'.length)
+          : vendor.masterRecordId
+            ? String(vendor.masterRecordId)
+            : '';
+      return (
+        (vendor.id ? updatedById.get(vendor.id) : undefined) ||
+        (vMasterSuffix ? updatedByMasterId.get(vMasterSuffix) : undefined) ||
+        (vendor.email ? updatedByEmail.get(vendor.email.trim().toLowerCase()) : undefined)
+      );
+    };
+
+    const syncedVendorsFromResolutions = confirmedResolutions
+      .map((item) => item.matchedVendor)
+      .filter((v): v is Partial<VendorEntry> => Boolean(v));
+    const matchedVendors = buyerVendors.filter(
+      (v) =>
+        Boolean(findMatchingUpdatedRow(v)) ||
+        affectedSet.has(v.id) ||
+        Boolean(v.email && affectedSet.has(v.email))
+    );
     const identifiersToSync = Array.from(
       new Set(
         [
           ...affectedIds,
-          ...[...matchedVendors, ...updatedRows, ...extraVendors].flatMap((v) => [v.id, v.email, v.name]),
+          ...[...matchedVendors, ...updatedRows, ...syncedVendorsFromResolutions].flatMap((v) => [
+            v.id,
+            v.email,
+            v.name,
+            v.masterRecordId ? `v-master-${v.masterRecordId}` : '',
+          ]),
         ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
       )
     );
     setVendorsActiveStateInStorage(identifiersToSync, isActive);
 
+    const buildActiveEntry = (base: Partial<VendorEntry>, patch: Partial<VendorEntry>, resolvedId: string): VendorEntry => {
+      const nextStatus = isActive
+        ? (patch.status || base.previousStatus || 'REGISTERED / NOT EVALUATED')
+        : VENDOR_ACTIVE_STATUSES.INACTIVE;
+      return {
+        ...base,
+        ...patch,
+        id: resolvedId,
+        isActive,
+        disabled: !isActive,
+        status: nextStatus as VendorEntry['status'],
+      } as VendorEntry;
+    };
+
     setBuyerVendors((prev) => {
+      const matchedRowIds = new Set<string>();
       const next = prev.map((v) => {
-        const directMatch = updatedById.get(v.id) || (v.email ? updatedByEmail.get(v.email.trim().toLowerCase()) : undefined);
-        const isTargeted = Boolean(directMatch) || affectedSet.has(v.id) || (v.email ? affectedSet.has(v.email) : false);
+        const directMatch = findMatchingUpdatedRow(v);
+        const isTargeted =
+          Boolean(directMatch) || affectedSet.has(v.id) || Boolean(v.email && affectedSet.has(v.email));
         if (!isTargeted) return v;
-        return {
-          ...v,
-          ...(directMatch || {}),
-          isActive,
-          disabled: !isActive,
-          status: (isActive
-            ? (directMatch?.status || v.previousStatus || 'REGISTERED / NOT EVALUATED')
-            : VENDOR_ACTIVE_STATUSES.INACTIVE) as VendorEntry['status'],
-        };
+        if (directMatch?.id) matchedRowIds.add(directMatch.id);
+        return buildActiveEntry(v, directMatch || {}, directMatch?.id || v.id);
       });
-      setSessionCache('vendors', next);
-      return next;
+
+      const seenIds = new Set(next.map((v) => v.id).filter(Boolean));
+      const seenEmails = new Set(
+        next.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
+      );
+      const additions: VendorEntry[] = [];
+      const pushIfMissing = (entry: VendorEntry) => {
+        const entryEmail = String(entry.email || '').trim().toLowerCase();
+        if (
+          matchedRowIds.has(entry.id) ||
+          seenIds.has(entry.id) ||
+          (entryEmail && seenEmails.has(entryEmail))
+        ) {
+          return;
+        }
+        seenIds.add(entry.id);
+        if (entryEmail) seenEmails.add(entryEmail);
+        additions.push(entry);
+      };
+
+      for (const row of updatedRows) {
+        const rowId = String(row.id || '');
+        const rowEmail = String(row.email || '').trim().toLowerCase();
+        const sourceResolution = confirmedResolutions.find(
+          (item) =>
+            item.targetVendorId === rowId ||
+            item.rawId === rowId ||
+            (rowEmail && String(item.matchedVendor?.email || '').trim().toLowerCase() === rowEmail) ||
+            (row.masterRecordId && item.rawId === `v-master-${row.masterRecordId}`)
+        );
+        const targetId = rowId || sourceResolution?.targetVendorId || '';
+        pushIfMissing(buildActiveEntry(sourceResolution?.matchedVendor || {}, row, targetId));
+      }
+
+      for (const item of confirmedResolutions) {
+        if (!item.matchedVendor) continue;
+        const resolvedId = idMappings[item.targetVendorId] || idMappings[item.rawId] || item.targetVendorId;
+        if (seenIds.has(resolvedId) || seenIds.has(item.rawId)) continue;
+        pushIfMissing(buildActiveEntry(item.matchedVendor, {}, resolvedId));
+      }
+
+      const combined = additions.length > 0 ? [...additions, ...next] : next;
+      setSessionCache('vendors', combined);
+      return combined;
     });
 
-    const changedCount = updatedIds.length || affectedIds.length;
+    const changedCount = updatedIds.length || fallbackUnskippedIds.length;
     void addAuditLog(
       isActive
         ? `Reactivated ${changedCount} buyer vendor(s) for future sourcing workflows.`
         : `Marked ${changedCount} buyer vendor(s) INACTIVE (historical data preserved; excluded from future RFQs).`
     );
+    const hasPartialSkips = skippedSet.size > 0 && hasExplicitUpdatedCount;
     showToast(
       UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
-      formatString(
-        isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
-        { count: changedCount }
-      ),
-      isActive ? 'success' : 'info'
+      hasPartialSkips
+        ? formatString(UI_STRINGS.vendorStatusControl.bulkPartialUpdateToast, {
+            updatedCount: changedCount,
+            skippedCount: skippedSet.size,
+          })
+        : formatString(
+            isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
+            { count: changedCount }
+          ),
+      hasPartialSkips ? 'warning' : isActive ? 'success' : 'info'
     );
     return true;
   };

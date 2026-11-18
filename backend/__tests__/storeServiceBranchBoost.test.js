@@ -2901,6 +2901,58 @@ describe('storeService comprehensive branch boost tests', () => {
       sendSmsSpy.mockRestore();
       sendWaSpy.mockRestore();
     });
+
+    test('getVendorByIdWithDBFallback resolves promoted masterRecordId vendors from DB and supports preloaded bulk status options', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const promoted = {
+        id: 'v-ingest-boost-1',
+        masterRecordId: 'vmr-boost-1',
+        name: 'Boost Master Vendor',
+        email: 'boostmaster@test.in',
+        buyerId: 'buyer-boost-1',
+        status: 'REGISTERED / NOT EVALUATED',
+      };
+      storeService.vendors = [promoted];
+      const byIdSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (lookupId) => {
+        if (lookupId === 'v-ingest-boost-1') return promoted;
+        return null;
+      });
+      const byEmailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+      const resolved = await storeService.getVendorByIdWithDBFallback('v-master-vmr-boost-1', 'buyer-boost-1', { fresh: true });
+      expect(resolved).toMatchObject({ id: 'v-ingest-boost-1', masterRecordId: 'vmr-boost-1' });
+      expect(byIdSpy).toHaveBeenCalledWith('v-ingest-boost-1', { fresh: true });
+
+      const nonFresh = await storeService.getVendorByIdWithDBFallback('v-master-vmr-boost-1', 'buyer-boost-1', { fresh: false });
+      expect(nonFresh).toMatchObject({ id: 'v-ingest-boost-1' });
+
+      const snapSpy = jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockResolvedValue({
+        id: promoted.id,
+        vendor: promoted,
+        raw: JSON.stringify(promoted),
+      });
+      const updSnapSpy = jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockResolvedValue({
+        ...promoted,
+        isActive: false,
+        disabled: true,
+        status: 'INACTIVE',
+      });
+      const auditCountBefore = storeService.auditLogs.length;
+      const updatedPreloaded = await storeService.updateVendorActiveStatusDurably(
+        promoted.id,
+        false,
+        'buyer@boost.in',
+        { preloadedVendor: promoted, skipAuditLog: true }
+      );
+      expect(updatedPreloaded).toMatchObject({ id: promoted.id, isActive: false, status: 'INACTIVE' });
+      expect(storeService.auditLogs.length).toBe(auditCountBefore);
+
+      snapSpy.mockRestore();
+      updSnapSpy.mockRestore();
+      byIdSpy.mockRestore();
+      byEmailSpy.mockRestore();
+      hasStorageSpy.mockRestore();
+    });
   });
 });
 

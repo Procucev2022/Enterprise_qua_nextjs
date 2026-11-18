@@ -3,7 +3,7 @@ import { render, screen, act, waitFor, fireEvent } from '@testing-library/react'
 import { AppProvider, useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount, VendorEvaluationRecord, ExtractedEntity } from '@/lib/types';
 import type { UserSession } from '@/lib/types';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { STORE_MESSAGES } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -3920,6 +3920,196 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         });
         expect(ctx().buyerVendors.some((v: any) => v.id === 'v-master-syn-tog-rec' && v.isActive === false)).toBe(true);
         expect(ctx().buyerVendors.find((v: any) => v.id === 'v-tog-2')?.isActive).toBe(true);
+      } finally {
+        localStorage.removeItem('procucev_vendor_upload_history');
+      }
+    });
+
+    it('bulk inactive handles zero-updated responses as failures, reconciles promoted IDs, and avoids mutating skipped/unselected vendors', async () => {
+      let ctx!: () => ReturnType<typeof useApp>;
+      const Harness = () => {
+        const value = useApp();
+        ctx = () => value;
+        return null;
+      };
+
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/rfqs' || url === '/api/rfqs?limit=500') {
+          return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: [] }) });
+        }
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({
+              success: true,
+              data: { id: `v-keep-${body.vendorCode || Date.now()}`, ...body, buyerId: 'buyer-bulk-rec-1' },
+            }),
+          });
+        }
+        if (url === '/api/vendors/bulk-status' && init?.method === 'POST') {
+          const body = JSON.parse(init.body || '{}');
+          if (body.vendorIds.includes('v-zero-case')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                updatedCount: 0,
+                updatedIds: [],
+                skippedIds: ['v-zero-case'],
+                data: [],
+              }),
+            });
+          }
+          if (body.vendorIds.includes('v-master-rec-bulk-1')) {
+            return Promise.resolve({
+              ok: true,
+              status: 200,
+              json: async () => ({
+                success: true,
+                updatedCount: 2,
+                updatedIds: ['v-ingest-promoted-bulk-1', 'v-ingest-hist-bulk-2'],
+                idMappings: {
+                  'v-master-rec-bulk-1': 'v-ingest-promoted-bulk-1',
+                  'v-hist-local-batch-0': 'v-ingest-hist-bulk-2',
+                },
+                skippedIds: ['v-unskipped-missing-check'],
+                data: [
+                  {
+                    id: 'v-ingest-promoted-bulk-1',
+                    masterRecordId: 'rec-bulk-1',
+                    name: 'Master Promoted Without Email',
+                    isActive: false,
+                    disabled: true,
+                    status: 'INACTIVE',
+                  },
+                  {
+                    id: 'v-ingest-hist-bulk-2',
+                    name: 'Local History Promoted',
+                    email: 'histbulk@vendor.test',
+                    isActive: false,
+                    disabled: true,
+                    status: 'INACTIVE',
+                  },
+                ],
+              }),
+            });
+          }
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              updatedCount: 1,
+              updatedIds: ['v-keep-B1'],
+              idMappings: { 'v-keep-B1': 'v-keep-B1' },
+              skippedIds: ['v-keep-B2'],
+              data: [
+                {
+                  id: 'v-keep-B1',
+                  name: 'Bulk One',
+                  email: 'bulk1@vendor.test',
+                  isActive: false,
+                  disabled: true,
+                  status: 'INACTIVE',
+                },
+              ],
+            }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-bulk-1',
+            records: [
+              { id: 'hist-b1', vendorName: 'Bulk One', email: 'bulk1@vendor.test', category: 'IT' },
+              { id: 'hist-b2', vendorName: 'Bulk Two', email: 'bulk2@vendor.test', category: 'IT' },
+            ],
+          },
+        ])
+      );
+
+      render(
+        <AppProvider>
+          <Harness />
+        </AppProvider>
+      );
+
+      try {
+        await act(async () => {
+          await ctx().addBuyerVendor({ name: 'Bulk One', email: 'bulk1@vendor.test', vendorCode: 'B1', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'buyer_manual' } as any);
+          await ctx().addBuyerVendor({ name: 'Bulk Two', email: 'bulk2@vendor.test', vendorCode: 'B2', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'buyer_manual' } as any);
+        });
+
+        // 1. Server returns HTTP 200 with updatedCount: 0 -> returns false and leaves storage/state clean
+        let zeroResult = true;
+        await act(async () => {
+          zeroResult = await ctx().setMultipleBuyerVendorsActiveStatus(['v-zero-case'], false);
+        });
+        expect(zeroResult).toBe(false);
+        expect(ctx().toastMessage).toMatchObject({
+          title: UI_STRINGS.vendorStatusControl.updateFailedTitle,
+          description: UI_STRINGS.vendorStatusControl.bulkUpdateNoneUpdatedMessage,
+        });
+
+        // 2. Partial skip: updated B1, skipped B2 -> only B1 becomes inactive in buyerVendors & localStorage
+        let partialOk = false;
+        await act(async () => {
+          partialOk = await ctx().setMultipleBuyerVendorsActiveStatus(['v-keep-B1', 'v-keep-B2'], false);
+        });
+        expect(partialOk).toBe(true);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-keep-B1')?.isActive).toBe(false);
+        expect(ctx().buyerVendors.find((v: any) => v.id === 'v-keep-B2')?.isActive).not.toBe(false);
+        const histAfterPartial = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+        expect(histAfterPartial[0].records[0].isActive).toBe(false);
+        expect(histAfterPartial[0].records[1].isActive).toBeUndefined();
+        expect(ctx().toastMessage).toMatchObject({
+          description: formatString(UI_STRINGS.vendorStatusControl.bulkPartialUpdateToast, {
+            updatedCount: 1,
+            skippedCount: 1,
+          }),
+        });
+
+        // 3. Promoted synthetic master/history rows absent from buyerVendors are added with persisted server IDs
+        let promotedOk = false;
+        await act(async () => {
+          promotedOk = await ctx().setMultipleBuyerVendorsActiveStatus(
+            ['v-master-rec-bulk-1', 'v-hist-local-batch-0', 'v-unskipped-missing-check'],
+            false,
+            [
+              { id: 'v-master-rec-bulk-1', name: 'Master Promoted Without Email', source: 'vendor_master_ingestion' },
+              { id: 'v-hist-local-batch-0', name: 'Local History Promoted', email: 'histbulk@vendor.test', source: 'buyer_uploaded' },
+            ]
+          );
+        });
+        expect(promotedOk).toBe(true);
+        expect(ctx().buyerVendors.some((v: any) => v.id === 'v-ingest-promoted-bulk-1' && v.isActive === false)).toBe(true);
+        expect(ctx().buyerVendors.some((v: any) => v.id === 'v-ingest-hist-bulk-2' && v.isActive === false)).toBe(true);
+
+        // 4. Bulk reactivate missing local vendor when backend omits data array (confirmedResolutions fallback)
+        mockFetch.mockImplementationOnce(() =>
+          Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, skippedIds: [] }) })
+        );
+        let fallbackReactivate = false;
+        await act(async () => {
+          fallbackReactivate = await ctx().setMultipleBuyerVendorsActiveStatus(
+            ['v-hist-local-fallback-only'],
+            true,
+            [{ id: 'v-hist-local-fallback-only', name: 'Omitted Data Co', email: 'omitted-bulk@vendor.test', previousStatus: 'PREFERRED ENTERPRISE SUPPLIER' }]
+          );
+        });
+        expect(fallbackReactivate).toBe(true);
+        expect(
+          ctx().buyerVendors.some(
+            (v: any) => v.id === 'v-hist-local-fallback-only' && v.isActive === true && v.status === 'PREFERRED ENTERPRISE SUPPLIER'
+          )
+        ).toBe(true);
       } finally {
         localStorage.removeItem('procucev_vendor_upload_history');
       }

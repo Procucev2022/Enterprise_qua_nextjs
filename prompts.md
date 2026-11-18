@@ -6348,3 +6348,18 @@ Buyer Vendor data upload and mapping discrepancies
 4. We noted that duplicate vendor entries distort total uploaded counts and require better duplicate removal handling.
 ```
 ---
+
+### Prompt 275
+**Timestamp**: 2026-11-18T10:47:30+05:30
+```text
+On the Buyer side, the Vendor Directory page is displaying vendor data correctly. However, when I select multiple vendors and try to mark them as *Inactive using the bulk action*, nothing happens.
+
+Please investigate and fix the bulk inactive functionality. Ensure that:
+1. Selected vendors are successfully marked as Inactive.
+2. The status is updated correctly in the database.
+3. The updated status is reflected immediately in the Vendor Directory UI.
+4. Bulk inactive works correctly for all selected vendors without affecting other vendors.
+
+Please identify and fix the root cause rather than applying a temporary workaround.
+```
+---

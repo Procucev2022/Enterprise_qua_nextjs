@@ -545,7 +545,24 @@ function mapRowToVendorMaster(row) {
     pincode: loc.pincode,
     gstin: text(row.gstin),
     rating: numeric(row.rating),
-    ...(rawMeta.isActive === false ? { isActive: false, disabled: true, status: rawMeta.status || 'INACTIVE' } : {}),
+    ...(rawMeta.isActive === false || rawMeta.disabled === true || String(rawMeta.status || '').trim().toUpperCase() === 'INACTIVE'
+      ? {
+          isActive: false,
+          disabled: true,
+          status: rawMeta.status || 'INACTIVE',
+          ...(rawMeta.previousStatus !== undefined ? { previousStatus: rawMeta.previousStatus } : {}),
+          ...(rawMeta.disabledAt !== undefined ? { disabledAt: rawMeta.disabledAt } : {}),
+          ...(rawMeta.disabledBy !== undefined ? { disabledBy: rawMeta.disabledBy } : {}),
+        }
+      : rawMeta.isActive === true
+        ? {
+            isActive: true,
+            disabled: false,
+            ...(rawMeta.status ? { status: rawMeta.status } : {}),
+            ...(rawMeta.reactivatedAt !== undefined ? { reactivatedAt: rawMeta.reactivatedAt } : {}),
+            ...(rawMeta.reactivatedBy !== undefined ? { reactivatedBy: rawMeta.reactivatedBy } : {}),
+          }
+        : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -718,6 +735,39 @@ async function findVendorMasterRecord(recordId, organizationId) {
     { d1: true }
   );
   return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
+}
+
+/** Persist active/inactive lifecycle metadata onto an org-scoped vendor-master record. */
+async function updateVendorMasterRecordActiveStatus(recordId, organizationId, statusUpdates = {}) {
+  if (!pool.hasStorage() || !recordId || !organizationId) return null;
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where id = $1 and organization_id = $2 limit 1`,
+    [recordId, organizationId],
+    { d1: true }
+  );
+  if (!rows || rows.length === 0) return null;
+  const existingRaw = parseRawRecord(rows[0].raw);
+  const mergedRaw = {
+    ...existingRaw,
+    ...(statusUpdates && typeof statusUpdates === 'object' ? statusUpdates : {}),
+  };
+  const result = await pool.query(
+    `update vendor_master_records
+        set raw = $3::jsonb,
+            updated_at = now()
+      where id = $1 and organization_id = $2
+      returning *`,
+    [recordId, organizationId, JSON.stringify(mergedRaw)],
+    {
+      d1: true,
+      d1Text: `update vendor_master_records
+          set raw = $3,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        where id = $1 and organization_id = $2
+        returning *`,
+    }
+  );
+  return result.rows[0] ? mapRowToVendorMaster(result.rows[0]) : null;
 }
 
 async function countVendorMasterRecords(sessionId, organizationId) {
@@ -2444,6 +2494,7 @@ module.exports = {
   bulkUpsertVendorMasterRecords,
   findVendorMasterRecords,
   findVendorMasterRecord,
+  updateVendorMasterRecordActiveStatus,
   countVendorMasterRecords,
   deleteVendorMasterRecords,
   deleteVendorMasterRecordsByIdsOrEmails,

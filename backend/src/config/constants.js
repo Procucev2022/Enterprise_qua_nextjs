@@ -3676,6 +3676,9 @@ const VENDOR_STATUS_MESSAGES = Object.freeze({
   INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
   MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
   MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+  BULK_NO_VENDORS_UPDATED: 'None of the selected vendors could be updated. Please verify your roster permissions or refresh the directory.',
+  BULK_OWNERSHIP_DENIED: 'You do not have permission to change the status of the selected vendor(s).',
+  BULK_VENDOR_NOT_FOUND: 'Selected vendor record(s) could not be found in storage. Please refresh and retry.',
 });
 
 /** Returns true when a vendor record has been disabled / marked inactive. */

@@ -59,7 +59,34 @@ const vendorPresenceService = require('../services/vendorPresenceService');
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-async function checkVendorOwnership(user, vendorOrEmail) {
+async function buildBuyerOwnershipContext(user) {
+  const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
+  const resolvedOrgId = await resolveBuyerOrgIdForScope(user, buyerAccount);
+  const buyerScope = buyerScopeIdsFor(user, buyerAccount, resolvedOrgId);
+  const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+  const scopeSet = new Set(
+    [...buyerScope, buyerAccount?.email]
+      .map((id) => String(id || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const sId = buyerId ? String(buyerId).toLowerCase() : '';
+  const uEmail = user.email ? String(user.email).toLowerCase() : '';
+  const orgName = String(buyerAccount?.organizationName || user.orgName || '').trim().toLowerCase();
+  const buyerCompany = buyerAccount?.organizationName || user.orgName || user.name || 'Buyer';
+  return {
+    buyerAccount,
+    resolvedOrgId,
+    buyerScope,
+    buyerCompany,
+    buyerId,
+    scopeSet,
+    sId,
+    uEmail,
+    orgName,
+  };
+}
+
+function checkVendorOwnershipWithContext(user, vendorOrEmail, buyerContext = null) {
   if (!user) return false;
   if (user.role === 'admin') return true;
 
@@ -68,18 +95,8 @@ async function checkVendorOwnership(user, vendorOrEmail) {
     return true;
   }
 
-  if (user.role === 'buyer') {
-    const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-    const resolvedOrgId = await resolveBuyerOrgIdForScope(user, buyerAccount);
-    const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    const scopeSet = new Set(
-      buyerScopeIdsFor(user, buyerAccount, resolvedOrgId)
-        .map((id) => String(id || '').trim().toLowerCase())
-        .filter(Boolean)
-    );
-    const sId = buyerId ? String(buyerId).toLowerCase() : '';
-    const uEmail = user.email ? String(user.email).toLowerCase() : '';
-    const orgName = buyerAccount?.organizationName ? String(buyerAccount.organizationName).toLowerCase() : '';
+  if (user.role === 'buyer' && buyerContext) {
+    const { scopeSet, sId, uEmail, orgName } = buyerContext;
 
     if (typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
       const vBuyerId = vendorOrEmail.buyerId ? String(vendorOrEmail.buyerId).toLowerCase() : '';
@@ -144,13 +161,19 @@ async function checkVendorOwnership(user, vendorOrEmail) {
   return false;
 }
 
-async function assertVendorOwnership(req, res, vendorOrEmail) {
+async function checkVendorOwnership(user, vendorOrEmail, precomputedContext = null) {
+  const buyerContext =
+    user && user.role === 'buyer' ? precomputedContext || (await buildBuyerOwnershipContext(user)) : null;
+  return checkVendorOwnershipWithContext(user, vendorOrEmail, buyerContext);
+}
+
+async function assertVendorOwnership(req, res, vendorOrEmail, precomputedContext = null) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
     return false;
   }
-  const isOwner = await checkVendorOwnership(user, vendorOrEmail);
+  const isOwner = await checkVendorOwnership(user, vendorOrEmail, precomputedContext);
   if (isOwner) return true;
 
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
@@ -1117,17 +1140,112 @@ async function updateVendor(req, res, next) {
   }
 }
 
-async function resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint = {} }) {
+function pickFallbackField(primary, secondary) {
+  return primary || secondary || null;
+}
+
+async function syncVendorMasterRecordStatus({ id, vendor, resolvedOrgId, isActive, actorEmail }) {
+  const masterRecordId =
+    (vendor && vendor.masterRecordId) ||
+    (typeof id === 'string' && id.startsWith(SYNTHETIC_MASTER_PREFIX) ? id.slice(SYNTHETIC_MASTER_PREFIX.length) : '');
+  if (!masterRecordId || !resolvedOrgId) {
+    return null;
+  }
+  const statusUpdates = storeService.buildVendorActiveStatusUpdates(vendor || null, isActive, actorEmail);
+  try {
+    return await vendorIngestionQueries.updateVendorMasterRecordActiveStatus(masterRecordId, resolvedOrgId, statusUpdates);
+  } catch (err) {
+    logger.warn('Failed to synchronize active status onto vendor_master_records', {
+      error: err,
+      masterRecordId,
+      resolvedOrgId,
+      isActive,
+    }, 'VENDOR_CONTROLLER');
+    return null;
+  }
+}
+
+function buildBuyerMasterStatusFallbackVendor({
+  masterRec,
+  isActive,
+  user,
+  buyerAccount,
+  buyerCompany,
+  metadataHint = {},
+}) {
+  const statusUpdates = storeService.buildVendorActiveStatusUpdates(masterRec, isActive, user.email);
+  const attributedBuyerId = [buyerAccount?.id, user.sub, user.id, user.email].find(Boolean) || null;
+  const email = pickFallbackField(masterRec.email, metadataHint.vendorEmail);
+  const name = [masterRec.companyName, metadataHint.vendorName, email, masterRec.vendorCode, 'Supplier'].find(Boolean);
+  return {
+    id: `${SYNTHETIC_MASTER_PREFIX}${masterRec.id}`,
+    masterRecordId: masterRec.id,
+    vendorCode: pickFallbackField(masterRec.vendorCode, metadataHint.vendorCode),
+    name,
+    email,
+    contactPerson: pickFallbackField(masterRec.contactPerson, metadataHint.contactPerson),
+    phone: pickFallbackField(masterRec.phone, metadataHint.phone),
+    location: pickFallbackField(masterRec.address, metadataHint.location),
+    city: pickFallbackField(masterRec.city, metadataHint.city),
+    state: pickFallbackField(masterRec.state, metadataHint.state),
+    pincode: pickFallbackField(masterRec.pincode, metadataHint.pincode),
+    gstin: pickFallbackField(masterRec.gstin, metadataHint.gstin),
+    source: 'vendor_master_ingestion',
+    addedByBuyerCompany: pickFallbackField(buyerCompany, buyerAccount?.organizationName),
+    buyerId: attributedBuyerId,
+    buyerAccountId: attributedBuyerId,
+    buyerEmail: pickFallbackField(buyerAccount?.corporateEmail, user.email),
+    isExistingInDatabase: true,
+    ...statusUpdates,
+  };
+}
+
+async function resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint = {}, buyerContext = null }) {
   const existing = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
   if (existing) {
-    return { vendor: existing, promoted: false };
+    return { vendor: existing, promoted: false, ownershipDenied: false };
   }
   if (user?.role === 'buyer' && isSyntheticFallbackVendorId(id)) {
-    const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-    const resolvedOrgId = await resolveBuyerOrgIdForScope(user, buyerAccount);
-    const buyerScope = buyerScopeIdsFor(user, buyerAccount, resolvedOrgId);
-    const buyerCompany = buyerAccount?.organizationName || user.orgName || user.name || 'Buyer';
+    const ctx = buyerContext || (await buildBuyerOwnershipContext(user));
+    const { buyerAccount, resolvedOrgId, buyerScope, buyerCompany } = ctx;
     const initialStatusFields = storeService.buildVendorActiveStatusUpdates(null, isActive, user.email);
+
+    if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId) {
+      const masterRec = await vendorIngestionQueries.findVendorMasterRecord(id.slice(SYNTHETIC_MASTER_PREFIX.length), resolvedOrgId);
+      const candidateEmail = masterRec ? String(masterRec.email || metadataHint.vendorEmail || '').trim().toLowerCase() : '';
+      if (masterRec && candidateEmail) {
+        const buyerOwned = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
+        if (buyerOwned && checkVendorOwnershipWithContext(user, buyerOwned, ctx)) {
+          return { vendor: buyerOwned, promoted: false, ownershipDenied: false };
+        }
+        const globalCollision = await storeService.getVendorByIdWithDBFallback(candidateEmail, 'all', { fresh: true });
+        if (globalCollision) {
+          await syncVendorMasterRecordStatus({
+            id,
+            vendor: masterRec,
+            resolvedOrgId,
+            isActive,
+            actorEmail: user.email,
+          });
+          const masterVendor = buildBuyerMasterStatusFallbackVendor({
+            masterRec,
+            isActive,
+            user,
+            buyerAccount,
+            buyerCompany,
+            metadataHint,
+          });
+          storeService.addAuditLog({
+            userEmail: user.email || SYSTEM_ACTOR_EMAIL,
+            action: isActive
+              ? `Marked vendor ${masterVendor.name} (${candidateEmail}) ACTIVE and eligible for future workflows`
+              : `Marked vendor ${masterVendor.name} (${candidateEmail}) INACTIVE (historical data preserved; excluded from future flows)`,
+          });
+          return { vendor: masterVendor, promoted: true, ownershipDenied: false };
+        }
+      }
+    }
+
     const resolved = await resolveFallbackVendorRecord({
       id,
       user,
@@ -1140,9 +1258,21 @@ async function resolveOrPromoteVendorForStatusChange({ id, user, isActive, metad
       requireEmail: false,
       allowUnassignedCategory: true,
     });
-    return { vendor: resolved.vendor || null, promoted: Boolean(resolved.promoted) };
+    if (resolved.vendor && !resolved.promoted && !checkVendorOwnershipWithContext(user, resolved.vendor, ctx)) {
+      return { vendor: null, promoted: false, ownershipDenied: true };
+    }
+    if (resolved.promoted && id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId) {
+      await syncVendorMasterRecordStatus({
+        id,
+        vendor: resolved.vendor,
+        resolvedOrgId,
+        isActive,
+        actorEmail: user.email,
+      });
+    }
+    return { vendor: resolved.vendor || null, promoted: Boolean(resolved.promoted), ownershipDenied: false };
   }
-  return { vendor: null, promoted: false };
+  return { vendor: null, promoted: false, ownershipDenied: false };
 }
 
 async function updateVendorStatus(req, res, next) {
@@ -1167,7 +1297,11 @@ async function updateVendorStatus(req, res, next) {
     }
 
     const { isActive, ...metadataHint } = validation.sanitizedData;
-    const resolved = await resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint });
+    const buyerContext = user.role === 'buyer' ? await buildBuyerOwnershipContext(user) : null;
+    const resolved = await resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint, buyerContext });
+    if (resolved.ownershipDenied) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
+    }
     if (!resolved.vendor) {
       logger.warn(`Vendor not found for status update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1186,13 +1320,22 @@ async function updateVendorStatus(req, res, next) {
       });
     }
 
-    if (!(await assertVendorOwnership(req, res, resolved.vendor))) return;
+    if (!(await assertVendorOwnership(req, res, resolved.vendor, buyerContext))) return;
     logger.info(`Updating vendor ${resolved.vendor.id} active status to ${isActive ? 'ACTIVE' : 'INACTIVE'}`, {
       vendorId: resolved.vendor.id,
       isActive,
       actorEmail: user.email,
     }, 'VENDOR_CONTROLLER');
     const updated = await storeService.updateVendorActiveStatusDurably(resolved.vendor.id, isActive, user.email);
+    if (updated && buyerContext?.resolvedOrgId) {
+      await syncVendorMasterRecordStatus({
+        id,
+        vendor: updated,
+        resolvedOrgId: buyerContext.resolvedOrgId,
+        isActive,
+        actorEmail: user.email,
+      });
+    }
     return res.json({
       success: true,
       message: isActive ? VENDOR_STATUS_MESSAGES.MARKED_ACTIVE_SUCCESS : VENDOR_STATUS_MESSAGES.MARKED_INACTIVE_SUCCESS,
@@ -1237,9 +1380,12 @@ async function bulkUpdateVendorStatus(req, res, next) {
       }
     }
 
+    const buyerContext = user.role === 'buyer' ? await buildBuyerOwnershipContext(user) : null;
     const updatedIds = [];
     const updatedVendors = [];
+    const idMappings = {};
     const skippedIds = [];
+    const skippedReasons = {};
 
     for (const id of cleanedIds) {
       const resolved = await resolveOrPromoteVendorForStatusChange({
@@ -1247,28 +1393,76 @@ async function bulkUpdateVendorStatus(req, res, next) {
         user,
         isActive,
         metadataHint: hintById.get(id) || {},
+        buyerContext,
       });
       if (!resolved.vendor) {
         skippedIds.push(id);
+        skippedReasons[id] = resolved.ownershipDenied ? 'FORBIDDEN' : 'NOT_FOUND';
         continue;
       }
       if (resolved.promoted) {
         updatedIds.push(resolved.vendor.id);
+        idMappings[id] = resolved.vendor.id;
         updatedVendors.push(withoutTemporaryPassword(resolved.vendor));
         continue;
       }
-      if (!(await checkVendorOwnership(user, resolved.vendor))) {
+      const isOwner = user.role === 'buyer'
+        ? checkVendorOwnershipWithContext(user, resolved.vendor, buyerContext)
+        : await checkVendorOwnership(user, resolved.vendor);
+      if (!isOwner) {
         skippedIds.push(id);
+        skippedReasons[id] = 'FORBIDDEN';
         continue;
       }
-      const updated = await storeService.updateVendorActiveStatusDurably(resolved.vendor.id, isActive, user.email);
+      const updated = await storeService.updateVendorActiveStatusDurably(resolved.vendor.id, isActive, user.email, {
+        preloadedVendor: resolved.vendor,
+        skipAuditLog: true,
+      });
       if (updated) {
+        if (buyerContext?.resolvedOrgId) {
+          await syncVendorMasterRecordStatus({
+            id,
+            vendor: updated,
+            resolvedOrgId: buyerContext.resolvedOrgId,
+            isActive,
+            actorEmail: user.email,
+          });
+        }
         updatedIds.push(updated.id);
+        idMappings[id] = updated.id;
         updatedVendors.push(withoutTemporaryPassword(updated));
       } else {
         skippedIds.push(id);
+        skippedReasons[id] = 'UPDATE_FAILED';
       }
     }
+
+    if (updatedIds.length === 0) {
+      const allForbidden = skippedIds.length > 0 && skippedIds.every((sid) => skippedReasons[sid] === 'FORBIDDEN');
+      logger.warn('Bulk vendor active status update modified zero vendors', {
+        isActive,
+        requestedCount: cleanedIds.length,
+        skippedIds,
+        skippedReasons,
+      }, 'VENDOR_CONTROLLER');
+      return res.status(allForbidden ? 403 : 404).json({
+        success: false,
+        isActive,
+        error: allForbidden ? VENDOR_STATUS_MESSAGES.BULK_OWNERSHIP_DENIED : VENDOR_STATUS_MESSAGES.BULK_NO_VENDORS_UPDATED,
+        updatedCount: 0,
+        updatedIds: [],
+        skippedIds,
+        skippedReasons,
+        data: [],
+      });
+    }
+
+    storeService.addAuditLog({
+      userEmail: user.email || SYSTEM_ACTOR_EMAIL,
+      action: isActive
+        ? `Bulk marked ${updatedIds.length} vendor(s) ACTIVE and eligible for future workflows`
+        : `Bulk marked ${updatedIds.length} vendor(s) INACTIVE (historical data preserved; excluded from future flows)`,
+    });
 
     logger.info(`Bulk updated status (${isActive ? 'ACTIVE' : 'INACTIVE'}) for ${updatedIds.length} vendors`, {
       isActive,
@@ -1284,6 +1478,7 @@ async function bulkUpdateVendorStatus(req, res, next) {
         : `Successfully marked ${updatedIds.length} vendor${updatedIds.length === 1 ? '' : 's'} inactive.`,
       updatedCount: updatedIds.length,
       updatedIds,
+      idMappings,
       skippedIds,
       data: updatedVendors,
     });

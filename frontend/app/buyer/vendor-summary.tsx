@@ -1116,15 +1116,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   };
 
   // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
+  const resolveBulkTargetVendors = (targetIsActive: boolean): VendorEntry[] => {
+    const selectedVendors = mergedVendors.filter((v) => selectedVendorIds.includes(v.id));
+    const targetedVendors = selectedVendors.filter((v) =>
+      targetIsActive ? isVendorInactive(v) : isVendorActive(v)
+    );
+    return targetedVendors.length > 0 ? targetedVendors : selectedVendors;
+  };
+
   const handleBulkStatusConfirm = async () => {
     if (selectedVendorIds.length === 0 || isUpdatingBulkStatus) return;
     setIsUpdatingBulkStatus(true);
     try {
-      const selectedVendors = mergedVendors.filter((v) => selectedVendorIds.includes(v.id));
-      const targetedVendors = selectedVendors.filter((v) =>
-        bulkTargetIsActive ? isVendorInactive(v) : isVendorActive(v)
-      );
-      const effectiveVendors = targetedVendors.length > 0 ? targetedVendors : selectedVendors;
+      const effectiveVendors = resolveBulkTargetVendors(bulkTargetIsActive);
       const idsToUpdate = effectiveVendors.length > 0
         ? effectiveVendors.map((v) => v.id)
         : [...selectedVendorIds];
@@ -1149,10 +1153,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })
         );
         updated = results.every((r) => r !== false);
+        if (updated) {
+          setVendorsActiveStateInStorage(identifiers, bulkTargetIsActive);
+        }
       }
 
       if (updated !== false) {
-        setVendorsActiveStateInStorage(identifiers, bulkTargetIsActive);
         loadUploadHistory();
         setSelectedVendorIds([]);
         setBulkStatusModalOpen(false);
@@ -3304,7 +3310,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ========================================================================= */}
       {/* BULK VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
       {/* ========================================================================= */}
-      {bulkStatusModalOpen && (
+      {bulkStatusModalOpen && (() => {
+        const modalTargetVendors = resolveBulkTargetVendors(bulkTargetIsActive);
+        const modalTargetIds = modalTargetVendors.length > 0
+          ? modalTargetVendors.map((v) => v.id)
+          : selectedVendorIds;
+        const targetCount = modalTargetIds.length;
+        return (
         <div className="modal-overlay !z-[1100]" data-testid="bulk-vendor-status-modal">
           <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
             <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
@@ -3325,8 +3337,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         ? UI_STRINGS.vendorStatusControl.bulkEnableModalTitle
                         : UI_STRINGS.vendorStatusControl.bulkDisableModalTitle,
                       {
-                        count: selectedVendorIds.length,
-                        plural: selectedVendorIds.length === 1 ? '' : 's',
+                        count: targetCount,
+                        plural: targetCount === 1 ? '' : 's',
                       }
                     )}
                   </h3>
@@ -3378,12 +3390,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* List Preview of Selected Vendors */}
             <div className="space-y-1.5">
               <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
-                <span>Selected Suppliers ({selectedVendorIds.length})</span>
+                <span>
+                  {formatString(UI_STRINGS.vendorStatusControl.bulkSelectedListHeading, { count: targetCount })}
+                </span>
                 <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
               </div>
               <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
-                {selectedVendorIds.map((id) => {
-                  const vendor = buyerFilteredVendors.find((v) => v.id === id) || buyerVendors.find((v) => v.id === id);
+                {modalTargetIds.map((id) => {
+                  const vendor =
+                    mergedVendors.find((v) => v.id === id) ||
+                    buyerFilteredVendors.find((v) => v.id === id) ||
+                    buyerVendors.find((v) => v.id === id);
                   return (
                     <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
                       <div className="min-w-0 flex-1">
@@ -3449,16 +3466,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <>
                     <Power size={13} />{' '}
                     {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmEnableButton, {
-                      count: selectedVendorIds.length,
-                      plural: selectedVendorIds.length === 1 ? '' : 's',
+                      count: targetCount,
+                      plural: targetCount === 1 ? '' : 's',
                     })}
                   </>
                 ) : (
                   <>
                     <PowerOff size={13} />{' '}
                     {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmDisableButton, {
-                      count: selectedVendorIds.length,
-                      plural: selectedVendorIds.length === 1 ? '' : 's',
+                      count: targetCount,
+                      plural: targetCount === 1 ? '' : 's',
                     })}
                   </>
                 )}
@@ -3466,7 +3483,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
           </div>
         </div>
-      )}
+        );
+      })()}
 
       {/* ========================================================================= */}
       {/* BUYER VENDOR RATING REVISION MODAL */}
