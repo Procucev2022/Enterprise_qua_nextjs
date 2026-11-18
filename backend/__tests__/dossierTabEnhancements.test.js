@@ -803,7 +803,7 @@ describe('Dossier Tab Enhancements', () => {
       const pinStage1 = await domainQueries.getPublicVendorsMatchingCategories(['Hardware'], { pincode: '56' });
       expect(Array.isArray(pinStage1)).toBe(true);
 
-      // 7. getVendorByEmailFromDB: negative cache branches
+      // 7. getVendorByEmailFromDB: negative cache branches & D1 active branch
       jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
       const nonExistent = await domainQueries.getVendorByEmailFromDB('nonexistent@vendor.test');
       expect(nonExistent).toBeNull();
@@ -811,6 +811,35 @@ describe('Dossier Tab Enhancements', () => {
       // Hit cached negative
       const cachedNonExistent = await domainQueries.getVendorByEmailFromDB('nonexistent@vendor.test', { fresh: false });
       expect(cachedNonExistent).toBeNull();
+
+      // D1 active branch in getVendorByEmailFromDB
+      const d1Bridge = require('../src/db/d1Bridge');
+      const origD1Client = d1Bridge.getD1HttpClient;
+      try {
+        d1Bridge.getD1HttpClient = () => ({});
+        const d1Empty = await domainQueries.getVendorByEmailFromDB('d1nonexistent@vendor.test', { fresh: false });
+        expect(d1Empty).toBeNull();
+      } finally {
+        d1Bridge.getD1HttpClient = origD1Client;
+      }
+
+      // 8. getVendorsUploadedByBuyerFromDB: candidate email resolution and error handling
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB')
+        .mockResolvedValueOnce({ id: 'b-cand-1', organizationName: 'Cand Org' })
+        .mockRejectedValueOnce(new Error('Buyer account DB failure'));
+      jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+      const emailCandVendors = await domainQueries.getVendorsUploadedByBuyerFromDB('cand@buyer.com', 'Org Name', 50);
+      expect(emailCandVendors).toEqual([]);
+
+      // 9. getVendorsUploadedByBuyerFromDB: stale cache fallback on retryable error
+      const { queryCache } = require('../src/db/queryCache');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(d1Bridge, 'isRetryableD1Error').mockReturnValueOnce(true);
+      jest.spyOn(queryCache, 'getStale').mockReturnValueOnce([{ id: 'v-stale-1', companyName: 'Stale Co' }]);
+
+      const staleResult = await domainQueries.getVendorsUploadedByBuyerFromDB('stale-buyer-id', null, 10);
+      expect(staleResult).toEqual([{ id: 'v-stale-1', companyName: 'Stale Co' }]);
     });
   });
 });
