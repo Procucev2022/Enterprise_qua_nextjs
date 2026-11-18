@@ -1671,6 +1671,41 @@ async function requeueMapping(mappingId, organizationId) {
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
 
+/** Reset non-approved mappings back to QUEUED when PO dump or vendor master data is replaced. */
+async function resetCategoryMappingsForReclassification(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            updated_at = CURRENT_TIMESTAMP
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    [
+      sessionId,
+      organizationId,
+      VENDOR_AI_PROCESSING_STATUS.QUEUED,
+      VENDOR_MAPPING_STATUS.BUYER_APPROVED,
+      VENDOR_MAPPING_STATUS.REJECTED,
+      VENDOR_MAPPING_STATUS.PENDING_REVIEW,
+    ],
+    {
+      d1: true,
+      d1Text: `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    }
+  );
+  return result.rowCount || 0;
+}
+
 /**
  * Record the buyer's decision.
  *
@@ -2388,6 +2423,7 @@ module.exports = {
   saveAiSuggestion,
   markMappingFailed,
   requeueMapping,
+  resetCategoryMappingsForReclassification,
   saveBuyerReview,
   attachVendorId,
   summarizeCategoryMappings,

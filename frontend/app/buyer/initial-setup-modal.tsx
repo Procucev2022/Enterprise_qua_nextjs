@@ -558,7 +558,7 @@ export default function InitialSetupModal() {
               setSkippedDuplicateVendors((prev) => (prev.length > 0 ? prev : serverSkippedList));
             }
           } else if (which === 'po') setPoJob(freshJob);
-          else setAiJob(freshJob);
+          else setAiJob((prev) => ({ ...freshJob, fileName: freshJob.fileName || prev?.fileName || '' }));
         } catch (err) {
           logger.log('WARN', 'Could not refresh ingestion job progress', { error: err, jobType: which }, 'VENDOR_INGESTION');
         }

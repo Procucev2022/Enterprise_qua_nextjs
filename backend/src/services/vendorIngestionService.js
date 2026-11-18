@@ -287,6 +287,7 @@ async function updateSessionHorizon(sessionUser, sessionId, payload) {
   const hadPoData = session.poRowCount > 0;
   if (hadPoData) {
     await queries.deletePoLineItems(sessionId, context.organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, context.organizationId);
   }
 
   const updated = await queries.updateSession(sessionId, context.organizationId, {
@@ -631,6 +632,7 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
 
   if (replaceExisting) {
     await queries.deletePoLineItems(sessionId, context.organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, context.organizationId);
   }
 
   if (stamped.length === 0) {
@@ -654,6 +656,9 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     poOutsideHorizonCount: counts.outsideHorizon,
     status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
     currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
+    ...(replaceExisting
+      ? { aiStatus: VENDOR_INGESTION_AI_STATUS.IDLE, aiProcessedCount: 0, aiFailedCount: 0 }
+      : {}),
   });
 
   await recordAudit(context, {
@@ -942,6 +947,41 @@ function isJobStale(job) {
   return !Number.isFinite(lastProgress) || Date.now() - lastProgress > VENDOR_INGESTION_CONFIG.AI_JOB_STALE_AFTER_MS;
 }
 
+function computeCategorizationJobCounts({
+  totalVendors,
+  matchedVendorCount,
+  unmatchedVendorCount,
+  processedInLoop,
+  failedInLoop,
+  summary,
+}) {
+  const selfMapCount = (summary?.selfMapRequired || 0) + (summary?.selfMapped || 0);
+  const completedMatched = Math.max(
+    processedInLoop,
+    Math.min(matchedVendorCount, Math.max(0, (summary?.completed || 0) - selfMapCount))
+  );
+  const failedCount = Math.max(failedInLoop, Math.min(completedMatched, Number(summary?.failed) || 0));
+  const importedCount = Math.max(0, completedMatched - failedCount);
+
+  if (matchedVendorCount === 0 && totalVendors > 0) {
+    return {
+      totalRecords: totalVendors,
+      processedRecords: totalVendors,
+      importedRecords: 0,
+      skippedRecords: unmatchedVendorCount,
+      failedRecords: 0,
+    };
+  }
+
+  return {
+    totalRecords: matchedVendorCount,
+    processedRecords: completedMatched,
+    importedRecords: importedCount,
+    skippedRecords: 0,
+    failedRecords: failedCount,
+  };
+}
+
 /**
  * Run the join, then every AI batch, for one session, recording progress on the job.
  *
@@ -952,6 +992,7 @@ function isJobStale(job) {
  */
 async function runCategorizationJob({ sessionUser, sessionId, organizationId, jobId }) {
   let processed = 0;
+  let imported = 0;
   let failed = 0;
   let firstError = null;
 
@@ -960,11 +1001,22 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       status: VENDOR_INGESTION_JOB_STATUS.PROCESSING,
       totalRecords: join.matchedVendorCount,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
     });
 
     // At least one batch always runs, so a session with no PO-matched suppliers
     // still reaches AI_COMPLETED instead of staying at JOINED.
     let batch;
+    let latestCounts = {
+      totalRecords: join.matchedVendorCount,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 0,
+    };
     do {
       batch = await processCategorizationBatch(sessionUser, sessionId, {
         batchSize: VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE,
@@ -974,11 +1026,17 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       );
       processed += batch.processedInBatch;
       failed += batchFailures.length;
+      imported += Math.max(0, batch.processedInBatch - batchFailures.length);
       firstError = firstError || (batchFailures.length > 0 ? batchFailures[0].error : null);
-      await queries.updateIngestionJobProgress(jobId, organizationId, {
-        processedRecords: processed,
-        failedRecords: failed,
+      latestCounts = computeCategorizationJobCounts({
+        totalVendors: join.totalVendors,
+        matchedVendorCount: join.matchedVendorCount,
+        unmatchedVendorCount: join.unmatchedVendorCount,
+        processedInLoop: processed,
+        failedInLoop: failed,
+        summary: batch.summary,
       });
+      await queries.updateIngestionJobProgress(jobId, organizationId, latestCounts);
       // Each batch moves the queued suppliers out of the queue, so zero progress
       // with work still queued means the queue is stuck. Stop rather than spin.
       if (!batch.done && batch.processedInBatch === 0) {
@@ -988,11 +1046,16 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
 
     const everyAttemptFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
     await queries.updateIngestionJobProgress(jobId, organizationId, {
+      ...latestCounts,
       status: everyAttemptFailed ? VENDOR_INGESTION_JOB_STATUS.FAILED : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
       ...(everyAttemptFailed ? { errorMessage: firstError || VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED } : {}),
       completedAt: new Date().toISOString(),
     });
-    logger.info('AI categorization job finished', { sessionId, jobId, processed, failed, everyAttemptFailed }, LOG_CATEGORY);
+    logger.info(
+      'AI categorization job finished',
+      { sessionId, jobId, ...latestCounts, everyAttemptFailed },
+      LOG_CATEGORY
+    );
   } catch (err) {
     logger.error(`AI categorization job ${jobId} stopped`, err, LOG_CATEGORY);
     const message = err instanceof VendorIngestionError ? err.message : VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED;
@@ -1002,6 +1065,8 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
         errorMessage: message,
         errorDetails: err?.message ? { error: err.message, name: err?.name } : null,
         processedRecords: processed,
+        importedRecords: imported,
+        skippedRecords: 0,
         failedRecords: failed,
         completedAt: new Date().toISOString(),
       })

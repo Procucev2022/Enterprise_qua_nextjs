@@ -620,6 +620,8 @@ describe('largeFileIngestionService unit tests', () => {
       });
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }]);
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
@@ -1018,6 +1020,8 @@ describe('largeFileIngestionService unit tests', () => {
       });
       jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
 
       // Process batch with errors in both main batch and remainder batch
@@ -1214,6 +1218,8 @@ describe('largeFileIngestionService unit tests', () => {
         createdByEmail: 'buyer@org.in',
       });
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
       const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
@@ -1259,7 +1265,11 @@ describe('largeFileIngestionService unit tests', () => {
         id: 'sess-arr-dup',
         organizationId: 'org-1',
       });
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
       const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
@@ -1287,6 +1297,44 @@ describe('largeFileIngestionService unit tests', () => {
         failedRecords: 0,
         status: 'COMPLETED',
       });
+    });
+
+    it('clears prior PO dump line items and resets AI status when a replacement PO_DUMP upload finishes', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-po-replace',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.AI_COMPLETED,
+        currentStep: VENDOR_INGESTION_STEP.DISPATCH,
+      });
+      const delPoSpy = jest.spyOn(queries, 'deletePoLineItems').mockResolvedValue(17);
+      const resetMapSpy = jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(7);
+      jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValue([{ id: 'po-1' }]);
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 4, inHorizon: 4, outsideHorizon: 0 });
+      const updateSessionSpy = jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-po-replace',
+        sessionId: 'sess-po-replace',
+        organizationId: 'org-1',
+        rows: [{ vendorName: 'Apex', itemDescription: 'Valve' }],
+        fileName: 'po latest one.xlsx',
+        jobType: 'PO_DUMP',
+      });
+
+      expect(delPoSpy).toHaveBeenCalledWith('sess-po-replace', 'org-1');
+      expect(resetMapSpy).toHaveBeenCalledWith('sess-po-replace', 'org-1');
+      expect(updateSessionSpy).toHaveBeenCalledWith(
+        'sess-po-replace',
+        'org-1',
+        expect.objectContaining({
+          poFileName: 'po latest one.xlsx',
+          poRowCount: 4,
+          aiStatus: 'IDLE',
+          aiProcessedCount: 0,
+          aiFailedCount: 0,
+        })
+      );
     });
   });
 });

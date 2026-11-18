@@ -4741,5 +4741,31 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       jest.useRealTimers();
     }
   });
+
+  it('displays accurate processed and imported AI Category Ingestion counts and retains fileName across polling', async () => {
+    jest.useFakeTimers();
+    try {
+      installIngestionServer({
+        startJob: completedAiJob({ status: 'PROCESSING', totalRecords: 7, processedRecords: 0, importedRecords: 0, fileName: 'po latest one.xlsx' }),
+        pollJob: completedAiJob({ status: 'COMPLETED', totalRecords: 7, processedRecords: 7, importedRecords: 7, skippedRecords: 0, failedRecords: 0, fileName: '' }),
+      });
+      const { container } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
+      uploadVendorAndPoDump(container);
+      runAiCategoryJob();
+
+      await screen.findByText(/AI Category Ingestion/i);
+      await act(async () => {
+        jest.advanceTimersByTime(2100);
+      });
+      await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      expect(await screen.findByText('7 / 7 suppliers processed (100%)')).toBeInTheDocument();
+      expect(screen.getAllByText('po latest one.xlsx').length).toBeGreaterThanOrEqual(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
 });
 

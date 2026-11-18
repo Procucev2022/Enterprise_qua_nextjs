@@ -33,6 +33,7 @@ const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSch
 const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
+  VENDOR_INGESTION_AI_STATUS,
   VENDOR_INGESTION_CONFIG,
   VENDOR_INGESTION_MESSAGES,
   resolveVendorLocationFields,
@@ -841,6 +842,16 @@ async function recordVendorMasterUpload({ jobId, sessionId, organizationId, tota
   }
 }
 
+/** Clear prior session rows & stale AI state when a replacement file begins ingesting. */
+async function prepareSessionForReplacementUpload({ sessionId, organizationId, jobType }) {
+  if (jobType === 'VENDOR_MASTER') {
+    await queries.deleteVendorMasterRecords(sessionId, organizationId);
+  } else {
+    await queries.deletePoLineItems(sessionId, organizationId);
+  }
+  await queries.resetCategoryMappingsForReclassification(sessionId, organizationId);
+}
+
 /**
  * Persist finalized session counts and advance the session step only when rows were actually stored.
  */
@@ -871,6 +882,9 @@ async function finalizeSessionAfterUpload({ session, sessionId, organizationId, 
       counts.total > 0
         ? Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN)
         : session.currentStep,
+    ...(counts.total > 0
+      ? { aiStatus: VENDOR_INGESTION_AI_STATUS.IDLE, aiProcessedCount: 0, aiFailedCount: 0 }
+      : {}),
   });
 }
 
@@ -920,6 +934,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       const allLines = text.split(/\r\n|\r|\n/);
 
       totalLines = Math.max(0, allLines.filter((line) => line.trim().length > 0).length - 1); // Exclude header line
+      if (totalLines > 0) {
+        await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
+      }
 
       await queries.updateIngestionJobProgress(jobId, organizationId, {
         totalRecords: totalLines,
@@ -1067,6 +1084,9 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
     let skippedRecords = 0;
     let failedRecords = 0;
     const recentErrors = [];
+    if (rows.length > 0) {
+      await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
+    }
     const vendorDedupeState = jobType === 'VENDOR_MASTER'
       ? await loadExistingVendorDedupeState(session, organizationId)
       : null;

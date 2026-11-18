@@ -178,6 +178,7 @@ describe('vendor ingestion session lifecycle', () => {
     const result = await service.updateSessionHorizon(USER, SESSION.id, { horizonType: HORIZON.LAST_2_YEARS });
     expect(result.poDataCleared).toBe(true);
     expect(queries.deletePoLineItems).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
+    expect(queries.resetCategoryMappingsForReclassification).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     expect(result.session).toMatchObject({ poRowCount: 0, aiProcessedCount: 0, aiStatus: AI_STATUS.IDLE, currentStep: STEP.PO_DUMP, status: status === SESSION_STATUS.DRAFT ? SESSION_STATUS.DRAFT : SESSION_STATUS.VENDOR_MASTER_STORED });
   });
 
@@ -244,6 +245,7 @@ describe('vendor and purchase order uploads', () => {
     const result = await service.confirmPoDump(USER, SESSION.id, { rows, replaceExisting: true, fileName: 'new-pos.csv' });
     expect(result).toMatchObject({ validRows: 3, invalidRows: 2, insidePeriod: 1, outsidePeriod: 1 });
     expect(queries.deletePoLineItems).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
+    expect(queries.resetCategoryMappingsForReclassification).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     const stored = queries.bulkInsertPoLineItems.mock.calls[0][2];
     expect(stored.map((row) => row.inHorizon)).toEqual([true, false, false]);
     expect(stored[1].poDate).toBe('2024-01-01');
