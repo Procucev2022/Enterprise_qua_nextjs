@@ -25,6 +25,7 @@ router.put('/:id/categories', authenticate, buyerAccountController.updateSupport
 router.get('/:id/communications', authenticate, buyerAccountController.getBuyerCommunications);
 router.post('/:id/communications', authenticate, buyerAccountController.recordBuyerCommunication);
 router.get('/:id/payment-history', authenticate, buyerAccountController.getBuyerPaymentHistory);
+router.get('/:id/uploaded-vendors', authenticate, buyerAccountController.getBuyerUploadedVendors);
 
 // Buyer Dossier Documents
 router.get('/:id/documents', authenticate, accountDocumentController.getBuyerDocuments);

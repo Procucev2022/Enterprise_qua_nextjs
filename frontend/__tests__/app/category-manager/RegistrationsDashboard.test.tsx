@@ -119,13 +119,15 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('renders header with title and total count badge', async () => {
+  test('renders summary cards and updates total count', async () => {
     const onCountChange = jest.fn();
     render(<RegistrationsDashboard onTotalCountChange={onCountChange} />);
 
-    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail).length).toBeGreaterThan(0);
     await waitFor(() => {
-      expect(screen.getByText(`${mockClients.length} Total`)).toBeInTheDocument();
       expect(onCountChange).toHaveBeenCalledWith(mockClients.length);
     });
   });
@@ -182,125 +184,88 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('accepts client registration and updates status', async () => {
+  test('displays auto-approved status indicator for both buyers and sellers without action buttons', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
+      expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
     });
 
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
+    // Auto-Approved is shown for both buyers and sellers
+    const autoApprovedBadges = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusAutoApproved);
+    expect(autoApprovedBadges.length).toBeGreaterThan(0);
 
+    // Rejected is shown for genuinely rejected records
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusRejected).length).toBeGreaterThan(0);
+
+    // No manual accept or reject action buttons should exist
+    expect(screen.queryByLabelText(/accept for/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/reject for/i)).not.toBeInTheDocument();
+  });
+
+  test('filters registrations by status dropdown (All, Auto-Approved, Rejected)', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+
+    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
-          body: JSON.stringify({ action: 'accept' }),
-        })
+        expect.stringContaining('status=Auto-Approved'),
+        expect.anything()
       );
-      expect(
-        screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.acceptSuccess)
-      ).toBeInTheDocument();
-    });
-  });
-
-  test('rejects client registration and updates status', async () => {
-    render(<RegistrationsDashboard />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
     });
 
-    const rejectButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.rejectTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(rejectButton);
-
+    fireEvent.change(statusSelect, { target: { value: 'Rejected' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
-          body: JSON.stringify({ action: 'reject' }),
-        })
+        expect.stringContaining('status=Rejected'),
+        expect.anything()
       );
-      expect(
-        screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.rejectSuccess)
-      ).toBeInTheDocument();
     });
 
-    // Dismiss feedback banner
-    const closeFeedback = screen.getByText('×');
-    fireEvent.click(closeFeedback);
-    expect(
-      screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.rejectSuccess)
-    ).not.toBeInTheDocument();
-  });
-
-  test('handles action error from API', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.resolve({
-          ok: false,
-          json: () => Promise.resolve({ success: false, error: 'Database conflict' }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
-    render(<RegistrationsDashboard />);
-
+    fireEvent.change(statusSelect, { target: { value: 'all' } });
     await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
-    });
-
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
-
-    await waitFor(() => {
-      expect(screen.getByText('Database conflict')).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.not.stringContaining('status='),
+        expect.anything()
+      );
     });
   });
 
-  test('handles network error on action', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.reject(new Error('Network drop'));
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
+  test('independent filters combine correctly when multiple filters are selected', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
+      expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
+    const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel);
+    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+
+    fireEvent.change(clientSelect, { target: { value: 'buyer' } });
+    fireEvent.change(sourceSelect, { target: { value: 'Web App' } });
+    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
 
     await waitFor(() => {
-      expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.actionError)).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('clientType=buyer'),
+        expect.anything()
+      );
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('sourceType=Web+App'),
+        expect.anything()
+      );
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('status=Auto-Approved'),
+        expect.anything()
+      );
     });
   });
 
@@ -401,35 +366,6 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('handles action failure when API returns error without message', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.resolve({
-          ok: false,
-          json: () => Promise.resolve({ success: false }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
-    render(<RegistrationsDashboard />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    });
-
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
-
-    await waitFor(() => {
-      expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.actionError)).toBeInTheDocument();
-    });
-  });
 
   test('renders empty state when no clients returned', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
@@ -789,8 +725,8 @@ describe('RegistrationsDashboard', () => {
 
     // Status filter selection
     const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
-    fireEvent.change(statusSelect, { target: { value: 'New' } });
-    fireEvent.change(statusSelect, { target: { value: 'Accepted' } });
+    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
+    fireEvent.change(statusSelect, { target: { value: 'Rejected' } });
     fireEvent.change(statusSelect, { target: { value: 'all' } });
 
     // Client view filter selection
@@ -798,5 +734,99 @@ describe('RegistrationsDashboard', () => {
     fireEvent.change(clientSelect, { target: { value: 'seller' } });
     fireEvent.change(clientSelect, { target: { value: 'buyer' } });
     fireEvent.change(clientSelect, { target: { value: 'all' } });
+  });
+
+  test('handles date range presets (10 days, 1 month, custom, all dates) and date inputs', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    // 1. Click "Last 10 Days" preset
+    const btn10Days = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateLast10Days);
+    fireEvent.click(btn10Days);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringMatching(/startDate=\d{4}-\d{2}-\d{2}&endDate=\d{4}-\d{2}-\d{2}/),
+        expect.anything()
+      );
+    });
+
+    // Start & End date inputs should now be visible and populated
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDateLabel) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDateLabel) as HTMLInputElement;
+    expect(startInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(endInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+
+    // 2. Click "Last 1 Month" preset
+    const btn1Month = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateLast1Month);
+    fireEvent.click(btn1Month);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringMatching(/startDate=\d{4}-\d{2}-\d{2}&endDate=\d{4}-\d{2}-\d{2}/),
+        expect.anything()
+      );
+    });
+
+    // 3. Click "Custom Range" preset and edit dates manually
+    const btnCustom = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateCustomRange);
+    fireEvent.click(btnCustom);
+
+    fireEvent.change(startInput, { target: { value: '2026-11-01' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-15' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('startDate=2026-11-01&endDate=2026-11-15'),
+        expect.anything()
+      );
+    });
+
+    // 4. Click clear date filter button
+    const clearBtn = screen.getByTitle(UI_STRINGS.actionCenter.registrationsDashboard.clearDateFilter);
+    fireEvent.click(clearBtn);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.not.stringContaining('startDate='),
+        expect.anything()
+      );
+    });
+
+    // 5. Click "All Dates" preset directly
+    fireEvent.click(btn10Days);
+    const btnAllDates = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateAllTime);
+    fireEvent.click(btnAllDates);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.not.stringContaining('startDate='),
+        expect.anything()
+      );
+    });
+
+    // 6. Test startDate only and endDate only
+    fireEvent.click(btnCustom);
+    const customStart = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDateLabel);
+    const customEnd = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDateLabel);
+    fireEvent.change(customStart, { target: { value: '2026-11-01' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('startDate=2026-11-01'),
+        expect.anything()
+      );
+    });
+
+    fireEvent.change(customStart, { target: { value: '' } });
+    fireEvent.change(customEnd, { target: { value: '2026-11-20' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('endDate=2026-11-20'),
+        expect.anything()
+      );
+    });
   });
 });

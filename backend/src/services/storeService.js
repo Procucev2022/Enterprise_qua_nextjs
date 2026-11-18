@@ -4549,6 +4549,25 @@ class StoreService {
       (parseStoredRfqTime(createdAt) ?? Date.now()) + RFQ_AUTO_CLOSE_AFTER_MS
     ).toISOString();
 
+    const resolvedCity = rfqData.deliveryCity || (resolvedBuyer ? (resolvedBuyer.city || resolvedBuyer.deliveryCity || '') : '');
+    const resolvedState = rfqData.deliveryState || (resolvedBuyer ? (resolvedBuyer.state || resolvedBuyer.deliveryState || '') : '');
+    const resolvedPincode = rfqData.deliveryPincode || (resolvedBuyer ? (resolvedBuyer.pincode || resolvedBuyer.zipCode || resolvedBuyer.deliveryPincode || '') : '');
+    let resolvedLocation = rfqData.deliveryLocation || (resolvedBuyer ? (resolvedBuyer.location || resolvedBuyer.deliveryLocation || resolvedBuyer.primaryPlantLocation || resolvedBuyer.street || resolvedBuyer.address1 || '') : '');
+    if (!resolvedLocation && (resolvedCity || resolvedState || resolvedPincode)) {
+      resolvedLocation = [resolvedCity, resolvedState, resolvedPincode].filter(Boolean).join(', ');
+    }
+
+    const resolvedDeadline = rfqData.deadline
+      ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+      : (rfqData.targetDeliveryDate
+        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+        : rfqIngestionService.ensureFutureDeliveryDate(null, 5));
+    const resolvedTargetDeliveryDate = rfqData.targetDeliveryDate
+      ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+      : (rfqData.deadline
+        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+        : rfqIngestionService.ensureFutureDeliveryDate(null, 5));
+
     const newRFQ = {
       id,
       rfqNumber,
@@ -4559,24 +4578,16 @@ class StoreService {
       category: rfqData.category || null,
       createdAt,
       closingDeadline,
-      deadline: rfqData.deadline
-        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-        : (rfqData.targetDeliveryDate
-          ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
-      targetDeliveryDate: rfqData.targetDeliveryDate
-        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-        : (rfqData.deadline
-          ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+      deadline: resolvedDeadline,
+      targetDeliveryDate: resolvedTargetDeliveryDate,
       // Budget is optional (VALIDATION_SCHEMAS.createRFQ). An RFQ that states none keeps
       // null, and the UI shows it as not stated. Zero is never stored in its place.
       budget: budgetAmount,
       // Vendors price freight against these, so they round-trip with the RFQ.
-      deliveryLocation: rfqData.deliveryLocation || '',
-      deliveryCity: rfqData.deliveryCity || '',
-      deliveryState: rfqData.deliveryState || '',
-      deliveryPincode: rfqData.deliveryPincode || '',
+      deliveryLocation: resolvedLocation || '',
+      deliveryCity: resolvedCity || '',
+      deliveryState: resolvedState || '',
+      deliveryPincode: resolvedPincode || '',
       // Metadata only. The bytes live in object storage under
       // rfqAttachmentService, so the bootstrap payload stays a fixed size no
       // matter how much is attached.
@@ -4642,7 +4653,24 @@ class StoreService {
       // from this persisted shape) showed none, and PO generation
       // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
       // an empty line-item PO for any RFQ created this way.
-      extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
+      extractedEntities: rfqData.source === 'email_gateway'
+        ? (Array.isArray(rfqData.extractedEntities) ? rfqData.extractedEntities : (Array.isArray(rfqData.lineItems) ? rfqData.lineItems : [])).map((entity) => {
+            if (!entity || typeof entity !== 'object') return entity;
+            const eCity = entity.deliveryCity || resolvedCity || '';
+            const eState = entity.deliveryState || resolvedState || '';
+            const ePincode = entity.deliveryPincode || resolvedPincode || '';
+            const eLoc = entity.deliveryLocation || resolvedLocation || [eCity, eState, ePincode].filter(Boolean).join(', ');
+            const eDate = entity.targetDate || resolvedTargetDeliveryDate;
+            return {
+              ...entity,
+              deliveryCity: eCity,
+              deliveryState: eState,
+              deliveryPincode: ePincode,
+              deliveryLocation: eLoc,
+              targetDate: eDate,
+            };
+          })
+        : (rfqData.extractedEntities || rfqData.lineItems || []),
       // AI-generated headline/scope/risk-notes built from the line items above,
       // before the RFQ is constructed here (see rfqController.createRFQ) — a
       // deterministic fallback when there's nothing to summarise or the model

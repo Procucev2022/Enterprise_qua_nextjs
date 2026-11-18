@@ -36,6 +36,7 @@ import {
   Sparkles,
   ChevronDown,
   Upload,
+  Users,
 } from 'lucide-react';
 import { getScenariosForEntityType, interpolateScenarioTemplate, getScenarioForCallOutcome } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
@@ -50,6 +51,7 @@ import type {
   BuyerPaymentSummary,
   BuyerPaymentTransaction,
   InternalTeamMember,
+  BuyerUploadedVendorItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -57,6 +59,8 @@ import {
   RFQ_MODE_LABELS,
   CALL_OUTCOMES,
   FOLLOWUP_PRIORITIES,
+  BUYER_PROFILE_REQUEST_TYPES,
+  type BuyerProfileRequestType,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -67,6 +71,7 @@ import {
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
   fetchCategoryTaxonomy,
+  fetchBuyerUploadedVendors,
 } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
@@ -80,8 +85,8 @@ interface BuyerDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   buyerRfqs?: RFQItem[];
   initialCommunications?: BuyerCommunicationItem[];
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
-  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => void;
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors';
+  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors') => void;
 }
 
 // Shown wherever a value is missing from the record. Never a substitute value.
@@ -99,12 +104,60 @@ export default function BuyerDossierDrawer({
   const strings = UI_STRINGS.buyerDirectory.dossier;
 
   // Active Main Tab with context preservation
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>(initialTab);
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>(initialTab);
   const [docCount, setDocCount] = useState<number>(0);
-  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => {
+  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors') => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
+
+  // Buyer Uploaded Vendors state
+  const [uploadedVendors, setUploadedVendors] = useState<BuyerUploadedVendorItem[]>([]);
+  const [loadingUploadedVendors, setLoadingUploadedVendors] = useState<boolean>(false);
+  const [uploadedVendorsError, setUploadedVendorsError] = useState<string | null>(null);
+  const [uploadedVendorSearch, setUploadedVendorSearch] = useState<string>('');
+  const [uploadedVendorStatusFilter, setUploadedVendorStatusFilter] = useState<string>('ALL');
+  const [selectedVendorForModal, setSelectedVendorForModal] = useState<BuyerUploadedVendorItem | null>(null);
+
+  const loadUploadedVendors = useCallback(async () => {
+    if (!buyer?.id) return;
+    setLoadingUploadedVendors(true);
+    setUploadedVendorsError(null);
+    try {
+      const res = await fetchBuyerUploadedVendors(buyer.id);
+      if (res.success && Array.isArray(res.data)) {
+        setUploadedVendors(res.data);
+      } else {
+        setUploadedVendorsError(res.error || strings.uploadedVendors.loadError);
+      }
+    } catch (err: unknown) {
+      setUploadedVendorsError(err instanceof Error ? err.message : strings.uploadedVendors.loadError);
+    } finally {
+      setLoadingUploadedVendors(false);
+    }
+  }, [buyer?.id, strings.uploadedVendors.loadError]);
+
+  useEffect(() => {
+    void loadUploadedVendors();
+  }, [loadUploadedVendors]);
+
+  const filteredUploadedVendors = useMemo(() => {
+    return uploadedVendors.filter((v) => {
+      if (uploadedVendorStatusFilter !== 'ALL' && (v.status || '').toUpperCase() !== uploadedVendorStatusFilter.toUpperCase()) {
+        return false;
+      }
+      if (uploadedVendorSearch.trim()) {
+        const q = uploadedVendorSearch.toLowerCase();
+        const matchName = (v.name || '').toLowerCase().includes(q);
+        const matchComp = (v.companyName || '').toLowerCase().includes(q);
+        const matchContact = (v.contactPerson || '').toLowerCase().includes(q);
+        const matchEmail = (v.email || '').toLowerCase().includes(q);
+        const matchPhone = (v.phone || '').toLowerCase().includes(q);
+        return matchName || matchComp || matchContact || matchEmail || matchPhone;
+      }
+      return true;
+    });
+  }, [uploadedVendors, uploadedVendorSearch, uploadedVendorStatusFilter]);
 
   // Active Communications Sub-Tab
   const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
@@ -357,17 +410,31 @@ export default function BuyerDossierDrawer({
   const [creditPage, setCreditPage] = useState<number>(1);
   const creditPageSize = 10;
 
-  // Add Credit modal states
+  // Add Credit / Request Type modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
+  const [selectedRequestType, setSelectedRequestType] = useState<BuyerProfileRequestType>('Buyer Credit Addition');
+  const [isRequestTypeDropdownOpen, setIsRequestTypeDropdownOpen] = useState<boolean>(false);
+  const requestTypeDropdownRef = useRef<HTMLDivElement>(null);
   const [creditApprover, setCreditApprover] = useState<string>('');
   // The initiator is the signed-in user. The name comes from the session, never from a list.
   const creditInitiator = authClient.getSessionUser()?.name ?? '';
   const [addCreditAmount, setAddCreditAmount] = useState<number>(0);
+  const [paymentReference, setPaymentReference] = useState<string>('');
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
   const [creditHistoryError, setCreditHistoryError] = useState<string | null>(null);
   const creditApprovalRequestKey = useRef<string>('');
   const creditApprovalRequestFingerprint = useRef<string>('');
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (requestTypeDropdownRef.current && !requestTypeDropdownRef.current.contains(e.target as Node)) {
+        setIsRequestTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -401,10 +468,42 @@ export default function BuyerDossierDrawer({
 
   const handleConfirmAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (addCreditAmount <= 0) {
-      showToast(strings.creditApproval.invalidAmount, 'error');
-      return;
+    if (selectedRequestType === 'Discounts') {
+      if (addCreditAmount <= 0 || addCreditAmount > 100) {
+        showToast('Please enter a valid discount percentage (1-100%).', 'error');
+        return;
+      }
+    } else if (selectedRequestType === 'Trial Periods') {
+      if (addCreditAmount <= 0 || addCreditAmount > 365) {
+        showToast('Please enter a valid trial extension period (1-365 days).', 'error');
+        return;
+      }
+    } else if (selectedRequestType === 'Offline Payments') {
+      if (addCreditAmount <= 0) {
+        showToast('Please enter a valid offline payment amount.', 'error');
+        return;
+      }
+      if (!paymentReference.trim()) {
+        showToast('Please enter the payment reference or UTR number.', 'error');
+        return;
+      }
+    } else if (selectedRequestType === 'Buyer Credit Deletion') {
+      if (addCreditAmount <= 0) {
+        showToast(strings.creditApproval.invalidAmount, 'error');
+        return;
+      }
+      const available = creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? 0;
+      if (addCreditAmount > available) {
+        showToast(`Cannot deduct ${addCreditAmount} credits. Available balance is ${available}.`, 'error');
+        return;
+      }
+    } else {
+      if (addCreditAmount <= 0) {
+        showToast(strings.creditApproval.invalidAmount, 'error');
+        return;
+      }
     }
+
     if (!creditApprover.trim() || !creditInitiator) {
       showToast(strings.creditApproval.approverRequired, 'error');
       return;
@@ -413,7 +512,9 @@ export default function BuyerDossierDrawer({
     const requestFingerprint = JSON.stringify([
       buyer.id,
       buyer.organizationName,
+      selectedRequestType,
       addCreditAmount,
+      paymentReference,
       addCreditReason,
       creditApprover,
       creditInitiator,
@@ -424,7 +525,11 @@ export default function BuyerDossierDrawer({
     }
     try {
       const res = await requestBuyerCreditApproval(buyer.id, {
+        requestType: selectedRequestType,
         amount: addCreditAmount,
+        discountPercentage: selectedRequestType === 'Discounts' ? addCreditAmount : undefined,
+        durationDays: selectedRequestType === 'Trial Periods' ? addCreditAmount : undefined,
+        paymentReference: selectedRequestType === 'Offline Payments' ? paymentReference.trim() : undefined,
         reason: addCreditReason.trim(),
         approverName: creditApprover.trim(),
         initiatorName: creditInitiator,
@@ -442,6 +547,7 @@ export default function BuyerDossierDrawer({
         );
         setIsAddCreditModalOpen(false);
         setAddCreditAmount(0);
+        setPaymentReference('');
         setAddCreditReason('');
       } else {
         showToast(res.error || strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
@@ -661,7 +767,9 @@ export default function BuyerDossierDrawer({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (selectedRfqForModal) {
+        if (isRequestTypeDropdownOpen) {
+          setIsRequestTypeDropdownOpen(false);
+        } else if (selectedRfqForModal) {
           setSelectedRfqForModal(null);
         } else if (isAddCreditModalOpen) {
           setIsAddCreditModalOpen(false);
@@ -680,7 +788,7 @@ export default function BuyerDossierDrawer({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal, isComposeOpen]);
+  }, [onClose, isRequestTypeDropdownOpen, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal, isComposeOpen]);
 
   // CSV Exporter for Credit History
   const exportCreditCsv = () => {
@@ -778,15 +886,46 @@ export default function BuyerDossierDrawer({
                 <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                   {RFQ_MODE_LABELS[buyer.sourcingMode] || EMPTY_VALUE}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsAddCreditModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
-                  title="Add RFQ Sourcing Credits"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{strings.addCredit}</span>
-                </button>
+                <div className="relative inline-block text-left" ref={requestTypeDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestTypeDropdownOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
+                    title={strings.requestTypeTitle || 'Request Type'}
+                    aria-label={strings.requestTypeTitle || 'Request Type'}
+                    aria-haspopup="true"
+                    aria-expanded={isRequestTypeDropdownOpen}
+                    data-testid="request-type-dropdown-btn"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{strings.requestTypeDropdown || '+ Request Type'}</span>
+                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                  </button>
+
+                  {isRequestTypeDropdownOpen && (
+                    <div
+                      role="menu"
+                      aria-orientation="vertical"
+                      className="absolute left-0 mt-1 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 py-1 text-xs divide-y divide-slate-100 dark:divide-slate-800"
+                    >
+                      {BUYER_PROFILE_REQUEST_TYPES.map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setSelectedRequestType(type);
+                            setIsRequestTypeDropdownOpen(false);
+                            setIsAddCreditModalOpen(true);
+                          }}
+                          className="w-full text-left px-3.5 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition cursor-pointer flex items-center justify-between"
+                        >
+                          <span>{type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 {formatString(strings.registered, {
@@ -815,6 +954,7 @@ export default function BuyerDossierDrawer({
             { id: 'communications', label: `${strings.communicationsTab} (${communications.length})`, icon: MessageSquare },
             { id: 'payments', label: `${strings.paymentsTab} (${payments.length})`, icon: Receipt },
             { id: 'documents', label: `${strings.documentsTab} (${docCount})`, icon: FileText },
+            { id: 'uploaded-vendors', label: `${strings.uploadedVendorsTab} (${uploadedVendors.length})`, icon: Users },
           ].map((tab) => {
             const Icon = tab.icon;
             return (
@@ -1578,8 +1718,140 @@ export default function BuyerDossierDrawer({
               )}
             </div>
           )}
-        </div>
 
+          {/* TAB 7: BUYER UPLOADED VENDORS TAB */}
+          {dossierTab === 'uploaded-vendors' && (
+            <div className="space-y-4">
+              {/* Header / Search Controls */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={uploadedVendorSearch}
+                    onChange={(e) => setUploadedVendorSearch(e.target.value)}
+                    placeholder={strings.uploadedVendors.searchPlaceholder}
+                    className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={uploadedVendorStatusFilter}
+                    onChange={(e) => setUploadedVendorStatusFilter(e.target.value)}
+                    aria-label="Filter by vendor status"
+                    className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">{strings.uploadedVendors.statusFilterAll}</option>
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="PENDING">PENDING</option>
+                    <option value="VERIFIED">VERIFIED</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void loadUploadedVendors()}
+                    title={strings.uploadedVendors.retry}
+                    aria-label={strings.uploadedVendors.retry}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className={`w-4 h-4 ${loadingUploadedVendors ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content states */}
+              {loadingUploadedVendors ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin mb-2 text-indigo-600" />
+                  <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+                </div>
+              ) : uploadedVendorsError ? (
+                <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                    <span className="text-xs">{uploadedVendorsError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadUploadedVendors()}
+                    className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                  >
+                    {strings.uploadedVendors.retry}
+                  </button>
+                </div>
+              ) : filteredUploadedVendors.length === 0 ? (
+                <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                  <Users className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                  <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                    {strings.uploadedVendors.emptyMessage}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">{strings.uploadedVendors.subtitle}</p>
+                </div>
+              ) : (
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                      <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colVendorName}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colCompanyName}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colContactPerson}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colEmail}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colPhone}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colUploadDate}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colStatus}</th>
+                          <th className="py-3 px-4 text-right whitespace-nowrap">{strings.uploadedVendors.colActions}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {filteredUploadedVendors.map((vendor) => (
+                          <tr key={vendor.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                            <td className="py-3 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                              {vendor.name || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                              {vendor.companyName || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.contactPerson || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                              {vendor.email || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.phone || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.createdAt ? formatIndianDateTime(vendor.createdAt) : EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                (vendor.status || '').toUpperCase().includes('ACTIVE') || (vendor.status || '').toUpperCase().includes('VERIFIED')
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                              }`}>
+                                {vendor.status || EMPTY_VALUE}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedVendorForModal(vendor)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                {strings.uploadedVendors.viewDetails}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         {/* Modal Footer Controls */}
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
           <span className="text-xs text-slate-500">{strings.consoleTitle}</span>
@@ -1594,7 +1866,7 @@ export default function BuyerDossierDrawer({
       </div>
 
       {/* ------------------------------------------------------------------------ */}
-      {/* MODAL 1: ADD CREDIT MODAL (WITH APPROVAL WORKFLOW) */}
+      {/* MODAL 1: REQUEST TYPE MODAL (WITH APPROVAL WORKFLOW) */}
       {/* ------------------------------------------------------------------------ */}
       {isAddCreditModalOpen && (
         <div
@@ -1609,10 +1881,10 @@ export default function BuyerDossierDrawer({
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {strings.creditApproval?.modalTitle || 'Request Buyer Sourcing Credits'}
+                  {strings.creditApproval?.types?.[selectedRequestType]?.title || strings.creditApproval?.modalTitle || 'Request Buyer Credit Approval'}
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
-                  {strings.creditApproval?.modalSubtitle || 'Submit a credit addition request for executive review & approval'}
+                  {strings.creditApproval?.types?.[selectedRequestType]?.subtitle || strings.creditApproval?.modalSubtitle || 'Submit request for authorization by the approver you select below.'}
                 </p>
               </div>
               <button
@@ -1638,31 +1910,59 @@ export default function BuyerDossierDrawer({
                 />
               </div>
 
-              {/* Current Available Credits (Read-Only) */}
+              {/* Current Context / Available Credits (Read-Only) */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits'}
+                  {selectedRequestType === 'Discounts' || selectedRequestType === 'Trial Periods'
+                    ? 'Current Subscription Tier'
+                    : selectedRequestType === 'Offline Payments'
+                    ? 'Buyer Sourcing Mode'
+                    : (strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits')}
                 </label>
                 <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits != null ? `${creditSummary.remainingFreeCredits} Credits` : EMPTY_VALUE}
+                  {selectedRequestType === 'Discounts' || selectedRequestType === 'Trial Periods'
+                    ? (buyer.subscriptionTier || buyer.subscriptionPlan || 'Free_trial')
+                    : selectedRequestType === 'Offline Payments'
+                    ? (RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 2')
+                    : (creditSummary?.remainingFreeCredits != null ? `${creditSummary.remainingFreeCredits} Credits` : EMPTY_VALUE)}
                 </div>
               </div>
 
-              {/* Requested Credits */}
+              {/* Type-Specific Value Field */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
+                  {strings.creditApproval?.types?.[selectedRequestType]?.valueLabel ||
+                    strings.creditApproval?.requestedCreditsLabel ||
+                    'Requested Credits'} <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="number"
                   min="1"
-                  max="1000"
+                  max={selectedRequestType === 'Discounts' ? 100 : selectedRequestType === 'Trial Periods' ? 365 : 100000000}
                   value={addCreditAmount}
                   onChange={(e) => setAddCreditAmount(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                  placeholder={strings.creditApproval?.types?.[selectedRequestType]?.placeholder || '0'}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                   required
                 />
               </div>
+
+              {/* Offline Payments Reference Field */}
+              {selectedRequestType === 'Offline Payments' && (
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    {strings.creditApproval?.types?.['Offline Payments']?.referenceLabel || 'Payment Reference / UTR Number'} <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    value={paymentReference}
+                    onChange={(e) => setPaymentReference(e.target.value)}
+                    placeholder={strings.creditApproval?.types?.['Offline Payments']?.referencePlaceholder || 'Enter UTR, cheque, or bank reference...'}
+                    className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    required
+                  />
+                </div>
+              )}
 
               {/* Initiated By Select */}
               <div>
@@ -1684,7 +1984,6 @@ export default function BuyerDossierDrawer({
                 <label htmlFor="credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                   {strings.creditApproval?.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                 </label>
-                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
                 <input
                   id="credit-approver"
                   type="text"
@@ -1698,13 +1997,13 @@ export default function BuyerDossierDrawer({
               {/* Reason / Remarks */}
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.reasonLabel || 'Business Justification / Reason'}
+                  {strings.creditApproval?.reasonLabel || 'Request Reason / Justification'}
                 </label>
                 <textarea
                   rows={2}
                   value={addCreditReason}
                   onChange={(e) => setAddCreditReason(e.target.value)}
-                  placeholder={strings.creditApproval?.reasonPlaceholder || 'Enter business justification...'}
+                  placeholder={strings.creditApproval?.types?.[selectedRequestType]?.reasonPlaceholder || strings.creditApproval?.reasonPlaceholder || 'Enter business justification...'}
                   className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
                 />
               </div>
@@ -1719,12 +2018,12 @@ export default function BuyerDossierDrawer({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmittingCredit || addCreditAmount <= 0}
+                  disabled={isSubmittingCredit || addCreditAmount <= 0 || (selectedRequestType === 'Offline Payments' && !paymentReference.trim())}
                   className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
                 >
                   {isSubmittingCredit
-                    ? strings.creditApproval?.submittingBtn || 'Submitting Request...'
-                    : strings.creditApproval?.submitBtn || 'Submit for Approval'}
+                    ? (strings.creditApproval?.submittingBtn || 'Submitting Request...')
+                    : (strings.creditApproval?.submitBtn || 'Submit for Approval')}
                 </button>
               </div>
             </form>
@@ -2559,6 +2858,97 @@ export default function BuyerDossierDrawer({
                 className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg hover:bg-slate-200"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vendor Details Modal */}
+      {selectedVendorForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedVendorForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedVendorForModal.name || selectedVendorForModal.companyName || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.uploadedVendors.vendorDetailsTitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedVendorForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.uploadedVendors.closeModal}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colCompanyName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.companyName || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colContactPerson}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.contactPerson || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colEmail}</span>
+                <span className="text-indigo-600 dark:text-indigo-400 font-medium break-all">{selectedVendorForModal.email || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colPhone}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.phone || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.categoryLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.majorCategory || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.locationLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.location || selectedVendorForModal.city || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.gstinLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.gstin || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.panLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.pan || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colUploadDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedVendorForModal.createdAt ? formatIndianDateTime(selectedVendorForModal.createdAt) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedVendorForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedVendorForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.uploadedVendors.closeModal}
               </button>
             </div>
           </div>

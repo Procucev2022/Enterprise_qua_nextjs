@@ -5,6 +5,8 @@ import {
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
   updateSupplierCategories,
+  fetchSellerBuyerUploads,
+  fetchSellerActiveRFQs,
 } from '@/lib/supplierProfileClient';
 import supplierProfileClient from '@/lib/supplierProfileClient';
 import { authClient } from '@/lib/authClient';
@@ -199,6 +201,58 @@ describe('supplierProfileClient', () => {
     });
   });
 
+  describe('fetchSellerBuyerUploads', () => {
+    test('fetches buyer uploads successfully', async () => {
+      const mockData = { success: true, count: 1, data: [{ id: 'b-1', name: 'Buyer One' }] };
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse(mockData));
+
+      const res = await fetchSellerBuyerUploads('v-123');
+      expect(res.success).toBe(true);
+      expect(res.count).toBe(1);
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/v-123/buyer-uploads', expect.any(Object));
+    });
+
+    test('handles failure when loading buyer uploads', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network failure'));
+      const res = await fetchSellerBuyerUploads('v-123');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.buyerUploads.title }));
+    });
+
+    test('handles non-Error rejection fallback for buyer uploads', async () => {
+      global.fetch = jest.fn().mockRejectedValue('String error');
+      const res = await fetchSellerBuyerUploads('v-123');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.buyerUploads.title }));
+    });
+  });
+
+  describe('fetchSellerActiveRFQs', () => {
+    test('fetches active RFQs successfully', async () => {
+      const mockData = { success: true, count: 1, data: [{ id: 'rfq-1', rfqNumber: 'RFQ-001' }] };
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse(mockData));
+
+      const res = await fetchSellerActiveRFQs('v-123');
+      expect(res.success).toBe(true);
+      expect(res.count).toBe(1);
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/v-123/active-rfqs', expect.any(Object));
+    });
+
+    test('handles failure when loading active RFQs', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Active RFQs error'));
+      const res = await fetchSellerActiveRFQs('v-123');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.activeRfqs.title }));
+    });
+
+    test('handles non-Error rejection fallback for active RFQs', async () => {
+      global.fetch = jest.fn().mockRejectedValue(500);
+      const res = await fetchSellerActiveRFQs('v-123');
+      expect(res.success).toBe(false);
+      expect(res.error).toBe(formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.activeRfqs.title }));
+    });
+  });
+
   describe('supplierProfileClient default export', () => {
     test('contains all expected methods', () => {
       expect(typeof supplierProfileClient.fetchSupplierCreditHistory).toBe('function');
@@ -206,6 +260,8 @@ describe('supplierProfileClient', () => {
       expect(typeof supplierProfileClient.recordSupplierCommunication).toBe('function');
       expect(typeof supplierProfileClient.fetchSupplierPaymentHistory).toBe('function');
       expect(typeof supplierProfileClient.updateSupplierCategories).toBe('function');
+      expect(typeof supplierProfileClient.fetchSellerBuyerUploads).toBe('function');
+      expect(typeof supplierProfileClient.fetchSellerActiveRFQs).toBe('function');
     });
 
     test('authHeaders handles unauthenticated state', async () => {

@@ -440,10 +440,10 @@ export async function completeInternalTask(
   resolutionRemarks?: string
 ): Promise<InternalTask | null> {
   return updateInternalTask(id, {
-    status: 'Completed',
+    status: 'Closed',
     completionConfirmed: true,
     completionRemarks: resolutionRemarks,
-    activityComment: resolutionRemarks ? `Completed: ${resolutionRemarks}` : 'Task marked as completed',
+    activityComment: resolutionRemarks ? `Closed: ${resolutionRemarks}` : 'Task marked as closed',
     notes: resolutionRemarks || undefined,
   });
 }

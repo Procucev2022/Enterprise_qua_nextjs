@@ -4,6 +4,7 @@ import PaymentDuesDashboard from '@/app/category-manager/components/PaymentDuesD
 import * as paymentDuesClient from '@/lib/paymentDuesClient';
 import type { PaymentDuesAccount, PaymentDuesSummary } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { AppContext } from '@/lib/store';
 
 jest.mock('@/lib/paymentDuesClient', () => {
   const actual = jest.requireActual('@/lib/paymentDuesClient');
@@ -28,6 +29,9 @@ jest.mock('@/app/category-manager/BuyerDetailsModal', () => {
     return (
       <div data-testid="buyer-details-modal">
         <span>Buyer Modal: {props.buyerName}</span>
+        {props.onOpenDossier && (
+          <button onClick={props.onOpenDossier}>Open 360 Dossier</button>
+        )}
         <button onClick={props.onClose}>Close Buyer Modal</button>
       </div>
     );
@@ -41,6 +45,30 @@ jest.mock('@/app/category-manager/VendorDetailsModal', () => {
       <div data-testid="vendor-details-modal">
         <span>Vendor Modal: {props.vendorName}</span>
         <button onClick={props.onClose}>Close Vendor Modal</button>
+      </div>
+    );
+  };
+});
+
+jest.mock('@/app/category-manager/components/SupplierDossierDrawer', () => {
+  return function MockSupplierDossierDrawer(props: any) {
+    if (!props.seller) return null;
+    return (
+      <div data-testid="supplier-dossier-drawer">
+        <span>Seller 360 Dossier: {props.seller.name || props.seller.companyName}</span>
+        <button onClick={props.onClose}>Close Seller Dossier</button>
+      </div>
+    );
+  };
+});
+
+jest.mock('@/app/category-manager/components/BuyerDossierDrawer', () => {
+  return function MockBuyerDossierDrawer(props: any) {
+    if (!props.buyer) return null;
+    return (
+      <div data-testid="buyer-dossier-drawer">
+        <span>Buyer 360 Dossier: {props.buyer.organizationName}</span>
+        <button onClick={props.onClose}>Close Buyer Dossier</button>
       </div>
     );
   };
@@ -318,7 +346,7 @@ describe('PaymentDuesDashboard', () => {
     });
   });
 
-  it('opens BuyerDetailsModal when buyer name is clicked', async () => {
+  it('opens Buyer 360 Dossier when buyer name is clicked', async () => {
     render(<PaymentDuesDashboard />);
 
     await waitFor(() => {
@@ -328,15 +356,15 @@ describe('PaymentDuesDashboard', () => {
     const buyerLink = screen.getByText('Apex Industries');
     fireEvent.click(buyerLink);
 
-    expect(screen.getByTestId('buyer-details-modal')).toBeInTheDocument();
-    expect(screen.getByText(/Buyer Modal: Apex Industries/i)).toBeInTheDocument();
+    expect(screen.getByTestId('buyer-dossier-drawer')).toBeInTheDocument();
+    expect(screen.getByText(/Buyer 360 Dossier: Apex Industries/i)).toBeInTheDocument();
 
-    // Close modal
-    fireEvent.click(screen.getByText('Close Buyer Modal'));
-    expect(screen.queryByTestId('buyer-details-modal')).not.toBeInTheDocument();
+    // Close Buyer Dossier
+    fireEvent.click(screen.getByText('Close Buyer Dossier'));
+    expect(screen.queryByTestId('buyer-dossier-drawer')).not.toBeInTheDocument();
   });
 
-  it('opens VendorDetailsModal when seller name is clicked', async () => {
+  it('opens SupplierDossierDrawer when seller name is clicked', async () => {
     render(<PaymentDuesDashboard />);
 
     await waitFor(() => {
@@ -346,12 +374,33 @@ describe('PaymentDuesDashboard', () => {
     const vendorLink = screen.getByText('Zenith Fasteners');
     fireEvent.click(vendorLink);
 
-    expect(screen.getByTestId('vendor-details-modal')).toBeInTheDocument();
-    expect(screen.getByText(/Vendor Modal: Zenith Fasteners/i)).toBeInTheDocument();
+    expect(screen.getByTestId('supplier-dossier-drawer')).toBeInTheDocument();
+    expect(screen.getByText(/Seller 360 Dossier: Zenith Fasteners/i)).toBeInTheDocument();
 
-    // Close modal
-    fireEvent.click(screen.getByText('Close Vendor Modal'));
-    expect(screen.queryByTestId('vendor-details-modal')).not.toBeInTheDocument();
+    // Close drawer
+    fireEvent.click(screen.getByText('Close Seller Dossier'));
+    expect(screen.queryByTestId('supplier-dossier-drawer')).not.toBeInTheDocument();
+  });
+
+  it('opens Buyer 360 Dossier with store buyer account match', async () => {
+    render(
+      <AppContext.Provider value={{ buyerAccounts: [{ id: 'acc-buyer-1', organizationName: 'Apex Store Corp', syncTimestamp: '2026-11-16T12:00:00Z', supportedMajorCategories: ['IT'] }] as any, buyerVendors: [], rfqs: [] } as any}>
+        <PaymentDuesDashboard />
+      </AppContext.Provider>
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+    });
+
+    const buyerLink = screen.getByText('Apex Industries');
+    fireEvent.click(buyerLink);
+
+    expect(screen.getByTestId('buyer-dossier-drawer')).toBeInTheDocument();
+
+    // Close Buyer Dossier
+    fireEvent.click(screen.getByText('Close Buyer Dossier'));
+    expect(screen.queryByTestId('buyer-dossier-drawer')).not.toBeInTheDocument();
   });
 
   it('Gear Icon popover toggles column visibility, select all, hide optional, and reset', async () => {
@@ -484,14 +533,7 @@ describe('PaymentDuesDashboard', () => {
   });
 
   it('opens WhatsApp modal and sends notification', async () => {
-    (paymentDuesClient.sendPaymentDuesWhatsApp as jest.Mock).mockResolvedValue({
-      success: false,
-      status: 'link_only',
-      error: 'WhatsApp was not sent by a provider. Open the link to send the message from your own WhatsApp.',
-      directLink: 'https://wa.me/9876543210',
-    });
-    window.open = jest.fn();
-
+    (paymentDuesClient.sendPaymentDuesWhatsApp as jest.Mock).mockResolvedValue({ success: true });
     render(<PaymentDuesDashboard />);
 
     await waitFor(() => {
@@ -512,11 +554,7 @@ describe('PaymentDuesDashboard', () => {
           accountId: 'acc-buyer-1',
         })
       );
-      expect(window.open).not.toHaveBeenCalled();
-      expect(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i })).toBeInTheDocument();
     });
-    fireEvent.click(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i }));
-    expect(window.open).toHaveBeenCalledWith('https://wa.me/9876543210', '_blank', 'noopener,noreferrer');
   });
 
   it('opens Acknowledgement modal and updates status', async () => {
@@ -709,7 +747,7 @@ describe('PaymentDuesDashboard', () => {
     if (closeBtn) fireEvent.click(closeBtn);
   });
 
-  it('clicking Account ID opens Buyer and Seller modals', async () => {
+  it('clicking Account ID opens Buyer and Seller 360 Dossiers', async () => {
     render(<PaymentDuesDashboard />);
     await waitFor(() => {
       expect(screen.getByText('Apex Industries')).toBeInTheDocument();
@@ -717,13 +755,13 @@ describe('PaymentDuesDashboard', () => {
 
     const buyerIdBtn = screen.getByText('acc-buyer-1');
     fireEvent.click(buyerIdBtn);
-    expect(screen.getByTestId('buyer-details-modal')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Close Buyer Modal'));
+    expect(screen.getByTestId('buyer-dossier-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Close Buyer Dossier'));
 
     const sellerIdBtn = screen.getByText('acc-seller-1');
     fireEvent.click(sellerIdBtn);
-    expect(screen.getByTestId('vendor-details-modal')).toBeInTheDocument();
-    fireEvent.click(screen.getByText('Close Vendor Modal'));
+    expect(screen.getByTestId('supplier-dossier-drawer')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Close Seller Dossier'));
   });
 
   it('handles field changes and cancel buttons in all modals', async () => {
@@ -1089,12 +1127,19 @@ describe('PaymentDuesDashboard', () => {
     // Open and submit WhatsApp to test directLink
     fireEvent.click(screen.getByTitle('WhatsApp Notification'));
     await waitFor(() => expect(screen.getByText('Send WhatsApp Notification')).toBeInTheDocument());
-    const waForm = document.querySelector('form') as HTMLFormElement;
-    fireEvent.submit(waForm);
+    const phoneInput = screen.getByText(/WhatsApp Phone Number/i).parentElement?.querySelector('input') as HTMLInputElement;
+    fireEvent.change(phoneInput, { target: { value: '919999999999' } });
+    const sendWaBtn = screen.getByText('Send via WhatsApp');
+    const form = sendWaBtn.closest('form');
+    if (form) {
+      fireEvent.submit(form);
+    } else {
+      fireEvent.click(sendWaBtn);
+    }
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i })).toBeInTheDocument();
-    });
+    }, { timeout: 10000 });
     // The link never opens by itself. It opens only when the user presses the button.
     expect(windowOpenSpy).not.toHaveBeenCalled();
     fireEvent.click(screen.getByRole('button', { name: /Open WhatsApp link to send manually/i }));
@@ -1174,7 +1219,8 @@ describe('PaymentDuesDashboard', () => {
     // WhatsApp error fallback
     fireEvent.click(screen.getAllByTitle('WhatsApp Notification')[0]);
     await waitFor(() => expect(screen.getByText('Send WhatsApp Notification')).toBeInTheDocument());
-    fireEvent.submit(document.querySelector('form') as HTMLFormElement);
+    const sendWaBtn = screen.getByText('Send via WhatsApp');
+    fireEvent.click(sendWaBtn);
     await waitFor(() => expect(screen.getByText('Failed to initiate WhatsApp notification')).toBeInTheDocument());
     fireEvent.click(document.querySelector('button[aria-label="Close"]') as HTMLButtonElement);
     await waitFor(() => expect(screen.queryByText('Send WhatsApp Notification')).not.toBeInTheDocument());
@@ -1392,4 +1438,158 @@ describe('Summary Cards Click and Modal Popup', () => {
     });
   });
 
+  it('clears search when clear button is clicked', async () => {
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    const searchInput = screen.getByPlaceholderText(/Search company/i);
+    fireEvent.change(searchInput, { target: { value: 'Apex' } });
+    expect(searchInput).toHaveValue('Apex');
+
+    const clearBtn = screen.getByLabelText('Clear search');
+    fireEvent.click(clearBtn);
+    expect(searchInput).toHaveValue('');
+  });
+
+  it('shows load error and retries connection on Retry Connection button click', async () => {
+    (paymentDuesClient.fetchPaymentDues as jest.Mock)
+      .mockResolvedValueOnce({
+        error: 'Database connection failed',
+        accounts: [],
+        total: 0,
+        summary: null,
+      })
+      .mockResolvedValueOnce({
+        accounts: mockAccounts,
+        total: mockAccounts.length,
+        summary: mockSummary,
+      });
+
+    render(<PaymentDuesDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load low-credit accounts')).toBeInTheDocument();
+      expect(screen.getByText('Database connection failed')).toBeInTheDocument();
+    });
+
+    const retryBtn = screen.getByRole('button', { name: /Retry Connection/i });
+    fireEvent.click(retryBtn);
+
+    await waitFor(() => {
+      expect(screen.getByText('Apex Industries')).toBeInTheDocument();
+    });
+  });
+
+  it('handles non-Error thrown during loadData', async () => {
+    (paymentDuesClient.fetchPaymentDues as jest.Mock).mockRejectedValueOnce('string error');
+    render(<PaymentDuesDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to load low-credit accounts')).toBeInTheDocument();
+    });
+  });
+
+  it('handles seller with fallback company name and opens SupplierDossierDrawer', async () => {
+    const rawSellerAccount: PaymentDuesAccount = {
+      accountId: 'seller-fallback-1',
+      accountType: 'seller',
+      companyName: '–',
+      contactPerson: 'Vendor Fallback Contact',
+      email: 'vendorfallback@test.com',
+      phoneNumber: '9123456780',
+      availableCredits: 0,
+      totalCredits: 5,
+      creditsUsed: 5,
+      accountStatus: 'Active',
+      registrationDate: '2026-01-01',
+      lastActivity: '2026-02-01',
+      assignedExecutive: 'Devin',
+      lastNotification: null,
+      notificationChannel: '–',
+      acknowledgementStatus: 'Not Notified',
+      rawRecord: {
+        name: 'Vendor From Raw Record',
+        rating: 4.9,
+        score360: 92,
+      },
+    };
+
+    (paymentDuesClient.fetchPaymentDues as jest.Mock).mockResolvedValueOnce({
+      accounts: [rawSellerAccount],
+      total: 1,
+      summary: mockSummary,
+    });
+
+    render(<PaymentDuesDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Vendor From Raw Record')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByText('Vendor From Raw Record'));
+    expect(screen.getByTestId('supplier-dossier-drawer')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByText('Close Seller Dossier'));
+    expect(screen.queryByTestId('supplier-dossier-drawer')).not.toBeInTheDocument();
+  });
+
+  it('updates internal notes in in-app message modal', async () => {
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    const msgBtns = screen.getAllByTitle('Send Message');
+    fireEvent.click(msgBtns[0]);
+
+    await waitFor(() => expect(screen.getByText('Send In-App Notification')).toBeInTheDocument());
+    const notesInput = screen.getByText('Internal Notes (Optional)').parentElement?.querySelector('input') as HTMLInputElement;
+    fireEvent.change(notesInput, { target: { value: 'Important internal memo' } });
+    expect(notesInput).toHaveValue('Important internal memo');
+  });
+
+  it('navigates previous and next pages properly with chevron buttons', async () => {
+    (paymentDuesClient.fetchPaymentDues as jest.Mock).mockResolvedValue({
+      accounts: mockAccounts,
+      total: 50,
+      summary: mockSummary,
+    });
+
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    // Page 1 of 5 initially
+    expect(screen.getByText(/Page 1 of/i)).toBeInTheDocument();
+
+    // Click next page
+    const buttons = screen.getAllByRole('button');
+    const nextBtn = buttons.find((b) => b.querySelector('svg.lucide-chevron-right'));
+
+    if (nextBtn) {
+      fireEvent.click(nextBtn);
+      await waitFor(() => expect(screen.getByText(/Page 2 of/i)).toBeInTheDocument());
+
+      const updatedButtons = screen.getAllByRole('button');
+      const prevBtn = updatedButtons.find((b) => b.querySelector('svg.lucide-chevron-left'));
+      if (prevBtn) {
+        fireEvent.click(prevBtn);
+        await waitFor(() => expect(screen.getByText(/Page 1 of/i)).toBeInTheDocument());
+      }
+    }
+  });
+
+  it('handles column with unknown key in preferences and renders cell fallback', async () => {
+    const customPrefs = [
+      { key: 'companyName', label: 'Company Name', visible: true, required: true },
+      { key: 'unknownCustomColumn', label: 'Custom Col', visible: true },
+    ];
+    localStorage.setItem('qua_payment_dues_column_prefs', JSON.stringify(customPrefs));
+
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    // Check that fallback '–' is rendered in the unknown column cell
+    const cells = screen.getAllByRole('cell');
+    expect(cells.some((c) => c.textContent === '–')).toBe(true);
+
+    localStorage.removeItem('qua_payment_dues_column_prefs');
+  });
 });

@@ -258,11 +258,16 @@ const ORGANIZATION_TYPES = [
 ];
 
 const INTERNAL_TASK_CATEGORY_ENUM = Object.freeze([
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
+  'CREDIT_MANAGEMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
+  'INTERNAL_OPERATIONS',
   'COMMUNICATION',
   'DEMO_SCHEDULING',
-  'CREDIT_MANAGEMENT',
   'BUSINESS_DEVELOPMENT',
-  'INTERNAL_OPERATIONS',
   'ONBOARDING',
 ]);
 
@@ -468,13 +473,49 @@ const VALIDATION_SCHEMAS = {
       type: 'string', required: false, maxLength: 36, pattern: UUID_REGEX,
       message: 'Idempotency key must be a UUID.',
     },
+    requestType: {
+      type: 'string',
+      required: false,
+      enum: [
+        'Buyer Credit Addition',
+        'Buyer Credit Deletion',
+        'Discounts',
+        'Trial Periods',
+        'Offline Payments',
+      ],
+    },
     amount: {
       type: 'number',
-      required: true,
+      required: false,
       min: 1,
-      max: 100000,
-      custom: (val) => (!Number.isInteger(Number(val)) || Number(val) < 1 ? 'Credit amount must be a positive integer.' : null),
+      max: 100000000,
+      custom: (val, data) => {
+        if (data?.requestType === 'Discounts' && data?.discountPercentage) return null;
+        if (data?.requestType === 'Trial Periods' && data?.durationDays) return null;
+        if (val === undefined || val === null || val === '') return 'Credit amount must be a positive integer.';
+        if (!Number.isInteger(Number(val)) || Number(val) < 1) return 'Credit amount must be a positive integer.';
+        return null;
+      },
       message: 'Credit amount must be a positive integer.',
+    },
+    discountPercentage: {
+      type: 'number',
+      required: false,
+      min: 1,
+      max: 100,
+      message: 'Discount percentage must be between 1 and 100.',
+    },
+    durationDays: {
+      type: 'number',
+      required: false,
+      min: 1,
+      max: 365,
+      message: 'Trial duration must be between 1 and 365 days.',
+    },
+    paymentReference: {
+      type: 'string',
+      required: false,
+      maxLength: 100,
     },
     reason: { type: 'string', required: false, maxLength: 1000 },
     // The maker is the signed-in account (buyerAccountController), so no initiator name is
@@ -1424,8 +1465,11 @@ const VALIDATION_SCHEMAS = {
     status: {
       type: 'string',
       required: false,
-      enum: ['all', 'All', 'new', 'New', 'accepted', 'Accepted', 'rejected', 'Rejected'],
+      enum: ['all', 'All', 'new', 'New', 'accepted', 'Accepted', 'rejected', 'Rejected', 'auto-approved', 'Auto-Approved', 'auto_approved'],
     },
+    startDate: { type: 'string', required: false, maxLength: 50 },
+    endDate: { type: 'string', required: false, maxLength: 50 },
+    dateRangePreset: { type: 'string', required: false, maxLength: 50 },
     limit: { type: 'number', required: false, min: 1, max: 200 },
     offset: { type: 'number', required: false, min: 0, max: 1000000 },
   },
@@ -1570,6 +1614,12 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       enum: [
+        'Open',
+        'Pending',
+        'Closed',
+        'open',
+        'pending',
+        'closed',
         'New',
         'Assigned',
         'In Progress',
@@ -1577,7 +1627,6 @@ const VALIDATION_SCHEMAS = {
         'Completed',
         'Rejected',
         'Cancelled',
-        'Pending',
         'Blocked',
         'Escalated',
       ],
@@ -1620,6 +1669,12 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       enum: [
+        'Open',
+        'Pending',
+        'Closed',
+        'open',
+        'pending',
+        'closed',
         'New',
         'Assigned',
         'In Progress',
@@ -1627,7 +1682,6 @@ const VALIDATION_SCHEMAS = {
         'Completed',
         'Rejected',
         'Cancelled',
-        'Pending',
         'Blocked',
         'Escalated',
       ],

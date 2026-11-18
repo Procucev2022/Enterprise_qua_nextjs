@@ -85,8 +85,51 @@ describe('internalTaskController - Registrations', () => {
 
       expect(res.status).toHaveBeenCalledWith(200);
       expect(registrationQueries.getRegisteredClients).toHaveBeenCalledWith({
-        search: '', sourceType: 'all', status: 'all', clientType: 'all', limit: 100, offset: 0,
+        search: '', sourceType: 'all', status: 'all', clientType: 'all', startDate: '', endDate: '', limit: 100, offset: 0,
       });
+    });
+
+    test('passes startDate and endDate to getRegisteredClients', async () => {
+      req.query = { startDate: '2026-11-06', endDate: '2026-11-16' };
+      const getSpy = jest.spyOn(registrationQueries, 'getRegisteredClients').mockResolvedValue({
+        total: 1, clients: [{ id: 'c-1' }], limit: 100, offset: 0,
+      });
+
+      await internalTaskController.getRegistrations(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(getSpy).toHaveBeenCalledWith(expect.objectContaining({
+        startDate: '2026-11-06',
+        endDate: '2026-11-16',
+      }));
+    });
+
+    test('computes date range when dateRangePreset is last10', async () => {
+      req.query = { dateRangePreset: 'last10' };
+      const getSpy = jest.spyOn(registrationQueries, 'getRegisteredClients').mockResolvedValue({
+        total: 1, clients: [{ id: 'c-1' }], limit: 100, offset: 0,
+      });
+
+      await internalTaskController.getRegistrations(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const callArg = getSpy.mock.calls[0][0];
+      expect(callArg.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(callArg.endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    });
+
+    test('computes date range when dateRangePreset is last30 or last1month', async () => {
+      req.query = { dateRangePreset: 'last30' };
+      const getSpy = jest.spyOn(registrationQueries, 'getRegisteredClients').mockResolvedValue({
+        total: 1, clients: [{ id: 'c-1' }], limit: 100, offset: 0,
+      });
+
+      await internalTaskController.getRegistrations(req, res);
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      const callArg = getSpy.mock.calls[0][0];
+      expect(callArg.startDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+      expect(callArg.endDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     });
 
     test('returns 500 on database or query exception', async () => {

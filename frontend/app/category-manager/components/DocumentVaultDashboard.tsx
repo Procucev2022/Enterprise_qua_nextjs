@@ -77,21 +77,24 @@ export default function DocumentVaultDashboard() {
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Column settings & sort states
-  const [docColumns, setDocColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(DOC_VAULT_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as unknown;
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed as ColumnDef[];
-        }
-      } catch { /* ignore */ }
-    }
-    return DOC_VAULT_DEFAULT_COLUMNS;
-  });
+  const [docColumns, setDocColumns] = useState<ColumnDef[]>(DOC_VAULT_DEFAULT_COLUMNS);
   const [showDocColumnSettings, setShowDocColumnSettings] = useState<boolean>(false);
   const [docSortField, setDocSortField] = useState<string>('uploadedAt');
   const [docSortOrder, setDocSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Hydrate doc column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(DOC_VAULT_COL_PREF_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved) as unknown;
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setDocColumns(parsed as ColumnDef[]);
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });

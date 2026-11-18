@@ -363,21 +363,21 @@ describe('internalTaskClient', () => {
     );
   });
 
-  test('completeInternalTask calls updateInternalTask with Completed status and remarks', async () => {
+  test('completeInternalTask calls updateInternalTask with Closed status and remarks', async () => {
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        task: { id: 'tsk_1', status: 'Completed', notes: 'Verified and approved' },
+        task: { id: 'tsk_1', status: 'Closed', notes: 'Verified and approved' },
       }),
     });
 
     const res = await completeInternalTask('tsk_1', 'Verified and approved');
-    expect(res?.status).toBe('Completed');
+    expect(res?.status).toBe('Closed');
     expect(global.fetch).toHaveBeenCalledWith(
       '/api/internal-tasks/tsk_1',
       expect.objectContaining({
         method: 'PUT',
-        body: expect.stringContaining('"status":"Completed"'),
+        body: expect.stringContaining('"status":"Closed"'),
       })
     );
 
@@ -385,11 +385,11 @@ describe('internalTaskClient', () => {
     global.fetch = jest.fn().mockResolvedValueOnce({
       ok: true,
       json: async () => ({
-        task: { id: 'tsk_2', status: 'Completed' },
+        task: { id: 'tsk_2', status: 'Closed' },
       }),
     });
     const res2 = await completeInternalTask('tsk_2');
-    expect(res2?.status).toBe('Completed');
+    expect(res2?.status).toBe('Closed');
   });
 
 

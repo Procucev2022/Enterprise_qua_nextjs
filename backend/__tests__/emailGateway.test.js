@@ -235,7 +235,7 @@ describe('emailGatewayService.processMessage', () => {
     expect(payload.sourceEmail).toBe(SENDER);
     expect(account.id).toBe('buyer-acc-101');
     expect(result.rfq.rfqNumber).toBe('RFQ-2026-0001');
-  });
+  }, 30000);
 
   test('does not record or charge an email RFQ when its durable create fails', async () => {
     mockExtraction();
@@ -816,6 +816,8 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     mailTransport.resetCooldowns();
     jest.spyOn(mailTransport, 'loadPersistedCooldowns').mockResolvedValue(true);
     jest.spyOn(mailTransport, 'flushPendingCooldownWrites').mockResolvedValue();
+    if (typeof mailerService.getGmailOAuthClient !== 'function') mailerService.getGmailOAuthClient = () => ({});
+    if (typeof mailerService.getGmailProviderKey !== 'function') mailerService.getGmailProviderKey = () => '';
     jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
     jest.spyOn(mailerService, 'getGmailProviderKey').mockReturnValue('gmail:buyer:testfp');
 

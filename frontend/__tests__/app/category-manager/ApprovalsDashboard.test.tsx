@@ -145,13 +145,16 @@ describe('ApprovalsDashboard', () => {
 
     // Toolbar controls rendered in single row
     expect(screen.getByPlaceholderText(strings.searchPlaceholder)).toBeInTheDocument();
-    expect(screen.getByLabelText(strings.projectFilterPlaceholder)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allRequestTypes)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allStatuses)).toBeInTheDocument();
-    expect(screen.getByTestId('toggle-my-approvals')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-refresh-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-settings-btn')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(strings.projectFilterPlaceholder)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toggle-my-approvals')).not.toBeInTheDocument();
   });
 
-  it('filters by status and toggles my approvals cleanly', async () => {
+  it('filters by status via summary cards and total card cleanly', async () => {
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
@@ -190,24 +193,7 @@ describe('ApprovalsDashboard', () => {
     });
     fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
 
-    // 4. Toggle My Approvals button
-    const myApprovalsBtn = screen.getByTestId('toggle-my-approvals');
-    fireEvent.click(myApprovalsBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: 'Srinu Sir' })
-      );
-    });
-
-    // Toggle off My Approvals
-    fireEvent.click(myApprovalsBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: undefined })
-      );
-    });
-
-    // 5. Total Requests Card click
+    // 4. Total Requests Card click
     const totalCard = screen.getByTestId('card-total-requests');
     fireEvent.click(totalCard);
     await waitFor(() => {
@@ -282,8 +268,7 @@ describe('ApprovalsDashboard', () => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
 
-    // The project filter is typed text. The request type and status dropdowns are the first two comboboxes.
-    fireEvent.change(screen.getByLabelText(strings.projectFilterPlaceholder), { target: { value: 'Tata' } });
+    // The request type and status dropdowns are the first two comboboxes.
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[0], { target: { value: 'Buyer Credit Addition' } });
     fireEvent.change(selects[1], { target: { value: 'Pending' } });
@@ -291,7 +276,6 @@ describe('ApprovalsDashboard', () => {
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({
-          project: 'Tata',
           module: 'Buyer Credit Addition',
           status: 'Pending',
         })
@@ -308,6 +292,16 @@ describe('ApprovalsDashboard', () => {
       );
     });
 
+    // Test Clear search button
+    const clearBtn = screen.getByRole('button', { name: strings.clearSearch });
+    fireEvent.click(clearBtn);
+
+    await waitFor(() => {
+      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+        expect.objectContaining({ search: undefined })
+      );
+    });
+
     // Test Refresh button
     const refreshBtn = screen.getByRole('button', { name: strings.refreshTooltip });
     fireEvent.click(refreshBtn);
@@ -316,6 +310,62 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.fetchApprovalSummary).toHaveBeenCalledTimes(2);
       expect(approvalClient.fetchApprovals).toHaveBeenCalled();
     });
+  });
+
+  it('renders only the 7 exact request type options in the exact order and filters correctly', async () => {
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    const requestTypeSelect = screen.getByLabelText(strings.allRequestTypes);
+    const options = Array.from(requestTypeSelect.querySelectorAll('option')).map((opt) => opt.textContent);
+
+    expect(options).toEqual([
+      strings.allRequestTypes,
+      'Buyer Credit Addition',
+      'Buyer Credit Deletion',
+      'Seller Credit Addition',
+      'Seller Credit Deletion',
+      'Discounts',
+      'Trial Periods',
+      'Offline Payments',
+    ]);
+
+    // Verify removed options are NOT present
+    const removedOptions = [
+      'Purchase Requests',
+      'Payment Approvals',
+      'Account Approvals',
+      'Unit Bookings',
+      'Packages',
+      'Milestones',
+      'Credit Notes',
+      'Cancellations & Refunds',
+    ];
+    for (const removed of removedOptions) {
+      expect(options).not.toContain(removed);
+    }
+
+    // Verify filtering on all 7 options
+    const testTypes = [
+      'Buyer Credit Addition',
+      'Buyer Credit Deletion',
+      'Seller Credit Addition',
+      'Seller Credit Deletion',
+      'Discounts',
+      'Trial Periods',
+      'Offline Payments',
+    ];
+    for (const type of testTypes) {
+      fireEvent.change(requestTypeSelect, { target: { value: type } });
+      await waitFor(() => {
+        expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+          expect.objectContaining({ module: type })
+        );
+      });
+    }
   });
 
   it('customizes table columns via Column Settings modal and persists to localStorage', async () => {
@@ -981,9 +1031,9 @@ describe('ApprovalsDashboard', () => {
     });
     unmount2();
 
-    // 3. User with email only, no name
+    // 3. User with email only, no id
     jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
-      id: 'u-email-only',
+      id: '',
       name: '',
       email: 'approver@enterprise.com',
       role: 'buyer',
@@ -993,13 +1043,6 @@ describe('ApprovalsDashboard', () => {
     const { unmount: unmount3 } = render(<ApprovalsDashboard />);
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
-    });
-    const myApprBtn = screen.getByTestId('toggle-my-approvals');
-    fireEvent.click(myApprBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: 'approver@enterprise.com' })
-      );
     });
 
     // 4. Test ignored key on card

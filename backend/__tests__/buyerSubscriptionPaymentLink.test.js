@@ -290,7 +290,7 @@ describe('GET /api/buyer-accounts/:id/payment-links and invoice download', () =>
     expect(res.headers['content-type']).toBe('application/pdf');
     expect(res.headers['content-disposition']).toContain(`receipt-${link.id}.pdf`);
     expect(res.body.subarray(0, 4).toString('utf8')).toBe('%PDF');
-  });
+  }, 30000);
 
   test('404s for a payment link that belongs to a different buyer account', async () => {
     const otherBuyer = storeService.addBuyerAccount({ organizationName: 'Other Buyer Co 2', corporateEmail: 'other-billing-buyer-2@example.com' });

@@ -32,12 +32,18 @@ export interface UploadAccountDocumentPayload {
   file?: File;
 }
 
+import type { BuyerProfileRequestType } from '@/lib/constants';
+
 export interface RequestBuyerCreditApprovalPayload {
-  amount: number;
+  amount?: number;
   reason?: string;
   approverName: string;
   initiatorName: string;
   idempotencyKey?: string;
+  requestType?: BuyerProfileRequestType;
+  discountPercentage?: number;
+  durationDays?: number;
+  paymentReference?: string;
 }
 
 export interface RequestSellerQuoteCreditApprovalPayload {

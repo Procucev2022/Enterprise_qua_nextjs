@@ -159,6 +159,30 @@ async function getApprovalSummary() {
 }
 
 /**
+ * Maps an approval request type to database module aliases/variants for resilient query matching.
+ */
+function getModuleFilterVariants(requestType) {
+  const normalized = String(requestType || '').trim().toLowerCase();
+  const variants = [normalized];
+  if (normalized === 'buyer credit addition') {
+    variants.push('buyer_credit_addition', 'buyer credit', 'credit addition', 'admin credit addition');
+  } else if (normalized === 'buyer credit deletion') {
+    variants.push('buyer_credit_deletion', 'buyer credit deduction', 'buyer_credit_deduction', 'credit deletion', 'credit deduction', 'admin credit deduction');
+  } else if (normalized === 'seller credit addition') {
+    variants.push('seller_credit_addition', 'seller credit', 'quote credit addition', 'quote_credit_addition', 'vendor credit addition');
+  } else if (normalized === 'seller credit deletion') {
+    variants.push('seller_credit_deletion', 'seller credit deduction', 'seller_credit_deduction', 'quote credit deduction', 'quote_credit_deduction', 'vendor credit deduction');
+  } else if (normalized === 'discounts') {
+    variants.push('discount');
+  } else if (normalized === 'trial periods') {
+    variants.push('trial period', 'trial_periods', 'trial_period');
+  } else if (normalized === 'offline payments') {
+    variants.push('offline payment', 'offline_payments', 'offline_payment');
+  }
+  return Array.from(new Set(variants));
+}
+
+/**
  * List approvals with module, status, project, assigned approver, and search filtering.
  */
 async function getApprovals({
@@ -186,7 +210,19 @@ async function getApprovals({
     params.push(value);
     filters.push(predicate(params.length));
   };
-  if (module && module !== 'all') addFilter(String(module).toLowerCase(), (index) => `lower(module) = $${index}`);
+  if (module && module !== 'all') {
+    const rawMod = String(module).toLowerCase().trim();
+    const variants = getModuleFilterVariants(rawMod);
+    if (variants.length <= 1) {
+      addFilter(variants[0] || rawMod, (index) => `lower(module) = $${index}`);
+    } else {
+      const placeholders = variants.map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      }).join(', ');
+      filters.push(`lower(module) IN (${placeholders})`);
+    }
+  }
   if (status && status !== 'all') addFilter(String(status).toLowerCase(), (index) => `lower(status) = $${index}`);
   if (project && project !== 'all') addFilter(`%${String(project).trim().toLowerCase()}%`, (index) => `lower(coalesce(project, '')) LIKE $${index}`);
   if (assigned_approver && String(assigned_approver).trim()) {
@@ -644,4 +680,5 @@ module.exports = {
   prepareApprovalCreate,
   processApprovalAction,
   hydrateApprovalRow,
+  getModuleFilterVariants,
 };

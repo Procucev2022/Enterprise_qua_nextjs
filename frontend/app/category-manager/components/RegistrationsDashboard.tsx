@@ -6,8 +6,6 @@ import {
   Globe,
   MessageSquare,
   Mail,
-  CheckCircle,
-  XCircle,
   Loader2,
   ChevronLeft,
   ChevronRight,
@@ -23,9 +21,10 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  Calendar,
 } from 'lucide-react';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
-import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColumnConfig, RegistrationColumnKey } from '@/lib/types';
 import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
@@ -46,29 +45,60 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [sourceType, setSourceType] = useState<string>('all');
   const [clientType, setClientType] = useState<string>('all');
   const [statusFilter, setStatusFilter] = useState<string>('all');
+  const [dateRangePreset, setDateRangePreset] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
+
+  // Date range preset selection handler
+  const handleDatePresetChange = (preset: string) => {
+    setDateRangePreset(preset);
+    setCurrentPage(1);
+
+    const now = new Date();
+    const formatDateYmd = (d: Date) => {
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      return `${year}-${month}-${day}`;
+    };
+
+    if (preset === 'all') {
+      setStartDate('');
+      setEndDate('');
+    } else if (preset === 'last10') {
+      const past = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+      setStartDate(formatDateYmd(past));
+      setEndDate(formatDateYmd(now));
+    } else if (preset === 'last30') {
+      const past = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      setStartDate(formatDateYmd(past));
+      setEndDate(formatDateYmd(now));
+    }
+  };
 
   // Column Reordering & Visibility state
-  const [columns, setColumns] = useState<RegistrationColumnConfig[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(REGISTRATION_COLUMN_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            return parsed;
-          }
-        }
-      } catch {
-        // fallback
-      }
-    }
-    return DEFAULT_REGISTRATION_COLUMNS;
-  });
+  const [columns, setColumns] = useState<RegistrationColumnConfig[]>(DEFAULT_REGISTRATION_COLUMNS);
 
   const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
   const [sortField, setSortField] = useState<RegistrationColumnKey>('regDate');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Hydrate registration column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(REGISTRATION_COLUMN_PREF_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setColumns(parsed);
+        }
+      }
+    } catch {
+      // fallback
+    }
+  }, []);
 
   const handleSort = (field: RegistrationColumnKey) => {
     if (sortField === field) {
@@ -81,21 +111,27 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
   const sortedClients = useMemo(() => {
     if (!clients.length) return [];
-    return [...clients].sort((a, b) => {
-      const valA = a[sortField as keyof RegisteredClient];
-      const valB = b[sortField as keyof RegisteredClient];
+    let list = clients;
+    if (startDate || endDate) {
+      const startMs = startDate ? new Date(startDate).getTime() : 0;
+      const endMs = endDate ? new Date(endDate).getTime() + 86400000 : Infinity;
+      list = list.filter((c) => {
+        const regMs = c.regDate ? new Date(c.regDate).getTime() : 0;
+        return regMs >= startMs && regMs <= endMs;
+      });
+    }
+    return [...list].sort((a, b) => {
       if (sortField === 'regDate') {
         const timeA = new Date(a.regDate || 0).getTime();
         const timeB = new Date(b.regDate || 0).getTime();
         return sortOrder === 'asc' ? timeA - timeB : timeB - timeA;
       }
-      if (typeof valA === 'string' && typeof valB === 'string') {
-        const cmp = valA.localeCompare(valB);
-        return sortOrder === 'asc' ? cmp : -cmp;
-      }
-      return 0;
+      const valA = String(a[sortField as keyof RegisteredClient] || '');
+      const valB = String(b[sortField as keyof RegisteredClient] || '');
+      const cmp = valA.localeCompare(valB);
+      return sortOrder === 'asc' ? cmp : -cmp;
     });
-  }, [clients, sortField, sortOrder]);
+  }, [clients, sortField, sortOrder, startDate, endDate]);
 
   const saveColumns = useCallback((newCols: RegistrationColumnConfig[]) => {
     setColumns(newCols);
@@ -149,10 +185,6 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [pageSize, setPageSize] = useState<number>(100);
 
-  // Action loading states
-  const [processingId, setProcessingId] = useState<string | null>(null);
-  const [actionFeedback, setActionFeedback] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
-
   // Summary counts for KPI cards
   const [summaryCounts, setSummaryCounts] = useState<{
     total: number;
@@ -185,6 +217,8 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
       if (sourceType !== 'all') params.append('sourceType', sourceType);
       if (clientType !== 'all') params.append('clientType', clientType);
       if (statusFilter !== 'all') params.append('status', statusFilter);
+      if (startDate) params.append('startDate', startDate);
+      if (endDate) params.append('endDate', endDate);
       params.append('limit', String(pageSize));
       params.append('offset', String((currentPage - 1) * pageSize));
 
@@ -216,65 +250,21 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     } finally {
       setLoading(false);
     }
-  }, [search, sourceType, clientType, statusFilter, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
+  }, [search, sourceType, clientType, statusFilter, startDate, endDate, currentPage, pageSize, onTotalCountChange, strings.noClientsFound, strings.actionError]);
 
   useEffect(() => {
     fetchRegistrations();
   }, [fetchRegistrations]);
 
-  const handleAction = async (id: string, action: 'accept' | 'reject') => {
-    setProcessingId(id);
-    setActionFeedback(null);
-    try {
-      const token = authClient.getToken();
-      const res = await fetch(`/api/internal-tasks/registrations/${encodeURIComponent(id)}/action`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
-        },
-        body: JSON.stringify({ action }),
-      });
-      const json = await res.json();
-      if (json.success) {
-        setClients((prev) =>
-          prev.map((c) =>
-            c.id === id
-              ? {
-                  ...c,
-                  status: action === 'accept' ? 'Accepted' : 'Rejected',
-                  isApproved: action === 'accept',
-                }
-              : c
-          )
-        );
-        setActionFeedback({
-          message: action === 'accept' ? strings.acceptSuccess : strings.rejectSuccess,
-          type: 'success',
-        });
-      } else {
-        setActionFeedback({ message: json.error || strings.actionError, type: 'error' });
-      }
-    } catch {
-      setActionFeedback({ message: strings.actionError, type: 'error' });
-    } finally {
-      setProcessingId(null);
-    }
-  };
-
   const formatDate = (isoString?: string): string => {
     if (!isoString) return '-';
-    try {
-      const d = new Date(isoString);
-      if (isNaN(d.getTime())) return isoString;
-      const day = String(d.getDate()).padStart(2, '0');
-      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-      const month = months[d.getMonth()];
-      const year = d.getFullYear();
-      return `${day}-${month}-${year}`;
-    } catch {
-      return isoString;
-    }
+    const d = new Date(isoString);
+    if (isNaN(d.getTime())) return isoString;
+    const day = String(d.getDate()).padStart(2, '0');
+    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const month = months[d.getMonth()];
+    const year = d.getFullYear();
+    return `${day}-${month}-${year}`;
   };
 
   const registrationPopupColumns = useMemo<ActionCenterSummaryPopupColumn<RegisteredClient>[]>(() => [
@@ -306,19 +296,20 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
     {
       key: 'status',
       label: strings.colStatus,
-      render: (c) => (
-        <span
-          className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
-            c.status === 'Accepted'
-              ? 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
-              : c.status === 'Rejected'
-              ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
-              : 'bg-amber-50 text-amber-700 dark:bg-amber-950/60 dark:text-amber-300'
-          }`}
-        >
-          {c.status}
-        </span>
-      ),
+      render: (c) => {
+        const isRejected = c.status === 'Rejected';
+        return (
+          <span
+            className={`px-2 py-0.5 rounded text-[11px] font-semibold ${
+              isRejected
+                ? 'bg-rose-50 text-rose-700 dark:bg-rose-950/60 dark:text-rose-300'
+                : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300'
+            }`}
+          >
+            {isRejected ? strings.statusRejected : strings.statusAutoApproved}
+          </span>
+        );
+      },
     },
     {
       key: 'sourceType',
@@ -369,19 +360,6 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
   return (
     <div className="w-full bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-sm p-4 sm:p-6 space-y-4">
-      {/* Top Header Row with Total Badge */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-slate-100 dark:border-slate-800 pb-3">
-        <div className="flex items-center gap-3">
-          <h2 className="text-xl font-bold tracking-tight text-orange-600 dark:text-orange-500">
-            {strings.title}
-          </h2>
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-800">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
-            {formatString(strings.totalCountBadge, { count: String(totalCount) })}
-          </span>
-        </div>
-      </div>
-
       {/* 4 Dynamic Compact Summary Cards (1 Horizontal Row) */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-2.5 w-full">
         {/* Total Registered Clients */}
@@ -481,133 +459,181 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
         </div>
       </div>
 
-      {/* Action Feedback Banner */}
-      {actionFeedback && (
-        <div
-          role="status"
-          aria-live="polite"
-          className={`p-3 rounded-lg text-xs font-semibold flex items-center justify-between transition-all ${
-            actionFeedback.type === 'success'
-              ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
-              : 'bg-rose-50 dark:bg-rose-950/40 text-rose-800 dark:text-rose-300 border border-rose-200 dark:border-rose-800'
-          }`}
-        >
-          <span>{actionFeedback.message}</span>
-          <button
-            type="button"
-            onClick={() => setActionFeedback(null)}
-            className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 ml-2"
-          >
-            ×
-          </button>
-        </div>
-      )}
-
-      {/* Unified Horizontal Toolbar: Search Bar + Client View Filter + Source Type Filter + Status Filter + Refresh + Column Settings */}
-      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-xs flex flex-row items-center gap-1.5 sm:gap-2 w-full min-w-0 max-w-full box-border">
-        {/* Search field: flexible width with non-overlapping icon and clear button */}
-        <div className="relative flex-1 min-w-[140px]">
-          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          <input
-            type="text"
-            value={search}
-            onChange={(e) => {
-              setSearch(e.target.value);
-              setCurrentPage(1);
-            }}
-            placeholder={strings.searchPlaceholder}
-            aria-label={strings.searchPlaceholder}
-            className="w-full pl-8 pr-7 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
-          />
-          {search && (
-            <button
-              type="button"
-              onClick={() => {
-                setSearch('');
+      {/* Unified Toolbar: Row 1 Search & Filters + Row 2 Date Wise Filter */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-2 shadow-xs flex flex-col gap-2 w-full min-w-0 max-w-full box-border">
+        {/* Row 1: Search Bar + Client View Filter + Source Type Filter + Status Filter + Refresh + Column Settings */}
+        <div className="flex flex-row items-center gap-1.5 sm:gap-2 w-full min-w-0 max-w-full">
+          {/* Search field: flexible width with non-overlapping icon and clear button */}
+          <div className="relative flex-1 min-w-[140px]">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+            <input
+              type="text"
+              value={search}
+              onChange={(e) => {
+                setSearch(e.target.value);
                 setCurrentPage(1);
               }}
-              className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-              title="Clear search"
-              aria-label="Clear search"
-            >
-              <X className="w-3.5 h-3.5" />
-            </button>
-          )}
+              placeholder={strings.searchPlaceholder}
+              aria-label={strings.searchPlaceholder}
+              className="w-full pl-8 pr-7 py-1.5 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-800 dark:text-slate-200 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-orange-500"
+            />
+            {search && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSearch('');
+                  setCurrentPage(1);
+                }}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                title="Clear search"
+                aria-label="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+
+          {/* Client View Filter Dropdown */}
+          <select
+            id="client-type-select"
+            value={clientType}
+            onChange={(e) => {
+              setClientType(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.clientTypeLabel}
+            className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[145px] sm:w-[160px] truncate"
+          >
+            {REGISTRATION_CLIENT_TYPES.map((ct) => (
+              <option key={ct.id} value={ct.id}>
+                {ct.label}
+              </option>
+            ))}
+          </select>
+
+          {/* Source Type Filter Dropdown */}
+          <select
+            id="source-type-select"
+            value={sourceType}
+            onChange={(e) => {
+              setSourceType(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.sourceTypeLabel}
+            className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[110px] sm:w-[125px] truncate"
+          >
+            <option value="all">{strings.allSources}</option>
+            <option value="Web App">{strings.webApp}</option>
+            <option value="WhatsApp">{strings.whatsapp}</option>
+            <option value="Email">{strings.email}</option>
+          </select>
+
+          {/* Status Filter Dropdown */}
+          <select
+            id="registration-status-select"
+            value={statusFilter}
+            onChange={(e) => {
+              setStatusFilter(e.target.value);
+              setCurrentPage(1);
+            }}
+            aria-label={strings.colStatus}
+            className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[115px] sm:w-[130px] truncate"
+          >
+            <option value="all">{strings.allStatuses}</option>
+            <option value="Auto-Approved">{strings.statusAutoApproved}</option>
+            <option value="Rejected">{strings.statusRejected}</option>
+          </select>
+
+          {/* Refresh Button */}
+          <button
+            type="button"
+            onClick={() => fetchRegistrations()}
+            title={strings.refreshTooltip}
+            aria-label={strings.refreshTooltip}
+            className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+
+          {/* Column Settings Gear Button */}
+          <button
+            type="button"
+            onClick={() => setShowColumnSettings(true)}
+            title={strings.columnSettingsTooltip}
+            aria-label={strings.columnSettingsTooltip}
+            className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
+          >
+            <Settings className="w-3.5 h-3.5" />
+          </button>
         </div>
 
-        {/* Client View Filter Dropdown */}
-        <select
-          id="client-type-select"
-          value={clientType}
-          onChange={(e) => {
-            setClientType(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.clientTypeLabel}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[145px] sm:w-[160px] truncate"
-        >
-          {REGISTRATION_CLIENT_TYPES.map((ct) => (
-            <option key={ct.id} value={ct.id}>
-              {ct.label}
-            </option>
+        {/* Row 2: Date Wise Filter (10 days, 1 month, starting date / ending date filter) */}
+        <div className="flex flex-wrap items-center gap-1.5 pt-1.5 border-t border-slate-100 dark:border-slate-800/80 w-full min-w-0">
+          <div className="flex items-center gap-1 text-slate-500 dark:text-slate-400 mr-1 shrink-0">
+            <Calendar className="w-3.5 h-3.5 text-slate-400" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider">{strings.dateRangeLabel}</span>
+          </div>
+          {[
+            { id: 'all', label: strings.dateAllTime },
+            { id: 'last10', label: strings.dateLast10Days },
+            { id: 'last30', label: strings.dateLast1Month },
+            { id: 'custom', label: strings.dateCustomRange },
+          ].map((preset) => (
+            <button
+              key={preset.id}
+              type="button"
+              onClick={() => handleDatePresetChange(preset.id)}
+              className={`px-2 py-0.5 text-[11px] rounded-md border transition-all cursor-pointer whitespace-nowrap ${
+                dateRangePreset === preset.id
+                  ? 'bg-orange-50 dark:bg-orange-950/40 text-orange-600 dark:text-orange-400 border-orange-300 dark:border-orange-700 font-semibold shadow-xs'
+                  : 'bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/50'
+              }`}
+            >
+              {preset.label}
+            </button>
           ))}
-        </select>
 
-        {/* Source Type Filter Dropdown */}
-        <select
-          id="source-type-select"
-          value={sourceType}
-          onChange={(e) => {
-            setSourceType(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.sourceTypeLabel}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[110px] sm:w-[125px] truncate"
-        >
-          <option value="all">{strings.allSources}</option>
-          <option value="Web App">{strings.webApp}</option>
-          <option value="WhatsApp">{strings.whatsapp}</option>
-          <option value="Email">{strings.email}</option>
-        </select>
-
-        {/* Status Filter Dropdown */}
-        <select
-          id="registration-status-select"
-          value={statusFilter}
-          onChange={(e) => {
-            setStatusFilter(e.target.value);
-            setCurrentPage(1);
-          }}
-          aria-label={strings.colStatus}
-          className="h-8 px-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-orange-500 cursor-pointer shrink-0 w-[105px] sm:w-[120px] truncate"
-        >
-          <option value="all">{strings.allStatuses}</option>
-          <option value="New">{strings.statusNew}</option>
-          <option value="Accepted">{strings.statusAccepted}</option>
-          <option value="Rejected">{strings.statusRejected}</option>
-        </select>
-
-        {/* Refresh Button */}
-        <button
-          type="button"
-          onClick={() => fetchRegistrations()}
-          title={strings.refreshTooltip}
-          aria-label={strings.refreshTooltip}
-          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
-        </button>
-
-        {/* Column Settings Gear Button */}
-        <button
-          type="button"
-          onClick={() => setShowColumnSettings(true)}
-          title={strings.columnSettingsTooltip}
-          aria-label={strings.columnSettingsTooltip}
-          className="p-1.5 h-8 w-8 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-300 transition-colors flex items-center justify-center shrink-0 cursor-pointer"
-        >
-          <Settings className="w-3.5 h-3.5" />
-        </button>
+          {/* Starting Date & Ending Date Inputs */}
+          {(dateRangePreset === 'custom' || startDate || endDate) && (
+            <div className="flex items-center gap-1.5 ml-auto sm:ml-2">
+              <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">{strings.fromLabel}</span>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => {
+                  setStartDate(e.target.value);
+                  setDateRangePreset('custom');
+                  setCurrentPage(1);
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                aria-label={strings.startDateLabel}
+              />
+              <span className="text-[10px] font-medium text-slate-500 dark:text-slate-400">{strings.toLabel}</span>
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => {
+                  setEndDate(e.target.value);
+                  setDateRangePreset('custom');
+                  setCurrentPage(1);
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-orange-500"
+                aria-label={strings.endDateLabel}
+              />
+              {(startDate || endDate) && (
+                <button
+                  type="button"
+                  onClick={() => handleDatePresetChange('all')}
+                  className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer rounded"
+                  title={strings.clearDateFilter}
+                  aria-label={strings.clearDateFilter}
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              )}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Column Customization Modal */}
@@ -763,9 +789,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                   ? 'bg-[#fff5ee] dark:bg-slate-800/40' // Soft seashell/apricot tint
                   : 'bg-[#f0f7ff] dark:bg-slate-800/70'; // Soft sky blue tint
 
-                const isSeller = client.clientType === 'Seller';
-                const isNew = !isSeller && (client.status === 'New' || client.status === 'Pending');
-                const isAccepted = isSeller || client.status === 'Accepted';
+                const isRejected = client.status === 'Rejected';
 
                 return (
                   <tr
@@ -825,21 +849,16 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                         );
                       }
                       if (col.key === 'status') {
-                        const isRejected = client.status === 'Rejected';
                         return (
                           <td key={col.key} className="py-2.5 px-3.5 whitespace-nowrap">
                             <span
                               className={`font-semibold ${
                                 isRejected
                                   ? 'text-rose-600 dark:text-rose-400'
-                                  : isSeller
-                                  ? 'text-emerald-600 dark:text-emerald-400'
-                                  : isAccepted
-                                  ? 'text-indigo-600 dark:text-indigo-400'
-                                  : 'text-slate-800 dark:text-slate-200'
+                                  : 'text-emerald-600 dark:text-emerald-400'
                               }`}
                             >
-                              {isSeller && !isRejected ? strings.statusAutoApproved : client.status}
+                              {isRejected ? strings.statusRejected : strings.statusAutoApproved}
                             </span>
                           </td>
                         );
@@ -861,47 +880,15 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                         );
                       }
                       if (col.key === 'actions') {
-                        if (isSeller) {
-                          return (
-                            <td key={col.key} className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
-                                {strings.statusAutoApproved}
-                              </span>
-                            </td>
-                          );
-                        }
                         return (
                           <td key={col.key} className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                            {isNew ? (
-                              <div className="flex items-center justify-center gap-2">
-                                <button
-                                  type="button"
-                                  onClick={() => handleAction(client.id, 'accept')}
-                                  disabled={processingId === client.id}
-                                  title={strings.acceptTooltip}
-                                  aria-label={`${strings.acceptTooltip} for ${client.userName}`}
-                                  className="p-1 rounded-full text-emerald-600 hover:text-emerald-700 hover:bg-emerald-50 dark:hover:bg-emerald-950/50 transition-colors disabled:opacity-40 cursor-pointer"
-                                >
-                                  <CheckCircle className="w-5 h-5 fill-emerald-600 text-white" />
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleAction(client.id, 'reject')}
-                                  disabled={processingId === client.id}
-                                  title={strings.rejectTooltip}
-                                  aria-label={`${strings.rejectTooltip} for ${client.userName}`}
-                                  className="p-1 rounded-full text-rose-600 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/50 transition-colors disabled:opacity-40 cursor-pointer"
-                                >
-                                  <XCircle className="w-5 h-5 fill-rose-600 text-white" />
-                                </button>
-                              </div>
-                            ) : isAccepted ? (
-                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40">
-                                {strings.statusAccepted}
+                            {isRejected ? (
+                              <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 px-2.5 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800">
+                                {strings.statusRejected}
                               </span>
                             ) : (
-                              <span className="text-[11px] font-semibold text-rose-700 dark:text-rose-400 px-2 py-0.5 rounded-full bg-rose-50 dark:bg-rose-950/40">
-                                {strings.statusRejected}
+                              <span className="text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 px-2.5 py-0.5 rounded-full bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800">
+                                {strings.statusAutoApproved}
                               </span>
                             )}
                           </td>

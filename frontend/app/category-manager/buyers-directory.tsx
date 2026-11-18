@@ -84,7 +84,7 @@ import { exportReportToExcel } from '@/lib/reportsClient';
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   initialBuyerId?: string;
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors';
 }
 
 export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
@@ -245,7 +245,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       }
     }
   }, [initialBuyerId, initialTab, buyerAccounts]);
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>('profile');
+  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
   const buyerMetricsMap = useMemo(() => {

@@ -923,7 +923,7 @@ async function getOrCreateBuyerAccount(email) {
       userResult = await identityQueries.insertBuyerAccount({
         email: normEmail,
         password: tempPassword,
-        phone: null,
+        phone: PLACEHOLDER_MOBILE_NUMBER,
         fullName: displayName,
         organizationName: orgName,
         resetPasswordRequired: true,
@@ -980,7 +980,7 @@ async function getOrCreateBuyerAccount(email) {
         brandName: displayName,
         corporateEmail: normEmail,
         contactPerson: displayName,
-        mobileNumber: null,
+        mobileNumber: `+91${PLACEHOLDER_MOBILE_NUMBER}`,
         organizationId: orgId,
         sourcingMode: 'mode_0',
         subscriptionPlan: 'free_trial',
@@ -1047,43 +1047,60 @@ async function resolveBuyerRegisteredLocation(buyerAccount) {
     return { city: '', state: '', pincode: '' };
   }
 
-  // 1. Direct fields on buyerAccount (in-memory or store service account object)
-  const directCity = buyerAccount.city || buyerAccount.deliveryCity || '';
-  const directState = buyerAccount.state || buyerAccount.deliveryState || '';
-  const directPincode = buyerAccount.pincode || buyerAccount.zipCode || buyerAccount.deliveryPincode || '';
+  // 1. Direct fields on buyerAccount or linked organization object
+  const org = buyerAccount.organization || {};
+  let city = String(buyerAccount.city || buyerAccount.deliveryCity || org.city || '').trim();
+  let state = String(buyerAccount.state || buyerAccount.deliveryState || org.state || '').trim();
+  let pincode = String(buyerAccount.pincode || buyerAccount.zipCode || buyerAccount.deliveryPincode || org.pincode || org.zip_code || '').trim();
+  let location = String(
+    buyerAccount.location ||
+    buyerAccount.deliveryLocation ||
+    buyerAccount.primaryPlantLocation ||
+    buyerAccount.street ||
+    buyerAccount.address1 ||
+    org.location ||
+    org.deliveryLocation ||
+    org.primaryPlantLocation ||
+    org.address1 ||
+    org.street ||
+    ''
+  ).trim();
 
-  if (directCity || directState || directPincode) {
-    return {
-      city: String(directCity).trim(),
-      state: String(directState).trim(),
-      pincode: String(directPincode).trim(),
-    };
-  }
+  // 2. Query Neon PostgreSQL / D1 buyer profile if any location detail is missing
+  const hasStorage = pool && (typeof pool.hasStorage === 'function' ? pool.hasStorage() : Boolean(pool.pool));
+  const hasIdentifier = Boolean(buyerAccount.corporateEmail || buyerAccount.email || buyerAccount.id || buyerAccount.organizationId);
 
-  // 2. Query Neon PostgreSQL buyer profile if pool is active and buyer has corporateEmail
-  if (pool && pool.pool && buyerAccount.corporateEmail) {
+  if ((!city || !state || !pincode || !location) && hasStorage && hasIdentifier) {
     try {
-      const email = String(buyerAccount.corporateEmail).trim().toLowerCase();
-      const rows = await pool.rows(
-        `${buyerProfileQueries.PROFILE_SELECT} where lower(u.username) = lower($1) or lower(u.email) = lower($1) limit 1`,
-        [email]
-      );
-      if (rows.length > 0) {
-        const mapped = buyerProfileQueries.mapRowToProfile(rows[0]);
-        if (mapped) {
-          return {
-            city: mapped.city || '',
-            state: mapped.state || '',
-            pincode: mapped.pincode || '',
-          };
-        }
+      const email = String(buyerAccount.corporateEmail || buyerAccount.email || '').trim().toLowerCase();
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        email: email || undefined,
+        userId: buyerAccount.id || undefined,
+        organizationId: buyerAccount.organizationId || undefined,
+      });
+      if (res && res.found && res.profile) {
+        const mapped = res.profile;
+        if (!city && mapped.city) city = String(mapped.city).trim();
+        if (!state && mapped.state) state = String(mapped.state).trim();
+        if (!pincode && mapped.pincode) pincode = String(mapped.pincode).trim();
+        if (!location && mapped.street) location = String(mapped.street).trim();
       }
     } catch (dbErr) {
       logger.error('Failed to query buyer profile for location fallback', dbErr, 'EMAIL_GATEWAY');
     }
   }
 
-  return { city: '', state: '', pincode: '' };
+  const result = {
+    city,
+    state,
+    pincode,
+  };
+
+  if (location && location !== [city, state, pincode].filter(Boolean).join(', ')) {
+    result.location = location;
+  }
+
+  return result;
 }
 
 /**
@@ -1130,14 +1147,14 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
       deliveryCity = buyerLocation.city || '';
       deliveryState = buyerLocation.state || '';
       deliveryPincode = buyerLocation.pincode || '';
-      deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+      deliveryLocation = buyerLocation.location || [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
     } else {
       // Partial location handling: preserve explicit fields without replacing them with buyer defaults
       if (!deliveryCity && deliveryLocation) {
         deliveryCity = deliveryLocation;
       }
       if (!deliveryLocation) {
-        deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+        deliveryLocation = buyerLocation.location || [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
       }
     }
 
@@ -1901,7 +1918,7 @@ async function retryPendingAcknowledgements({
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
-          mobileNumber: saved.mobileNumber || null,
+          mobileNumber: saved.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
           category: saved.category,
           deliveryLocation: saved.deliveryLocation,
           requiredBy: saved.requiredBy || saved.deliveryDate,
@@ -2023,7 +2040,7 @@ async function notifyRfqNotCreated(message, reason, { buyerAccount = null, confi
       to: message.fromAddress,
       recipientName: buyerDisplayName(buyerAccount, message),
       tempPassword: authorisation.tempPassword,
-      contactPhone: buyerAccount?.mobileNumber || null,
+      contactPhone: buyerAccount?.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
     };
     try {
       ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail(credentials), 'Buyer credentials notice');
@@ -2107,6 +2124,16 @@ async function storeEmailAttachments(message) {
     // a PDF requisition is); saveAttachment's MIME allow-list decides what is
     // storable, exactly as for a portal upload.
     if (!attachment || !attachment.content) continue;
+    // Signature graphics, company logos, social icons, and tracking pixels are never RFQ documents.
+    const isSig = attachment.isSignature || attachment.role === 'signature' || (typeof emailIngestionService.isSignatureAttachment === 'function' && emailIngestionService.isSignatureAttachment(attachment));
+    if (isSig) {
+      logger.info(
+        `Skipped email signature graphic from RFQ attachments: ${attachment.fileName || attachment.filename || 'unnamed'}`,
+        { fileName: attachment.fileName || attachment.filename, contentType: attachment.contentType, size: attachment.size },
+        'EMAIL_GATEWAY'
+      );
+      continue;
+    }
     try {
       const result = await withTimeout(
         rfqAttachmentService.saveAttachment({
@@ -3141,12 +3168,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
         sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget ?? null,
-        targetDeliveryDate: draft.targetDeliveryDate,
+        targetDeliveryDate: draft.targetDeliveryDate || group.targetDate || rfqIngestionService.defaultTargetDate(5),
         extractedEntities: draft.extractedEntities,
-        deliveryLocation: draft.deliveryLocation,
-        deliveryCity: draft.deliveryCity,
-        deliveryState: draft.deliveryState,
-        deliveryPincode: draft.deliveryPincode,
+        deliveryLocation: draft.deliveryLocation || group.deliveryLocation || buyerLocation.location || [buyerLocation.city, buyerLocation.state, buyerLocation.pincode].filter(Boolean).join(', '),
+        deliveryCity: draft.deliveryCity || group.deliveryCity || buyerLocation.city || '',
+        deliveryState: draft.deliveryState || group.deliveryState || buyerLocation.state || '',
+        deliveryPincode: draft.deliveryPincode || group.deliveryPincode || buyerLocation.pincode || '',
         attachments: await emailAttachments(),
         sharedBuyerAccountIds: attribution.sharedBuyerAccountIds || [],
         sharedBuyerEmails: attribution.sharedBuyerEmails || [],

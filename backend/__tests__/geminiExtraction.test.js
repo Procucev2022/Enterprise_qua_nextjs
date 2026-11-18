@@ -2117,6 +2117,44 @@ describe('geminiService.generateJson', () => {
         expect(extracted[0].quantity).toBe(100);
         expect(extracted[0].targetDate).toBe('2026-11-15');
       });
+
+      test('accurately extracts line items from email tables with SR No. | Material Description | Quantity', () => {
+        const emailTable = [
+          'SR No. | Material Description | Quantity',
+          '1 | DELL: Intel Core i3 Processor, 12th Gen | 1',
+          '4 | 4 MP IP CAMERA (MAKE UNV) | 2',
+          '6 | 4 TB HDD SEAGATE | 1',
+          '11 | THERMAL PRINTER PAPER ROLL | 100',
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(emailTable);
+        expect(extracted).toHaveLength(4);
+        expect(extracted[0].itemName).toBe('DELL: Intel Core i3 Processor');
+        expect(extracted[0].quantity).toBe(1);
+        expect(extracted[1].itemName).toBe('4 MP IP CAMERA (MAKE UNV)');
+        expect(extracted[1].quantity).toBe(2);
+        expect(extracted[2].itemName).toBe('4 TB HDD SEAGATE');
+        expect(extracted[2].quantity).toBe(1);
+        expect(extracted[3].itemName).toBe('THERMAL PRINTER PAPER ROLL');
+        expect(extracted[3].quantity).toBe(100);
+      });
+
+      test('fallback column inference distinguishes leading serial numbers from quantities when headers are missing', () => {
+        const headerlessTable = [
+          '1 | Industrial Valve 2 inch | 10',
+          '2 | Pneumatic Actuator | 5',
+          '3 | Flange Gasket | 50',
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(headerlessTable);
+        expect(extracted).toHaveLength(3);
+        expect(extracted[0].itemName).toBe('Industrial Valve 2 inch');
+        expect(extracted[0].quantity).toBe(10);
+        expect(extracted[1].itemName).toBe('Pneumatic Actuator');
+        expect(extracted[1].quantity).toBe(5);
+        expect(extracted[2].itemName).toBe('Flange Gasket');
+        expect(extracted[2].quantity).toBe(50);
+      });
     });
 
     describe('extractLineItems integration with large multi-worksheet text', () => {

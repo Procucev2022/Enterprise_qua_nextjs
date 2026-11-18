@@ -78,23 +78,60 @@ function stripQuotedReplies(text) {
  * extractor as one from an uploaded workbook.
  */
 function flattenHtmlBody(html) {
-  return String(html || '')
-    .replace(/<\s*(script|style)[\s\S]*?<\s*\/\s*\1\s*>/gi, '')
-    .replace(/<\s*\/\s*t[dh]\s*>/gi, ' | ')
-    .replace(/<\s*(br|\/p|\/div|\/tr|\/h[1-6]|\/li)\s*\/?>/gi, '\n')
+  if (!html) return '';
+
+  let cleaned = String(html).replace(/<\s*(script|style)[\s\S]*?<\s*\/\s*\1\s*>/gi, '');
+
+  // 1. Convert each table row into "cell1 | cell2 | cell3", keeping each row on a single line.
+  cleaned = cleaned.replace(/<table\b[^>]*>([\s\S]*?)(?:<\/table>|$)/gi, (match, tableBody) => {
+    const rowRegex = /<tr\b[^>]*>([\s\S]*?)(?=<\/tr>|<tr\b|<\/table>|$)/gi;
+    const cellRegex = /<t[dh]\b[^>]*>([\s\S]*?)(?=<\/t[dh]>|<t[dh]\b|<\/tr>|<tr\b|<\/table>|$)/gi;
+
+    const parsedRows = [];
+    let rowMatch;
+    while ((rowMatch = rowRegex.exec(tableBody)) !== null) {
+      const rowContent = rowMatch[1];
+      const cells = [];
+      let cellMatch;
+      while ((cellMatch = cellRegex.exec(rowContent)) !== null) {
+        const cleanCell = cellMatch[1]
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/&nbsp;/gi, ' ')
+          .replace(/&amp;/gi, '&')
+          .replace(/&lt;/gi, '<')
+          .replace(/&gt;/gi, '>')
+          .replace(/&quot;/gi, '"')
+          .replace(/&#39;/gi, "'")
+          .replace(/&apos;/gi, "'")
+          .replace(/\s+/g, ' ')
+          .trim();
+        cells.push(cleanCell);
+      }
+      if (cells.some((c) => c.length > 0)) {
+        parsedRows.push(cells.join(' | '));
+      }
+    }
+
+    return parsedRows.length > 0 ? '\n\n' + parsedRows.join('\n') + '\n\n' : '';
+  });
+
+  // 2. Format remaining non-table HTML
+  cleaned = cleaned
+    .replace(/<\s*(br|\/p|\/div|\/h[1-6]|\/li)\s*\/?>/gi, '\n')
     .replace(/<[^>]+>/g, '')
     .replace(/&nbsp;/gi, ' ')
     .replace(/&lt;/gi, '<')
     .replace(/&gt;/gi, '>')
     .replace(/&quot;/gi, '"')
     .replace(/&#39;/gi, "'")
-    // Last, so an escaped entity elsewhere cannot be double-decoded into a tag.
+    .replace(/&apos;/gi, "'")
     .replace(/&amp;/gi, '&')
     .replace(/[ \t]+/g, ' ')
-    .replace(/\s*\|\s*$/gm, '')
     .replace(/^\s+$/gm, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
+
+  return cleaned;
 }
 
 /**
@@ -115,13 +152,42 @@ function resolveBodyText(parsed) {
 }
 
 /**
+ * Detect whether an attachment is an inline email signature graphic, company logo,
+ * tracking pixel, or social icon, rather than an intentional procurement document.
+ */
+function isSignatureAttachment(attachment) {
+  if (!attachment) return false;
+  const disposition = String(attachment.contentDisposition || '').toLowerCase();
+  const contentType = String(attachment.contentType || '').toLowerCase();
+  const fileName = String(attachment.filename || attachment.fileName || '').trim().toLowerCase();
+  const cid = String(attachment.cid || '').trim();
+  const isRelated = Boolean(attachment.related);
+  const size = Number(attachment.size || (attachment.content && attachment.content.length) || 0);
+
+  if (contentType.startsWith('image/')) {
+    if (disposition === 'inline' || isRelated || cid.length > 0) {
+      return true;
+    }
+    const signaturePattern = EMAIL_INGESTION_CONFIG.SIGNATURE_FILE_NAME_PATTERN;
+    const maxSignatureBytes = EMAIL_INGESTION_CONFIG.SIGNATURE_IMAGE_MAX_BYTES;
+    if (size > 0 && size <= maxSignatureBytes && fileName && signaturePattern.test(fileName)) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
  * Classify an attachment into how it can contribute to extraction.
  *
+ * - `signature` email footer logo or inline image; excluded from documents and model
  * - `text`   decoded inline and appended to the document text
  * - `inline` handed to Gemini as base64 (it reads PDFs and images natively)
  * - `manual` recognised but unreadable here; reported by name
  */
 function classifyAttachment(attachment) {
+  if (isSignatureAttachment(attachment)) return 'signature';
   const contentType = String(attachment.contentType || '').toLowerCase();
   if (EMAIL_INGESTION_CONFIG.TEXT_ATTACHMENT_MIME_TYPES.includes(contentType)) return 'text';
   if (EMAIL_INGESTION_CONFIG.INLINE_ATTACHMENT_MIME_TYPES.includes(contentType)) return 'inline';
@@ -469,6 +535,7 @@ const emailIngestion = {
   stripQuotedReplies,
   flattenHtmlBody,
   resolveBodyText,
+  isSignatureAttachment,
   classifyAttachment,
   buildDocumentText,
   parseEmailMessage,

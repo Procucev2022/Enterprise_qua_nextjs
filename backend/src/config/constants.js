@@ -418,6 +418,16 @@ const INFRASTRUCTURE_HEALTH = Object.freeze({
     CONNECTION_FAILED: 'Database connection failed.',
   }),
 });
+
+const DOSSIER_MESSAGES = Object.freeze({
+  BUYER_NOT_FOUND: 'Buyer account {id} not found.',
+  SELLER_NOT_FOUND: 'Seller {id} not found.',
+  UNAUTHORIZED_BUYER_ACCESS: 'You do not have permission to access this buyer profile.',
+  UNAUTHORIZED_SELLER_ACCESS: 'You do not have permission to access this supplier dossier.',
+  UPLOADED_VENDORS_LOAD_FAILED: 'Failed to retrieve buyer uploaded vendors.',
+  BUYER_UPLOADS_LOAD_FAILED: 'Failed to retrieve associated buyers for seller.',
+  ACTIVE_RFQS_LOAD_FAILED: 'Failed to retrieve active RFQs for seller.',
+});
 const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
   D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
@@ -738,6 +748,8 @@ const IDENTITY_MASTER_DATA = {
   VERIFICATION_VERIFIED: 'EMAIL_VERIFIED',
   VERIFICATION_PENDING: 'PENDING_EMAIL_VERIFICATION',
 };
+
+const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 
 // Indian phone numbers are stored normalised as +91XXXXXXXXXX in the shared
 // schema, and the Java login path compares them byte-for-byte.
@@ -1562,6 +1574,8 @@ const EMAIL_INGESTION_CONFIG = {
   // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
   // type can never be forwarded that the extractor would then refuse.
   INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  SIGNATURE_IMAGE_MAX_BYTES: 50 * 1024,
+  SIGNATURE_FILE_NAME_PATTERN: /^(?:image\d*|logo\d*|signature\d*|banner\d*|icon\d*|footer\d*|header\d*|outlook\w*|spacer\w*|facebook|twitter|linkedin|instagram|youtube)\.(?:png|jpe?g|gif|webp|bmp|ico)$/i,
   // A line matching any of these starts the quoted thread beneath a forwarded
   // requisition; everything from there down is dropped before extraction.
   QUOTE_MARKERS: [
@@ -3713,24 +3727,81 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
 
 
 const INTERNAL_TASK_CATEGORIES = Object.freeze({
+  CALL_TASK: 'CALL_TASK',
+  EMAIL_TASK: 'EMAIL_TASK',
+  SMS_TASK: 'SMS_TASK',
+  DEMO_SCHEDULE: 'DEMO_SCHEDULE',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  SITE_VISITING_MEETING_CLIENTS: 'SITE_VISITING_MEETING_CLIENTS',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   COMMUNICATION: 'COMMUNICATION',
   DEMO_SCHEDULING: 'DEMO_SCHEDULING',
-  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
   BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
-  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   ONBOARDING: 'ONBOARDING',
 });
 
+const INTERNAL_TASK_CATEGORY_LIST = Object.freeze([
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
+  'CREDIT_MANAGEMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
+  'INTERNAL_OPERATIONS',
+]);
+
 const INTERNAL_TASK_CATEGORY_LABELS = Object.freeze({
-  COMMUNICATION: 'Communication Tasks',
-  DEMO_SCHEDULING: 'Demo Scheduling',
+  CALL_TASK: 'Call Task',
+  EMAIL_TASK: 'Email Task',
+  SMS_TASK: 'SMS Task',
+  DEMO_SCHEDULE: 'Demo schedule',
   CREDIT_MANAGEMENT: 'Credit Management',
-  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
-  INTERNAL_OPERATIONS: 'Internal Operations',
-  ONBOARDING: 'Onboarding Process',
+  SITE_VISITING_MEETING_CLIENTS: 'Site visiting/Meeting Clients',
+  INTERNAL_OPERATIONS: 'Internal operations',
+  COMMUNICATION: 'Call Task',
+  DEMO_SCHEDULING: 'Demo schedule',
+  BUSINESS_DEVELOPMENT: 'Site visiting/Meeting Clients',
+  ONBOARDING: 'Internal operations',
 });
 
 const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
+  CALL_TASK: Object.freeze([
+    'Phone Call',
+    'Outgoing Call',
+    'Incoming Call',
+    'Follow-up Call',
+  ]),
+  EMAIL_TASK: Object.freeze([
+    'Email',
+    'Send Proposal',
+    'Send Corporate Email',
+    'Email Follow-up',
+  ]),
+  SMS_TASK: Object.freeze([
+    'SMS',
+    'SMS Alert',
+    'SMS Follow-up',
+    'WhatsApp Notification',
+  ]),
+  DEMO_SCHEDULE: Object.freeze([
+    'Schedule Demo',
+    'Product Demo',
+  ]),
+  CREDIT_MANAGEMENT: Object.freeze([
+    'Add Credits',
+    'Delete Credits',
+    'Credit Approval Request',
+  ]),
+  SITE_VISITING_MEETING_CLIENTS: Object.freeze([
+    'Site Visit',
+    'Client Meeting',
+    'Vendor Facility Inspection',
+  ]),
+  INTERNAL_OPERATIONS: Object.freeze([
+    'Operational Task',
+    'Client Onboarding',
+    'Internal Review',
+  ]),
   COMMUNICATION: Object.freeze([
     'Phone Call',
     'SMS',
@@ -3742,16 +3813,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
   DEMO_SCHEDULING: Object.freeze([
     'Schedule Demo',
   ]),
-  CREDIT_MANAGEMENT: Object.freeze([
-    'Add Credits',
-    'Delete Credits',
-  ]),
   BUSINESS_DEVELOPMENT: Object.freeze([
     'Send Proposal',
     'Send Corporate Email',
-  ]),
-  INTERNAL_OPERATIONS: Object.freeze([
-    'Operational Task',
   ]),
   ONBOARDING: Object.freeze([
     'Client Onboarding',
@@ -3759,13 +3823,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
 });
 
 const INTERNAL_TASK_STATUSES = Object.freeze([
-  'New',
-  'Assigned',
-  'In Progress',
-  'Pending Approval',
-  'Completed',
-  'Rejected',
-  'Cancelled',
+  'Open',
+  'Pending',
+  'Closed',
 ]);
 
 const INTERNAL_TASK_PRIORITIES = Object.freeze([
@@ -3773,6 +3833,13 @@ const INTERNAL_TASK_PRIORITIES = Object.freeze([
   'Medium',
   'High',
   'Critical',
+]);
+
+const DEFAULT_INTERNAL_ASSIGNEES = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
 ]);
 
 const DEMO_STATUSES = Object.freeze([
@@ -3870,14 +3937,20 @@ const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
 
 const APPROVAL_REQUEST_TYPES = Object.freeze([
   'Buyer Credit Addition',
+  'Buyer Credit Deletion',
   'Seller Credit Addition',
+  'Seller Credit Deletion',
+  'Discounts',
+  'Trial Periods',
+  'Offline Payments',
+]);
+
+const ALL_LEGACY_APPROVAL_REQUEST_TYPES = Object.freeze([
+  ...APPROVAL_REQUEST_TYPES,
   'Credit Notes',
   'Purchase Requests',
   'Payment Approvals',
-  'Discounts',
   'Account Approvals',
-  'Trial Periods',
-  'Offline Payments',
   'Unit Bookings',
   'Cancellations & Refunds',
   'Packages',
@@ -4211,12 +4284,15 @@ module.exports = {
   CREDIT_APPROVAL_APPROVERS,
   SELLER_QUOTE_CREDITS_ALLOWED,
   APPROVAL_REQUEST_TYPES,
+  ALL_LEGACY_APPROVAL_REQUEST_TYPES,
   APPROVAL_STATUSES,
   INTERNAL_TASK_CATEGORIES,
+  INTERNAL_TASK_CATEGORY_LIST,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
   INTERNAL_TASK_STATUSES,
   INTERNAL_TASK_PRIORITIES,
+  DEFAULT_INTERNAL_ASSIGNEES,
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,
@@ -4294,6 +4370,7 @@ module.exports = {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
+  PLACEHOLDER_MOBILE_NUMBER,
   IDENTITY_OTP_CONFIG,
   BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
@@ -4465,6 +4542,7 @@ module.exports = {
   ACTION_CENTER_CHANNELS,
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,
+  DOSSIER_MESSAGES,
   VENDOR_ACTIVE_STATUSES,
   VENDOR_STATUS_MESSAGES,
   isVendorInactive,

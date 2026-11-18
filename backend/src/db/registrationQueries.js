@@ -46,8 +46,7 @@ function normalizeClientType(roleName) {
 function normalizeStatus(isApproved, verificationStatus) {
   const vs = String(verificationStatus || '').toLowerCase();
   if (vs === 'rejected') return 'Rejected';
-  if (isApproved === true || vs === 'verified' || vs === 'accepted' || vs === 'active') return 'Accepted';
-  return 'New';
+  return 'Auto-Approved';
 }
 
 function createPersistenceError(error, operation, id = undefined, action = undefined) {
@@ -143,6 +142,8 @@ async function getRegisteredClients({
   sourceType = 'all',
   status = 'all',
   clientType = 'all',
+  startDate = '',
+  endDate = '',
   limit = 100,
   offset = 0,
 } = {}) {
@@ -164,10 +165,21 @@ async function getRegisteredClients({
           ELSE 'web app' END) = $${index}`);
       }
       if (status && status.toLowerCase() !== 'all') {
-        addFilter(status.toLowerCase(), (index) => `(CASE
-          WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
-          WHEN u.is_approved = true OR LOWER(COALESCE(u.verification_status, '')) IN ('verified', 'accepted', 'active') THEN 'accepted'
-          ELSE 'new' END) = $${index}`);
+        const normStatus = status.toLowerCase().replace(/[^a-z]/g, '');
+        if (normStatus === 'autoapproved' || normStatus === 'accepted') {
+          addFilter('auto-approved', (index) => `(CASE
+            WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
+            ELSE 'auto-approved' END) = $${index}`);
+        } else if (normStatus === 'rejected') {
+          addFilter('rejected', (index) => `(CASE
+            WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
+            ELSE 'auto-approved' END) = $${index}`);
+        } else {
+          addFilter(status.toLowerCase(), (index) => `(CASE
+            WHEN LOWER(COALESCE(u.verification_status, '')) = 'rejected' THEN 'rejected'
+            WHEN u.is_approved = true OR LOWER(COALESCE(u.verification_status, '')) IN ('verified', 'accepted', 'active') THEN 'accepted'
+            ELSE 'new' END) = $${index}`);
+        }
       }
       if (clientType && clientType.toLowerCase() !== 'all') {
         addFilter(clientType.toLowerCase(), (index) => `(CASE
@@ -182,6 +194,16 @@ async function getRegisteredClients({
           OR LOWER(COALESCE(u.phone, '')) LIKE $${index}
           OR LOWER(COALESCE(u.email, u.username, '')) LIKE $${index}
         )`);
+      }
+      if (startDate && String(startDate).trim()) {
+        const cleanStart = String(startDate).trim();
+        const startVal = cleanStart.includes('T') ? cleanStart : cleanStart.slice(0, 10);
+        addFilter(startVal, (index) => `u.created_ts >= $${index}`);
+      }
+      if (endDate && String(endDate).trim()) {
+        const cleanEnd = String(endDate).trim();
+        const endVal = cleanEnd.includes('T') ? cleanEnd : `${cleanEnd.slice(0, 10)}T23:59:59.999Z`;
+        addFilter(endVal, (index) => `u.created_ts <= $${index}`);
       }
 
       const safeLimit = Math.min(Math.max(parseInt(String(limit), 10) || 100, 1), 200);
@@ -335,7 +357,8 @@ async function updateClientRegistrationStatus(id, action, remarks = '', actor = 
           const currentResult = await client.query(currentSql, [id, ...REGISTRATION_ROLE_NAMES]);
           const current = currentResult.rows[0];
           if (!current) return null;
-          if (normalizeStatus(current.isApproved, current.verificationStatus) !== 'New') {
+          const currentVs = String(current.verificationStatus || '').toLowerCase();
+          if (current.isApproved === true || ['verified', 'accepted', 'active', 'rejected'].includes(currentVs)) {
             throw registrationConflict();
           }
 

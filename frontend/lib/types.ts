@@ -31,6 +31,9 @@ export interface ExtractedEntity {
   technicalSpecs: string;
   confidence: number;
   category: string;
+  itemDescription?: string;
+  rawText?: string;
+  targetPrice?: number;
   /**
    * Required rather than optional: every producer sets both. Extraction gets them
    * from the taxonomy classifier, and a row keyed by hand starts with empty
@@ -2201,6 +2204,7 @@ export interface BuyerAccount {
   industrySector: string;
   sourcingMode: SourcingMode;
   subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited';
+  subscriptionTier?: string;
   remainingFreeRFQs: number;
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
@@ -2783,7 +2787,7 @@ export type ActionCenterTabKey =
   | 'document_vault'
   | 'login_logs';
 
-export type LoginLogUserType = 'buyer' | 'vendor';
+export type LoginLogUserType = 'buyer' | 'vendor' | 'category_manager';
 export type LoginLogStatus = 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
 
 export interface LoginLogEntry {
@@ -2815,7 +2819,7 @@ export interface LoginLogsSummary {
 }
 
 export interface LoginLogsFilterParams {
-  userType?: 'all' | 'buyer' | 'vendor';
+  userType?: 'all' | 'buyer' | 'vendor' | 'category_manager';
   status?: 'all' | 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
   search?: string;
   startDate?: string;
@@ -3530,6 +3534,65 @@ export interface SupplierPaymentTransaction {
   receiptUrl?: string;
 }
 
+export interface BuyerUploadedVendorItem {
+  id: string;
+  name: string;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  createdAt: string;
+  status: string;
+  majorCategory?: string;
+  minorCategories?: string[];
+  location?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  source?: string;
+  rating?: number;
+  score?: number;
+  gstin?: string;
+  pan?: string;
+  [key: string]: unknown;
+}
+
+export interface SellerBuyerUploadItem {
+  id: string;
+  name: string;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  uploadDate: string;
+  status: string;
+  sourcingMode?: string;
+  subscriptionPlan?: string;
+  location?: string;
+  [key: string]: unknown;
+}
+
+export interface SellerActiveRFQItem {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  category: string;
+  procurementCategory?: string;
+  buyerCompanyName: string;
+  buyerCompany?: string;
+  buyerName?: string;
+  location: string;
+  publishedDate: string;
+  closingDate?: string;
+  status: string;
+  budget?: number;
+  sourcingMode?: string;
+  extractedEntities?: ExtractedEntity[];
+  lineItems?: unknown[];
+  description?: string;
+  [key: string]: unknown;
+}
+
 
 
 export type RegistrationColumnKey =
@@ -3579,14 +3642,25 @@ export interface InternalTeamMember {
 // ==============================================================================
 
 export type InternalTaskCategory =
+  | 'CALL_TASK'
+  | 'EMAIL_TASK'
+  | 'SMS_TASK'
+  | 'DEMO_SCHEDULE'
+  | 'CREDIT_MANAGEMENT'
+  | 'SITE_VISITING_MEETING_CLIENTS'
+  | 'INTERNAL_OPERATIONS'
   | 'COMMUNICATION'
   | 'DEMO_SCHEDULING'
-  | 'CREDIT_MANAGEMENT'
   | 'BUSINESS_DEVELOPMENT'
-  | 'INTERNAL_OPERATIONS'
   | 'ONBOARDING';
 
 export type InternalTaskStatus =
+  | 'Open'
+  | 'Pending'
+  | 'Closed'
+  | 'open'
+  | 'pending'
+  | 'closed'
   | 'New'
   | 'Assigned'
   | 'In Progress'
@@ -3594,7 +3668,6 @@ export type InternalTaskStatus =
   | 'Completed'
   | 'Rejected'
   | 'Cancelled'
-  | 'Pending'
   | 'Blocked'
   | 'Escalated';
 

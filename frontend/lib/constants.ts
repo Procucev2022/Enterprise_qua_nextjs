@@ -2320,33 +2320,81 @@ export const ACTION_CENTER_SMS_MAX_CHARS = 160;
 
 
 export const INTERNAL_TASK_CATEGORIES = {
+  CALL_TASK: 'CALL_TASK',
+  EMAIL_TASK: 'EMAIL_TASK',
+  SMS_TASK: 'SMS_TASK',
+  DEMO_SCHEDULE: 'DEMO_SCHEDULE',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  SITE_VISITING_MEETING_CLIENTS: 'SITE_VISITING_MEETING_CLIENTS',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   COMMUNICATION: 'COMMUNICATION',
   DEMO_SCHEDULING: 'DEMO_SCHEDULING',
-  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
   BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
-  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   ONBOARDING: 'ONBOARDING',
 } as const;
 
 export const INTERNAL_TASK_CATEGORY_LIST = [
-  'COMMUNICATION',
-  'DEMO_SCHEDULING',
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
   'CREDIT_MANAGEMENT',
-  'BUSINESS_DEVELOPMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
   'INTERNAL_OPERATIONS',
-  'ONBOARDING',
 ] as const;
 
-export const INTERNAL_TASK_CATEGORY_LABELS = {
-  COMMUNICATION: 'Communication Tasks',
-  DEMO_SCHEDULING: 'Demo Scheduling',
+export const INTERNAL_TASK_CATEGORY_LABELS: Record<string, string> = {
+  CALL_TASK: 'Call Task',
+  EMAIL_TASK: 'Email Task',
+  SMS_TASK: 'SMS Task',
+  DEMO_SCHEDULE: 'Demo schedule',
   CREDIT_MANAGEMENT: 'Credit Management',
-  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
-  INTERNAL_OPERATIONS: 'Internal Operations',
-  ONBOARDING: 'Onboarding Process',
-} as const;
+  SITE_VISITING_MEETING_CLIENTS: 'Site visiting/Meeting Clients',
+  INTERNAL_OPERATIONS: 'Internal operations',
+  COMMUNICATION: 'Call Task',
+  DEMO_SCHEDULING: 'Demo schedule',
+  BUSINESS_DEVELOPMENT: 'Site visiting/Meeting Clients',
+  ONBOARDING: 'Internal operations',
+};
 
 export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
+  CALL_TASK: [
+    'Phone Call',
+    'Outgoing Call',
+    'Incoming Call',
+    'Follow-up Call',
+  ],
+  EMAIL_TASK: [
+    'Email',
+    'Send Proposal',
+    'Send Corporate Email',
+    'Email Follow-up',
+  ],
+  SMS_TASK: [
+    'SMS',
+    'SMS Alert',
+    'SMS Follow-up',
+    'WhatsApp Notification',
+  ],
+  DEMO_SCHEDULE: [
+    'Schedule Demo',
+    'Product Demo',
+  ],
+  CREDIT_MANAGEMENT: [
+    'Add Credits',
+    'Delete Credits',
+    'Credit Approval Request',
+  ],
+  SITE_VISITING_MEETING_CLIENTS: [
+    'Site Visit',
+    'Client Meeting',
+    'Vendor Facility Inspection',
+  ],
+  INTERNAL_OPERATIONS: [
+    'Operational Task',
+    'Client Onboarding',
+    'Internal Review',
+  ],
   COMMUNICATION: [
     'Phone Call',
     'SMS',
@@ -2358,16 +2406,9 @@ export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
   DEMO_SCHEDULING: [
     'Schedule Demo',
   ],
-  CREDIT_MANAGEMENT: [
-    'Add Credits',
-    'Delete Credits',
-  ],
   BUSINESS_DEVELOPMENT: [
     'Send Proposal',
     'Send Corporate Email',
-  ],
-  INTERNAL_OPERATIONS: [
-    'Operational Task',
   ],
   ONBOARDING: [
     'Client Onboarding',
@@ -2375,13 +2416,9 @@ export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
 };
 
 export const INTERNAL_TASK_STATUSES = [
-  'New',
-  'Assigned',
-  'In Progress',
-  'Pending Approval',
-  'Completed',
-  'Rejected',
-  'Cancelled',
+  'Open',
+  'Pending',
+  'Closed',
 ] as const;
 
 export const INTERNAL_TASK_PRIORITIES = [
@@ -2389,6 +2426,13 @@ export const INTERNAL_TASK_PRIORITIES = [
   'Medium',
   'High',
   'Critical',
+] as const;
+
+export const DEFAULT_INTERNAL_ASSIGNEES = [
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
 ] as const;
 
 export const DEMO_STATUSES = [
@@ -2499,19 +2543,25 @@ export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
 
 export const APPROVAL_REQUEST_TYPES = [
   'Buyer Credit Addition',
+  'Buyer Credit Deletion',
   'Seller Credit Addition',
-  'Credit Notes',
-  'Purchase Requests',
-  'Payment Approvals',
+  'Seller Credit Deletion',
   'Discounts',
-  'Account Approvals',
   'Trial Periods',
   'Offline Payments',
-  'Unit Bookings',
-  'Cancellations & Refunds',
-  'Packages',
-  'Milestones',
 ] as const;
+
+export type ApprovalRequestType = (typeof APPROVAL_REQUEST_TYPES)[number];
+
+export const BUYER_PROFILE_REQUEST_TYPES = [
+  'Buyer Credit Addition',
+  'Buyer Credit Deletion',
+  'Discounts',
+  'Trial Periods',
+  'Offline Payments',
+] as const;
+
+export type BuyerProfileRequestType = (typeof BUYER_PROFILE_REQUEST_TYPES)[number];
 
 export const DEFAULT_APPROVAL_COLUMNS: Array<{
   key:

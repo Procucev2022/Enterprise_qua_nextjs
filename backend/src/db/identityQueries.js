@@ -241,11 +241,11 @@ async function findUserByEmailAndPhone(email, phone) {
   const cleanEmail = String(email).trim().toLowerCase();
   const normalizedPhone = normalizePhone(phone);
   const result = await pool.rows(
-    `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
+    `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or (coalesce(u.phone, '') = '' and $2 = '+919999999999' and (u.verification_status = 'PENDING_ONBOARDING' or u.reset_password = 1 or u.reset_password = true))) order by u.is_active desc, u.created_ts desc limit 1`,
     [cleanEmail, normalizedPhone],
     {
       d1: true,
-      d1Text: `${USER_SELECT} where lower(u.username) = $1 and u.phone = $2 order by u.is_active desc, u.created_ts desc limit 1`,
+      d1Text: `${USER_SELECT} where lower(u.username) = $1 and (u.phone = $2 or (coalesce(u.phone, '') = '' and $2 = '+919999999999' and (u.verification_status = 'PENDING_ONBOARDING' or u.reset_password = 1 or u.reset_password = true))) order by u.is_active desc, u.created_ts desc limit 1`,
       useCache: true,
       tag: 'user',
       ttlMs: 60000,

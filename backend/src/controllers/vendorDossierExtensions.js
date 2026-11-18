@@ -3,7 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES, DOSSIER_MESSAGES, formatMessage } = require('../config/constants');
 
 const VENDOR_DOSSIER_ERRORS = Object.freeze({
   ACTOR_REQUIRED: 'Sign in with a staff account to record this vendor communication. No signed-in user was found on the request.',
@@ -770,6 +770,176 @@ async function requestCreditApproval(req, res, next) {
   }
 }
 
+function matchesVendorBuyer(vendor, buyer) {
+  if (!buyer) return false;
+  const bId = String(buyer.id || '').toLowerCase();
+  const bEmail = String(buyer.corporateEmail || '').toLowerCase();
+  const bOrg = String(buyer.organizationName || '').toLowerCase();
+
+  const vBuyerId = String(vendor.buyerId || '').toLowerCase();
+  const vBuyerAccountId = String(vendor.buyerAccountId || '').toLowerCase();
+  const vBuyerEmail = String(vendor.buyerEmail || '').toLowerCase();
+  const vAddedBy = String(vendor.addedByBuyerCompany || '').toLowerCase();
+
+  if (vBuyerId && vBuyerId === bId) return true;
+  if (vBuyerAccountId && vBuyerAccountId === bId) return true;
+  if (vBuyerEmail && bEmail && vBuyerEmail === bEmail) return true;
+  if (vAddedBy && bOrg && vAddedBy === bOrg) return true;
+  return false;
+}
+
+async function getSellerBuyerUploads(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbBuyers = [];
+    if (pool.hasStorage()) {
+      dbBuyers = await domainQueries.getAssociatedBuyersForVendorFromDB(vendor, 100);
+    }
+
+    const inMemBuyers = (storeService.getBuyerAccounts() || []).filter((b) => matchesVendorBuyer(vendor, b)).map((b) => {
+      const company = b.organizationName || b.companyName || b.name || 'Enterprise Buyer';
+      const contact = b.contactPerson || b.name || 'Primary Contact';
+      const email = b.corporateEmail || b.email || '';
+      const phone = b.mobileNumber || b.phone || '';
+      const uploadDate = vendor.createdAt || vendor.created_at || b.createdAt;
+      return {
+        id: b.id,
+        name: company,
+        companyName: company,
+        contactPerson: contact,
+        email,
+        phone,
+        uploadDate,
+        status: b.status || 'ACTIVE_VERIFIED',
+        sourcingMode: b.sourcingMode || 'Mode 1',
+        subscriptionPlan: b.subscriptionPlan || b.subscriptionTier || 'Version_3',
+        location: b.location || b.city || '',
+      };
+    });
+
+    const buyerMap = new Map();
+    for (const b of [...dbBuyers, ...inMemBuyers]) {
+      const key = String(b.id || b.email).toLowerCase();
+      if (key && !buyerMap.has(key)) {
+        buyerMap.set(key, b);
+      }
+    }
+
+    if (buyerMap.size === 0 && (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail)) {
+      const clientName = vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client';
+      const key = String(vendor.buyerId || vendor.buyerEmail || clientName).toLowerCase();
+      buyerMap.set(key, {
+        id: vendor.buyerId || `buyer-ext-${key.slice(0, 10)}`,
+        name: clientName,
+        companyName: clientName,
+        contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Contact',
+        email: vendor.buyerEmail || '',
+        phone: '',
+        uploadDate: vendor.createdAt || new Date().toISOString(),
+        status: 'ACTIVE_VERIFIED',
+        sourcingMode: 'Mode 1',
+        subscriptionPlan: 'Enterprise',
+        location: vendor.city ? `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}` : '',
+      });
+    }
+
+    const buyers = Array.from(buyerMap.values());
+    return res.status(200).json({
+      success: true,
+      count: buyers.length,
+      data: buyers,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller buyer uploads', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
+async function getSellerActiveRFQs(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbMatchedRFQs = [];
+    if (pool.hasStorage()) {
+      dbMatchedRFQs = await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB(vendor, 100);
+    }
+
+    const now = Date.now();
+    const inMemRFQs = (storeService.rfqs || []).filter((rfq) => {
+      if (!rfq) return false;
+      const status = String(rfq.status || '').toLowerCase();
+      if (status.includes('close') || status.includes('cancel') || status.includes('expire') || status.includes('complet')) {
+        return false;
+      }
+      const closingDate = rfq.closingDate || rfq.deadline || rfq.bidClosingDate;
+      if (closingDate) {
+        const time = new Date(closingDate).getTime();
+        if (!isNaN(time) && time < now) return false;
+      }
+      const rfqCat = rfq.category || rfq.procurementCategory || rfq.majorCategory;
+      if (storeService.vendorCoversCategory(vendor, rfqCat)) return true;
+      if (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+      if (Array.isArray(rfq.extractedEntities)) {
+        return rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category));
+      }
+      return false;
+    }).map((rfq) => {
+      const cat = rfq.category || 'General';
+      const buyerName = rfq.buyerAccountName || 'Buyer Enterprise';
+      return {
+        id: rfq.id,
+        rfqNumber: rfq.rfqNumber || rfq.id,
+        title: rfq.title || `RFQ ${rfq.rfqNumber || rfq.id}`,
+        category: cat,
+        procurementCategory: cat,
+        buyerCompanyName: buyerName,
+        buyerCompany: buyerName,
+        buyerName,
+        location: rfq.deliveryLocation || '—',
+        publishedDate: rfq.publishedDate || rfq.createdAt || new Date().toISOString(),
+        closingDate: rfq.closingDate || null,
+        status: rfq.status || 'Quotes Pending',
+        budget: rfq.budget ?? 0,
+        sourcingMode: rfq.sourcingMode || 'Mode 1',
+        extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : [],
+        description: rfq.description || '',
+        ...rfq,
+      };
+    });
+
+    const rfqMap = new Map();
+    for (const rfq of [...dbMatchedRFQs, ...inMemRFQs]) {
+      if (rfq?.id && !rfqMap.has(rfq.id)) {
+        rfqMap.set(rfq.id, rfq);
+      }
+    }
+
+    const activeRfqs = Array.from(rfqMap.values());
+    return res.status(200).json({
+      success: true,
+      count: activeRfqs.length,
+      data: activeRfqs,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller active RFQs', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
@@ -780,4 +950,6 @@ module.exports = {
   getVendorPaymentHistory,
   addQuoteCredits,
   requestCreditApproval,
+  getSellerBuyerUploads,
+  getSellerActiveRFQs,
 };

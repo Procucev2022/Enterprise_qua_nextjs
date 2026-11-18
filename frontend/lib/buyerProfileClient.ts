@@ -4,6 +4,7 @@ import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
+  BuyerUploadedVendorItem,
   BuyerCreditSummary,
   BuyerCreditTransaction,
   BuyerCommunicationItem,
@@ -492,6 +493,24 @@ export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
   }
 }
 
+export async function fetchBuyerUploadedVendors(buyerId: string): Promise<{
+  success: boolean;
+  count?: number;
+  data?: BuyerUploadedVendorItem[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/uploaded-vendors`, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer uploaded vendors request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch buyer uploaded vendors') };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
   saveBuyerProfile,
@@ -506,6 +525,7 @@ const buyerProfileClient = {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchBuyerUploadedVendors,
 };
 
 export default buyerProfileClient;

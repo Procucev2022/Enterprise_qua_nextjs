@@ -679,6 +679,7 @@ describe('buyerProfileClient', () => {
       'fetchBuyerCreditHistory',
       'fetchBuyerPaymentHistory',
       'fetchBuyerProfile',
+      'fetchBuyerUploadedVendors',
       'fetchCategoryTaxonomy',
       'fetchDispatchTemplates',
       'flattenCategorySelection',

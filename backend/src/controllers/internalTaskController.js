@@ -278,8 +278,15 @@ async function updateTask(req, res) {
 
     // Communication tasks requirement:
     // Do not automatically mark communication tasks as completed unless the required action is successfully performed or completion is explicitly confirmed.
-    const isComm = req.body.taskCategory === 'COMMUNICATION';
-    const isCompleted = req.body.status === 'Completed';
+    const isComm =
+      req.body.taskCategory === 'COMMUNICATION' ||
+      req.body.taskCategory === 'CALL_TASK' ||
+      req.body.taskCategory === 'EMAIL_TASK' ||
+      req.body.taskCategory === 'SMS_TASK';
+    const isCompleted =
+      req.body.status === 'Completed' ||
+      req.body.status === 'Closed' ||
+      req.body.status === 'closed';
     const hasConfirmation = Boolean(
       req.body.completionConfirmed ||
       req.body.actionOutcome ||
@@ -632,9 +639,27 @@ async function getRegistrations(req, res) {
       sourceType = 'all',
       status = 'all',
       clientType = 'all',
+      startDate = '',
+      endDate = '',
+      dateRangePreset = '',
       limit = 100,
       offset = 0,
     } = validation.sanitizedData;
+
+    let effectiveStartDate = startDate || '';
+    let effectiveEndDate = endDate || '';
+    if (!effectiveStartDate && !effectiveEndDate && dateRangePreset) {
+      const now = new Date();
+      if (dateRangePreset === 'last10') {
+        const d = new Date(now.getTime() - 10 * 24 * 60 * 60 * 1000);
+        effectiveStartDate = d.toISOString().split('T')[0];
+        effectiveEndDate = now.toISOString().split('T')[0];
+      } else if (dateRangePreset === 'last30' || dateRangePreset === 'last1month') {
+        const d = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+        effectiveStartDate = d.toISOString().split('T')[0];
+        effectiveEndDate = now.toISOString().split('T')[0];
+      }
+    }
 
     logger.info('Fetching registered clients', {
       hasSearch: Boolean(search),
@@ -642,6 +667,8 @@ async function getRegistrations(req, res) {
       sourceType,
       status,
       clientType,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
       limit,
       offset,
     }, 'INTERNAL_TASK_CONTROLLER');
@@ -652,6 +679,8 @@ async function getRegistrations(req, res) {
       limit,
       offset,
       clientType,
+      startDate: effectiveStartDate,
+      endDate: effectiveEndDate,
     });
 
     return res.status(200).json({

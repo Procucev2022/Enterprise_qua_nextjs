@@ -395,18 +395,18 @@ async function getInternalTaskSummary({ assignedTo = '', taskCategory = '' } = {
   const sql = `
     SELECT
       count(*) as total,
-      sum(case when status = 'New' then 1 else 0 end) as new_tasks,
+      sum(case when status IN ('New', 'Open', 'open') then 1 else 0 end) as new_tasks,
       sum(case when status = 'Assigned' then 1 else 0 end) as assigned_tasks,
       sum(case when status = 'In Progress' then 1 else 0 end) as in_progress,
       sum(case when status = 'Pending Approval' then 1 else 0 end) as pending_approval,
-      sum(case when status = 'Completed' then 1 else 0 end) as completed,
+      sum(case when status IN ('Completed', 'Closed', 'closed') then 1 else 0 end) as completed,
       sum(case when status = 'Rejected' then 1 else 0 end) as rejected,
       sum(case when status = 'Cancelled' then 1 else 0 end) as cancelled,
-      sum(case when status = 'Pending' then 1 else 0 end) as pending,
+      sum(case when status IN ('Pending', 'pending') then 1 else 0 end) as pending,
       sum(case when status = 'Blocked' then 1 else 0 end) as blocked,
       sum(case when status = 'Escalated' then 1 else 0 end) as escalated,
-      sum(case when priority = 'Critical' and status NOT IN ('Completed', 'Rejected', 'Cancelled') then 1 else 0 end) as critical_count,
-      sum(case when due_date < $${overdueParamIdx} and status NOT IN ('Completed', 'Rejected', 'Cancelled') then 1 else 0 end) as overdue_count
+      sum(case when priority = 'Critical' and status NOT IN ('Completed', 'Closed', 'closed', 'Rejected', 'Cancelled') then 1 else 0 end) as critical_count,
+      sum(case when due_date < $${overdueParamIdx} and status NOT IN ('Completed', 'Closed', 'closed', 'Rejected', 'Cancelled') then 1 else 0 end) as overdue_count
     FROM internal_tasks
     ${whereClause}
   `;
@@ -844,9 +844,20 @@ async function updateInternalTask(id, updates = {}, actor = {}) {
     attachments: finalAttachments,
   });
 
-  const completedAt = status === 'Completed' && existing.status !== 'Completed' ? new Date().toISOString() : existing.completed_at;
-  const completedByUserId = status === 'Completed' ? (actor.uuid || actor.id || existing.completed_by_user_id) : existing.completed_by_user_id;
-  const completedByName = status === 'Completed' ? (actor.fullName || actor.name || actor.email || existing.completed_by_name) : existing.completed_by_name;
+  const isNowCompleted =
+    (status === 'Closed' || status === 'Completed' || status === 'closed') &&
+    existing.status !== 'Closed' &&
+    existing.status !== 'Completed' &&
+    existing.status !== 'closed';
+  const completedAt = isNowCompleted ? new Date().toISOString() : existing.completed_at;
+  const completedByUserId =
+    status === 'Closed' || status === 'Completed' || status === 'closed'
+      ? actor.uuid || actor.id || existing.completed_by_user_id
+      : existing.completed_by_user_id;
+  const completedByName =
+    status === 'Closed' || status === 'Completed' || status === 'closed'
+      ? actor.fullName || actor.name || actor.email || existing.completed_by_name
+      : existing.completed_by_name;
   const completionRemarks = updates.completionRemarks || updates.notes || existing.completion_remarks || '';
 
   const updateSql = `
@@ -1284,6 +1295,41 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
       }, { persist: false });
     }
   }
+
+  const updateApprovalSql = `
+    UPDATE approvals SET
+      status = 'Approved',
+      approver_name = $1,
+      approver_remarks = $2,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE internal_task_id = $3 AND status = 'Pending'
+  `;
+  try {
+    await pool.query(updateApprovalSql, [actorName, approvalRemarks, task.id], { d1: true, d1Text: updateApprovalSql });
+  } catch (syncErr) {
+    logger.warn('Internal task approved but approvals sync failed', { error: syncErr.message, taskId: task.id }, 'INTERNAL_TASK_APPROVAL');
+  }
+
+  if (buyerAccount && storeService.updateBuyerAccount) {
+    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts') {
+      const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
+      storeService.updateBuyerAccount(accountId, {
+        discountPercentage: discountPct,
+        subscriptionDiscount: `${discountPct}%`,
+      }, { persist: false });
+    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods') {
+      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      storeService.updateBuyerAccount(accountId, {
+        subscriptionTier: 'Free_trial',
+        trialPeriodDays: days,
+      }, { persist: false });
+    } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
+      storeService.updateBuyerAccount(accountId, {
+        offlinePaymentStatus: 'VERIFIED',
+        lastPaymentStatus: 'VERIFIED',
+      }, { persist: false });
+    }
+  }
   return updatedTask;
 }
 
@@ -1431,6 +1477,20 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       `;
       await client.query(updateSql, [actorId, actorName, approvalRemarks, task.id]);
 
+      const updateApprovalSql = `
+        UPDATE approvals SET
+          status = 'Approved',
+          approver_name = $1,
+          approver_remarks = $2,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE internal_task_id = $3 AND status = 'Pending'
+      `;
+      try {
+        await client.query(updateApprovalSql, [actorName, approvalRemarks, task.id]);
+      } catch (syncErr) {
+        logger.warn('Internal task approved but approvals sync failed', { error: syncErr.message, taskId: task.id }, 'INTERNAL_TASK_APPROVAL');
+      }
+
       // Log approval activity record in database
       const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
       const actSql = `
@@ -1470,6 +1530,25 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
     }, { persist: false });
+  } else if (accountType === 'BUYER' && storeService.updateBuyerAccount) {
+    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts') {
+      const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
+      storeService.updateBuyerAccount(accountId, {
+        discountPercentage: discountPct,
+        subscriptionDiscount: `${discountPct}%`,
+      }, { persist: false });
+    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods') {
+      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      storeService.updateBuyerAccount(accountId, {
+        subscriptionTier: 'Free_trial',
+        trialPeriodDays: days,
+      }, { persist: false });
+    } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
+      storeService.updateBuyerAccount(accountId, {
+        offlinePaymentStatus: 'VERIFIED',
+        lastPaymentStatus: 'VERIFIED',
+      }, { persist: false });
+    }
   } else if (updatedVendorInfo && storeService.updateVendor) {
     storeService.updateVendor(updatedVendorInfo.vendorId, {
       freeQuotationCredits: updatedVendorInfo.updatedBal,
@@ -1528,6 +1607,20 @@ async function rejectCreditTask(id, actor = {}, remarks = '') {
     { d1: true, d1Text: actSql }
   );
 
+  const updateApprovalSql = `
+    UPDATE approvals SET
+      status = 'Rejected',
+      approver_name = $1,
+      approver_remarks = $2,
+      updated_at = CURRENT_TIMESTAMP
+    WHERE internal_task_id = $3 AND status = 'Pending'
+  `;
+  try {
+    await pool.query(updateApprovalSql, [actorName, rejectionRemarks, task.id], { d1: true, d1Text: updateApprovalSql });
+  } catch (syncErr) {
+    logger.warn('Internal task rejected but approvals sync failed', { error: syncErr.message, taskId: task.id }, 'INTERNAL_TASK_APPROVAL');
+  }
+
   return getInternalTaskById(task.id);
 }
 
@@ -1573,7 +1666,7 @@ async function getOverdueAndUpcomingTasks() {
   const deadlineCutoff = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString().split('T')[0];
   const sql = `
     SELECT * FROM internal_tasks
-    WHERE status NOT IN ('Completed', 'Rejected', 'Cancelled')
+    WHERE status NOT IN ('Completed', 'Closed', 'closed', 'Rejected', 'Cancelled')
       AND due_date IS NOT NULL
       AND due_date <= $1
     ORDER BY due_date ASC

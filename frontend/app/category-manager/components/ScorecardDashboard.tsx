@@ -86,21 +86,24 @@ export function ScorecardDashboard() {
   const [drilldownExecutive, setDrilldownExecutive] = useState<TeamScorecardRow | null>(null);
 
   // Column customization states
-  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch {}
-    }
-    return SCORECARD_DEFAULT_COLUMNS;
-  });
+  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(SCORECARD_DEFAULT_COLUMNS);
   const [showScorecardColumnSettings, setShowScorecardColumnSettings] = useState<boolean>(false);
   const [scorecardSortField, setScorecardSortField] = useState<string>('rank');
   const [scorecardSortOrder, setScorecardSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Hydrate scorecard column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setScorecardColumns(parsed);
+        }
+      }
+    } catch {}
+  }, []);
 
   const handleScorecardSort = (field: string) => {
     if (scorecardSortField === field) {

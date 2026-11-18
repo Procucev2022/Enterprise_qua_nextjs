@@ -54,6 +54,8 @@ jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCommunications: jest.fn(),
   recordSupplierCommunication: jest.fn(),
   fetchSupplierPaymentHistory: jest.fn(),
+  fetchSellerBuyerUploads: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
+  fetchSellerActiveRFQs: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -1957,4 +1959,636 @@ test('displays PAN in SupplierDossierDrawer Statutory Verification card without 
     />
   );
   expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
+});
+
+describe('SupplierDossierDrawer - Buyer Uploads Tab', () => {
+  const mockBuyerUploads = [
+    {
+      id: 'buyer-1',
+      name: 'Veera Enterprise',
+      companyName: 'Veera solutions pvt ltd',
+      contactPerson: 'Veera',
+      email: 'veerababuv2002@gmail.com',
+      phone: '+919381877013',
+      uploadDate: '2026-11-14T12:48:00.000Z',
+      status: 'ACTIVE_VERIFIED',
+      sourcingMode: 'Mode 1',
+      subscriptionPlan: 'Version_3',
+      location: 'Hyderabad, India',
+    },
+  ];
+
+  test('renders Buyer Uploads tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab} \\(1\\)`, 'i'),
+      })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+    expect(screen.getByText('veerababuv2002@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('+919381877013')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
+    expect(screen.getByText('Version_3')).toBeInTheDocument();
+
+    // Close modal
+    const closeBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(closeBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+  });
+
+  test('handles search filter and error/empty states for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    const searchInput = await screen.findByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.buyerUploads.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Backdrop click on buyer details modal and close footer
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    
+    // Close using the footer button
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+    }
+  });
+
+  test('handles tab navigation, refresh button, error responses, and exceptions for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to retrieve buyers',
+      })
+      .mockRejectedValueOnce(new Error('Network disconnected'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockBuyerUploads,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Click tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to retrieve buyers')).toBeInTheDocument();
+
+    // Click retry button in error banner
+    const retryBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(retryBtns[retryBtns.length - 1]);
+
+    // Displays network error message
+    expect(await screen.findByText('Network disconnected')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Successfully loads buyers
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+  });
+});
+
+describe('SupplierDossierDrawer - Active RFQs Tab', () => {
+  const mockActiveRfqs = [
+    {
+      id: 'rfq-act-1',
+      rfqNumber: 'RFQ-2026-999',
+      title: 'Centrifugal Industrial Pumps 50HP',
+      category: 'Mechanical & Fluid Equipment',
+      procurementCategory: 'Mechanical & Fluid Equipment',
+      buyerCompanyName: 'Veera solutions pvt ltd',
+      location: 'Bengaluru, KA',
+      publishedDate: '2026-11-15T09:00:00.000Z',
+      closingDate: '2026-11-30T18:00:00.000Z',
+      status: 'PUBLISHED',
+      budget: 1500000,
+      sourcingMode: 'Direct',
+      extractedEntities: [
+        {
+          itemDescription: '50HP Centrifugal Pump with starter',
+          quantity: 2,
+          unit: 'Units',
+          targetPrice: 750000,
+        },
+      ],
+    },
+  ];
+
+  test('renders Active RFQs tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockActiveRfqs,
+    });
+    const onSelectRFQMock = jest.fn();
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="active-rfqs"
+        onClose={jest.fn()}
+        onSelectRFQ={onSelectRFQMock}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.activeRfqsTab} \\(1\\)`, 'i'),
+      })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+    expect(screen.getByText('Centrifugal Industrial Pumps 50HP')).toBeInTheDocument();
+    expect(screen.getByText('Bengaluru, KA')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('50HP Centrifugal Pump with starter')).toBeInTheDocument();
+
+    // Close via header X button
+    const closeXBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+    fireEvent.click(closeXBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via footer close button
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[footerCloseBtns.length - 1]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+    }
+
+    // Reopen and Open in RFQ Workspace
+    fireEvent.click(viewBtn);
+    const openRfqBtn = await screen.findByRole('button', { name: /Open in RFQ Workspace/i });
+    fireEvent.click(openRfqBtn);
+    expect(onSelectRFQMock).toHaveBeenCalledWith(expect.objectContaining({ rfqNumber: 'RFQ-2026-999' }));
+  });
+
+  test('handles tab navigation, refresh, empty line items, error responses and exceptions for Active RFQs', async () => {
+    const mockRfqNoItems = [
+      {
+        ...mockActiveRfqs[0],
+        extractedEntities: [],
+        budget: 0,
+      },
+    ];
+
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to query active RFQs',
+      })
+      .mockRejectedValueOnce(new Error('Connection timed out'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockRfqNoItems,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Switch tab by clicking the tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to query active RFQs')).toBeInTheDocument();
+
+    // Click retry button in banner
+    const retryBannerBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(retryBannerBtns[retryBannerBtns.length - 1]);
+
+    // Displays timeout error
+    expect(await screen.findByText('Connection timed out')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Displays loaded table with RFQ
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+
+    // Search filter
+    const searchInput = screen.getByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Open View Details to verify empty line items message
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.noLineItems)).toBeInTheDocument();
+  });
+
+  describe('SupplierDossierDrawer - Extended Branch Coverage', () => {
+    test('covers Buyer Uploads search across all fields, error fallbacks, and sparse item fallbacks', async () => {
+      const sparseBuyerUploads = [
+        {
+          id: 'bu-sparse-1',
+          name: 'Omega Tech Solutions',
+          companyName: 'Omega Corp',
+          contactPerson: 'Karan Sharma',
+          email: 'karan@omega.test',
+          phone: '+919876500001',
+          uploadDate: '2026-03-10T11:00:00.000Z',
+          status: 'ACTIVE',
+          sourcingMode: 'Mode 2',
+          subscriptionPlan: 'Enterprise Plan',
+          location: 'Bengaluru, Karnataka',
+        },
+        {
+          id: 'bu-sparse-2',
+          name: '',
+          companyName: '',
+          contactPerson: '',
+          email: '',
+          phone: '',
+          uploadDate: null,
+          status: 'PENDING_REVIEW',
+          sourcingMode: '',
+          subscriptionPlan: '',
+          location: '',
+        },
+      ];
+
+      // Error fallbacks: res.success = false without res.error, and non-Error throw
+      (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock)
+        .mockResolvedValueOnce({ success: false })
+        .mockRejectedValueOnce('Non-error string rejection')
+        .mockResolvedValue({ success: true, count: 2, data: sparseBuyerUploads });
+
+      const { rerender } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="buyer-uploads"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Verify generic load error banner
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.loadError)).toBeInTheDocument();
+
+      // Trigger retry button in banner to hit non-Error catch branch
+      const retryBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry });
+      fireEvent.click(retryBtns[retryBtns.length - 1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.loadError)).toBeInTheDocument();
+
+      // Trigger header refresh to load data
+      const refreshBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry });
+      fireEvent.click(refreshBtns[0]);
+
+      expect(await screen.findByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.searchPlaceholder);
+
+      // Search match name
+      fireEvent.change(searchInput, { target: { value: 'Omega Tech' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match companyName
+      fireEvent.change(searchInput, { target: { value: 'Omega Corp' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match contactPerson
+      fireEvent.change(searchInput, { target: { value: 'Karan Sharma' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match email
+      fireEvent.change(searchInput, { target: { value: 'karan@omega.test' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match phone
+      fireEvent.change(searchInput, { target: { value: '+919876500001' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // View details for sparse buyer item (hits all modal empty fallbacks)
+      const viewButtons = screen.getAllByRole('button', {
+        name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+      });
+      fireEvent.click(viewButtons[1]);
+
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+
+      // Close modal
+      const closeBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal });
+      fireEvent.click(closeBtns[0]);
+      await waitFor(() => {
+        expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+      });
+    });
+
+    test('covers Active RFQs search across all fields, error fallbacks, and sparse line items fallbacks', async () => {
+      const sparseActiveRfqs = [
+        {
+          id: 'rfq-ext-1',
+          rfqNumber: 'RFQ-EXT-001',
+          title: 'High Pressure Water Jetting Pump',
+          buyerCompanyName: 'Apex Global Industries',
+          buyerCompany: 'Apex Global Industries',
+          buyerName: 'Vikram Joshi',
+          category: 'Mechanical Machinery',
+          procurementCategory: 'Industrial Pumps',
+          location: 'Pune, Maharashtra',
+          budget: 850000,
+          publishedDate: '2026-03-01T10:00:00.000Z',
+          closingDate: '2026-04-15T18:00:00.000Z',
+          status: 'Active',
+          sourcingMode: 'Direct',
+          extractedEntities: [
+            { itemName: 'Triplex Plunger Pump', quantity: 3, unit: 'Units', targetPrice: 250000 },
+            { itemDescription: 'Spare Seal Kit', quantity: null, unit: '', targetPrice: null },
+            { rawText: 'Unstructured Line Item Raw Text' },
+            { technicalSpecs: 'High pressure stainless steel 316 specs' },
+            {},
+          ],
+        },
+        {
+          id: 'rfq-ext-fallback-id',
+          rfqNumber: '',
+          title: '',
+          buyerCompanyName: '',
+          buyerCompany: 'Subordinate Buyers Ltd',
+          buyerName: '',
+          category: '',
+          procurementCategory: 'Pneumatics & Hydraulics',
+          location: 'Surat, Gujarat',
+          budget: 0,
+          publishedDate: null,
+          closingDate: null,
+          status: 'CLOSED_EXPIRED',
+          sourcingMode: '',
+          extractedEntities: [],
+        },
+        {
+          id: '',
+          rfqNumber: '',
+          title: '',
+          buyerCompanyName: '',
+          buyerCompany: '',
+          buyerName: 'Direct Sole Buyer',
+          category: '',
+          procurementCategory: '',
+          location: '',
+          budget: -100,
+          publishedDate: null,
+          closingDate: null,
+          status: '',
+          sourcingMode: '',
+          extractedEntities: null,
+        },
+      ];
+
+      (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock)
+        .mockResolvedValueOnce({ success: false })
+        .mockRejectedValueOnce('Non-error string timeout')
+        .mockResolvedValue({ success: true, count: 3, data: sparseActiveRfqs });
+
+      render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="active-rfqs"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Verify generic load error banner
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.loadError)).toBeInTheDocument();
+
+      // Retry to hit non-Error catch
+      const retryBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry });
+      fireEvent.click(retryBtns[retryBtns.length - 1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.loadError)).toBeInTheDocument();
+
+      // Refresh to load data
+      const refreshBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry });
+      fireEvent.click(refreshBtns[0]);
+
+      expect(await screen.findByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder);
+
+      // Search match rfqNumber
+      fireEvent.change(searchInput, { target: { value: 'RFQ-EXT-001' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match fallback id
+      fireEvent.change(searchInput, { target: { value: 'rfq-ext-fallback-id' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match title
+      fireEvent.change(searchInput, { target: { value: 'Water Jetting' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match buyerCompanyName
+      fireEvent.change(searchInput, { target: { value: 'Apex Global' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match buyerCompany
+      fireEvent.change(searchInput, { target: { value: 'Subordinate Buyers' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match buyerName
+      fireEvent.change(searchInput, { target: { value: 'Direct Sole Buyer' } });
+      expect(screen.getByText('Direct Sole Buyer')).toBeInTheDocument();
+
+      // Search match category
+      fireEvent.change(searchInput, { target: { value: 'Mechanical Machinery' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match procurementCategory
+      fireEvent.change(searchInput, { target: { value: 'Pneumatics & Hydraulics' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match location
+      fireEvent.change(searchInput, { target: { value: 'Surat' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Open View Details for first item to exercise extractedEntities fallbacks
+      const viewButtons = screen.getAllByRole('button', {
+        name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+      });
+      fireEvent.click(viewButtons[0]);
+
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      expect(screen.getByText('Triplex Plunger Pump')).toBeInTheDocument();
+      expect(screen.getByText('Spare Seal Kit')).toBeInTheDocument();
+      expect(screen.getByText('Unstructured Line Item Raw Text')).toBeInTheDocument();
+      expect(screen.getByText('High pressure stainless steel 316 specs')).toBeInTheDocument();
+
+      // Close modal
+      const closeBtn = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn[0]);
+
+      // Open View Details for second item (sparse fallbacks)
+      fireEvent.click(viewButtons[1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      const closeBtn2 = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn2[0]);
+
+      // Open View Details for third item (null entities and zero/negative budget fallbacks)
+      fireEvent.click(viewButtons[2]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      const closeBtn3 = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn3[0]);
+    });
+
+    test('covers communications channel switching, follow-up scheduling, and toast notifications', async () => {
+      const recordMock = supplierProfileClient.recordSupplierCommunication as jest.Mock;
+      recordMock.mockResolvedValue({ success: true });
+
+      const { container } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="communications"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Open compose modal
+      const recordCommBtn = screen.getByRole('button', { name: /Record Communication/i });
+      fireEvent.click(recordCommBtn);
+
+      expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.compose.title)).toBeInTheDocument();
+
+      // Switch channels
+      const channelSelect = screen.getByDisplayValue('Email');
+      fireEvent.change(channelSelect, { target: { value: 'SMS' } });
+      fireEvent.change(channelSelect, { target: { value: 'WHATSAPP' } });
+      fireEvent.change(channelSelect, { target: { value: 'CALL' } });
+      fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+
+      // Fill subject and message
+      const subjectInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.subjectPlaceholder);
+      fireEvent.change(subjectInput, { target: { value: 'Test Subject Outreach' } });
+
+      const msgInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.messagePlaceholder);
+      fireEvent.change(msgInput, { target: { value: 'Outreach follow up communication message content.' } });
+
+      // Add next followup date
+      const followupInput = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(followupInput, { target: { value: '2026-12-01T15:30' } });
+
+      // Submit with followup date
+      const submitBtn = screen.getByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.compose.sendBtn });
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(recordMock).toHaveBeenCalledWith(mockSeller.id, expect.objectContaining({
+          subject: 'Test Subject Outreach',
+          nextFollowupDate: '2026-12-01T15:30',
+        }));
+      });
+    });
+  });
 });
