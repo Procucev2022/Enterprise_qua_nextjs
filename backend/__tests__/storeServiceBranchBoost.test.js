@@ -2695,6 +2695,212 @@ describe('storeService comprehensive branch boost tests', () => {
         );
       }).not.toThrow();
     });
+
+    test('excludes inactive vendors from future RFQ creation, candidates, invitations, notifications, and emails while preserving historical invites', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+
+      const buyerAcc = {
+        id: 'buyer-inact-flow',
+        organizationName: 'Future Flow Buyer',
+        corporateEmail: 'buyer@future.test',
+        subscriptionPlan: 'enterprise',
+        remainingFreeRFQs: 10,
+      };
+      storeService.buyerAccounts = [buyerAcc];
+      storeService.activeBuyerAccount = buyerAcc;
+
+      const activeVendor = storeService.addVendor(
+        {
+          name: 'Active Electrical Vendor',
+          email: 'act@mech.test',
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Transformers'],
+          source: 'buyer_uploaded',
+          buyerId: buyerAcc.id,
+          buyerAccountId: buyerAcc.id,
+        },
+        buyerAcc.corporateEmail,
+        buyerAcc.id
+      );
+      const inactiveVendor = storeService.addVendor(
+        {
+          name: 'Disabled Electrical Vendor',
+          email: 'inact@mech.test',
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Transformers'],
+          source: 'buyer_uploaded',
+          buyerId: buyerAcc.id,
+          buyerAccountId: buyerAcc.id,
+        },
+        buyerAcc.corporateEmail,
+        buyerAcc.id
+      );
+
+      // Unknown vendor returns null on status update
+      await expect(storeService.updateVendorActiveStatusDurably('v-missing-status', false, buyerAcc.corporateEmail)).resolves.toBeNull();
+
+      // Mark inactive
+      const deactivated = await storeService.updateVendorActiveStatusDurably(inactiveVendor.id, false, buyerAcc.corporateEmail);
+      expect(deactivated).toMatchObject({ id: inactiveVendor.id, isActive: false, disabled: true, status: 'INACTIVE' });
+
+      // Historical already-invited RFQ keeps visibility; future/uninvited RFQ does not
+      const historicalRfq = {
+        id: 'rfq-hist-invited',
+        rfqNumber: 'RFQ-HIST-1',
+        sourcingMode: 'mode_0',
+        category: 'Engineering Spares - Electrical',
+        buyerId: buyerAcc.id,
+        buyerAccountId: buyerAcc.id,
+        buyerEmail: buyerAcc.corporateEmail,
+        assignedVendors: [{ id: inactiveVendor.id, name: inactiveVendor.name, email: inactiveVendor.email }],
+      };
+      const futureOpenRfq = {
+        id: 'rfq-future-open',
+        rfqNumber: 'RFQ-FUT-1',
+        sourcingMode: 'mode_0',
+        category: 'Engineering Spares - Electrical',
+        buyerId: buyerAcc.id,
+        buyerAccountId: buyerAcc.id,
+        buyerEmail: buyerAcc.corporateEmail,
+        assignedVendors: [],
+      };
+      expect(storeService.vendorCoversRFQ(deactivated, historicalRfq)).toBe(true);
+      expect(storeService.vendorCoversRFQ(deactivated, futureOpenRfq)).toBe(false);
+
+      // Visible & candidate pools exclude inactive vendors
+      expect(storeService._visibleVendorsForRFQ(futureOpenRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+      expect(storeService.candidateVendorsForRFQ(futureOpenRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+
+      // inviteVendorsToRFQ excludes inactive vendor and records reason
+      storeService.rfqs = [futureOpenRfq];
+      const inviteRes = await storeService.inviteVendorsToRFQ(futureOpenRfq.id, [inactiveVendor.id, activeVendor.id], 'cm@procucev.com');
+      expect(inviteRes.invitedCount).toBe(1);
+      expect(inviteRes.updatedRFQ.assignedVendors.map((v) => v.id)).toEqual([activeVendor.id]);
+      expect(inviteRes.excludedVendors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: inactiveVendor.id })])
+      );
+
+      // createRFQ filters out inactive client-supplied vendors and skips them in targets/emails/notifications
+      const createdRfq = storeService.createRFQ(
+        {
+          title: 'Future Transformer Requirement',
+          category: 'Engineering Spares - Electrical',
+          sourcingMode: 'mode_1',
+          extractedEntities: [
+            { itemName: 'Step-down Transformer', majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Transformers', quantity: 5, unit: 'Nos' },
+          ],
+          assignedVendors: [
+            { id: inactiveVendor.id, name: inactiveVendor.name, email: inactiveVendor.email },
+            { id: activeVendor.id, name: activeVendor.name, email: activeVendor.email },
+          ],
+        },
+        buyerAcc,
+        { deferSideEffects: true }
+      );
+      expect(createdRfq.assignedVendors.map((v) => v.id)).toEqual([activeVendor.id]);
+      expect(storeService.selectVendorsForRFQEmail(createdRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+      expect(storeService.notifyVendorsOfNewRFQ(createdRfq).map((n) => n.recipientId)).not.toContain(inactiveVendor.id);
+      const targets = storeService._buildRFQVendorInviteTargets(createdRfq, [deactivated, activeVendor]);
+      expect(targets.map((t) => t.vendorId)).toEqual([activeVendor.id]);
+      expect(storeService.emailRFQToMatchedVendors(createdRfq)).toBeGreaterThanOrEqual(1);
+
+      // Reactivating restores previous status
+      const reactivated = await storeService.updateVendorActiveStatusDurably(inactiveVendor.id, true, buyerAcc.corporateEmail);
+      expect(reactivated).toMatchObject({ id: inactiveVendor.id, isActive: true, disabled: false });
+      expect(storeService.vendorCoversRFQ(reactivated, futureOpenRfq)).toBe(true);
+    });
+
+    test('notifyOfRFQClosure resolves all invited vendor formats, cancels chasers, and falls back to DB contacts', async () => {
+      const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+      storeService.notifyOfRFQClosure(null);
+
+      const clearSpy = jest.spyOn(rfqChaserScheduler, 'clearScheduledChasers').mockImplementation(() => {});
+      const sendVendorEmailSpy = jest.spyOn(mailerService, 'sendRfqClosedVendorEmail').mockResolvedValue({ sent: true });
+      const sendSmsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: true });
+      const sendWaSpy = jest.spyOn(whatsAppService, 'sendRFQClosedWhatsApp').mockResolvedValue({ success: true });
+
+      storeService.vendors = [
+        {
+          id: 'v-mem-1',
+          name: 'Memory Invited Vendor',
+          email: 'mem@vendor.test',
+          phone: '9876543201',
+          source: 'buyer_uploaded',
+        },
+      ];
+
+      const rfq = {
+        id: 'rfq-close-invited-1',
+        rfqNumber: 'RFQ-CLOSE-INV-1',
+        title: 'Heavy Valves Package',
+        sourcingMode: 'mode_1',
+        buyerAccountId: 'buyer-c-1',
+        buyerEmail: 'buyer@c.test',
+        assignedVendors: [
+          'v-mem-1',
+          'direct@string.test',
+          '  ',
+          null,
+          42,
+          { vendorId: 'v-db-only-1', name: 'DB Cold Vendor' },
+          { id: 'v-mem-1', email: 'mem@vendor.test' },
+          { email: 'mem@vendor.test', phone: '9876543201', contactPerson: 'Lead Contact' },
+          {},
+        ],
+        followUpData: {
+          vendors: [
+            { id: 'v-fup-1', vendorName: 'FollowUp Vendor', email: 'fup@vendor.test', mobile: '9876543202' },
+            { name: 'FollowUp Vendor', email: 'fup@vendor.test' },
+          ],
+        },
+        status: 'Closed',
+      };
+
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const getDbVendorsSpy = jest.spyOn(domainQueries, 'getVendorsByIdsFromDB').mockResolvedValue([
+        {
+          id: 'v-db-only-1',
+          name: 'DB Cold Vendor',
+          email: 'db-cold@vendor.test',
+          mobileNumber: '9876543203',
+          source: 'procucev_network',
+        },
+      ]);
+
+      storeService.notifyOfRFQClosure(rfq);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(clearSpy).toHaveBeenCalledWith('RFQ-CLOSE-INV-1');
+      expect(getDbVendorsSpy).toHaveBeenCalledWith(expect.arrayContaining(['v-db-only-1']));
+
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('mem@vendor.test', expect.objectContaining({ recipientName: expect.any(String) }));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('direct@string.test', expect.any(Object));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('fup@vendor.test', expect.any(Object));
+      expect(sendVendorEmailSpy).toHaveBeenCalledWith('db-cold@vendor.test', expect.any(Object));
+
+      expect(sendSmsSpy).toHaveBeenCalledTimes(3);
+      expect(sendWaSpy).toHaveBeenCalledTimes(3);
+
+      const closedNotifs = storeService.notifications.filter((n) => n.recipientType === 'vendor' && n.kind === 'rfq_closed');
+      expect(closedNotifs.map((n) => n.recipientId)).toEqual(
+        expect.arrayContaining(['v-mem-1', 'v-db-only-1', 'v-fup-1'])
+      );
+
+      // Missing/empty DB vendor list and empty dispatch coverage
+      getDbVendorsSpy.mockResolvedValueOnce([]);
+      storeService.notifyOfRFQClosure({ id: 'rfq-no-inv', title: 'Empty', assignedVendors: [] });
+      storeService._dispatchVendorClosureMessages({ id: 'rfq-null-v' }, [null]);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      hasStorageSpy.mockRestore();
+      getDbVendorsSpy.mockRestore();
+      clearSpy.mockRestore();
+      sendVendorEmailSpy.mockRestore();
+      sendSmsSpy.mockRestore();
+      sendWaSpy.mockRestore();
+    });
   });
 });
 

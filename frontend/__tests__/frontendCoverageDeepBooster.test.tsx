@@ -466,11 +466,16 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
       />
     );
 
-    // Click Close RFQ
-    const closeBtn = screen.queryByRole('button', { name: /Close RFQ/i });
+    // Click Close RFQ, verify warning dialog, then confirm close
+    const closeBtn = screen.queryByRole('button', { name: new RegExp(`^${UI_STRINGS.rfqDetails.closeRfqAction}$`, 'i') });
     if (closeBtn) {
+      fireEvent.click(closeBtn);
+      const closeDialog = screen.getByRole('dialog');
+      expect(within(closeDialog).getByText(UI_STRINGS.rfqDetails.closeModalWarningBody)).toBeInTheDocument();
       await act(async () => {
-        fireEvent.click(closeBtn);
+        fireEvent.click(
+          within(closeDialog).getByRole('button', { name: new RegExp(UI_STRINGS.rfqDetails.closeModalConfirmAction, 'i') })
+        );
       });
       expect(rfqClientModule.updateRFQ).toHaveBeenCalledWith('rfq-deep-1', { status: 'Closed' });
     }

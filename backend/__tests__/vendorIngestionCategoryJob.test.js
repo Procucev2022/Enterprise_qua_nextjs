@@ -86,10 +86,18 @@ describe('runCategorizationJob', () => {
     await service.runCategorizationJob(RUN);
 
     expect(progressPatches()).toEqual([
-      expect.objectContaining({ status: JOB_STATUS.PROCESSING, totalRecords: 1 }),
-      { processedRecords: 1, failedRecords: 0 },
-      { processedRecords: 1, failedRecords: 0 },
-      expect.objectContaining({ status: JOB_STATUS.COMPLETED, completedAt: expect.any(String) }),
+      expect.objectContaining({ status: JOB_STATUS.PROCESSING, totalRecords: 1, processedRecords: 0, importedRecords: 0 }),
+      { totalRecords: 1, processedRecords: 1, importedRecords: 1, skippedRecords: 0, failedRecords: 0 },
+      { totalRecords: 1, processedRecords: 1, importedRecords: 1, skippedRecords: 0, failedRecords: 0 },
+      expect.objectContaining({
+        totalRecords: 1,
+        processedRecords: 1,
+        importedRecords: 1,
+        skippedRecords: 0,
+        failedRecords: 0,
+        status: JOB_STATUS.COMPLETED,
+        completedAt: expect.any(String),
+      }),
     ]);
     expect(categorization.runCategorizationBatch).toHaveBeenCalledTimes(1);
     expect(queries.updateIngestionJobProgress).toHaveBeenCalledWith('job-1', ORGANIZATION_ID, expect.any(Object));
@@ -106,7 +114,13 @@ describe('runCategorizationJob', () => {
 
     await service.runCategorizationJob(RUN);
 
-    expect(progressPatches()).toContainEqual({ processedRecords: 1, failedRecords: 1 });
+    expect(progressPatches()).toContainEqual({
+      totalRecords: 1,
+      processedRecords: 1,
+      importedRecords: 0,
+      skippedRecords: 0,
+      failedRecords: 1,
+    });
     expect(progressPatches().at(-1)).toEqual(expect.objectContaining({ status: JOB_STATUS.FAILED, errorMessage: 'AI is not configured.' }));
   });
 
@@ -166,6 +180,59 @@ describe('runCategorizationJob', () => {
 
     expect(categorization.runCategorizationBatch).not.toHaveBeenCalled();
     expect(progressPatches().at(-1)).toEqual(expect.objectContaining({ status: JOB_STATUS.FAILED, errorMessage: MESSAGES.AI_JOB_FAILED }));
+  });
+
+  test('reconciles processed and imported counts when matched vendors were already completed or when zero suppliers have PO history', async () => {
+    // Case A: re-run / resume where 7 matched suppliers already finished prior classification
+    queries.findVendorPurchasingProfiles.mockResolvedValue(
+      Array.from({ length: 7 }, (_, i) => ({ ...PROFILE, vendorRecordId: `vr-${i + 1}` }))
+    );
+    queries.findQueuedCategoryMappings.mockResolvedValue([]);
+    queries.summarizeCategoryMappings.mockResolvedValue({
+      ...SUMMARY,
+      completed: 7,
+      mapped: 6,
+      failed: 1,
+      selfMapRequired: 0,
+    });
+
+    await service.runCategorizationJob(RUN);
+    expect(progressPatches().at(-1)).toEqual(
+      expect.objectContaining({
+        status: JOB_STATUS.COMPLETED,
+        totalRecords: 7,
+        processedRecords: 7,
+        importedRecords: 6,
+        skippedRecords: 0,
+        failedRecords: 1,
+      })
+    );
+
+    // Case B: zero suppliers matched PO history — all are skipped as self-mapping required
+    queries.updateIngestionJobProgress.mockClear();
+    queries.findVendorPurchasingProfiles.mockResolvedValue([
+      { ...PROFILE, vendorRecordId: 'vr-1', hasPoHistory: false },
+      { ...PROFILE, vendorRecordId: 'vr-2', hasPoHistory: false },
+    ]);
+    queries.summarizeCategoryMappings.mockResolvedValue({
+      ...SUMMARY,
+      completed: 2,
+      mapped: 0,
+      selfMapRequired: 2,
+      failed: 0,
+    });
+
+    await service.runCategorizationJob(RUN);
+    expect(progressPatches().at(-1)).toEqual(
+      expect.objectContaining({
+        status: JOB_STATUS.COMPLETED,
+        totalRecords: 2,
+        processedRecords: 2,
+        importedRecords: 0,
+        skippedRecords: 2,
+        failedRecords: 0,
+      })
+    );
   });
 
   test('does not reject when the failure itself cannot be recorded', async () => {

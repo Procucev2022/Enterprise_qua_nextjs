@@ -3276,5 +3276,33 @@ describe('additional domainQueries branch coverage', () => {
       jest.spyOn(buyerCreditQueries, 'addBuyerCreditsInDB').mockResolvedValueOnce({ balance: 100 });
       expect(await domainQueries.addBuyerCreditsInDB({ buyerId: 'b-1' })).toEqual({ balance: 100 });
     });
+
+    test('getVendorsPageFromDB activeOnly filters SQL and excludes inactive vendors', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const query = jest.fn()
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            { raw: { id: 'v-act', name: 'Active Vendor', status: 'ACTIVE' } },
+            { raw: { id: 'v-inact', name: 'Inactive Vendor', isActive: false, status: 'INACTIVE' } },
+          ],
+        });
+      pool.pool = { query };
+
+      const page = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, activeOnly: true });
+      expect(query.mock.calls[0][0]).toContain("upper(status) != 'INACTIVE'");
+      expect(page.rows.map((v) => v.id)).toEqual(['v-act']);
+
+      // getPublicVendorsByMajorCategoryFromDB drops inactive rows via appendUniqueVendors
+      const pubQuery = jest.fn().mockResolvedValueOnce({
+        rows: [
+          { raw: { id: 'v-pub-inact', isActive: false, status: 'INACTIVE', pincode: '560001' } },
+          { raw: { id: 'v-pub-act', status: 'ACTIVE', pincode: '560001' } },
+        ],
+      });
+      pool.pool = { query: pubQuery };
+      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Mechanical'], 5, { pincode: '560001' });
+      expect(majorRows.map((v) => v.id)).toEqual(['v-pub-act']);
+    });
   });
 });

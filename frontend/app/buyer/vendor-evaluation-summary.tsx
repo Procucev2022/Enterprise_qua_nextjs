@@ -9,6 +9,7 @@ import {
   VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   isBuyerUploadedVendor,
   isProcucevNetworkVendor,
+  isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
 } from '@/lib/constants';
@@ -297,6 +298,9 @@ export default function VendorEvaluationSummary({
     reconciledBuyerVendors.forEach((v) => {
       if (!v.id) return;
       const matchedEval = findEvaluation(allEvaluations, v.id, v.name, v.email);
+      // Inactive buyer vendors remain accessible when viewing a historical evaluation record,
+      // but unevaluated inactive suppliers stay excluded from future evaluation selection.
+      if (!isVendorActive(v) && !matchedEval && evaluationRecord?.vendorId !== v.id) return;
       if (matchedEval) matchedEvaluationRefs.add(matchedEval);
       optionById.set(v.id, buildSelectOption(v, toScore(matchedEval?.overallScore)));
     });

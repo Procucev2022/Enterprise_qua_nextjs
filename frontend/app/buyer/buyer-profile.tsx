@@ -11,7 +11,16 @@ import {
 } from '@/lib/buyerProfileClient';
 import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { FORM_SCHEMAS, validateFormData, validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import {
+  FORM_SCHEMAS,
+  validateFormData,
+  validatePincode,
+  PostOfficeDetail,
+  PINCODE_PATTERN,
+  isDummyPincode,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
+} from '@/lib/validationSchemas';
 import { logger } from '@/lib/logger';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
@@ -47,7 +56,7 @@ import {
  * never names an organisation and a buyer can only ever reach their own record.
  */
 export default function BuyerProfilePage() {
-  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy } = useApp();
+  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy, refreshActiveBuyerAccount } = useApp();
   const activeBuyerAccountRef = useRef(activeBuyerAccount);
   useEffect(() => {
     activeBuyerAccountRef.current = activeBuyerAccount;
@@ -241,9 +250,11 @@ export default function BuyerProfilePage() {
 
     const profile = profileResult.data;
     const activeAcc = activeBuyerAccountRef.current;
-    const resolvedCity = profile.city || activeAcc?.city || '';
-    const resolvedState = profile.state || activeAcc?.state || '';
-    const resolvedPincode = profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || activeAcc?.zipCode || '';
+    const parsedPlant = parsePrimaryPlantLocation(activeAcc?.primaryPlantLocation);
+    const resolvedCity = profile.city || activeAcc?.city || parsedPlant.city || '';
+    const resolvedState = profile.state || activeAcc?.state || parsedPlant.state || '';
+    const resolvedPincode =
+      profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || activeAcc?.zipCode || parsedPlant.pincode || '';
     const resolvedCountry = profile.country || activeAcc?.country || 'India';
     const resolvedStreet =
       profile.street ||
@@ -251,12 +262,15 @@ export default function BuyerProfilePage() {
       activeAcc?.address1 ||
       activeAcc?.address ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
-    const resolvedGst = profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '';
+    const resolvedGst = (profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '').toUpperCase();
     const resolvedPan =
-      profile.panNumber ||
-      activeAcc?.panNumber ||
-      activeAcc?.pan ||
-      '';
+      (
+        profile.panNumber ||
+        activeAcc?.panNumber ||
+        activeAcc?.pan ||
+        derivePanFromGstin(resolvedGst) ||
+        ''
+      ).toUpperCase();
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -306,16 +320,26 @@ export default function BuyerProfilePage() {
     if (!brandName && (activeBuyerAccount.brandName || activeBuyerAccount.organizationName)) {
       setBrandName(activeBuyerAccount.brandName || activeBuyerAccount.organizationName);
     }
-    if (!city && activeBuyerAccount.city) setCity(activeBuyerAccount.city);
-    if (!state && activeBuyerAccount.state) setState(activeBuyerAccount.state);
-    if (!pincode && (activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode)) {
-      setPincode(activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode || '');
+    const parsedPlant = parsePrimaryPlantLocation(activeBuyerAccount.primaryPlantLocation);
+    const resolvedCity = activeBuyerAccount.city || parsedPlant.city || '';
+    const resolvedState = activeBuyerAccount.state || parsedPlant.state || '';
+    const resolvedPincode =
+      activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode || parsedPlant.pincode || '';
+    if (!city && resolvedCity) setCity(resolvedCity);
+    if (!state && resolvedState) setState(resolvedState);
+    if (!pincode && resolvedPincode) {
+      setPincode(resolvedPincode);
     }
     if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
-    const savedGst = activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '';
+    const savedGst = (activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '').toUpperCase();
     if (!gstNumber && savedGst) setGstNumber(savedGst);
     if (!panNumber) {
-      const savedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || '';
+      const savedPan = (
+        activeBuyerAccount.panNumber ||
+        activeBuyerAccount.pan ||
+        derivePanFromGstin(savedGst || gstNumber) ||
+        ''
+      ).toUpperCase();
       if (savedPan) setPanNumber(savedPan);
     }
     if (!street) {
@@ -323,9 +347,9 @@ export default function BuyerProfilePage() {
         activeBuyerAccount.street ||
         activeBuyerAccount.address1 ||
         activeBuyerAccount.address ||
-        (activeBuyerAccount.city && activeBuyerAccount.state
-          ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
-          : activeBuyerAccount.city || '');
+        (resolvedCity && resolvedState
+          ? `${resolvedCity}, ${resolvedState}`
+          : resolvedCity || '');
       if (fallbackStreet) setStreet(fallbackStreet);
     }
     if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);
@@ -574,6 +598,14 @@ export default function BuyerProfilePage() {
       setCinNumber(result.data.cinNumber);
       setAnnualTurnover(result.data.annualTurnover);
       setContactName(result.data.contactName);
+      if (result.data.street !== undefined) setStreet(result.data.street);
+      if (result.data.city !== undefined) setCity(result.data.city);
+      if (result.data.state !== undefined) setState(result.data.state);
+      if (result.data.pincode !== undefined) setPincode(result.data.pincode);
+      if (result.data.country !== undefined) setCountry(result.data.country);
+    }
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
     }
 
     addAuditLog(`Updated Buyer Organization Profile for ${companyName}`);
@@ -695,7 +727,14 @@ export default function BuyerProfilePage() {
               <input
                 type="text"
                 value={gstNumber}
-                onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
+                onChange={(e) => {
+                  const nextGst = e.target.value.toUpperCase();
+                  setGstNumber(nextGst);
+                  if (!panNumber.trim()) {
+                    const derivedPan = derivePanFromGstin(nextGst);
+                    if (derivedPan) setPanNumber(derivedPan);
+                  }
+                }}
                 maxLength={15}
                 required
                 className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"

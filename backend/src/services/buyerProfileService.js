@@ -16,7 +16,12 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const pool = require('../db/pool');
 const d1Bridge = require('../db/d1Bridge');
 const storeService = require('./storeService');
+const domainQueries = require('../db/domainQueries');
 const { logger } = require('./loggerService');
+const {
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
+} = require('../config/validationSchemas');
 const {
   AUTH_MESSAGES,
   BUYER_PROFILE_CONFIG,
@@ -82,6 +87,18 @@ function raiseLookupFailure(reason) {
 function buildFallbackProfileFromBuyerAccount({ userId, email, buyerAcc }) {
   const pickString = (...values) => values.find((v) => typeof v === 'string' && v.trim() !== '') || '';
   const phone = pickString(buyerAcc.phone, buyerAcc.mobile);
+  const parsedPlant = parsePrimaryPlantLocation(buyerAcc.primaryPlantLocation);
+  const city = pickString(buyerAcc.city, parsedPlant.city);
+  const state = pickString(buyerAcc.state, parsedPlant.state);
+  const pincode = pickString(buyerAcc.pincode, buyerAcc.zip_code, buyerAcc.zipCode, parsedPlant.pincode);
+  const street = pickString(
+    buyerAcc.street,
+    buyerAcc.address1,
+    buyerAcc.address,
+    city && state ? `${city}, ${state}` : city
+  );
+  const gstNumber = pickString(buyerAcc.gstin, buyerAcc.gstNumber, buyerAcc.gst).toUpperCase();
+  const panNumber = (pickString(buyerAcc.pan, buyerAcc.panNumber) || derivePanFromGstin(gstNumber)).toUpperCase();
   return {
     userId,
     email,
@@ -91,13 +108,13 @@ function buildFallbackProfileFromBuyerAccount({ userId, email, buyerAcc }) {
     contactEmail: email,
     contactPhone: phone,
     phone,
-    street: pickString(buyerAcc.street, buyerAcc.address1, buyerAcc.address),
-    city: pickString(buyerAcc.city),
-    state: pickString(buyerAcc.state),
-    pincode: pickString(buyerAcc.pincode, buyerAcc.zip_code, buyerAcc.zipCode),
+    street,
+    city,
+    state,
+    pincode,
     country: pickString(buyerAcc.country) || 'India',
-    gstNumber: pickString(buyerAcc.gstin, buyerAcc.gstNumber, buyerAcc.gst).toUpperCase(),
-    panNumber: pickString(buyerAcc.pan, buyerAcc.panNumber).toUpperCase(),
+    gstNumber,
+    panNumber,
     categories: [],
   };
 }
@@ -140,31 +157,47 @@ async function getProfile(sessionUser) {
 
   // Hydrate missing address / statutory tax details from storeService buyer account if present
   try {
-    const buyerAcc = await storeService.getBuyerAccountByEmail(email);
-    if (buyerAcc) {
-      let needsDbUpdate = false;
-      const patch = {};
+    let buyerAcc = await storeService.getBuyerAccountByEmail(email);
+    if (!buyerAcc && userId) {
+      buyerAcc =
+        (typeof storeService.getBuyerAccounts === 'function' ? storeService.getBuyerAccounts() : [])
+          .find((candidate) => candidate && candidate.id === userId) ||
+        (pool.hasStorage() && typeof domainQueries.getBuyerAccountByIdFromDB === 'function'
+          ? await domainQueries.getBuyerAccountByIdFromDB(userId).catch(() => null)
+          : null);
+    }
 
-      if (!profile.street) {
-        const fallbackStreet = buyerAcc.street || buyerAcc.address1 || buyerAcc.address || (buyerAcc.city && buyerAcc.state ? `${buyerAcc.city}, ${buyerAcc.state}` : buyerAcc.city || '');
-        if (fallbackStreet) {
-          profile.street = fallbackStreet;
-          patch.street = profile.street;
-          needsDbUpdate = true;
-        }
+    let needsDbUpdate = false;
+    const patch = {};
+
+    if (buyerAcc) {
+      const parsedPlant = parsePrimaryPlantLocation(buyerAcc.primaryPlantLocation);
+      const mirrorCity = buyerAcc.city || parsedPlant.city || '';
+      const mirrorState = buyerAcc.state || parsedPlant.state || '';
+      const mirrorPincode = buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode || parsedPlant.pincode || '';
+      const mirrorStreet =
+        buyerAcc.street ||
+        buyerAcc.address1 ||
+        buyerAcc.address ||
+        (mirrorCity && mirrorState ? `${mirrorCity}, ${mirrorState}` : mirrorCity || '');
+
+      if (!profile.street && mirrorStreet) {
+        profile.street = mirrorStreet;
+        patch.street = profile.street;
+        needsDbUpdate = true;
       }
-      if (!profile.city && buyerAcc.city) {
-        profile.city = buyerAcc.city;
+      if (!profile.city && mirrorCity) {
+        profile.city = mirrorCity;
         patch.city = profile.city;
         needsDbUpdate = true;
       }
-      if (!profile.state && buyerAcc.state) {
-        profile.state = buyerAcc.state;
+      if (!profile.state && mirrorState) {
+        profile.state = mirrorState;
         patch.state = profile.state;
         needsDbUpdate = true;
       }
-      if (!profile.pincode && (buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode)) {
-        profile.pincode = buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode;
+      if (!profile.pincode && mirrorPincode) {
+        profile.pincode = mirrorPincode;
         patch.pincode = profile.pincode;
         needsDbUpdate = true;
       }
@@ -180,25 +213,39 @@ async function getProfile(sessionUser) {
           needsDbUpdate = true;
         }
       }
+      if (!profile.brandName && buyerAcc.brandName) {
+        profile.brandName = buyerAcc.brandName;
+        patch.brandName = profile.brandName;
+        needsDbUpdate = true;
+      }
       if (!profile.country || profile.country === '') {
         profile.country = buyerAcc.country || 'India';
         if (needsDbUpdate) {
           patch.country = profile.country;
         }
       }
+    }
 
-      if (needsDbUpdate && profile.organizationId) {
-        try {
-          await buyerProfileQueries.updateProfile({
-            organizationId: profile.organizationId,
-            userId,
-            patch,
-            categories: profile.categories,
-            actor: email,
-          });
-        } catch (err) {
-          logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
-        }
+    if (!profile.panNumber && profile.gstNumber) {
+      const derivedPan = derivePanFromGstin(profile.gstNumber);
+      if (derivedPan) {
+        profile.panNumber = derivedPan;
+        patch.panNumber = derivedPan;
+        needsDbUpdate = true;
+      }
+    }
+
+    if (needsDbUpdate && profile.organizationId) {
+      try {
+        await buyerProfileQueries.updateProfile({
+          organizationId: profile.organizationId,
+          userId,
+          patch,
+          categories: profile.categories,
+          actor: email,
+        });
+      } catch (err) {
+        logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
       }
     }
   } catch (syncErr) {
@@ -443,21 +490,59 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
 
   if (email) {
     try {
-      const syncedAccount = await storeService.updateBuyerAccountDurably(email, {
+      const mirrorUpdate = {
         organizationName: patch.companyName,
-        contactPerson: patch.contactName,
-        city: patch.city,
-        state: patch.state,
-        pincode: patch.pincode,
-        gstin: patch.gstNumber,
-        pan: patch.panNumber,
         profileVerified: true,
         status: 'ACTIVE_VERIFIED',
         verificationStatus: 'verified',
         onboardingRequired: false,
         isAutoRegistered: false,
         tempPasswordRequired: false,
-      });
+      };
+      if (patch.brandName !== undefined) mirrorUpdate.brandName = patch.brandName;
+      if (patch.organizationType !== undefined) mirrorUpdate.organizationType = patch.organizationType;
+      if (patch.contactName !== undefined) mirrorUpdate.contactPerson = patch.contactName;
+      if (patch.contactDesignation !== undefined) mirrorUpdate.contactDesignation = patch.contactDesignation;
+      if (patch.street !== undefined) {
+        mirrorUpdate.street = patch.street;
+        mirrorUpdate.address1 = patch.street;
+        mirrorUpdate.address = patch.street;
+      }
+      if (patch.city !== undefined) mirrorUpdate.city = patch.city;
+      if (patch.state !== undefined) mirrorUpdate.state = patch.state;
+      if (patch.pincode !== undefined) {
+        mirrorUpdate.pincode = patch.pincode;
+        mirrorUpdate.zip_code = patch.pincode;
+        mirrorUpdate.zipCode = patch.pincode;
+      }
+      if (patch.country !== undefined) mirrorUpdate.country = patch.country;
+      if (patch.city !== undefined || patch.state !== undefined || patch.pincode !== undefined) {
+        const plantCity = patch.city ?? saved.profile?.city ?? '';
+        const plantState = patch.state ?? saved.profile?.state ?? '';
+        const plantPin = patch.pincode ?? saved.profile?.pincode ?? '';
+        const plantParts = [plantCity, plantState].filter(Boolean).join(', ');
+        if (plantParts || plantPin) {
+          mirrorUpdate.primaryPlantLocation = plantPin
+            ? (plantParts ? `${plantParts} (${plantPin})` : plantPin)
+            : plantParts;
+        }
+      }
+      if (patch.gstNumber !== undefined) {
+        mirrorUpdate.gstin = patch.gstNumber;
+        mirrorUpdate.gstNumber = patch.gstNumber;
+      }
+      if (patch.panNumber !== undefined) {
+        mirrorUpdate.pan = patch.panNumber;
+        mirrorUpdate.panNumber = patch.panNumber;
+      }
+      if (patch.cinNumber !== undefined) mirrorUpdate.cinNumber = patch.cinNumber;
+      if (patch.website !== undefined) mirrorUpdate.website = patch.website;
+      if (patch.annualTurnover !== undefined) mirrorUpdate.annualTurnover = patch.annualTurnover;
+
+      let syncedAccount = await storeService.updateBuyerAccountDurably(email, mirrorUpdate);
+      if (!syncedAccount && userId) {
+        syncedAccount = await storeService.updateBuyerAccountDurably(userId, mirrorUpdate);
+      }
       if (!syncedAccount) {
         logger.warn('Buyer organization profile saved but no buyer-account mirror was found to synchronize', {
           email,

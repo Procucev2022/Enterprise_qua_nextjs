@@ -40,6 +40,7 @@ const {
   EMAIL_GATEWAY_CONFIG,
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
+  RFQ_CLOSURE_MESSAGES,
   resolveAttachmentContentType,
 } = require('../config/constants');
 const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
@@ -1944,6 +1945,31 @@ async function updateRFQ(req, res, next) {
     }
 
     const updates = pickUpdatableRfqFields(body);
+    if (
+      existing.status === 'Closed' &&
+      updates.status &&
+      updates.status !== 'Closed' &&
+      updates.status !== 'PO Generated'
+    ) {
+      logger.warn('RFQ update rejected: closed RFQ cannot be reopened', {
+        id,
+        rfqNumber: existing.rfqNumber,
+        attemptedStatus: updates.status,
+      }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN,
+        fieldErrors: { status: RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN },
+      });
+    }
+    if (updates.status === 'Closed' && existing.status !== 'Closed') {
+      updates.closedAt = existing.closedAt || new Date().toISOString();
+      updates.closedByRole = role;
+      updates.closedByEmail = (req.user && req.user.email) || null;
+      updates.closedReason =
+        updates.closedReason ||
+        (role === 'buyer' ? RFQ_CLOSURE_MESSAGES.BUYER_CLOSE_REASON : RFQ_CLOSURE_MESSAGES.CM_CLOSE_REASON);
+    }
     if (existing.status === 'Parsing' && !updates.status) {
       const entities = updates.extractedEntities || existing.extractedEntities || [];
       const hasCategories = entities.length > 0 && entities.every((e) => e.majorCategory && e.minorCategory && e.minorCategory !== e.majorCategory);

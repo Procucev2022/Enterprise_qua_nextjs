@@ -1800,13 +1800,15 @@ function makeInquiry(overrides: any = {}): any {
     it('handles RFQ closure when clicking Close RFQ', async () => {
       renderDetails(buildRFQ({ status: 'Quotes Pending' }));
 
-      const closeBtn = screen.queryByRole('button', { name: /Close RFQ/i });
-      if (closeBtn) {
-        fireEvent.click(closeBtn);
-        await waitFor(() => {
-          expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
-        });
-      }
+      const closeBtn = screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') });
+      fireEvent.click(closeBtn);
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
+
+      await waitFor(() => {
+        expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
+      });
     });
 
     it('does not render Close RFQ button on the vendor side', () => {
@@ -1974,17 +1976,19 @@ function makeInquiry(overrides: any = {}): any {
       mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: 'Database locked' });
 
       renderDetails(buildRFQ({ id: 'rfq-close-fail' }));
-      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Database locked', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, 'Database locked', 'warning');
       });
 
       mockUpdateRFQ.mockRejectedValueOnce(new Error('Close request timed out'));
-      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Close request timed out', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, 'Close request timed out', 'warning');
       });
     });
 
@@ -3273,17 +3277,19 @@ function makeInquiry(overrides: any = {}): any {
       mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: '' });
       const { unmount } = renderDetails(buildRFQ());
 
-      const closeBtn = screen.getByRole('button', { name: /Close RFQ/i });
+      const closeBtn = screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') });
       fireEvent.click(closeBtn);
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Failed to close RFQ.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning');
       });
 
       // Close RFQ with empty catch error
       mockUpdateRFQ.mockRejectedValueOnce({});
-      fireEvent.click(closeBtn);
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Failed to close RFQ.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning');
       });
       unmount();
 
@@ -4294,12 +4300,86 @@ function makeInquiry(overrides: any = {}): any {
       expect(onUpdate).toHaveBeenCalledWith(extendedRfq);
       expect(refreshRFQs).toHaveBeenCalledTimes(1);
 
-      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const closeModal = screen.getByRole('dialog');
+      expect(within(closeModal).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      fireEvent.click(within(closeModal).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
 
       await waitFor(() => expect(syncRFQRecord).toHaveBeenCalledWith(closedRfq));
+      expect(mockUpdateRFQ).toHaveBeenCalledWith(openRfq.id, { status: 'Closed' });
       expect(onUpdate).toHaveBeenCalledWith(closedRfq);
       expect(refreshRFQs).toHaveBeenCalledTimes(2);
       expect(refreshFromDB).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the permanent-closure warning when Close RFQ is clicked and respects Cancel without closing', async () => {
+      const openRfq = buildRFQ({
+        id: 'rfq-close-warn-1',
+        rfqNumber: 'RFQ261711451755',
+        title: 'Civil Works Package',
+        status: 'Quotes Pending',
+      });
+
+      renderDetails(openRfq);
+
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText(DETAILS.closeModalWarningTitle)).toBeInTheDocument();
+      expect(within(dialog).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      expect(mockUpdateRFQ).not.toHaveBeenCalled();
+
+      // Dismiss via Cancel button
+      fireEvent.click(within(dialog).getAllByRole('button', { name: UI_STRINGS.actions.cancel })[1]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockUpdateRFQ).not.toHaveBeenCalled();
+
+      // Reopen via Close RFQ button and dismiss via top X icon button
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const reopened = screen.getByRole('dialog');
+      const closeIcons = within(reopened).getAllByRole('button', { name: UI_STRINGS.actions.cancel });
+      fireEvent.click(closeIcons[0]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('surfaces an error toast when closing an RFQ fails and keeps the closed banner on closed RFQs', async () => {
+      const openRfq = buildRFQ({
+        id: 'rfq-close-fail-1',
+        rfqNumber: 'RFQ261711451756',
+        status: 'Quotes Pending',
+      });
+      mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: '' } as any);
+
+      const { unmount } = renderDetails(openRfq);
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
+
+      await waitFor(() =>
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning')
+      );
+      unmount();
+
+      // Buyer sees permanent closed banner and no Close RFQ button
+      const { unmount: unmountBuyerClosed } = renderDetails(
+        buildRFQ({ id: 'rfq-closed-buyer-1', rfqNumber: 'RFQ261711451757', status: 'Closed' })
+      );
+      expect(screen.getByText(DETAILS.closedPermanentBannerBuyer)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') })).not.toBeInTheDocument();
+      unmountBuyerClosed();
+
+      // Vendor sees vendor closed banner
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'vendor',
+        buyerVendors: [],
+        currentUserSession: { name: 'Vendor Co', email: 'v@vendor.com', role: 'vendor' },
+      });
+      renderDetails(
+        buildRFQ({ id: 'rfq-closed-vendor-1', rfqNumber: 'RFQ261711451758', status: 'Closed' }),
+        { isVendorView: true }
+      );
+      expect(screen.getByText(DETAILS.closedPermanentBannerVendor)).toBeInTheDocument();
     });
   });
 });

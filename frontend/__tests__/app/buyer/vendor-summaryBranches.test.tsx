@@ -253,4 +253,141 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     localStorage.setItem('procucev_vendor_upload_history', '{invalid-json');
     renderSummary();
   });
+
+  it('normalizes vendor minor categories from clientMappedCategories, poMinorCategories, vendorSelectedCategories, and itemsSupplied', () => {
+    const vendorsToNormalize = [
+      {
+        id: 'v-norm-client',
+        name: 'Client Mapped Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        clientMappedCategories: ['Valves'],
+      },
+      {
+        id: 'v-norm-po',
+        name: 'PO Minor Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        poMinorCategories: ['Pumps'],
+      },
+      {
+        id: 'v-norm-self',
+        name: 'Vendor Selected Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        vendorSelectedCategories: ['Cables'],
+      },
+      {
+        id: 'v-norm-items',
+        name: 'Items Supplied Co',
+        source: 'buyer_uploaded',
+        majorCategory: 'Civil Works',
+        minorCategories: [],
+        itemsSupplied: ['Plumbing Kit', 'Unknown Item'],
+      },
+    ];
+    (useApp as jest.Mock).mockReturnValue(storeWith({ buyerVendors: vendorsToNormalize }));
+    renderSummary();
+
+    expect(screen.getByText('Client Mapped Co')).toBeInTheDocument();
+    expect(screen.getByText('PO Minor Co')).toBeInTheDocument();
+    expect(screen.getByText('Vendor Selected Co')).toBeInTheDocument();
+    expect(screen.getByText('Items Supplied Co')).toBeInTheDocument();
+  });
+
+  it('displays PO category suggestions from poMajorCategory, RFQ records, and clientMappedCategories and applies them', () => {
+    const rfqSourcedVendor = {
+      id: 'v-rfq-sug',
+      name: 'RFQ Suggested Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Vendor Master',
+      minorCategories: [],
+    };
+    const poSourcedVendor = {
+      id: 'v-po-sug',
+      name: 'PO Suggested Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Mechanical',
+      minorCategories: ['Valves'],
+      poMajorCategory: 'Mechanical',
+      poMinorCategories: ['Pumps'],
+    };
+    const clientSugVendor = {
+      id: 'v-client-sug',
+      name: 'Client Sug Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Mechanical',
+      minorCategories: [],
+      clientMappedCategories: ['Custom NonTaxon Minor'],
+    };
+    const emptyRfqSugVendor = {
+      id: 'v-rfq-major-only',
+      name: 'RFQ Major Only Co',
+      source: 'buyer_uploaded',
+      majorCategory: '',
+      minorCategories: [],
+    };
+
+    const rfqs = [
+      {
+        id: 'rfq-s-1',
+        quotations: [{ vendorId: 'v-rfq-sug', vendorName: 'RFQ Suggested Co' }],
+        followUps: [],
+        extractedEntities: [
+          { majorCategory: 'Vendor Master', minorCategory: 'Uncategorized' },
+          { majorCategory: 'Mechanical', minorCategory: 'Valves' },
+        ],
+      },
+      {
+        id: 'rfq-s-2',
+        quotations: [],
+        followUps: [{ vendorId: 'v-rfq-major-only', vendorName: 'RFQ Major Only Co' }],
+        extractedEntities: [{ majorCategory: '', minorCategory: 'Valves' }],
+      },
+    ];
+
+    (useApp as jest.Mock).mockReturnValue(
+      storeWith({
+        buyerVendors: [rfqSourcedVendor, poSourcedVendor, clientSugVendor, emptyRfqSugVendor],
+        rfqs,
+      })
+    );
+
+    const { rerender } = renderSummary();
+
+    // 1. PO Ingestion suggestion & Apply PO Suggestion button
+    fireEvent.click(screen.getByTestId('edit-category-vendor-v-po-sug'));
+    let modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Ingestion:/i)).toBeInTheDocument();
+    expect(within(modal).getByText(/Mechanical \(Pumps\)/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('apply-po-suggestion-button'));
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 2. RFQ Records suggestion
+    fireEvent.click(screen.getByTestId('add-category-vendor-v-rfq-sug'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Purchase Dump \/ RFQ Records:/i)).toBeInTheDocument();
+    expect(within(modal).getByText('Category Not Assigned')).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 3. RFQ suggestion with empty majorCategory ('Multi-Category')
+    fireEvent.click(screen.getByTestId('add-category-vendor-v-rfq-major-only'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Multi-Category \(Valves\)/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('apply-po-suggestion-button'));
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 4. PO Master Data suggestion (clientMappedCategories without taxonomy hit falls back to vendor.majorCategory)
+    fireEvent.click(screen.getByTestId('edit-category-vendor-v-client-sug'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Master Data:/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 5. Storage / custom event listener triggers loadUploadHistory refresh
+    fireEvent(window, new Event('vendor_upload_history_updated'));
+    rerender(<VendorSummary onViewEvaluation={jest.fn()} onNavigateToWizard={jest.fn()} />);
+  });
 });

@@ -993,5 +993,146 @@ describe('Buyer profile service', () => {
         }),
       }));
     });
+
+    test('getProfile recovers buyer account by userId fallback, parses primaryPlantLocation, and derives genuine PAN', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          brandName: '',
+          street: '',
+          city: '',
+          state: '',
+          pincode: '',
+          country: '',
+          gstNumber: '',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce({
+        id: 'user-1',
+        brandName: 'Veera Brands',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+        gstin: '27AAACK3921P1Z9',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.brandName).toBe('Veera Brands');
+      expect(hydrated.city).toBe('Bengaluru');
+      expect(hydrated.state).toBe('Karnataka');
+      expect(hydrated.pincode).toBe('560037');
+      expect(hydrated.street).toBe('Bengaluru, Karnataka');
+      expect(hydrated.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          brandName: 'Veera Brands',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          street: 'Bengaluru, Karnataka',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+        }),
+      }));
+    });
+
+    test('saveProfile syncs street, address aliases, constitution, brand, and tax identifiers to buyer_accounts and falls back to userId', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true, fieldsUpdated: 10, categoryCount: 1 });
+      const updateAccSpy = jest
+        .spyOn(storeService, 'updateBuyerAccountDurably')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'user-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Veera Solutions Pvt Ltd',
+        brandName: 'Veera Sourcing',
+        organizationType: 'Private Limited',
+        panNumber: 'AAACK3921P',
+        gstNumber: '27AAACK3921P1Z9',
+        cinNumber: 'L28920MH1946PLC004768',
+        website: 'https://veera.example.com',
+        annualTurnover: 'INR 50 Cr',
+        street: '302, Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+        contactName: 'Veera',
+        contactDesignation: 'Director',
+      });
+
+      expect(updateAccSpy).toHaveBeenNthCalledWith(
+        1,
+        SESSION.email,
+        expect.objectContaining({
+          organizationName: 'Veera Solutions Pvt Ltd',
+          brandName: 'Veera Sourcing',
+          organizationType: 'Private Limited',
+          street: '302, Sharada, AECS Layout',
+          address1: '302, Sharada, AECS Layout',
+          address: '302, Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          zip_code: '560037',
+          zipCode: '560037',
+          country: 'India',
+          primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+          gstin: '27AAACK3921P1Z9',
+          gstNumber: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+          panNumber: 'AAACK3921P',
+        })
+      );
+      expect(updateAccSpy).toHaveBeenNthCalledWith(2, 'user-1', expect.any(Object));
+    });
+
+    test('D1 overload fallback parses primaryPlantLocation and derives real PAN from GSTIN', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        organizationName: 'Veera Solutions',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+        gstin: '27AAACK3921P1Z9',
+      });
+
+      const fallbackProfile = await buyerProfileService.getProfile(SESSION);
+      expect(fallbackProfile.city).toBe('Bengaluru');
+      expect(fallbackProfile.state).toBe('Karnataka');
+      expect(fallbackProfile.pincode).toBe('560037');
+      expect(fallbackProfile.street).toBe('Bengaluru, Karnataka');
+      expect(fallbackProfile.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(fallbackProfile.panNumber).toBe('AAACK3921P');
+    });
+
+    test('getProfile derives PAN directly from profile GSTIN when storeService has no buyer account', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: { panNumber: 'AAACK3921P' },
+      }));
+    });
   });
 });

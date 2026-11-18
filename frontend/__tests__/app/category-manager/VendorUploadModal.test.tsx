@@ -871,4 +871,72 @@ describe('VendorUploadModal', () => {
       sessionSpy.mockRestore();
     }
   });
+
+  test('renders Add Vendor Bulk copy, required columns summary, category preview, and buyer-scoped history for buyers', async () => {
+    const { authClient } = require('@/lib/authClient');
+    const sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'buyer-u-1',
+      email: 'buyer@bulkcorp.test',
+      name: 'Buyer Bulk',
+      role: 'buyer',
+      orgId: 'org-bulk',
+      orgName: 'Bulk Corp',
+    });
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      refreshFromDB: mockRefreshFromDB,
+      activeBuyerAccount: { id: 'ba-bulk-1', corporateEmail: 'buyer@bulkcorp.test', organizationName: 'Bulk Corp' },
+    });
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          validRow({
+            vendor: {
+              vendorCode: 'V-101',
+              name: 'Bulk Category Co',
+              email: 'bulk@cat.test',
+              phone: '9876543210',
+              majorCategory: 'Mechanical',
+              minorCategories: ['Valves'],
+              city: 'Pune',
+            },
+          }, 2),
+        ],
+        blankRowCount: 0,
+      },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      results: [{ rowNumber: 2, status: 'imported' }],
+    });
+
+    try {
+      render(<VendorUploadModal isOpen onClose={onClose} onImportComplete={onImportComplete} />);
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerModalTitle)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerModalSubtitle)).toBeInTheDocument();
+      expect(screen.getByText('Required Columns')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerRequiredColumnsSummary)).toBeInTheDocument();
+
+      pickFile(new File(['x'], 'buyer-bulk.xlsx'));
+      await screen.findByText('buyer-bulk.xlsx');
+      expect(screen.getByText('Category')).toBeInTheDocument();
+      expect(screen.getByText('Mechanical')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Import 1 Vendor'));
+      await screen.findByText(/Upload Completed/);
+
+      const savedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+      expect(savedHistory[0]).toMatchObject({
+        buyerId: 'ba-bulk-1',
+        buyerEmail: 'buyer@bulkcorp.test',
+      });
+    } finally {
+      sessionSpy.mockRestore();
+    }
+  });
 });

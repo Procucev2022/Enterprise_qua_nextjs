@@ -3608,4 +3608,33 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     }
   });
+
+  it('shows neutral loading indicator (AI Extracting...) instead of Gemini AI message while extracting RFQ data', async () => {
+    let resolveExtract: ((val: RFQExtractionResult) => void) | undefined;
+    const pendingPromise = new Promise<RFQExtractionResult>((resolve) => {
+      resolveExtract = resolve;
+    });
+    mockExtract.mockReturnValueOnce(pendingPromise);
+
+    renderWizard();
+    expect(screen.getByText(UI_STRINGS.rfqExtraction.dropZoneIdlePrompt)).toBeInTheDocument();
+
+    uploadFile(new File(['col1,col2'], 'BOQ_Loading.csv', { type: 'text/csv' }));
+    clickExtract();
+
+    expect(await screen.findByText(UI_STRINGS.rfqExtraction.extractingStatus)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(UI_STRINGS.rfqExtraction.extractingStatus);
+    expect(screen.getByRole('button', { name: UI_STRINGS.rfqExtraction.extractingButtonLabel })).toBeDisabled();
+    expect(screen.queryByText(/Gemini AI/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveExtract?.(successResult());
+      await pendingPromise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.rfqExtraction.dropZoneIdlePrompt)).toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
+  });
 });

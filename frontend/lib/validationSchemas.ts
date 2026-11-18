@@ -130,6 +130,48 @@ export function usablePan(pan: unknown): string | null {
   if (!PAN_PATTERN.test(clean)) return null;
   return clean;
 }
+
+const PLACEHOLDER_DERIVED_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+/**
+ * Extract the 10-character PAN embedded in a valid Indian GSTIN when it does
+ * not match synthetic placeholder test PANs.
+ */
+export function derivePanFromGstin(gstin: unknown): string {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_PATTERN.test(clean)) return '';
+  const candidate = clean.slice(2, 12);
+  if (
+    !PAN_PATTERN.test(candidate) ||
+    PLACEHOLDER_DERIVED_PANS.has(candidate) ||
+    REPEATED_LETTER_PAN_PATTERN.test(candidate) ||
+    isDummyPan(candidate)
+  ) {
+    return '';
+  }
+  return candidate;
+}
+
+/**
+ * Parse a plant location string like "Pune, Maharashtra (411001)" into
+ * structured address parts so fallback accounts still hydrate city/state/pincode.
+ */
+export function parsePrimaryPlantLocation(location: unknown): { city: string; state: string; pincode: string } {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
+}
 export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
 export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
 

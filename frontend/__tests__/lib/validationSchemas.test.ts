@@ -13,6 +13,8 @@ import {
   isDummyPincode,
   isDummyPan,
   usablePan,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
   FormSchema,
   resolveCityAndStateFromPostalResult,
   resolveLocationFromPostalResult,
@@ -875,6 +877,27 @@ describe('isDummyPan and usablePan', () => {
     expect(usablePan(null)).toBeNull();
     expect(usablePan(undefined)).toBeNull();
     expect(usablePan(42)).toBeNull();
+  });
+
+  it('derives non-dummy PAN from valid GSTIN and parses primaryPlantLocation', () => {
+    expect(derivePanFromGstin('27aaack3921p1z9')).toBe('AAACK3921P');
+    expect(derivePanFromGstin('27AAAAA0000A1Z5')).toBe('');
+    expect(derivePanFromGstin('27AAACL1234F1Z5')).toBe('');
+    expect(derivePanFromGstin('BAD')).toBe('');
+    expect(derivePanFromGstin(null)).toBe('');
+
+    expect(parsePrimaryPlantLocation('Bengaluru, Karnataka (560037)')).toEqual({
+      city: 'Bengaluru',
+      state: 'Karnataka',
+      pincode: '560037',
+    });
+    expect(parsePrimaryPlantLocation('Pune, Maharashtra')).toEqual({
+      city: 'Pune',
+      state: 'Maharashtra',
+      pincode: '',
+    });
+    expect(parsePrimaryPlantLocation('')).toEqual({ city: '', state: '', pincode: '' });
+    expect(parsePrimaryPlantLocation(undefined)).toEqual({ city: '', state: '', pincode: '' });
   });
 });
 

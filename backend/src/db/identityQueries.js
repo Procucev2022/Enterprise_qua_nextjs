@@ -1353,6 +1353,7 @@ async function ensureBuyerOrganization({
               city = case when coalesce($2, '') <> '' then $2 else city end,
               state = case when coalesce($3, '') <> '' then $3 else state end,
               zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+              pincode = case when coalesce($4, '') <> '' then $4 else pincode end,
               country = case when coalesce($5, '') <> '' then $5 else country end,
               gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
               pan = case when coalesce($7, '') <> '' then $7 else pan end,

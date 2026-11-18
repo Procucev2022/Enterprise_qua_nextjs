@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord, VendorModuleScore } from '@/lib/types';
 import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime } from '@/lib/constants';
-import { computeRFQFollowUpTimes } from '@/lib/followUpSchedule';
+import { computeRFQFollowUpTimes, computeRFQFollowUpMetrics, normalizeFollowUpVendors } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   X,
@@ -972,7 +972,7 @@ interface RFQFollowUpDeepDiveModalProps {
 }
 
 export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDeepDiveModalProps) {
-  const { triggerChannelChaser, triggerBatchChannelChaser, showToast } = useApp();
+  const { rfqs, triggerChannelChaser, triggerBatchChannelChaser, showToast } = useApp();
   const [activeChannelTab, setActiveChannelTab] = useState<'all' | 'call' | 'whatsapp' | 'sms'>('all');
   const [activeVendorModal, setActiveVendorModal] = useState<{
     vendorName: string;
@@ -981,36 +981,15 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
 
   if (!isOpen || !rfq) return null;
 
-  const followUp = rfq.followUpData;
+  const liveRfq = (Array.isArray(rfqs) ? rfqs.find((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id) : undefined) || rfq;
+  const followUp = liveRfq.followUpData;
   // Each channel's next follow-up counts from the RFQ creation time, so it does not depend on follow-up data.
-  const nextFollowUps = computeRFQFollowUpTimes(rfq.createdAt);
-  const totalInvitedVendors = followUp?.totalInvited ?? (followUp?.vendors?.length || rfq.assignedVendors?.length || 0);
+  const nextFollowUps = computeRFQFollowUpTimes(liveRfq.createdAt);
+  const metrics = computeRFQFollowUpMetrics(liveRfq);
+  const totalInvitedVendors = metrics.totalInvited ?? 0;
 
-  // A channel with no outreach record is not dispatched. No attempt count, escalation or time is invented for it.
-  const notDispatched = { status: 'not_dispatched' as const, lastAttempt: '' };
-
-  // Normalize vendor telemetry records
-  const rawVendors: VendorFollowUpRecord[] = (followUp?.vendors && followUp.vendors.length > 0)
-    ? followUp.vendors
-    : (rfq.assignedVendors || []).map((av, idx) => ({
-        vendorId: av.id || `v-${idx + 1}`,
-        vendorName: av.name,
-        contactPerson: av.contactPerson || '',
-        phone: av.phone || '',
-        overallStatus: 'Pending' as const,
-        lastInteraction: '',
-        bidStatus: 'Pending' as const,
-        call: notDispatched,
-        whatsapp: notDispatched,
-        sms: notDispatched,
-      }));
-
-  const vendors: VendorFollowUpRecord[] = rawVendors.map((v) => ({
-    ...v,
-    call: v.call || notDispatched,
-    whatsapp: v.whatsapp || notDispatched,
-    sms: v.sms || notDispatched,
-  }));
+  // Normalize vendor telemetry records so assignedVendors entries without explicit vendorName/vendorId still display cleanly
+  const vendors: VendorFollowUpRecord[] = normalizeFollowUpVendors(liveRfq);
 
   // Vendor type shown per row:
   //  - "Buyer Vendors": a vendor the buyer explicitly added to this RFQ (present
@@ -1021,9 +1000,9 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   //    not on the buyer's assigned list is a Procucev network vendor.
   // V0/V1 RFQs circulate to the buyer's own roster only, so their vendors are
   // Buyer Vendors regardless.
-  const isHybridOrAutonomous = rfq.sourcingMode === 'mode_2' || rfq.sourcingMode === 'mode_3';
+  const isHybridOrAutonomous = liveRfq.sourcingMode === 'mode_2' || liveRfq.sourcingMode === 'mode_3';
   const assignedVendorKeys = new Set(
-    (rfq.assignedVendors || []).flatMap((av) =>
+    (liveRfq.assignedVendors || []).flatMap((av) =>
       [av.id, av.name].filter((k): k is string => !!k).map((k) => k.trim().toLowerCase())
     )
   );
@@ -1107,7 +1086,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="px-2.5 py-0.5 rounded-md font-extrabold text-xs mono bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
-                  {rfq.rfqNumber}
+                  {liveRfq.rfqNumber}
                 </span>
                 <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
                   Vendor Follow-Up Details
@@ -1115,7 +1094,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                 <span className="badge badge-purple text-xs font-bold px-2.5 py-0.5">Multi-Channel</span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                {rfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {rfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
+                {liveRfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {liveRfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
               </p>
             </div>
           </div>
@@ -1143,7 +1122,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-purple-950 dark:text-purple-100 mono">
-                {formatFollowUpCount(followUp?.callStats?.connected)} / {formatFollowUpCount(followUp?.callStats?.total)}
+                {formatFollowUpCount(metrics.callConnected)} / {formatFollowUpCount(metrics.callTotal)}
               </span>
               <span className="text-xs text-purple-700 dark:text-purple-300 font-semibold">Connected</span>
             </div>
@@ -1161,17 +1140,24 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
 
           {/* Channel 2: WhatsApp */}
           <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
-            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+            <div className="flex items-center justify-between gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex-wrap">
               <span className="flex items-center gap-1.5">
                 <MessageSquare size={13} /> WHATSAPP BOT
               </span>
-              <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
-                {formatFollowUpCount(followUp?.whatsappStats?.read)} Read
+              <span className="flex items-center gap-1">
+                {(metrics.waDelivered ?? 0) > (metrics.waRead ?? 0) && (
+                  <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
+                    {formatFollowUpCount(metrics.waDelivered)} Delivered
+                  </span>
+                )}
+                <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
+                  {formatFollowUpCount(metrics.waRead)} Read
+                </span>
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-emerald-950 dark:text-emerald-100 mono">
-                {formatFollowUpCount(followUp?.whatsappStats?.replied)} / {formatFollowUpCount(followUp?.whatsappStats?.total)}
+                {formatFollowUpCount(metrics.waReplied)} / {formatFollowUpCount(metrics.waTotal)}
               </span>
               <span className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold">Bids Submitted</span>
             </div>
@@ -1196,7 +1182,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-sky-950 dark:text-cyan-100 mono">
-                {formatFollowUpCount(followUp?.smsStats?.delivered)} / {formatFollowUpCount(followUp?.smsStats?.total)}
+                {formatFollowUpCount(metrics.smsDelivered)} / {formatFollowUpCount(metrics.smsTotal)}
               </span>
               <span className="text-xs text-sky-700 dark:text-cyan-300 font-semibold">Delivered</span>
             </div>
@@ -1221,7 +1207,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-amber-950 dark:text-amber-100 mono">
-                {formatFollowUpCount(followUp?.emailStats?.sent24h)} / {totalInvitedVendors}
+                {formatFollowUpCount(metrics.emailEscalationsSent)} / {totalInvitedVendors}
               </span>
               <span className="text-xs text-amber-700 dark:text-amber-300 font-semibold">Escalations Sent</span>
             </div>
@@ -1256,7 +1242,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📞</span> Calls ({formatFollowUpCount(followUp?.callStats?.total)})
+              <span>📞</span> Calls ({formatFollowUpCount(metrics.callTotal)})
             </button>
             <button
               onClick={() => setActiveChannelTab('whatsapp')}
@@ -1266,7 +1252,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MessageSquare size={13} /> WhatsApp ({formatFollowUpCount(followUp?.whatsappStats?.total)})
+              <MessageSquare size={13} /> WhatsApp ({formatFollowUpCount(metrics.waTotal)})
             </button>
             <button
               onClick={() => setActiveChannelTab('sms')}
@@ -1276,7 +1262,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📱</span> SMS ({formatFollowUpCount(followUp?.smsStats?.total)})
+              <span>📱</span> SMS ({formatFollowUpCount(metrics.smsTotal)})
             </button>
           </div>
         </div>
@@ -1433,34 +1419,44 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   </div>
 
                   {/* 24h Email Reminder Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
-                        <Mail size={12} className="text-amber-500" /> 24h Email Escalation
-                      </span>
-                      {vendor.email24h?.is24hReminderSent ? (
-                        <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
-                      ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
-                        <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
-                      ) : vendor.email24h ? (
-                        <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
-                      ) : (
-                        <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      {vendor.email24h?.lastAttempt
-                        ? `Sent: ${vendor.email24h.lastAttempt}`
-                        : vendor.email24h
-                          ? UI_STRINGS.modals.followUp.escalationQueued
-                          : UI_STRINGS.recordPlaceholders.notDispatched}
-                    </div>
-                    <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
-                      {vendor.email24h?.is24hReminderSent
-                        ? 'BOQ specs re-attached via email. Urgent bid submission requested.'
-                        : 'Dispatches if vendor fails to respond to initial follow-up.'}
-                    </p>
-                  </div>
+                  {(() => {
+                    const email24hDispatched = Boolean(
+                      vendor.email24h?.is24hReminderSent ||
+                      vendor.email24h?.status === 'sent' ||
+                      vendor.email24h?.status === 'delivered' ||
+                      vendor.email24h?.status === 'reminded_24h'
+                    );
+                    return (
+                      <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
+                            <Mail size={12} className="text-amber-500" /> 24h Email Escalation
+                          </span>
+                          {email24hDispatched ? (
+                            <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
+                          ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
+                            <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
+                          ) : vendor.email24h ? (
+                            <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
+                          ) : (
+                            <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-gray-400">
+                          {vendor.email24h?.lastAttempt
+                            ? `Sent: ${vendor.email24h.lastAttempt}`
+                            : vendor.email24h
+                              ? UI_STRINGS.modals.followUp.escalationQueued
+                              : UI_STRINGS.recordPlaceholders.notDispatched}
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
+                          {email24hDispatched
+                            ? 'BOQ specs re-attached via email. Urgent bid submission requested.'
+                            : 'Dispatches if vendor fails to respond to initial follow-up.'}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ))
@@ -1480,7 +1476,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
         <MultiChannelChaserModal
           isOpen={!!activeVendorModal}
           onClose={() => setActiveVendorModal(null)}
-          rfqNumber={rfq.rfqNumber}
+          rfqNumber={liveRfq.rfqNumber}
           vendorName={activeVendorModal.vendorName}
           hidePhone={true}
           initialChannel={activeVendorModal.channel}
@@ -2099,55 +2095,18 @@ export function ActivePipelineModal({
 
                   {(() => {
                     const followUp = rfq.followUpData;
-                    const vCount = Math.max(
-                      rfq.assignedVendors?.length || 0,
-                      rfq.procucevVendorCount || 0,
-                      followUp?.totalInvited || 0,
-                      followUp?.whatsappStats?.total || 0,
-                      followUp?.smsStats?.total || 0,
-                      followUp?.emailStats?.total || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                    );
+                    const metrics = computeRFQFollowUpMetrics(rfq);
+                    const vCount = metrics.totalVendors;
                     if (!followUp && vCount === 0) return null;
 
-                    // Read and delivered counts come only from recorded receipts. Elapsed time never counts as a read or a delivery.
-                    const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                    const waRead = Math.max(
-                      followUp?.whatsappStats?.read || 0,
-                      followUp?.whatsappStats?.delivered || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-                    );
-
-                    const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                    const smsDelivered = Math.max(
-                      followUp?.smsStats?.delivered || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-                    );
-
-                    const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                    const emailDelivered = Math.max(
-                      followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
-                    );
-                    const totalInvited = Math.max(
-                      followUp?.totalInvited || 0,
-                      vCount,
-                      waTotal,
-                      smsTotal,
-                      emailTotal
-                    );
-                    const quotesCount = Math.max(
-                      Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
-                      rfq.quotesCount || 0
-                    );
-                    const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                      ? followUp.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-                      : 0;
-                    const responded = Math.max(
-                      followUp?.respondedCount || 0,
-                      quotesCount,
-                      vendorRespondedCount
-                    );
+                    const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+                    const waRead = metrics.waDelivered ?? 0;
+                    const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+                    const smsDelivered = metrics.smsDelivered ?? 0;
+                    const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+                    const emailDelivered = metrics.emailDelivered ?? 0;
+                    const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
+                    const responded = metrics.responded;
 
                     return (
                       <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">

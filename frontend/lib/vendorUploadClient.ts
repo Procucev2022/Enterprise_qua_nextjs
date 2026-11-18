@@ -1,9 +1,17 @@
 import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
 import { isPlaceholderVendorCategory, normalizeVendorCategoryList } from './constants';
+import { formatString, UI_STRINGS } from './uiStrings';
 import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN } from './validationSchemas';
 import type {
+  ExistingVendorDedupeCandidate,
+  IngestionJobState,
+  SkippedDuplicateVendorRecord,
   VendorBulkInvitationResponse,
+  VendorDedupeSummary,
+  VendorDuplicatePartitionCandidate,
+  VendorDuplicatePartitionResult,
+  VendorMasterUploadRecord,
   VendorUploadImportResponse,
   VendorUploadRow,
   VendorUploadRowResult,
@@ -397,4 +405,243 @@ export async function bulkImportVendorRows(
   }
 
   return aggregate;
+}
+
+const PLACEHOLDER_GSTIN_VALUES = new Set(['', 'N/A', 'NA', 'NONE', 'NIL', '-', '—', 'NOTPROVIDED', 'NOTAPPLICABLE']);
+
+function normalizeDedupeEmail(raw: string | null | undefined): string {
+  const trimmed = String(raw || '').trim().toLowerCase();
+  return trimmed.includes('@') ? trimmed : '';
+}
+
+function normalizeDedupeGstin(raw: string | null | undefined): string {
+  const cleaned = String(raw || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!cleaned || PLACEHOLDER_GSTIN_VALUES.has(cleaned)) return '';
+  return cleaned.length >= 5 ? cleaned : '';
+}
+
+function normalizeDedupeCode(raw: string | null | undefined): string {
+  return String(raw || '').trim().toLowerCase();
+}
+
+function normalizeDedupeCompanyPhone(
+  companyName: string | null | undefined,
+  phone: string | null | undefined
+): string | null {
+  const normalizedCompany = String(companyName || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const digits = String(phone || '').replace(/\D/g, '');
+  const normalizedPhone = digits.length >= 10 ? digits.slice(-10) : digits;
+  if (!normalizedCompany || normalizedPhone.length < 7) return null;
+  return `${normalizedCompany}|${normalizedPhone}`;
+}
+
+/**
+ * Partition parsed Vendor Master rows into unique records to import and duplicate
+ * records to skip and display to the buyer.
+ *
+ * Detects duplicates both against existing Buyer Directory vendors and earlier rows
+ * within the uploaded file by email, GSTIN, explicit vendor code, or normalized
+ * (companyName + phone).
+ */
+export function partitionDuplicateVendorMasterRows(
+  candidates: VendorDuplicatePartitionCandidate[],
+  existingVendors: ExistingVendorDedupeCandidate[] = []
+): VendorDuplicatePartitionResult {
+  const existingEmails = new Set<string>();
+  const existingGstins = new Set<string>();
+  const existingCodes = new Set<string>();
+  const existingCompanyPhones = new Set<string>();
+
+  for (const existing of existingVendors) {
+    const emailKey = normalizeDedupeEmail(existing.email);
+    if (emailKey) existingEmails.add(emailKey);
+
+    const gstinKey = normalizeDedupeGstin(existing.gstNumber ?? existing.gstin);
+    if (gstinKey) existingGstins.add(gstinKey);
+
+    const codeKey = normalizeDedupeCode(existing.vendorCode);
+    // Avoid colliding auto-numbered codes (1, 2, 3...) across separate uploads.
+    if (codeKey && !/^\d+$/.test(codeKey)) existingCodes.add(codeKey);
+
+    const companyPhoneKey = normalizeDedupeCompanyPhone(existing.companyName ?? existing.name, existing.phone);
+    if (companyPhoneKey) existingCompanyPhones.add(companyPhoneKey);
+  }
+
+  const fileEmails = new Map<string, number>();
+  const fileGstins = new Map<string, number>();
+  const fileCodes = new Map<string, number>();
+  const fileCompanyPhones = new Map<string, number>();
+
+  const uniqueRecords: VendorMasterUploadRecord[] = [];
+  const skippedDuplicates: SkippedDuplicateVendorRecord[] = [];
+  const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+
+  const findDuplicateMatch = (
+    candidate: VendorDuplicatePartitionCandidate
+  ): { reason: string; matchedAgainst: 'FILE' | 'EXISTING_VENDOR' } | null => {
+    const { vendor, explicitVendorCode } = candidate;
+    const emailKey = normalizeDedupeEmail(vendor.email);
+    const gstinKey = normalizeDedupeGstin(vendor.gstNumber);
+    const codeKey = normalizeDedupeCode(explicitVendorCode);
+    const companyPhoneKey = normalizeDedupeCompanyPhone(vendor.companyName, vendor.phone);
+
+    if (emailKey) {
+      if (existingEmails.has(emailKey)) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonEmailExisting, { value: vendor.email.trim() }),
+          matchedAgainst: 'EXISTING_VENDOR',
+        };
+      }
+      const firstRow = fileEmails.get(emailKey);
+      if (firstRow !== undefined) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonEmailFile, { value: vendor.email.trim(), firstRow }),
+          matchedAgainst: 'FILE',
+        };
+      }
+    }
+
+    if (gstinKey) {
+      if (existingGstins.has(gstinKey)) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonGstinExisting, { value: gstinKey }),
+          matchedAgainst: 'EXISTING_VENDOR',
+        };
+      }
+      const firstRow = fileGstins.get(gstinKey);
+      if (firstRow !== undefined) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonGstinFile, { value: gstinKey, firstRow }),
+          matchedAgainst: 'FILE',
+        };
+      }
+    }
+
+    if (codeKey) {
+      if (!/^\d+$/.test(codeKey) && existingCodes.has(codeKey)) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonCodeExisting, { value: String(explicitVendorCode).trim() }),
+          matchedAgainst: 'EXISTING_VENDOR',
+        };
+      }
+      const firstRow = fileCodes.get(codeKey);
+      if (firstRow !== undefined) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonCodeFile, {
+            value: String(explicitVendorCode).trim(),
+            firstRow,
+          }),
+          matchedAgainst: 'FILE',
+        };
+      }
+    }
+
+    if (companyPhoneKey) {
+      if (existingCompanyPhones.has(companyPhoneKey)) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonCompanyPhoneExisting, {
+            company: vendor.companyName.trim(),
+            phone: vendor.phone.trim(),
+          }),
+          matchedAgainst: 'EXISTING_VENDOR',
+        };
+      }
+      const firstRow = fileCompanyPhones.get(companyPhoneKey);
+      if (firstRow !== undefined) {
+        return {
+          reason: formatString(vmStrings.duplicateReasonCompanyPhoneFile, {
+            company: vendor.companyName.trim(),
+            phone: vendor.phone.trim(),
+            firstRow,
+          }),
+          matchedAgainst: 'FILE',
+        };
+      }
+    }
+
+    return null;
+  };
+
+  for (const candidate of candidates) {
+    const match = findDuplicateMatch(candidate);
+    if (match) {
+      skippedDuplicates.push({
+        rowNumber: candidate.rowNumber,
+        vendorCode: candidate.vendor.vendorCode,
+        companyName: candidate.vendor.companyName,
+        email: candidate.vendor.email,
+        phone: candidate.vendor.phone,
+        gstNumber: candidate.vendor.gstNumber,
+        reason: match.reason,
+        matchedAgainst: match.matchedAgainst,
+      });
+      continue;
+    }
+
+    const emailKey = normalizeDedupeEmail(candidate.vendor.email);
+    const gstinKey = normalizeDedupeGstin(candidate.vendor.gstNumber);
+    const codeKey = normalizeDedupeCode(candidate.explicitVendorCode);
+    const companyPhoneKey = normalizeDedupeCompanyPhone(candidate.vendor.companyName, candidate.vendor.phone);
+
+    if (emailKey) fileEmails.set(emailKey, candidate.rowNumber);
+    if (gstinKey) fileGstins.set(gstinKey, candidate.rowNumber);
+    if (codeKey) fileCodes.set(codeKey, candidate.rowNumber);
+    if (companyPhoneKey) fileCompanyPhones.set(companyPhoneKey, candidate.rowNumber);
+
+    uniqueRecords.push(candidate.vendor);
+  }
+
+  return { uniqueRecords, skippedDuplicates };
+}
+
+/** Extract structured skipped-duplicate rows from a backend ingestion job's errorDetails array. */
+export function extractSkippedDuplicatesFromJob(job: IngestionJobState): SkippedDuplicateVendorRecord[] {
+  const details = Array.isArray(job.errorDetails) ? job.errorDetails : [];
+  const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+  return details
+    .filter(
+      (item) =>
+        Boolean(item) &&
+        (item.status === 'duplicate_skipped' ||
+          item.matchedAgainst === 'FILE' ||
+          item.matchedAgainst === 'EXISTING_VENDOR')
+    )
+    .map((item) => ({
+      rowNumber: Number(item.rowNumber) || 0,
+      vendorCode: item.vendorCode || undefined,
+      companyName: item.companyName || item.vendorName || '—',
+      email: item.email || '—',
+      phone: item.phone,
+      gstNumber: item.gstNumber,
+      reason: item.reason || vmStrings.duplicatesSkippedBannerHint,
+      matchedAgainst: item.matchedAgainst === 'EXISTING_VENDOR' ? 'EXISTING_VENDOR' : 'FILE',
+    }));
+}
+
+/** Merge client-side Vendor Master duplicate exclusions with polled/streamed server job counts. */
+export function reconcileVendorJobProgress(
+  serverJob: IngestionJobState,
+  summary: VendorDedupeSummary | null
+): IngestionJobState {
+  if (!summary || (serverJob.fileName && serverJob.fileName !== summary.fileName)) {
+    return serverJob;
+  }
+  if (summary.isExcelOnly && summary.skippedCount > 0) {
+    return {
+      ...serverJob,
+      totalRecords: Math.max(serverJob.totalRecords || 0, summary.totalCount),
+      processedRecords: (serverJob.processedRecords || 0) + summary.skippedCount,
+      skippedRecords: (serverJob.skippedRecords || 0) + summary.skippedCount,
+    };
+  }
+  if (!summary.isExcelOnly && serverJob.status === 'COMPLETED' && summary.skippedCount > 0 && !serverJob.skippedRecords) {
+    return {
+      ...serverJob,
+      totalRecords: Math.max(serverJob.totalRecords || 0, summary.totalCount),
+      processedRecords: Math.max(serverJob.processedRecords || 0, summary.totalCount),
+      skippedRecords: summary.skippedCount,
+      importedRecords: Math.max(0, summary.totalCount - summary.skippedCount),
+    };
+  }
+  return serverJob;
 }

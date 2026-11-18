@@ -21,6 +21,7 @@ const pool = require('../db/pool');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
 const { BUYER_ACCOUNT_RESOLUTION, BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
+const { derivePanFromGstin, parsePrimaryPlantLocation } = require('../config/validationSchemas');
 
 const LOG_CATEGORY = 'BUYER_ACCOUNT';
 
@@ -42,11 +43,38 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
   // free_trial plan with the same credit allowance a brand new account gets
   // (BUYER_FREE_TRIAL_RFQ_CREDITS), rather than reporting nothing at all.
   const legacyAccount = await storeService.getBuyerAccountByEmail(profile.contactEmail);
+  const parsedPlant = parsePrimaryPlantLocation(legacyAccount?.primaryPlantLocation);
+  const resolvedGst = (
+    profile.gstNumber ||
+    legacyAccount?.gstin ||
+    legacyAccount?.gstNumber ||
+    legacyAccount?.gst ||
+    ''
+  ).trim().toUpperCase();
+  const resolvedPan = (
+    profile.panNumber ||
+    legacyAccount?.pan ||
+    legacyAccount?.panNumber ||
+    derivePanFromGstin(resolvedGst) ||
+    ''
+  ).trim().toUpperCase();
+  const resolvedCity = profile.city || legacyAccount?.city || parsedPlant.city || '';
+  const resolvedState = profile.state || legacyAccount?.state || parsedPlant.state || '';
+  const resolvedPincode = profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || legacyAccount?.zipCode || parsedPlant.pincode || '';
+  const resolvedStreet = (
+    profile.street ||
+    legacyAccount?.street ||
+    legacyAccount?.address1 ||
+    legacyAccount?.address ||
+    (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '')
+  );
+
   return {
     id: profile.organizationId,
     organizationId: profile.organizationId,
     userId: profile.userId,
     organizationName: profile.companyName,
+    brandName: profile.brandName || legacyAccount?.brandName || '',
     corporateEmail: profile.contactEmail,
     contactPerson: profile.contactName,
     mobileNumber: profile.contactPhone,
@@ -54,14 +82,14 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     // than guessed from the organisation name, which is what the seed effectively
     // did by hardcoding 'Automotive & Heavy Commercial Vehicles'.
     industrySector: '',
-    gstin: profile.gstNumber || legacyAccount?.gstin || legacyAccount?.gstNumber || legacyAccount?.gst || '',
-    panNumber: profile.panNumber || legacyAccount?.pan || legacyAccount?.panNumber || '',
-    street: profile.street || legacyAccount?.street || legacyAccount?.address1 || legacyAccount?.address || (profile.city && profile.state ? `${profile.city}, ${profile.state}` : profile.city || ''),
-    city: profile.city || legacyAccount?.city || '',
-    state: profile.state || legacyAccount?.state || '',
-    pincode: profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || legacyAccount?.zipCode || '',
+    gstin: resolvedGst,
+    panNumber: resolvedPan,
+    street: resolvedStreet,
+    city: resolvedCity,
+    state: resolvedState,
+    pincode: resolvedPincode,
     country: profile.country || legacyAccount?.country || 'India',
-    primaryPlantLocation: [profile.city || legacyAccount?.city, profile.state || legacyAccount?.state].filter(Boolean).join(', '),
+    primaryPlantLocation: [resolvedCity, resolvedState].filter(Boolean).join(', '),
     // `profile.categories` is a flat list of `{ major, minor }` pairs — one per
     // selected minor category — which is the shape org_division_category stores
     // and the shape loadCategories returns. This previously read `.majorCategory`

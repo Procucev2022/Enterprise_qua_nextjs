@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
+const { derivePanFromGstin } = require('../config/validationSchemas');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
@@ -1193,7 +1194,7 @@ async function registerUser(payload, ipAddress) {
     (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')
   ).trim();
   const normalizedGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
-  const normalizedPan = (pan || panNumber || '').trim().toUpperCase();
+  const normalizedPan = (pan || panNumber || '').trim().toUpperCase() || derivePanFromGstin(normalizedGstin);
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1450,7 +1451,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   } = payload || {};
 
   const effectiveGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
-  const effectivePan = (pan || panNumber || '').trim().toUpperCase();
+  const effectivePan = (pan || panNumber || '').trim().toUpperCase() || derivePanFromGstin(effectiveGstin);
   const effectiveAddress = (street || streetAddress || address || registeredAddress || '').trim();
   const effectiveCity = (city || '').trim();
   const effectiveState = (state || '').trim();

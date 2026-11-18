@@ -1007,6 +1007,47 @@ describe('Authentication against the account records (/api/auth)', () => {
       );
     });
 
+    test('POST /api/auth/register derives real non-dummy PAN automatically from GSTIN', async () => {
+      const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: {
+          id: 'new-uuid-real',
+          email: 'real.buyer@example.com',
+          name: 'Veera',
+          role: 'buyer',
+          orgId: 'new-org-real',
+          orgName: 'Veera Solutions Pvt Ltd',
+        },
+      });
+
+      const res = await request(app).post('/api/auth/register').send({
+        name: 'Veera',
+        email: 'real.buyer@example.com',
+        password: 'Secret@123',
+        mobile: '9381877013',
+        role: 'buyer',
+        orgName: 'Veera Solutions Pvt Ltd',
+        street: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        gstin: '27AAACK3921P1Z9',
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+        })
+      );
+    });
+
     test('POST /api/auth/register reports a duplicate with 400', async () => {
       jest
         .spyOn(identityQueries, 'insertBuyerAccount')

@@ -50,6 +50,8 @@ interface UploadHistoryEntry {
   failed: number;
   onboardingFailed?: number;
   onboardingSkipped?: number;
+  buyerId?: string;
+  buyerEmail?: string;
   records?: Array<{
     vendorCode?: string;
     name: string;
@@ -69,7 +71,8 @@ const PREVIEW_PAGE_SIZE = 50;
 const HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
 export default function VendorUploadModal({ isOpen, onClose, onImportComplete }: VendorUploadModalProps) {
-  const { showToast, refreshFromDB } = useApp();
+  const { showToast, refreshFromDB, activeBuyerAccount } = useApp();
+  const isBuyerSession = authClient.getSessionUser?.()?.role === 'buyer';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [step, setStep] = useState<Step>('select');
@@ -147,7 +150,6 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       return;
     }
     setIsParsing(true);
-    const isBuyerSession = authClient.getSessionUser?.()?.role === 'buyer';
     const result = await (isBuyerSession
       ? parseVendorUploadFile(file, { requireCategory: true })
       : parseVendorUploadFile(file));
@@ -200,6 +202,8 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       failed: result.failed,
       onboardingFailed: result.onboardingFailed,
       onboardingSkipped: result.onboardingSkipped,
+      ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+      ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
       records: rows.slice(0, 100).map((r) => {
         const loc = resolveVendorLocationFields({
           city: r.vendor.city,
@@ -227,6 +231,9 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       const nextHistory = [historyEntry, ...historyList].slice(0, 30);
       setHistoryList(nextHistory);
       localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
+      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      }
     } catch {}
 
     if (result.imported > 0) {
@@ -325,10 +332,12 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
             </div>
             <div>
               <h2 id="vendor-upload-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
-                Bulk Upload Vendors
+                {isBuyerSession ? UI_STRINGS.vendorBulkImport.buyerModalTitle : 'Bulk Upload Vendors'}
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                Upload vendors via standard Excel spreadsheet (.xlsx) with unique Vendor Codes.
+                {isBuyerSession
+                  ? UI_STRINGS.vendorBulkImport.buyerModalSubtitle
+                  : 'Upload vendors via standard Excel spreadsheet (.xlsx) with unique Vendor Codes.'}
               </p>
             </div>
           </div>
@@ -402,12 +411,14 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
           {step === 'select' && (
             <div className="space-y-4">
-              {/* Single-line Simplified Vendor Bulk Upload Info & Download Banner */}
-              <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex items-center justify-between gap-3 shadow-xs">
-                <div className="flex items-center gap-2 min-w-0">
+              {/* Simplified Vendor Bulk Upload Required Columns & Download Banner */}
+              <div className="p-3.5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-gradient-to-r from-indigo-50/70 via-purple-50/30 to-blue-50/70 dark:from-indigo-950/40 dark:via-purple-950/20 dark:to-blue-950/40 flex flex-wrap items-center justify-between gap-3 shadow-xs">
+                <div className="flex items-start sm:items-center gap-2 min-w-0 flex-1">
                   <span className="badge badge-indigo font-bold text-[10px] shrink-0">Required Columns</span>
-                  <span className="text-xs text-slate-700 dark:text-gray-300 font-medium truncate">
-                    Vendor Code, Company Name, Contact Person, Mobile, Email &amp; Category
+                  <span className="text-xs text-slate-700 dark:text-gray-300 font-medium">
+                    {isBuyerSession
+                      ? UI_STRINGS.vendorBulkImport.buyerRequiredColumnsSummary
+                      : 'Vendor Code, Company Name, Contact Person, Mobile, Email & Category'}
                   </span>
                 </div>
                 <button
@@ -526,6 +537,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                       <th className="p-2">Vendor Code</th>
                       <th className="p-2">Status</th>
                       <th className="p-2">Company Name</th>
+                      <th className="p-2">Category</th>
                       <th className="p-2">Email</th>
                       <th className="p-2">Phone</th>
                       <th className="p-2">GSTIN</th>
@@ -559,6 +571,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                           )}
                         </td>
                         <td className="p-2 font-semibold">{r.vendor.name || '—'}</td>
+                        <td className="p-2">{r.vendor.majorCategory || r.vendor.minorCategories?.join(', ') || '—'}</td>
                         <td className="p-2">{r.vendor.email || <span className="text-amber-600 dark:text-amber-400 font-bold">No Email</span>}</td>
                         <td className="p-2">{r.vendor.phone || '—'}</td>
                         <td className="p-2">{r.vendor.gstin || '—'}</td>
