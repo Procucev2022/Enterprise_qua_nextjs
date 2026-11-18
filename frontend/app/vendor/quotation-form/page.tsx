@@ -23,6 +23,7 @@ function opportunityFromRfq(rfq: RFQItem): VendorOpportunity {
     title: rfq.title,
     buyer: rfq.buyerAccountName || '',
     deadline: rfq.targetDeliveryDate || '',
+    createdAt: rfq.createdAt,
     daysRemaining: Number.isFinite(deadlineMs) ? Math.ceil((deadlineMs - Date.now()) / MS_PER_DAY) : 0,
     type: rfq.sourcingMode === 'mode_3' ? 'network_marketplace' : 'direct_invitation',
     estimatedValue: rfq.budget > 0 ? `₹${rfq.budget.toLocaleString('en-IN')}` : undefined,

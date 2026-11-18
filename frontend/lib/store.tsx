@@ -158,6 +158,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
     sourcingMode: rfq.sourcingMode,
     assignedVendors: rfq.assignedVendors,
+    createdAt: rfq.createdAt,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -825,15 +826,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
+      const sortedRfqs = [...result.rfqs].sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
       const reconcileSelectedRfq = (prev: RFQItem | null) =>
         prev
-          ? result.rfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
-          : result.rfqs[0] || null;
-      setRfqs(result.rfqs);
-      setSessionCache('rfqs', result.rfqs);
+          ? sortedRfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
+          : sortedRfqs[0] || null;
+      setRfqs(sortedRfqs);
+      setSessionCache('rfqs', sortedRfqs);
       setSelectedRFQForMatrix(reconcileSelectedRfq);
       setSelectedRFQForDeepDive(reconcileSelectedRfq);
-      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      setVendorOpportunities(sortedRfqs.map(buildOpportunityFromRFQ));
       loadedEntitiesRef.current.rfqs = true;
     } finally {
       setIsLoadingRFQs(false);

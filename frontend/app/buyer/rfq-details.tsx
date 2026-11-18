@@ -1502,6 +1502,30 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {isVendor && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (router) {
+                    router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                  } else {
+                    window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                  }
+                }}
+                disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+                className="btn btn-sm font-bold inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl shadow-xs px-3.5 py-1.5 cursor-pointer disabled:cursor-not-allowed border-none text-xs"
+                title={
+                  activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
+                    ? 'Bidding is closed for this RFQ'
+                    : quotes.length > 0
+                    ? 'Update or resubmit quotation'
+                    : 'Submit quotation for this RFQ'
+                }
+              >
+                <Send size={13} />
+                <span>{quotes.length > 0 ? 'Resubmit Bid' : 'Submit Quote'}</span>
+              </button>
+            )}
             {activeRfq.status !== 'Closed' &&
               activeRfq.status !== 'Expired' &&
               activeRfq.status !== 'PO Generated' &&
@@ -2808,13 +2832,68 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
+      {isVendor && quotes.length === 0 && (
+        <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <Send size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Submit Your Quotation for this RFQ
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+                Review the line items and technical specifications, then submit your competitive quotation for this requirement.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+            onClick={() => {
+              if (router) {
+                router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+              } else {
+                window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              }
+            }}
+            className="btn btn-sm font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl px-4 py-2 shadow-xs shrink-0 cursor-pointer disabled:cursor-not-allowed border-none flex items-center gap-1.5"
+          >
+            <Send size={14} />
+            <span>Submit Quote</span>
+          </button>
+        </div>
+      )}
+
       {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
       {isVendor && quotes.length > 0 && (() => {
         const myQuote = quotes[0];
         return (
           <Panel
             title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+            toolbar={
+              <div className="flex items-center gap-2">
+                <span className="badge badge-emerald">Quote Submitted</span>
+                {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (router) {
+                        router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                      } else {
+                        window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                      }
+                    }}
+                    className="btn btn-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold inline-flex items-center gap-1 rounded-lg px-2.5 py-1 cursor-pointer border-none"
+                    title="Update or resubmit quotation"
+                  >
+                    <Send size={11} />
+                    <span>Resubmit Bid</span>
+                  </button>
+                )}
+              </div>
+            }
           >
             <div className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -3433,13 +3512,68 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
+      {isVendor && quotes.length === 0 && (
+        <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <Send size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Submit Your Quotation for this RFQ
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+                Review the line items and technical specifications, then submit your competitive quotation for this requirement.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+            onClick={() => {
+              if (router) {
+                router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+              } else {
+                window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              }
+            }}
+            className="btn btn-sm font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl px-4 py-2 shadow-xs shrink-0 cursor-pointer disabled:cursor-not-allowed border-none flex items-center gap-1.5"
+          >
+            <Send size={14} />
+            <span>Submit Quote</span>
+          </button>
+        </div>
+      )}
+
       {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
       {isVendor && quotes.length > 0 && (() => {
         const myQuote = quotes[0];
         return (
           <Panel
             title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+            toolbar={
+              <div className="flex items-center gap-2">
+                <span className="badge badge-emerald">Quote Submitted</span>
+                {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (router) {
+                        router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                      } else {
+                        window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                      }
+                    }}
+                    className="btn btn-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold inline-flex items-center gap-1 rounded-lg px-2.5 py-1 cursor-pointer border-none"
+                    title="Update or resubmit quotation"
+                  >
+                    <Send size={11} />
+                    <span>Resubmit Bid</span>
+                  </button>
+                )}
+              </div>
+            }
           >
             <div className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">

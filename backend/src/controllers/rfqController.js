@@ -387,21 +387,25 @@ function applyVendorBuyerPrivacy(rfq, vendorRecord) {
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
   const all = storeService.getRFQs(scope.restricted && scope.role === 'buyer' ? scope.buyerAccountId : null);
-  if (!scope.restricted) return all;
-  if (scope.role === 'vendor') {
-    return all
+  let list;
+  if (!scope.restricted) {
+    list = all;
+  } else if (scope.role === 'vendor') {
+    list = all
       .filter((rfq) => canVendorViewRfq(scope.vendor, rfq))
       .map((rfq) => applyVendorBuyerPrivacy(rfq, scope.vendor));
+  } else {
+    const buyerRfqs = all.filter((rfq) => {
+      if (!scope.buyerAccountId) return false;
+      if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+      if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+        return true;
+      }
+      return false;
+    });
+    list = buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
   }
-  const buyerRfqs = all.filter((rfq) => {
-    if (!scope.buyerAccountId) return false;
-    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
-    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
-      return true;
-    }
-    return false;
-  });
-  return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
+  return list.slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
 // Fields a buyer's own edit may touch. Deliberately a whitelist: id,
@@ -457,6 +461,7 @@ async function getRFQs(req, res, next) {
       await storeService.syncRFQsFromDB(true);
     }
     let rfqs = scopedRfqList(scope);
+    rfqs = rfqs.slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
       ? Math.min(Number(req.query.limit), 500)
       : 200;
