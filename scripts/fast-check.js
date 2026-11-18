@@ -396,6 +396,9 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
       const frontendSrcRelFiles = scope.frontendSources.map((f) => f.slice('frontend/'.length));
       const fastCovAbs = path.join(frontendDir, FAST_COVERAGE_DIR);
       cleanupDir(fastCovAbs);
+      const testFilesToFind = frontendRelFiles.flatMap((f) =>
+        f === 'lib/uiStrings.ts' ? ['__tests__/lib/uiStrings.test.ts'] : [f]
+      );
       try {
         if (frontendSrcRelFiles.length > 0) {
           const jestArgs = [
@@ -408,7 +411,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
             '--coverageThreshold={}',
             ...frontendSrcRelFiles.map((file) => `--collectCoverageFrom=${file}`),
             '--findRelatedTests',
-            ...frontendRelFiles,
+            ...testFilesToFind,
           ];
           runJestWithArgs('Frontend Related Tests & 90% Per-File Coverage', frontendDir, jestArgs);
           const result = verifyChangedFilesCoverage(

@@ -6212,130 +6212,384 @@ Please check once, all checks are failing, please fix them. Also, how can a comm
 ---
 
 ### Prompt 257
-**Timestamp**: 2026-11-17T18:56:38+05:30
+
+**Timestamp**: 2026-11-17T16:29:28+05:30
+
 ```text
-In buyer uploaded vendor, there should not be a delete vendor option, the option should be to disable it or mark it inactive. so that any later flow is not impacted, any future flow should not have this vendor, such as in the create RFQ flow for RFQ invitation etc.
+Pull the latest code from test-v3 and 
+
+check this code and create the pr from this branch to test-v3 and pass all the coverages , Ai review and gemini pr check
 ```
+
 ---
 
 ### Prompt 258
-**Timestamp**: 2026-11-17T19:09:29+05:30
+
+**Timestamp**: 2026-11-17T18:56:38+05:30
+
 ```text
-Keep commiting & pushing the changes to "test-v3"
+In buyer uploaded vendor, there should not be a delete vendor option, the option should be to disable it or mark it inactive. so that any later flow is not impacted, any future flow should not have this vendor, such as in the create RFQ flow for RFQ invitation etc.
 ```
+
 ---
 
 ### Prompt 259
-**Timestamp**: 2026-11-17T20:52:06+05:30
+
+**Timestamp**: 2026-11-17T19:09:29+05:30
+
 ```text
-The count are not getting updated. Please check
+Keep commiting & pushing the changes to "test-v3"
 ```
+
 ---
 
 ### Prompt 260
-**Timestamp**: 2026-11-17T20:52:53+05:30
+
+**Timestamp**: 2026-11-17T20:52:06+05:30
+
 ```text
-Remove the password verified , Active workspace , Enterprise Buyer .7 module And add right corner side profile button if i click the button it goes to buyer profile page
+The count are not getting updated. Please check
 ```
+
 ---
 
 ### Prompt 261
-**Timestamp**: 2026-11-17T20:54:30+05:30
+
+**Timestamp**: 2026-11-17T20:52:53+05:30
+
 ```text
-Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
+Remove the password verified , Active workspace , Enterprise Buyer .7 module And add right corner side profile button if i click the button it goes to buyer profile page
 ```
+
 ---
 
 ### Prompt 262
-**Timestamp**: 2026-11-18T05:24:20+05:30
+
+**Timestamp**: 2026-11-17T20:54:30+05:30
+
 ```text
-Keep commiting the changes directly to current "test-v3" branch & keep pushing them as soon as you achieve the task,
+Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
 ```
+
 ---
 
 ### Prompt 263
+
 **Timestamp**: 2026-11-17T20:54:50+05:30
+
 ```text
 if in vendor upload data have any duplicate it as to show and skip that data
 ```
+
 ---
 
 ### Prompt 264
+
 **Timestamp**: 2026-11-17T20:56:28+05:30
+
 ```text
 The count should come correctly. 
 ```
+
 ---
 
 ### Prompt 265
+
 **Timestamp**: 2026-11-17T20:57:11+05:30
+
 ```text
 i give the po data of 4 vendors only but it is showing 7 mapped and 3 unmapped. Please again check the counts.
 ```
+
 ---
 
 ### Prompt 266
+
 **Timestamp**: 2026-11-17T20:59:24+05:30
+
 ```text
 Why it is showing 10 total empanelled and 1 ocr &360 for the first time addition. Change "total empanelled" to "total vendor".
 ```
+
 ---
 
 ### Prompt 267
+
 **Timestamp**: 2026-11-17T21:03:19+05:30
+
 ```text
 This functionality should come as popup for the new buyer only. after buyer uploaded their vendor. Again this buyer vendor master functionaliy should not come instead it should come as a add vendor bulk feature with required columns
 ```
+
 ---
 
 ### Prompt 268
-**Timestamp**: 2026-11-17T21:09:07+05:30
+
+**Timestamp**: 2026-11-17T22:50:55+05:30
+
 ```text
-When we click the close rfq button, it should show warning "after close not able to open again" and if the buyer closes the RFQ, the rfq close message should go to all invited vendors for that rfq.
+continue and solve and merge the pr
 ```
+
 ---
 
 ### Prompt 269
-**Timestamp**: 2026-11-17T21:11:55+05:30
+
+**Timestamp**: 2026-11-18T05:24:20+05:30
+
 ```text
-my data not appearing GST address
+Keep commiting the changes directly to current "test-v3" branch & keep pushing them as soon as you achieve the task,
 ```
+
 ---
 
 ### Prompt 270
-**Timestamp**: 2026-11-17T21:12:52+05:30
+
+**Timestamp**: 2026-11-18T08:10:25+05:30
+
 ```text
-now this is the 4th page step.
-
-Above the three summary boxes, please add two separate information boxes:
-
-Mapped Vendors: "All mapped vendors with categories will be informed through email along with their login details."
-
-Unmapped Vendors: "Vendors who don't have a mapped category will be informed through email to update their categories, along with their login details."
+continue
 ```
+
 ---
 
 ### Prompt 271
-**Timestamp**: 2026-11-17T21:13:24+05:30
+
+**Timestamp**: 2026-11-18T11:10:10+05:30
+
 ```text
-the save button at the top is not working in buyer proffile
+Summary of Changes
+1. Merged Latest Upstream Code from \ est-v3\
+Pulled and cleanly merged \origin/test-v3\ (commit \e07ce42b) intoegistration-page.
+Harmonized prompt history in \prompts.md\ preserving exact chronological prompt sequences and timestamps.
+2. Action Center Toolbars (Internal Tasks & Approvals)
+Single-Row Horizontal Toolbars: Aligned all search fields, dropdown filters, action buttons, export CSV, and control actions in a single horizontal row within parent window bounds.
+Dropdown Visibility & Padding: Ensured dropdown labels (\All Categories, \All Users, \All Request Types, \All Statuses) have proper widths, centered text, and zero truncation/clipping.
+Scroll Isolation: Preserved fixed sticky toolbar positioning while isolating table horizontal scrolling to dedicated inner container (\overflow-x-auto scrollbar-thin).
+3. Buyer Profile & Seller 360° Dossier Enhancements
+Buyer Uploaded Vendors Tab: Integrated tab displaying real database records of vendors associated with the selected buyer with company name, contacts, categories, location, status, and dates.
+Request Type & Approvals Workflow: Integrated + Request Type\ options (Buyer Credit Addition/Deletion, Discounts, Trial Periods, Offline Payments) with synchronization across Approvals and Internal Tasks.
+4. 90% Unit Test Code Coverage Benchmark (Strict Per-File Enforcement)
+Every modified file satisfies ≥90 coverage across all 4 parameters:
+File
+Statements
+Branches
+Functions
+Lines
+Status
+\ackend/src/controllers/buyerAccountController.js\
+99.53%
+95.07%
+100%
+100%
+PASS (0 failures)
+\ rontend/app/category-manager/components/SupplierDossierDrawer.tsx\
+97.28%
+91.73%
+93.81%
+98.23%
+PASS (0 failures)
+\ rontend/app/category-manager/components/BuyerDossierDrawer.tsx\
+98.03%
+92.71%
+98.40%
+98.56%
+PASS (0 failures)
+\ rontend/app/category-manager/components/ApprovalsDashboard.tsx\
+95.04%
+90.80%
+94.73%
+96.68%
+PASS (0 failures)
+\ rontend/app/category-manager/internal-tasks.tsx\
+97.08%
+90.22%
+96.50%
+98.76%
+PASS (0 failures)
+\ rontend/app/category-manager/BuyerDetailsModal.tsx\
+96.88%
+92.31%
+94.12%
+97.50%
+PASS (0 failures)
+\ rontend/lib/supplierProfileClient.ts\
+100%
+100%
+100%
+100%
+PASS (0 failures)
+5. Verification Checks & Pre-Commit Gates
+TypeScript Static Typecheck:pm run typecheck --prefix frontend\ passed with 0 errors.
+ESLint Analysis:pm run lint --prefix frontend\ passed with 0 warnings and 0 errors.
+Fast Quality Gate:ode scripts/fast-check.js\ passed all unit tests and lint gates.
+Pre-Commit Gate: Automated Git pre-commit hook verified and approved all checks.
+[veerababuprocucev](https://github.com/veerababuprocucev) added 3 commits [18 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465#commits-pushed-1a482d4)
+[feat: fixed toolbars in internal tasks & approvals, buyer dossier upl…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/1a482d4b05ba1c9627847deecfd3a4d372714d41)
+[1a482d4](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/1a482d4b05ba1c9627847deecfd3a4d372714d41)
+[Merge branch 'origin/test-v3' into registration-page](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/dd9e3adfa6175178583f1d7d99fba503db55ff07)
+[dd9e3ad](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/dd9e3adfa6175178583f1d7d99fba503db55ff07)
+[test(buyerOnboarding): increase timeout for heavy async onboarding cr…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/43334fbf8fbb60e1280d2d7eb7fb3bc22809db73)
+[43334fb](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/43334fbf8fbb60e1280d2d7eb7fb3bc22809db73)
+[github-actions](https://github.com/apps/github-actions) Botcommented[16 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465#issuecomment-6948658181)
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+338 / 347 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+7141
+7141
+0
+0
+frontend
+4509
+4509
+0
+0
+Workspace
+11650
+11650
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+97.78%
+91.91%
+98.58%
+98.53%
+161 / 165
+frontend
+97.69%
+92.72%
+97.62%
+98.54%
+177 / 182
+Workspace
+97.74%
+92.26%
+98.00%
+98.54%
+338 / 347
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+FAILED
+Backend per-file coverage
+FAILED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+FAILED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+Coverage failures
+backend: src/controllers/bootstrapController.js: branches 87.66% < 90%.
+backend: src/controllers/vendorDossierExtensions.js: statements 88.51% < 90%.
+backend: src/controllers/vendorDossierExtensions.js: branches 65.33% < 90%.
+backend: src/controllers/vendorDossierExtensions.js: functions 73.68% < 90%.
+backend: src/db/domainQueries.js: branches 83.67% < 90%.
+backend: src/services/vendorCategorizationService.js: statements 87.32% < 90%.
+backend: src/services/vendorCategorizationService.js: branches 81.41% < 90%.
+frontend: app/buyer/vendor-summary.tsx: branches 87.27% < 90%.
+frontend: app/category-manager/BuyerDetailsModal.tsx: functions 85.19% < 90%.
+frontend: app/category-manager/components/SupplierDossierDrawer.tsx: branches 83.33% < 90%.
+frontend: lib/store.tsx: branches 89.72% < 90%.
+frontend: lib/supplierProfileClient.ts: branches 83.33% < 90%.
+[feat: complete branch coverage for buyerAccountController, SupplierDo…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/52f25ebcc3249082ed8ad254417643059129734e)
+[52f25eb](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/commits/52f25ebcc3249082ed8ad254417643059129734e)
+This branch has not been deployed
+No deployments
+Merge info
+This branch has conflicts that must be resolved
+Use the [web editor](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/465/conflicts) or the command line to resolve conflicts before continuing.
+backend/src/config/constants.js
+prompts.md
 ```
+
 ---
 
 ### Prompt 272
-**Timestamp**: 2026-11-17T21:17:42+05:30
+
+**Timestamp**: 2026-11-18T07:10:53Z
+
 ```text
-Please check the error logs, & fix all issues.
+how much time it required to fix this issue and merge this code still yesterdaay it is runningg and not solve the issue check the root cause and fix this pr as soon as possible
 ```
+
 ---
 
 ### Prompt 273
-**Timestamp**: 2026-11-18T05:18:56+05:30
+
+**Timestamp**: 2026-11-18T12:07:51+05:30
+
 ```text
-RFQ quotation visibility and notification issues
-1. Quotations remain visible before closing or before the 48-hour expiration window, violating comparison confidentiality rules.
-2. Category update emails fail to arrive
+check create rfq via email and create the unregister buyer accountflow and 
+put cc as register buuyer send unregister buyer create rfq all this create account and rfq are working or not?
 ```
+
+---
+
+### Prompt 274
+
+**Timestamp**: 2026-11-18T12:17:00+05:30
+
+```text
+give me the template that send for unregister buyer send the rfq to email
+```
+
+---
+
+### Prompt 275
+
+**Timestamp**: 2026-11-18T12:27:49+05:30
+
+```text
+Tell me one thing now the password  is expire 48 hr then i raise onother rfq via email then again new password create and share are what is the scenario
+```
+
+---
+
+### Prompt 276
+
+**Timestamp**: 2026-11-18T12:36:36+05:30
+
+```text
+yes 2nd time also it should goo the new password until he receive the quote update profile check and check 9999999999 to create new account with this number are not and add this number in loginncredentials email acknowledgemnt template as well
+```
+
+---
+
+### Prompt 277
+
+**Timestamp**: 2026-11-18T12:41:17+05:30
+
+```text
+continue
+```
+
 ---
 
 ### Prompt 274
@@ -6350,7 +6604,9 @@ Buyer Vendor data upload and mapping discrepancies
 ---
 
 ### Prompt 275
+
 **Timestamp**: 2026-11-18T10:47:30+05:30
+
 ```text
 On the Buyer side, the Vendor Directory page is displaying vendor data correctly. However, when I select multiple vendors and try to mark them as *Inactive using the bulk action*, nothing happens.
 
@@ -6362,25 +6618,86 @@ Please investigate and fix the bulk inactive functionality. Ensure that:
 
 Please identify and fix the root cause rather than applying a temporary workaround.
 ```
+
 ---
 
 ### Prompt 276
+
 **Timestamp**: 2026-11-18T13:16:35+05:30
+
 ```text
 For submit quotation, for one line item Rfq also, reuse the multiple line item details UI.
 ```
+
 ---
 
 ### Prompt 277
+
 **Timestamp**: 2026-11-18T14:31:29+05:30
+
 ```text
 Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
 ```
+
 ---
 
 ### Prompt 278
+
 **Timestamp**: 2026-11-18T14:31:36+05:30
+
 ```text
 Everywhere in complete codebase UI, Replace major category with "Division" & minor Category to "Category",. UI change only
 ```
+
+---
+
+### Prompt 279
+
+**Timestamp**: 2026-11-18T14:45:00+05:30
+
+```text
+Tell me create rfq via email time to create every time?
+```
+
+---
+
+### Prompt 280
+
+**Timestamp**: 2026-11-18T14:58:39+05:30
+
+```text
+The create rfq via email is not extract the data correctly which the root cause 
+and in the signature mail it is taking the images as documnets firrst identify the   root cause and tell me how  to fix this issue
+```
+
+---
+
+### Prompt 281
+
+**Timestamp**: 2026-11-18T15:15:00+05:30
+
+```text
+processed this implemetation and fix all the issue and check and fix if any other issue also there in create rfq via email and ensure apply all the testing that can not come this error once again in future
+```
+
+---
+
+### Prompt 282
+
+**Timestamp**: 2026-11-18T15:26:24+05:30
+
+```text
+Add the export csv button to dowmload the all rfq data and add starting date and ending date to select the data  in the place at refresh buttton reuse the existing functionalities and methods
+```
+
+---
+
+### Prompt 283
+
+**Timestamp**: 2026-11-18T16:04:17+05:30
+
+```text
+create the pr from new branch and merge in the test-v3
+```
+
 ---
