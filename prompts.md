@@ -6314,3 +6314,10 @@ Mapped Vendors: "All mapped vendors with categories will be informed through ema
 Unmapped Vendors: "Vendors who don't have a mapped category will be informed through email to update their categories, along with their login details."
 ```
 ---
+
+### Prompt 271
+**Timestamp**: 2026-11-17T21:13:24+05:30
+```text
+the save button at the top is not working in buyer proffile
+```
+---

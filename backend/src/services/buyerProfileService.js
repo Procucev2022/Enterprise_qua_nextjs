@@ -26,6 +26,7 @@ const {
   AUTH_MESSAGES,
   BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
+  D1_OVERLOAD_CONFIG,
   DEFAULT_CATEGORY_TAXONOMY,
   VALIDATION_SCHEMAS,
   validatePayload,
@@ -40,11 +41,12 @@ const LOG_CATEGORY = 'BUYER_PROFILE_SERVICE';
  * both flattened into a 500 with the same unhelpful message.
  */
 class BuyerProfileError extends Error {
-  constructor(message, status = 400, details = null) {
+  constructor(message, status = 400, details = null, options = {}) {
     super(message);
     this.name = 'BuyerProfileError';
     this.status = status;
     this.details = details;
+    this.retryable = Boolean(options && options.retryable);
   }
 }
 
@@ -241,7 +243,6 @@ async function getProfile(sessionUser) {
           organizationId: profile.organizationId,
           userId,
           patch,
-          categories: profile.categories,
           actor: email,
         });
       } catch (err) {
@@ -400,6 +401,21 @@ function pickPatchableFields(body) {
   return patch;
 }
 
+function buildSavedProfileSnapshot(baseProfile = {}, patch = {}, categories) {
+  const snapshot = {
+    ...baseProfile,
+    ...patch,
+    ...(categories !== undefined ? { categories } : {}),
+  };
+  if (typeof snapshot.panNumber === 'string') snapshot.panNumber = snapshot.panNumber.trim().toUpperCase();
+  if (typeof snapshot.gstNumber === 'string') snapshot.gstNumber = snapshot.gstNumber.trim().toUpperCase();
+  if (typeof snapshot.cinNumber === 'string') snapshot.cinNumber = snapshot.cinNumber.trim().toUpperCase();
+  if (typeof patch.annualTurnover === 'string') {
+    snapshot.annualTurnover = buyerProfileQueries.normalizeTurnover(patch.annualTurnover);
+  }
+  return snapshot;
+}
+
 /**
  * Save the signed-in buyer's organisation profile.
  *
@@ -422,10 +438,36 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
   // Resolve the organisation from the session's user record, not the body.
   let lookup;
   try {
-    lookup = await buyerProfileQueries.findProfileByUserId(userId);
+    lookup = await buyerProfileQueries.findProfileByUserId(userId, {
+      includeCategories: categories === undefined,
+    });
   } catch (err) {
-    logger.error('Buyer organization profile lookup failed before save', err, LOG_CATEGORY);
-    throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED, 503);
+    if ((d1Bridge.isRetryableD1Error(err) || d1Bridge.isD1Overloaded()) && email) {
+      const buyerAcc = await storeService.getBuyerAccountByEmail(email).catch(() => null);
+      if (buyerAcc && buyerAcc.organizationId) {
+        logger.warn(
+          'Resolved buyer organization ID from storeService mirror during transient D1 lookup failure',
+          { userId, email, organizationId: buyerAcc.organizationId, error: err.message },
+          LOG_CATEGORY
+        );
+        lookup = {
+          found: true,
+          profile: {
+            organizationId: buyerAcc.organizationId,
+            userId,
+            companyName: buyerAcc.organizationName || '',
+            contactEmail: email,
+          },
+        };
+      }
+    }
+    if (!lookup) {
+      logger.error('Buyer organization profile lookup failed before save', err, LOG_CATEGORY);
+      if (d1Bridge.isD1OverloadError(err) || d1Bridge.isD1Overloaded()) {
+        throw new BuyerProfileError(D1_OVERLOAD_CONFIG.MESSAGE, 503, null, { retryable: true });
+      }
+      throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED, 503);
+    }
   }
 
   if (!lookup.found) {
@@ -457,6 +499,9 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
     });
   } catch (err) {
     logger.error('Buyer organization profile write failed', err, LOG_CATEGORY);
+    if (d1Bridge.isD1OverloadError(err) || d1Bridge.isD1Overloaded()) {
+      throw new BuyerProfileError(D1_OVERLOAD_CONFIG.MESSAGE, 503, null, { retryable: true });
+    }
     throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED, 503);
   }
 
@@ -471,8 +516,20 @@ async function saveProfile(sessionUser, body = {}, ipAddress) {
   try {
     saved = await buyerProfileQueries.findProfileByUserId(userId);
   } catch (err) {
-    logger.error('Buyer organization profile re-read failed after save', err, LOG_CATEGORY);
-    throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
+    if (d1Bridge.isD1OverloadError(err) || d1Bridge.isD1Overloaded()) {
+      logger.warn(
+        'Buyer organization profile re-read hit D1 overload after commit; returning normalized snapshot',
+        { userId, organizationId, error: err.message },
+        LOG_CATEGORY
+      );
+      saved = {
+        found: true,
+        profile: buildSavedProfileSnapshot(lookup.profile, patch, categories),
+      };
+    } else {
+      logger.error('Buyer organization profile re-read failed after save', err, LOG_CATEGORY);
+      throw new BuyerProfileError(BUYER_PROFILE_MESSAGES.PROFILE_LOAD_FAILED, 503);
+    }
   }
 
   const targetCompanyName = patch.companyName || lookup.profile?.companyName || organizationId;

@@ -1474,6 +1474,37 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
     expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
   });
+
+  it('retains local values when server returns partial fields and resets saving state if save throws', async () => {
+    await renderLoaded();
+
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 2,
+      data: {
+        companyName: 'Normalized Corp',
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(screen.getByDisplayValue('Normalized Corp')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('400001')).toBeInTheDocument();
+
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Unexpected transport error'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Unexpected transport error',
+      'warning'
+    );
+    expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled();
+  });
 });
 
 

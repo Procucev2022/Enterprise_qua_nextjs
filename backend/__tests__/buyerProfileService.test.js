@@ -1134,5 +1134,79 @@ describe('Buyer profile service', () => {
         patch: { panNumber: 'AAACK3921P' },
       }));
     });
+
+    test('saveProfile resolves organizationId from buyer account mirror during transient lookup overload', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId')
+        .mockRejectedValueOnce(new Error('D1 DB is overloaded'))
+        .mockResolvedValueOnce({ found: true, profile: { ...STORED_PROFILE, companyName: 'Recovered Co' } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        organizationId: 'org-mirror-1',
+        organizationName: 'Recovered Co',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({
+        updated: true,
+        fieldsUpdated: 2,
+        categoryCount: 1,
+      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'org-mirror-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      const result = await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Recovered Co',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org-mirror-1' }));
+      expect(result.profile.companyName).toBe('Recovered Co');
+    });
+
+    test('saveProfile reports retryable D1 overload errors cleanly across lookup, write, and post-commit re-read', async () => {
+      const { D1_OVERLOAD_CONFIG } = require('../src/config/constants');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+
+      // 1. Pre-save lookup D1 overload without mirror orgId
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'Test Co' })
+      ).rejects.toMatchObject({ status: 503, message: D1_OVERLOAD_CONFIG.MESSAGE, retryable: true });
+
+      // 2. Write D1 overload
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'Test Co' })
+      ).rejects.toMatchObject({ status: 503, message: D1_OVERLOAD_CONFIG.MESSAGE, retryable: true });
+
+      // 3. Post-commit re-read D1 overload returns normalized saved snapshot instead of failing save
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId')
+        .mockResolvedValueOnce({ found: true, profile: STORED_PROFILE })
+        .mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({
+        updated: true,
+        fieldsUpdated: 4,
+        categoryCount: 1,
+      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'org-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      const saved = await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Snapshot Corp',
+        panNumber: 'aaacl1234f',
+        gstNumber: '27aaacl1234f1z5',
+        cinNumber: 'l28920mh1946plc004768',
+        annualTurnover: '₹ 50 Cr',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+
+      expect(saved.profile).toMatchObject({
+        organizationId: 'org-1',
+        companyName: 'Snapshot Corp',
+        panNumber: 'AAACL1234F',
+        gstNumber: '27AAACL1234F1Z5',
+        cinNumber: 'L28920MH1946PLC004768',
+        annualTurnover: 'INR 50 Cr',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+    });
   });
 });

@@ -580,8 +580,26 @@ export default function BuyerProfilePage() {
 
     setIsSaving(true);
     logger.info('Saving buyer organization profile', { categoryCount: categories.length }, 'BUYER_PROFILE');
-    const result = await saveBuyerProfile(payload);
-    setIsSaving(false);
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer organization profile', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          UI_STRINGS.buyerProfile.saveFailedTitle,
+          err instanceof Error ? err.message : UI_STRINGS.buyerProfile.saveUnreachable,
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
 
     if (!result.success) {
       showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
@@ -591,18 +609,25 @@ export default function BuyerProfilePage() {
     // Re-apply the stored record: the server normalises several fields, and
     // leaving the pre-save text on screen would misrepresent what was persisted.
     if (result.data) {
-      setCompanyName(result.data.companyName);
-      setBrandName(result.data.brandName);
-      setPanNumber(result.data.panNumber);
-      setGstNumber(result.data.gstNumber);
-      setCinNumber(result.data.cinNumber);
-      setAnnualTurnover(result.data.annualTurnover);
-      setContactName(result.data.contactName);
-      if (result.data.street !== undefined) setStreet(result.data.street);
-      if (result.data.city !== undefined) setCity(result.data.city);
-      if (result.data.state !== undefined) setState(result.data.state);
-      if (result.data.pincode !== undefined) setPincode(result.data.pincode);
-      if (result.data.country !== undefined) setCountry(result.data.country);
+      const storedFieldSetters: Array<[string | undefined, React.Dispatch<React.SetStateAction<string>>]> = [
+        [result.data.companyName, setCompanyName],
+        [result.data.brandName, setBrandName],
+        [result.data.panNumber, setPanNumber],
+        [result.data.gstNumber, setGstNumber],
+        [result.data.cinNumber, setCinNumber],
+        [result.data.website, setWebsite],
+        [result.data.annualTurnover, setAnnualTurnover],
+        [result.data.contactName, setContactName],
+        [result.data.contactDesignation, setContactDesignation],
+        [result.data.street, setStreet],
+        [result.data.city, setCity],
+        [result.data.state, setState],
+        [result.data.pincode, setPincode],
+        [result.data.country, setCountry],
+      ];
+      storedFieldSetters.forEach(([value, setter]) => {
+        if (value !== undefined) setter(value);
+      });
     }
     if (typeof refreshActiveBuyerAccount === 'function') {
       void refreshActiveBuyerAccount();
@@ -623,12 +648,13 @@ export default function BuyerProfilePage() {
       {/* Top Action Bar */}
       <div className="flex items-center justify-end">
         <button
+          type="button"
           onClick={handleSaveProfile}
           disabled={isLoading || isSaving}
           aria-busy={isSaving}
           className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
         >
-          <Save size={14} /> Save Organization Profile
+          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Organization Profile
         </button>
       </div>
 

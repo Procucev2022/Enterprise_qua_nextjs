@@ -1,6 +1,10 @@
 const buyerProfileService = require('../services/buyerProfileService');
 const { logger } = require('../services/loggerService');
-const { BUYER_PROFILE_MESSAGES, DEFAULT_CATEGORY_TAXONOMY } = require('../config/constants');
+const {
+  BUYER_PROFILE_MESSAGES,
+  D1_OVERLOAD_CONFIG,
+  DEFAULT_CATEGORY_TAXONOMY,
+} = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_CONTROLLER';
 
@@ -28,12 +32,16 @@ function respondWithError(err, res, next, fallbackMessage) {
   if (err && err.name === 'BuyerProfileError') {
     logger.warn(
       `Buyer profile request rejected: ${err.message}`,
-      { status: err.status, details: err.details },
+      { status: err.status, details: err.details, retryable: Boolean(err.retryable) },
       LOG_CATEGORY
     );
+    if (err.retryable) {
+      res.setHeader('Retry-After', String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+    }
     return res.status(err.status).json({
       success: false,
       error: err.message,
+      ...(err.retryable ? { retryable: true } : {}),
       ...(err.details ? { fieldErrors: err.details } : {}),
     });
   }
