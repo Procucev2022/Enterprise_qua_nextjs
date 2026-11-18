@@ -411,7 +411,7 @@ interface AppContextType {
   vendorFreeCreditsUsed: number | null;
   vendorUnlockedRfqIds: string[];
   refreshVendorCredits: () => Promise<void>;
-  unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean }>;
+  unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean; data?: unknown }>;
 
   // Vendor 360° AI Self-Evaluation & Infra Fee ($5 or $0 with Connect/Select)
   vendorSelfEvaluationCompleted: boolean;
@@ -768,7 +768,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const norm = String(rfqIdOrNumber);
         return prev.includes(norm) ? prev : [...prev, norm];
       });
-      return { success: true, alreadyUnlocked: res.alreadyUnlocked };
+      return { success: true, alreadyUnlocked: res.alreadyUnlocked, data: res.data };
     }
     return {
       success: false,
