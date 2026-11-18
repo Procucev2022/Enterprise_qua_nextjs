@@ -2330,13 +2330,19 @@ function buildVendorBulkImportInvitationEmail({ to, recipientName, buyerOrganiza
  */
 function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPhone, mobileNumber }) {
   const signInUrl = escapeHtml(buyerPortalUrl());
-  const phone = escapeHtml(mobileNumber || contactPhone || MAILER_NOT_SPECIFIED);
+  const PLACEHOLDER_MOBILE = '9999999999';
+  const rawPhone = mobileNumber || contactPhone || MAILER_NOT_SPECIFIED;
+  const isPlaceholderPhone = String(rawPhone).replace(/\D/g, '').endsWith(PLACEHOLDER_MOBILE);
+  const phone = escapeHtml(rawPhone);
+  const phoneCellHtml = isPlaceholderPhone
+    ? `${phone} <span style="font-size: 11px; color: #d97706; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; padding: 1px 6px; margin-left: 6px; font-weight: 600;">Placeholder — update after login</span>`
+    : phone;
   const inner = `
     <p>${recipientName ? `Dear <strong>${escapeHtml(recipientName)}</strong>,` : 'Hello,'}</p>
     <p>Your buyer account on <strong>Procucev Enterprise</strong> is ready. Use the credentials below to sign in and raise RFQs.</p>
     <table style="width: 100%; border-collapse: collapse; margin: 16px 0; background: #f8fafc;">
       ${row('Email Address', escapeHtml(to))}
-      ${row('Mobile Number', phone)}
+      ${row('Mobile Number', phoneCellHtml)}
       ${row('Temporary Password', tempPassword ? escapeHtml(tempPassword) : '')}
       ${row('Login URL', signInUrl)}
     </table>
@@ -2346,6 +2352,7 @@ function buildBuyerCredentialsEmail({ to, recipientName, tempPassword, contactPh
     <p style="font-size: 13px; color: #92400e; background: #fef3c7; border-left: 4px solid #f59e0b; padding: 12px;">
       <strong>Security Notice:</strong> This temporary password is for first-time access only. Please change it after signing in. You can also sign in at any time with a one-time code sent to this email.
     </p>
+    ${isPlaceholderPhone ? `<p style="font-size: 13px; color: #92400e; background: #fff7ed; border-left: 4px solid #f97316; padding: 12px; margin-top: 8px;"><strong>Mobile Update Required:</strong> Your registered mobile is currently a system placeholder (<strong>${PLACEHOLDER_MOBILE}</strong>). Please update it in your profile after login — your real number is needed for OTP verification and SMS quote alerts.</p>` : ''}
   `;
   return {
     from: fromAddress(),
