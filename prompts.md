@@ -6273,3 +6273,10 @@ The count should come correctly.
 i give the po data of 4 vendors only but it is showing 7 mapped and 3 unmapped. Please again check the counts.
 ```
 ---
+
+### Prompt 266
+**Timestamp**: 2026-11-17T20:59:24+05:30
+```text
+Why it is showing 10 total empanelled and 1 ocr &360 for the first time addition. Change "total empanelled" to "total vendor".
+```
+---

@@ -83,6 +83,36 @@ const statutoryText = (value: unknown): string => {
   return clean === '' ? UI_STRINGS.recordPlaceholders.notApplicable : clean;
 };
 
+/**
+ * Matches a vendor row to an evaluation record by vendor ID first, then email,
+ * falling back to vendor name only when stored emails do not conflict.
+ */
+function findMatchingEvaluation(
+  evaluations: VendorEvaluationRecord[],
+  vendor: VendorEntry
+): VendorEvaluationRecord | undefined {
+  const vendorId = String(vendor.id || '').trim();
+  if (vendorId) {
+    const byId = evaluations.find((e) => e.vendorId && e.vendorId === vendorId);
+    if (byId) return byId;
+  }
+
+  const vendorEmail = String(vendor.email || '').trim().toLowerCase();
+  if (vendorEmail) {
+    const byEmail = evaluations.find((e) => e.email && e.email.trim().toLowerCase() === vendorEmail);
+    if (byEmail) return byEmail;
+  }
+
+  const vendorName = String(vendor.name || '').trim().toLowerCase();
+  if (!vendorName) return undefined;
+  return evaluations.find((e) => {
+    const evalName = String(e.vendorName || '').trim().toLowerCase();
+    if (!evalName || evalName !== vendorName) return false;
+    const evalEmail = String(e.email || '').trim().toLowerCase();
+    return !(vendorEmail && evalEmail && evalEmail !== vendorEmail);
+  });
+}
+
 // Classification helpers shared across Buyer Vendor Directory and Evaluation Summary.
 export const isBuyerUploaded = isBuyerUploadedVendor;
 export const isProcucevVendor = isProcucevNetworkVendor;
@@ -1325,11 +1355,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const allEvaluations = [...vendorEvaluations];
   const mergeWithEvaluations = (list: VendorEntry[]) =>
     list.map((bv) => {
-      const storeEval = allEvaluations.find(
-        (e) =>
-          (e.vendorId && e.vendorId === bv.id) ||
-          (e.vendorName && e.vendorName.toLowerCase() === (bv.name || '').toLowerCase())
-      );
+      const storeEval = findMatchingEvaluation(allEvaluations, bv);
       if (storeEval && typeof storeEval.overallScore === 'number') {
         return {
           ...bv,
@@ -1905,11 +1931,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   // Opens only a stored evaluation record. No record means no evaluation.
                   let evalRec =
                     (vendor as any).storeRecord ||
-                    vendorEvaluations.find(
-                      (e) =>
-                        (e.vendorId && e.vendorId === vendor.id) ||
-                        (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())
-                    );
+                    findMatchingEvaluation(vendorEvaluations, vendor);
                   if (!evalRec && fetchVendorEvaluation) {
                     try {
                       evalRec = await fetchVendorEvaluation(vendor.id || vendor.name);
@@ -1980,19 +2002,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Stats Counter Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Total Empanelled</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">OCR &amp; 360° Evaluated</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Preferred Status</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.preferredStatusLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
             {buyerFilteredVendors.filter(
               (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
@@ -2000,7 +2028,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Selected Suppliers</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.selectedSuppliersLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-0.5">
             {selectedVendorIds.length}
           </div>

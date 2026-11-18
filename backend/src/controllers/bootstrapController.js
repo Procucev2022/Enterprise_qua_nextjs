@@ -260,6 +260,7 @@ async function getBootstrap(req, res, next) {
             .filter(Boolean)
             .map((val) => String(val).toLowerCase());
           if (evalBuyerValues.some((val) => buyerIdentityValues.includes(val))) return true;
+          if (evalBuyerValues.length > 0) return false;
 
           if (buyerOwnedVendors.length > 0) {
             return (
@@ -267,7 +268,7 @@ async function getBootstrap(req, res, next) {
               (evaluation.email && buyerOwnedVendorEmailSet.has(String(evaluation.email).toLowerCase()))
             );
           }
-          return true;
+          return false;
         })
       : [];
 

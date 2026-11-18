@@ -1100,4 +1100,29 @@ describe('Indian address location extraction helpers', () => {
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
   });
+
+  it('scopes upload history reconciliation to matching buyer identity and excludes other buyers batches', () => {
+    const activeBuyer = {
+      id: 'buyer-owner-a',
+      organizationName: 'Owner A Corp',
+      corporateEmail: 'a@ownera.com',
+    } as unknown as BuyerAccount;
+
+    const batches = [
+      {
+        id: 'batch-other-buyer',
+        buyerId: 'buyer-owner-b',
+        buyerEmail: 'b@ownerb.com',
+        records: [{ vendorName: 'Other Buyer Vendor', email: 'other@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-same-buyer',
+        buyerId: 'buyer-owner-a',
+        records: [{ vendorName: 'Same Buyer Vendor', email: 'same@vendor.test', category: 'Mechanical' }],
+      },
+    ];
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyer);
+    expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor']);
+  });
 });

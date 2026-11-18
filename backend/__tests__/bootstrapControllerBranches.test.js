@@ -31,8 +31,9 @@ describe('bootstrapController 100% Branch Coverage', () => {
       organizationId: 'org-full-1',
     };
     jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
-    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test' };
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation] });
+    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test', buyerAccountId: 'acc-full-1' };
+    const foreignEval = { id: 'eval-unassociated', email: 'other@company.test', vendorName: 'Other Vendor' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation, foreignEval] });
 
     const req = {
       user: {
@@ -284,10 +285,17 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
       email: 'foreign@other.com',
       vendorName: 'Veera Solutions Pvt LTD',
     };
+    const evalOtherBuyerSameEmail = {
+      id: 'eval-other-buyer',
+      buyerAccountId: 'buyer-acc-other',
+      vendorId: 'v-diff-2',
+      email: 'vendor1@owned.com',
+      vendorName: 'Owned Vendor 1',
+    };
 
     jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
       vendors: [ownedVendor1, ownedVendor2, foreignVendor],
-      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign],
+      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign, evalOtherBuyerSameEmail],
     });
 
     const req = {
@@ -305,11 +313,21 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(res.data.data.evaluations).toHaveLength(3);
     expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1', 'eval-2', 'eval-3']);
     expect(res.data.data.evaluations.find((e) => e.vendorName === 'Veera Solutions Pvt LTD')).toBeUndefined();
+    expect(res.data.data.evaluations.find((e) => e.id === 'eval-other-buyer')).toBeUndefined();
 
     // Foreign vendor must be sanitized
     const returnedForeignVendor = res.data.data.vendors.find((v) => v.id === 'v-foreign-99');
     expect(returnedForeignVendor).toBeDefined();
     expect(returnedForeignVendor.contactEmail).toBeUndefined();
+
+    // Buyer with zero owned vendors must not inherit unassociated DB evaluations
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [foreignVendor],
+      evaluations: [evalForeign, evalOwnedByBuyerId],
+    });
+    const emptyOwnedRes = mockRes();
+    await bootstrapController.getBootstrap(req, emptyOwnedRes, jest.fn());
+    expect(emptyOwnedRes.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1']);
   });
 
   test('vendor role scopes vendors and recognizes isOwnVendor', async () => {

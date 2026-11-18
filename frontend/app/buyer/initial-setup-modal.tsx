@@ -1025,6 +1025,8 @@ export default function InitialSetupModal() {
                 imported: 0,
                 duplicates: skippedDuplicates.length,
                 failed: 0,
+                ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+                ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
                 records: [],
               };
               const updatedHistory = [
@@ -1137,6 +1139,8 @@ export default function InitialSetupModal() {
               imported: parsedVendors.length,
               duplicates: skippedDuplicates.length,
               failed: 0,
+              ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+              ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
               records: parsedVendors.slice(0, 100).map((v) => {
                 const loc = resolveVendorLocationFields({
                   address: v.address,

@@ -2037,11 +2037,19 @@ export function setVendorsActiveStateInStorage(
 export function reconcileBuyerVendorsWithUploadHistory(
   buyerVendors: readonly VendorEntry[],
   uploadHistory: readonly VendorUploadHistoryBatch[],
-  activeBuyerAccount?: { id?: string; organizationName?: string } | null
+  activeBuyerAccount?: {
+    id?: string;
+    organizationName?: string;
+    corporateEmail?: string;
+  } | null
 ): VendorEntry[] {
   if (!Array.isArray(uploadHistory) || uploadHistory.length === 0) {
     return [...buyerVendors];
   }
+
+  const activeBuyerKeys = [activeBuyerAccount?.id, activeBuyerAccount?.corporateEmail]
+    .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+    .map((val) => val.trim().toLowerCase());
 
   const seenEmails = new Set(
     buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
@@ -2052,6 +2060,17 @@ export function reconcileBuyerVendorsWithUploadHistory(
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
+    const batchOwnerKeys = [batch?.buyerId, batch?.buyerEmail]
+      .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      .map((val) => val.trim().toLowerCase());
+    if (
+      activeBuyerKeys.length > 0 &&
+      batchOwnerKeys.length > 0 &&
+      !batchOwnerKeys.some((key) => activeBuyerKeys.includes(key))
+    ) {
+      return;
+    }
+
     const records: ReadonlyArray<Record<string, unknown>> = Array.isArray(batch?.records) ? batch.records : [];
     records.forEach((rec: Record<string, unknown>, recIdx: number) => {
       const recStatus = String(rec.status || '').toUpperCase();

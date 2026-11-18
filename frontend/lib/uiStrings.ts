@@ -3520,6 +3520,13 @@ export const UI_STRINGS = {
     activeCountSummary: '{activeCount} active · {inactiveCount} inactive',
   },
 
+  vendorSummaryStats: {
+    totalVendorLabel: 'Total Vendor',
+    ocrEvaluatedLabel: 'OCR & 360° Evaluated',
+    preferredStatusLabel: 'Preferred Status',
+    selectedSuppliersLabel: 'Selected Suppliers',
+  },
+
 };
 
 /**

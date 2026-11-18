@@ -426,7 +426,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       />
     );
 
-    expect(screen.getByText('Total Empanelled')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
     expect(screen.getByText('Global Valves Ltd')).toBeInTheDocument();
 
@@ -5117,6 +5117,77 @@ describe('app/buyer/vendor-summary.tsx', () => {
         { target: { value: 'IT Infrastructure' } }
       );
       expect(screen.queryByRole('button', { name: 'Remove Valves' })).not.toBeInTheDocument();
+    });
+
+    it('renders Total Vendor KPI label and ignores foreign evaluations with conflicting email on same company name', () => {
+      const sameNameNewVendor = vendorRecord({
+        id: 'v-new-same-name',
+        name: 'Veera Solutions Pvt LTD',
+        email: 'fresh.vendor@company.test',
+        source: 'buyer_manual',
+        majorCategory: 'Mechanical',
+        evaluated: false,
+      });
+      const emailMatchedVendor = vendorRecord({
+        id: 'v-master-email-match',
+        name: 'Different Name Supplier',
+        email: 'matched.email@company.test',
+        source: 'buyer_uploaded',
+        majorCategory: 'Mechanical',
+        evaluated: false,
+      });
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [
+          {
+            id: 'eval-conflict-name',
+            vendorId: 'v-other-999',
+            vendorName: 'Veera Solutions Pvt LTD',
+            email: 'veerababu.v@procucev.com',
+            overallScore: 11,
+            status: 'DISQUALIFIED SUPPLIER',
+          },
+          {
+            id: 'eval-email-match',
+            vendorId: 'v-persisted-222',
+            vendorName: 'Email Match Co',
+            email: 'matched.email@company.test',
+            overallScore: 84,
+            status: 'PREFERRED ENTERPRISE SUPPLIER',
+          },
+        ],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [sameNameNewVendor, emailMatchedVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel)).toBeInTheDocument();
+
+      // Only the email-matched vendor counts toward OCR & 360 Evaluated (1 of 2),
+      // while sameNameNewVendor keeps Not Evaluated instead of inheriting 11% DISQUALIFIED SUPPLIER.
+      const totalLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel);
+      expect(totalLabel.parentElement).toHaveTextContent('2');
+      const ocrLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel);
+      expect(ocrLabel.parentElement).toHaveTextContent('1');
+      expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
+      expect(screen.getByText('84%')).toBeInTheDocument();
     });
   });
 });

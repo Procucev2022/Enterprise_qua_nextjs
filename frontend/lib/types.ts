@@ -1565,6 +1565,8 @@ export interface VendorUploadHistoryBatch {
   id?: string | number;
   fileName?: string;
   uploadedAt?: string;
+  buyerId?: string;
+  buyerEmail?: string;
   records?: Array<Record<string, unknown>> | null;
 }
 
