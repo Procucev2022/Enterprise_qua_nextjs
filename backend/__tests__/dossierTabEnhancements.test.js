@@ -798,14 +798,18 @@ describe('Dossier Tab Enhancements', () => {
       expect(matchedRfqs.length).toBe(1);
       expect(matchedRfqs[0].id).toBe('rfq-entities');
 
-      // 6. executePincodeTieredPublicVendorQuery: single arm stage (digits.length <= 3)
+      // 6. executePincodeTieredPublicVendorQuery: single arm stage (digits.length <= 3) & >85 params fallback
       const mockVendorRow = { id: 'v-pin-1', raw: { id: 'v-pin-1', pincode: '560001', majorCategory: 'Hardware' } };
       jest.spyOn(pool, 'query').mockResolvedValue({ rows: [mockVendorRow] });
 
-      const pinStage1 = await domainQueries.getPublicVendorsMatchingCategories(['Hardware'], { pincode: '56' });
+      const pinStage1 = await domainQueries.getPublicVendorsMatchingCategories(['Hardware'], 50, { pincode: '560' });
       expect(Array.isArray(pinStage1)).toBe(true);
 
-      // 7. getVendorByEmailFromDB: negative cache branches
+      const manyCats = Array.from({ length: 50 }, (_, i) => `Category_${i}`);
+      const pinFallback = await domainQueries.getPublicVendorsMatchingCategories(manyCats, 50, { pincode: '560001' });
+      expect(Array.isArray(pinFallback)).toBe(true);
+
+      // 7. getVendorByEmailFromDB: negative cache branches & corporateEmail fallback
       jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
       const nonExistent = await domainQueries.getVendorByEmailFromDB('nonexistent@vendor.test');
       expect(nonExistent).toBeNull();
@@ -813,6 +817,48 @@ describe('Dossier Tab Enhancements', () => {
       // Hit cached negative
       const cachedNonExistent = await domainQueries.getVendorByEmailFromDB('nonexistent@vendor.test', { fresh: false });
       expect(cachedNonExistent).toBeNull();
+
+      // corporateEmail fallback when primary misses
+      const d1Bridge = require('../src/db/d1Bridge');
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+      jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-corp-1', corporateEmail: 'corp@vendor.test' } }] });
+      const corpVendor = await domainQueries.getVendorByEmailFromDB('corp@vendor.test', { fresh: true });
+      expect(corpVendor?.id).toBe('v-corp-1');
+
+      // 8. getVendorsUploadedByBuyerFromDB: candidate email resolution and error handling
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB')
+        .mockResolvedValueOnce({ id: 'b-cand-1', organizationName: 'Cand Org' })
+        .mockRejectedValueOnce(new Error('Buyer account DB failure'));
+      jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+      const emailCandVendors = await domainQueries.getVendorsUploadedByBuyerFromDB('cand@buyer.com', 'Org Name', 50);
+      expect(emailCandVendors).toEqual([]);
+
+      // 9. getVendorsUploadedByBuyerFromDB: stale cache fallback on retryable error
+      const { queryCache } = require('../src/db/queryCache');
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(d1Bridge, 'isRetryableD1Error').mockReturnValueOnce(true);
+      jest.spyOn(queryCache, 'getStale').mockReturnValueOnce([{ id: 'v-stale-1', companyName: 'Stale Co' }]);
+
+      const staleResult = await domainQueries.getVendorsUploadedByBuyerFromDB('stale-buyer-id', null, 10);
+      expect(staleResult).toEqual([{ id: 'v-stale-1', companyName: 'Stale Co' }]);
+
+      // 10. getPublicVendorsByMinorCategoryFromDB: broad pattern query fallback
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ id: 'v-unrelated', raw: { id: 'v-unrelated', name: 'Other Co', majorCategory: 'Machinery' } }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'v-broad-1', raw: { id: 'v-broad-1', name: 'Centrifugal Pumps Inc', majorCategory: 'Machinery' } }] });
+      const broadVendors = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['centrifugal'], ['Machinery'], 10);
+      expect(Array.isArray(broadVendors)).toBe(true);
+
+      // 11. getVendorsPageFromDB: stale cache fallback on retryable error
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('D1 connection failure'));
+      jest.spyOn(d1Bridge, 'isRetryableD1Error').mockReturnValueOnce(true);
+      jest.spyOn(queryCache, 'getStale').mockReturnValueOnce({ rows: [], total: 0 });
+      const stalePage = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 });
+      expect(stalePage).toEqual({ rows: [], total: 0 });
     });
   });
 });

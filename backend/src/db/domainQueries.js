@@ -564,7 +564,14 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   // Set when the count query fails: the page is still returned, but the response must not be
   // cached (that would pin a wrong total for the cache TTL) and the total is only an estimate.
   let countFailed = false;
-  if (!skipCount) {
+  const isD1SearchWithoutCount = Boolean(
+    !skipCount &&
+    search &&
+    !String(search).includes('@') &&
+    !cleanPincode &&
+    (d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient())
+  );
+  if (!skipCount && !isD1SearchWithoutCount) {
     const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && cleanMinorTerms.length === 0 && !cleanPincode && !email && !state && !city);
     if (
       isUnfiltered &&
@@ -613,10 +620,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
-  const dataParams = [...params, effectiveLimit, effectiveOffset];
+  const queryLimit = isD1SearchWithoutCount ? effectiveLimit + 1 : effectiveLimit;
+  const dataParams = [...params, queryLimit, effectiveOffset];
   let dataResult;
   try {
-    const d1DataParams = d1BaseParams ? [...d1BaseParams, effectiveLimit, effectiveOffset] : null;
+    const d1DataParams = d1BaseParams ? [...d1BaseParams, queryLimit, effectiveOffset] : null;
     const d1LimitIdx = d1DataParams ? d1DataParams.length - 1 : dataParams.length - 1;
     const d1OffsetIdx = d1DataParams ? d1DataParams.length : dataParams.length;
     dataResult = await pool.query(
@@ -636,11 +644,18 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     if (staleResponse !== null) return staleResponse;
     throw err;
   }
-  const mappedRows = dataResult.rows.map((row) => {
+  const slicedRows = isD1SearchWithoutCount ? dataResult.rows.slice(0, effectiveLimit) : dataResult.rows;
+  if (isD1SearchWithoutCount) {
+    const hasMoreRows = dataResult.rows.length > effectiveLimit;
+    total = Number(effectiveOffset) + slicedRows.length + (hasMoreRows ? 1 : 0);
+  }
+  const mappedRows = slicedRows.map((row) => {
     const v = parseVendorRaw(row.raw);
-    if (row.created_at && !v.created_at) v.created_at = row.created_at;
-    if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-    if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+    if (v) {
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+    }
     return v;
   });
   const response = {
