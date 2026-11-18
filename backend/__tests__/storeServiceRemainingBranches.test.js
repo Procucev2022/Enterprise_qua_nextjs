@@ -399,6 +399,24 @@ describe('Store Service — remaining branch coverage', () => {
 
       expect(res.importedCount).toBe(1);
     });
+
+    test('skips duplicate emails within the same vendorRecords batch cleanly', async () => {
+      const res = await storeService.processHistoricalPurchaseData('FY2026-batch-dup', [
+        { companyName: 'Unique Batch Vendor', email: 'dupbatch@historical.com' },
+        { companyName: 'Duplicate Batch Vendor', email: 'DUPBATCH@historical.com' },
+      ]);
+
+      expect(res.importedCount).toBe(1);
+      expect(res.skippedCount).toBe(1);
+      expect(res.skipped).toEqual([
+        expect.objectContaining({
+          row: 2,
+          vendorName: 'Duplicate Batch Vendor',
+          email: 'DUPBATCH@historical.com',
+          reason: expect.stringContaining('dupbatch@historical.com'),
+        }),
+      ]);
+    });
   });
 
   // Every fire-and-forget _persistX/_removeX/_setActiveX helper attaches its
@@ -2944,5 +2962,179 @@ describe('dispatchPendingQuoteNotifications without a buyer record', () => {
     expect(dispatched).toHaveLength(1);
     expect(sentToBuyer).toHaveLength(1);
     expect(sentToBuyer[0][1].recipientName).toBeNull();
+  });
+});
+
+describe('_sendWithFeedOutcome direct channel followUpData updates and _reconcileRFQFollowUpStats vendor normalization', () => {
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('_sendWithFeedOutcome updates followUpData for direct sms/whatsapp sends and skips empty/failed outcomes', async () => {
+    const rfq = {
+      id: 'rfq-direct-fup-1',
+      rfqNumber: 'RFQ-DIRECT-FUP-1',
+      title: 'Direct Channel Follow-Up Tracking',
+      category: 'Mechanical',
+      status: 'In Evaluation',
+      sourcingMode: 'mode_1',
+      followUpData: {
+        rfqNumber: 'RFQ-DIRECT-FUP-1',
+        totalInvited: 2,
+        respondedCount: 0,
+        callStats: { total: 0, connected: 0 },
+        whatsappStats: { total: 2, sent: 0, delivered: 0, read: 0, replied: 0 },
+        smsStats: { total: 2, sent: 0, delivered: 0, clicked: 0 },
+        emailStats: { total: 2, sent24h: 0, delivered: 0, opened: 0 },
+        vendors: [{ id: 'v-dir-1', name: 'Direct SMS Vendor', email: 'dir1@vendor.test' }],
+      },
+    };
+    storeService.rfqs.push(rfq);
+    try {
+      await storeService._sendWithFeedOutcome(
+        Promise.resolve({ success: true, messageId: 'sms-dir-1' }),
+        'SMS dispatch error',
+        {},
+        {
+          channel: 'sms',
+          vendor: { id: 'v-dir-1', name: 'Direct SMS Vendor', email: 'dir1@vendor.test' },
+          rfqNumber: rfq.rfqNumber,
+          buyerAccountId: null,
+        }
+      );
+
+      await storeService._sendWithFeedOutcome(
+        Promise.resolve({ success: true, messageId: 'wa-dir-2' }),
+        'WhatsApp dispatch error',
+        {},
+        {
+          channel: 'whatsapp',
+          vendor: { id: 'v-dir-2', name: 'Direct WA Vendor', email: 'dir2@vendor.test' },
+          rfqNumber: rfq.rfqNumber,
+          buyerAccountId: null,
+        }
+      );
+
+      // Failed/skipped outcome and missing followUpData should be no-ops
+      await storeService._sendWithFeedOutcome(
+        Promise.resolve({ success: false, error: 'Blocked' }),
+        'SMS dispatch error',
+        {},
+        { channel: 'sms', vendor: { id: 'v-dir-1', name: 'Direct SMS Vendor' }, rfqNumber: rfq.rfqNumber, buyerAccountId: null }
+      );
+      await storeService._sendWithFeedOutcome(
+        Promise.resolve({ sent: true }),
+        'Email dispatch',
+        {},
+        { channel: 'email', vendor: { name: 'Email Only' }, rfqNumber: rfq.rfqNumber, buyerAccountId: null }
+      );
+      await storeService._sendWithFeedOutcome(
+        Promise.resolve({ success: true }),
+        'Missing RFQ no-op',
+        {},
+        { channel: 'sms', vendor: { id: 'v-none' }, rfqNumber: 'RFQ-DOES-NOT-EXIST', buyerAccountId: null }
+      );
+
+      await new Promise((resolve) => setImmediate(resolve));
+
+      const updatedRfq = storeService.getRFQById(rfq.rfqNumber);
+      expect(updatedRfq.followUpData.smsStats.sent).toBeGreaterThanOrEqual(1);
+      expect(updatedRfq.followUpData.smsStats.delivered).toBe(0);
+      expect(updatedRfq.followUpData.vendors[0].vendorName).toBe('Direct SMS Vendor');
+      expect(updatedRfq.followUpData.vendors[0].sms.status).toBe('sent');
+      expect(updatedRfq.followUpData.whatsappStats.sent).toBeGreaterThanOrEqual(1);
+      expect(updatedRfq.followUpData.whatsappStats.delivered).toBe(0);
+      const secondVendor = updatedRfq.followUpData.vendors.find((v) => v.vendorId === 'v-dir-2');
+      expect(secondVendor).toBeDefined();
+      expect(secondVendor.whatsapp.status).toBe('sent');
+    } finally {
+      const idx = storeService.rfqs.indexOf(rfq);
+      if (idx >= 0) storeService.rfqs.splice(idx, 1);
+    }
+  });
+
+  test('_reconcileRFQFollowUpStats normalizes vendor stubs and reconciles sent/replied/sent24h without altering delivered', () => {
+    const rawRfq = {
+      id: 'rfq-rec-norm-1',
+      rfqNumber: 'RFQ-REC-NORM-1',
+      status: 'In Evaluation',
+      followUpData: {
+        totalInvited: 2,
+        respondedCount: 0,
+        smsStats: { total: 2, sent: 0, delivered: 0 },
+        whatsappStats: { total: 2, sent: 0, delivered: 0, replied: 0 },
+        emailStats: { total: 2, sent24h: 0, delivered: 0 },
+        vendors: [
+          {
+            id: 'v-norm-1',
+            name: 'Normalized Co A',
+            bidStatus: 'Submitted',
+            sms: { status: 'sent', lastAttempt: '2026-11-17T10:00:00Z' },
+            whatsapp: { status: 'replied', lastAttempt: '2026-11-17T10:01:00Z' },
+            email24h: { is24hReminderSent: true, status: 'sent', lastAttempt: '2026-11-17T10:02:00Z' },
+          },
+          {
+            id: 'v-norm-2',
+            vendorName: '',
+            email: 'fallback@vendor.test',
+            emailSent: true,
+          },
+        ],
+      },
+    };
+
+    const reconciled = storeService._reconcileRFQFollowUpStats(rawRfq);
+    expect(reconciled.followUpData.vendors[0]).toMatchObject({
+      vendorId: 'v-norm-1',
+      vendorName: 'Normalized Co A',
+      overallStatus: 'Responded',
+      bidStatus: 'Submitted',
+    });
+    expect(reconciled.followUpData.vendors[1]).toMatchObject({
+      vendorId: 'v-norm-2',
+      overallStatus: 'Pending',
+      bidStatus: 'Pending',
+    });
+    expect(reconciled.followUpData.smsStats.sent).toBe(1);
+    expect(reconciled.followUpData.smsStats.delivered).toBe(0);
+    expect(reconciled.followUpData.whatsappStats.sent).toBe(1);
+    expect(reconciled.followUpData.whatsappStats.replied).toBe(1);
+    expect(reconciled.followUpData.whatsappStats.delivered).toBe(0);
+    expect(reconciled.followUpData.emailStats.sent24h).toBe(1);
+    expect(reconciled.followUpData.emailStats.delivered).toBe(0);
+  });
+
+  test('_dispatchChannelWave caps concurrent outbound channel fetches, handles empty/errors, and extended 48h window', async () => {
+    const { CHANNEL_DISPATCH_CONCURRENCY } = require('../src/config/constants');
+    expect(await storeService._dispatchChannelWave([])).toEqual([]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const tasks = Array.from({ length: 10 }, (_, idx) => () => ({
+      promise: (async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        if (idx === 3) throw new Error('simulated sms abort');
+        return { sent: true, messageId: `msg-${idx}` };
+      })(),
+      errorMessage: `failed task ${idx}`,
+      metadata: { idx },
+    }));
+    await storeService._dispatchChannelWave(tasks);
+    expect(maxInFlight).toBeLessThanOrEqual(CHANNEL_DISPATCH_CONCURRENCY);
+
+    // Promoted master vendor lookup via v-master-<masterRecordId>
+    const promoted = { id: 'v-store-master-1', masterRecordId: 'vmr-store-88', name: 'Master Promoted' };
+    storeService.vendors = [promoted];
+    expect(storeService.getVendorById('v-master-vmr-store-88', 'all')).toEqual(promoted);
+
+    // Extended closingDeadline keeps 48h window active beyond initial 48h from createdAt
+    const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+    const futureClosing = new Date(Date.now() + 10 * 3600 * 1000).toISOString();
+    const extendedRfq = { sourcingMode: 'mode_1', status: 'In Evaluation', createdAt: fiftyHoursAgo, closingDeadline: futureClosing };
+    expect(storeService.isWithin48HourWindow(extendedRfq)).toBe(true);
+    expect(storeService.getRemaining48HourMs(extendedRfq)).toBeGreaterThan(0);
   });
 });

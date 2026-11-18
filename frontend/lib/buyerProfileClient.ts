@@ -117,7 +117,8 @@ export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Pro
 
   if (!res.ok || !body?.success || !body.data) {
     const { error } = describeFailure(res, body);
-    logger.error('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       status: res.status,
@@ -220,7 +221,8 @@ export async function fetchCategoryTaxonomy(
 
   if (!res.ok || !body?.success || !Array.isArray(body.data)) {
     const { error } = describeFailure(res, body);
-    logger.error('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       data: [],

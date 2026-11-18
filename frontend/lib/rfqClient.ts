@@ -3,6 +3,7 @@ import { logger } from './logger';
 import { resolveAttachmentMimeType } from './constants';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { getPendingVendorFetchSignal, withVendorFetchSignal } from './vendorFetchSignal';
+import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
   ExtractedEntity,
   FetchAllVendorsOptions,
@@ -1178,7 +1179,9 @@ export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
     }
     return { success: true, data: body.data };
   } catch (err: unknown) {
-    logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    if (!isAbortOrPageUnloadError(err)) {
+      logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    }
     return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching RFQ credits.') };
   }
 }

@@ -1840,4 +1840,157 @@ describe('Modals.tsx', () => {
       expect(screen.getByText('No supplier quotes found')).toBeInTheDocument();
     });
   });
+
+  describe('RFQFollowUpDeepDiveModal live telemetry & vendor normalization', () => {
+    it('displays sent SMS, WA delivered/replied, 24h Email escalation counts, and falls back to live store RFQs & vendor names', () => {
+      const prevImpl = (storeModule.useApp as jest.Mock).getMockImplementation();
+      const baseCtx = (storeModule.useApp as jest.Mock)() || {};
+      const staleRfq: RFQItem = {
+        id: 'rfq-deepdive-live',
+        rfqNumber: 'RFQ261711300896',
+        title: 'Live DeepDive Count Sync',
+        category: 'Logistics',
+        createdAt: '2026-11-17T08:00:00.000Z',
+        deadline: '2026-11-26',
+        targetDeliveryDate: '2026-11-26',
+        budget: 100000,
+        quotes: [],
+        chasingActive: true,
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        quotesCount: 0,
+        source: 'web_portal',
+        extractedEntities: [],
+        assignedVendors: [{ id: 'v-raw-1', name: 'Bharat Freight Lines' }],
+        followUpData: {
+          rfqNumber: 'RFQ261711300896',
+          autoChasingEnabled: true,
+          totalInvited: 125,
+          respondedCount: 0,
+          callStats: { total: 0, connected: 0, avgDuration: '0s' },
+          whatsappStats: { total: 125, sent: 0, delivered: 0, read: 0, replied: 0 },
+          smsStats: { total: 125, sent: 0, delivered: 0, clicked: 0 },
+          emailStats: { total: 125, sent24h: 0, delivered: 0, opened: 0 },
+          vendors: [],
+        },
+      };
+
+      const liveRfq: RFQItem = {
+        ...staleRfq,
+        followUpData: {
+          rfqNumber: 'RFQ261711300896',
+          autoChasingEnabled: true,
+          totalInvited: 125,
+          respondedCount: 0,
+          callStats: { total: 0, connected: 0, avgDuration: '0s' },
+          whatsappStats: { total: 125, sent: 40, delivered: 0, read: 10, replied: 0 },
+          smsStats: { total: 125, sent: 125, delivered: 0, clicked: 0 },
+          emailStats: { total: 125, sent24h: 12, delivered: 0, opened: 0 },
+          vendors: [
+            {
+              id: 'v-raw-1',
+              name: 'Bharat Freight Lines',
+              vendorCategory: 'Buyer Vendors',
+              lastInteraction: '',
+              call: { status: 'not_dispatched', lastAttempt: '' },
+              whatsapp: { status: 'queued', lastAttempt: '' },
+              sms: { status: 'sent', lastAttempt: '2026-11-17T10:05:22.239Z' },
+              email24h: { is24hReminderSent: true, status: 'sent', lastAttempt: '2026-11-17T11:00:00.000Z' },
+            } as unknown as NonNullable<RFQItem['followUpData']>['vendors'][number],
+          ],
+        },
+      };
+
+      try {
+        (storeModule.useApp as jest.Mock).mockReturnValue({
+          ...baseCtx,
+          rfqs: [liveRfq],
+          isChasingActive: true,
+          toggleChasing: jest.fn(),
+        });
+
+        render(
+          <RFQFollowUpDeepDiveModal isOpen={true} onClose={jest.fn()} rfq={staleRfq} />
+        );
+
+        expect(screen.getByText(UI_STRINGS.actions.vendorFollowUpDetails)).toBeInTheDocument();
+        expect(screen.getByText('Bharat Freight Lines')).toBeInTheDocument();
+        expect(screen.getByText('125 / 125')).toBeInTheDocument();
+        expect(screen.getByText('40 Delivered')).toBeInTheDocument();
+        expect(screen.getByText('12 / 125')).toBeInTheDocument();
+        expect(screen.getByText('✉️ Dispatched')).toBeInTheDocument();
+      } finally {
+        if (prevImpl) {
+          (storeModule.useApp as jest.Mock).mockImplementation(prevImpl);
+        } else {
+          (storeModule.useApp as jest.Mock).mockReturnValue(baseCtx);
+        }
+      }
+    });
+  });
+
+  describe('SupplierQuotesModal confidentiality sealing', () => {
+    it('omits quotations from sealed or V0 RFQs while showing unsealed quotes', () => {
+      const sealedRfq: RFQItem = {
+        id: 'rfq-modal-sealed',
+        rfqNumber: 'RFQ-MODAL-SEALED',
+        title: 'Sealed Modal Bid',
+        category: 'IT',
+        createdAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+        targetDeliveryDate: '2026-12-20',
+        budget: 50000,
+        quotes: [
+          {
+            vendorId: 'v-hidden',
+            vendorName: 'Hidden Modal Supplier',
+            vendorCategory: 'Client List',
+            unitPrice: 12000,
+            totalPrice: 12000,
+            leadTimeDays: 7,
+            aiMatchScore: 91,
+            isBestPrice: true,
+            warrantyYears: 1,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: '',
+          },
+        ],
+        chasingActive: false,
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        quotesCount: 1,
+        source: 'web_portal',
+        extractedEntities: [],
+      };
+      const v0Rfq: RFQItem = {
+        ...sealedRfq,
+        id: 'rfq-modal-v0',
+        rfqNumber: 'RFQ-MODAL-V0',
+        sourcingMode: 'mode_0',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        quotes: [{ ...sealedRfq.quotes[0], vendorName: 'V0 Hidden Supplier' }],
+      };
+      const closedRfq: RFQItem = {
+        ...sealedRfq,
+        id: 'rfq-modal-closed',
+        rfqNumber: 'RFQ-MODAL-CLOSED',
+        status: 'Closed',
+        quotes: [{ ...sealedRfq.quotes[0], vendorName: 'Unsealed Closed Supplier' }],
+      };
+
+      render(
+        <SupplierQuotesModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqs={[sealedRfq, v0Rfq, closedRfq]}
+          onNavigateToMatrix={jest.fn()}
+          onOpenDeepDive={jest.fn()}
+        />
+      );
+
+      expect(screen.getByText('Unsealed Closed Supplier')).toBeInTheDocument();
+      expect(screen.queryByText('Hidden Modal Supplier')).not.toBeInTheDocument();
+      expect(screen.queryByText('V0 Hidden Supplier')).not.toBeInTheDocument();
+    });
+  });
 });

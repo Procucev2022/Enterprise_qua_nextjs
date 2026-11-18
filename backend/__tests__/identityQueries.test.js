@@ -1182,6 +1182,7 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
       expect(orgUuid).toBe('existing-org-uuid');
       expect(querySpy.mock.calls[1][0]).toContain('update organization');
+      expect(querySpy.mock.calls[1][0]).toContain('pincode = case');
     });
   });
 });

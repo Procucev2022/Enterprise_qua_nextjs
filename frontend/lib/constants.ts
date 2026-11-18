@@ -771,6 +771,12 @@ export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
   admin: '/admin/infra-control',
 };
 
+/** Self-service profile routes exposed in the header dropdown for buyer and vendor roles. */
+export const ROLE_PROFILE_ROUTES: Partial<Record<UserRole, string>> = {
+  buyer: '/buyer/profile',
+  vendor: '/vendor/vendor-profile',
+};
+
 /** Path of the sign-in screen. */
 export const LOGIN_ROUTE = '/login';
 
@@ -1025,6 +1031,58 @@ export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDea
   const created = parseRfqTimestamp(rfq.createdAt);
   if (created === null) return null;
   return new Date(created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR).toISOString();
+}
+
+/**
+ * Whether an RFQ has reached a concluded state (Closed, PO Generated, PO finalised, or Expired).
+ */
+export function isRfqConcluded(
+  rfq?: Partial<Pick<RFQItem, 'status' | 'poFinalised' | 'poNumber'>> | null
+): boolean {
+  if (!rfq) return false;
+  return (
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    Boolean(rfq.poFinalised) ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired'
+  );
+}
+
+/**
+ * Resolves the ISO timestamp when buyer quotations unseal, honoring extended closing deadlines.
+ */
+export function resolveQuotesUnsealIso(
+  rfq?: Partial<Pick<RFQItem, 'quotesHiddenUntil' | 'closingDeadline' | 'createdAt'>> | null
+): string | null {
+  if (!rfq) return null;
+  const hiddenUntil = parseRfqTimestamp(rfq.quotesHiddenUntil);
+  if (hiddenUntil !== null) return new Date(hiddenUntil).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return windowEnd > Date.now() ? new Date(windowEnd).toISOString() : null;
+}
+
+/**
+ * Whether received quotations must remain sealed from the buyer view (before RFQ closure or 48h/deadline expiration).
+ */
+export function isBuyerQuotesSealed(
+  rfq?: Partial<Pick<RFQItem, 'sourcingMode' | 'status' | 'poFinalised' | 'poNumber' | 'createdAt' | 'closingDeadline' | 'quotesHidden'>> | null,
+  role?: UserRole | string | null
+): boolean {
+  if (!rfq) return false;
+  if (role && role !== 'buyer') return false;
+  const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+  if (mode === RFQ_MODES.MODE_0 || mode === 'v0' || mode === 'version_0') return false;
+  if (isRfqConcluded(rfq)) return false;
+
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return Boolean(rfq.quotesHidden) || (windowEnd > 0 && Date.now() < windowEnd);
 }
 
 /**
@@ -1780,6 +1838,21 @@ export function normalizeVendorCategoryList(values: unknown): string[] {
   return cleaned;
 }
 
+export const VENDOR_ACTIVE_STATUSES = {
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+} as const;
+
+export function isVendorInactive(v: Partial<VendorEntry> | null | undefined): boolean {
+  if (!v || typeof v !== 'object') return false;
+  if (v.isActive === false || v.disabled === true) return true;
+  return String(v.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+export function isVendorActive(v: Partial<VendorEntry> | null | undefined): boolean {
+  return Boolean(v) && !isVendorInactive(v);
+}
+
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
 export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
   if (!v) return false;
@@ -1849,24 +1922,10 @@ export function removeVendorsFromUploadHistoryInStorage(
     const updatedBatches = (batches as VendorUploadHistoryBatch[])
       .map((batch, batchIdx) => {
         if (!Array.isArray(batch?.records)) return batch;
-        const filteredRecords = batch.records.filter((rec: Record<string, unknown>, recIdx: number) => {
-          const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
-          const recEmail = String(rec.email || '').trim().toLowerCase();
-          const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
-          const recCode = String(rec.vendorCode || '').trim().toLowerCase();
-
-          const syntheticId1 = `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`.toLowerCase();
-          const syntheticId2 = `v-hist-local-${batchIdx}-${recIdx}`.toLowerCase();
-          const masterId = rec.id ? `v-master-${String(rec.id)}`.toLowerCase() : '';
-
-          if (recId && lookupSet.has(recId)) return false;
-          if (recEmail && lookupSet.has(recEmail)) return false;
-          if (recName && lookupSet.has(recName)) return false;
-          if (recCode && lookupSet.has(recCode)) return false;
-          if (lookupSet.has(syntheticId1) || lookupSet.has(syntheticId2)) return false;
-          if (masterId && lookupSet.has(masterId)) return false;
-          return true;
-        });
+        const filteredRecords = batch.records.filter(
+          (rec: Record<string, unknown>, recIdx: number) =>
+            !matchesUploadHistoryRecord(rec, batch.id, batchIdx, recIdx, lookupSet)
+        );
 
         return {
           ...batch,
@@ -1892,9 +1951,36 @@ export function removeVendorsFromUploadHistoryInStorage(
   }
 }
 
+/** Shared matcher identifying a cached upload-history vendor record by synthetic ID, DB ID, email, name, or code. */
+function matchesUploadHistoryRecord(
+  rec: Record<string, unknown>,
+  batchId: string | number | undefined,
+  batchIdx: number,
+  recIdx: number,
+  lookupSet: Set<string>
+): boolean {
+  const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+  const recEmail = String(rec.email || '').trim().toLowerCase();
+  const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+  const recCode = String(rec.vendorCode || '').trim().toLowerCase();
+  const syntheticId1 = `v-hist-local-${String(batchId ?? batchIdx)}-${recIdx}`.toLowerCase();
+  const syntheticId2 = `v-hist-local-${batchIdx}-${recIdx}`.toLowerCase();
+  const masterId = rec.id ? `v-master-${String(rec.id)}`.toLowerCase() : '';
+
+  return Boolean(
+    (recId && lookupSet.has(recId)) ||
+    (recEmail && lookupSet.has(recEmail)) ||
+    (recName && lookupSet.has(recName)) ||
+    (recCode && lookupSet.has(recCode)) ||
+    lookupSet.has(syntheticId1) ||
+    lookupSet.has(syntheticId2) ||
+    (masterId && lookupSet.has(masterId))
+  );
+}
+
 /**
  * Updates matching vendor records inside `procucev_vendor_upload_history` in browser
- * localStorage after a buyer edits or promotes a synthetic fallback vendor.
+ * localStorage after a buyer edits, disables/reactivates, or promotes a synthetic fallback vendor.
  */
 export function updateVendorInUploadHistoryStorage(
   vendorIdentifiers: readonly string[],
@@ -1910,6 +1996,11 @@ export function updateVendorInUploadHistoryStorage(
     state?: string;
     pincode?: string;
     location?: string;
+    isActive?: boolean;
+    disabled?: boolean;
+    status?: string;
+    disabledAt?: string | null;
+    previousStatus?: string | null;
   }
 ): VendorUploadHistoryBatch[] {
   if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
@@ -1927,19 +2018,10 @@ export function updateVendorInUploadHistoryStorage(
     if (!Array.isArray(batches)) return [];
 
     let changed = false;
-    const updatedBatches = (batches as VendorUploadHistoryBatch[]).map((batch) => {
+    const updatedBatches = (batches as VendorUploadHistoryBatch[]).map((batch, batchIdx) => {
       if (!Array.isArray(batch?.records)) return batch;
       const nextRecords = batch.records.map((rec: Record<string, unknown>, recIdx: number) => {
-        const syntheticId = `v-hist-local-${String(batch.id || '')}-${recIdx}`.toLowerCase();
-        const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
-        const recEmail = String(rec.email || '').trim().toLowerCase();
-        const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
-        const matches =
-          lookupSet.has(syntheticId) ||
-          (recId && lookupSet.has(recId)) ||
-          (recEmail && lookupSet.has(recEmail)) ||
-          (recName && lookupSet.has(recName));
-        if (!matches) return rec;
+        if (!matchesUploadHistoryRecord(rec, batch.id, batchIdx, recIdx, lookupSet)) return rec;
         changed = true;
         return {
           ...rec,
@@ -1961,6 +2043,11 @@ export function updateVendorInUploadHistoryStorage(
           ...(updates.state !== undefined ? { state: updates.state } : {}),
           ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
           ...(updates.location !== undefined ? { location: updates.location } : {}),
+          ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {}),
+          ...(updates.disabled !== undefined ? { disabled: updates.disabled } : {}),
+          ...(updates.status !== undefined ? { status: updates.status } : {}),
+          ...(updates.disabledAt !== undefined ? { disabledAt: updates.disabledAt } : {}),
+          ...(updates.previousStatus !== undefined ? { previousStatus: updates.previousStatus } : {}),
         };
       });
       return { ...batch, records: nextRecords };
@@ -1979,17 +2066,42 @@ export function updateVendorInUploadHistoryStorage(
 }
 
 /**
+ * Non-destructively marks matching vendor records active or inactive in local browser upload history
+ * so upload history stays intact while inactive vendors remain disabled across reloads.
+ */
+export function setVendorsActiveStateInStorage(
+  vendorIdentifiers: readonly string[],
+  isActive: boolean
+): VendorUploadHistoryBatch[] {
+  const active = Boolean(isActive);
+  return updateVendorInUploadHistoryStorage(vendorIdentifiers, {
+    isActive: active,
+    disabled: !active,
+    status: active ? 'REGISTERED / NOT EVALUATED' : VENDOR_ACTIVE_STATUSES.INACTIVE,
+    disabledAt: active ? null : new Date().toISOString(),
+  });
+}
+
+/**
  * Merges buyer vendor upload batches stored in localStorage with store buyerVendors,
  * deduplicating by email and vendor name so Vendor Directory and Evaluation Summary stay consistent.
  */
 export function reconcileBuyerVendorsWithUploadHistory(
   buyerVendors: readonly VendorEntry[],
   uploadHistory: readonly VendorUploadHistoryBatch[],
-  activeBuyerAccount?: { id?: string; organizationName?: string } | null
+  activeBuyerAccount?: {
+    id?: string;
+    organizationName?: string;
+    corporateEmail?: string;
+  } | null
 ): VendorEntry[] {
   if (!Array.isArray(uploadHistory) || uploadHistory.length === 0) {
     return [...buyerVendors];
   }
+
+  const activeBuyerKeys = [activeBuyerAccount?.id, activeBuyerAccount?.corporateEmail]
+    .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+    .map((val) => val.trim().toLowerCase());
 
   const seenEmails = new Set(
     buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
@@ -2000,6 +2112,17 @@ export function reconcileBuyerVendorsWithUploadHistory(
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
+    const batchOwnerKeys = [batch?.buyerId, batch?.buyerEmail]
+      .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      .map((val) => val.trim().toLowerCase());
+    if (
+      activeBuyerKeys.length > 0 &&
+      batchOwnerKeys.length > 0 &&
+      !batchOwnerKeys.some((key) => activeBuyerKeys.includes(key))
+    ) {
+      return;
+    }
+
     const records: ReadonlyArray<Record<string, unknown>> = Array.isArray(batch?.records) ? batch.records : [];
     records.forEach((rec: Record<string, unknown>, recIdx: number) => {
       const recStatus = String(rec.status || '').toUpperCase();
@@ -2037,6 +2160,11 @@ export function reconcileBuyerVendorsWithUploadHistory(
           ? numericRating
           : 0;
 
+      const isRecInactive =
+        rec.isActive === false ||
+        rec.disabled === true ||
+        String(rec.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+
       extras.push({
         id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
         name: rawName || rawEmail,
@@ -2048,7 +2176,8 @@ export function reconcileBuyerVendorsWithUploadHistory(
         location: loc.location || [city, state].filter(Boolean).join(', '),
         rating,
         source: 'buyer_uploaded',
-        status: 'REGISTERED / NOT EVALUATED',
+        status: isRecInactive ? VENDOR_ACTIVE_STATUSES.INACTIVE : 'REGISTERED / NOT EVALUATED',
+        ...(isRecInactive ? { isActive: false, disabled: true, disabledAt: typeof rec.disabledAt === 'string' ? rec.disabledAt : null } : {}),
         evaluated: false,
         hasRecord: false,
         addedByBuyerCompany: activeBuyerAccount?.organizationName,

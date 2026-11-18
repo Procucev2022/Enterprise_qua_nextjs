@@ -1436,5 +1436,92 @@ describe('_updateLiveFollowUpStats coverage', () => {
         process.env.NODE_ENV = previousNodeEnv;
       }
     });
+
+    test('matches vendors by email or creates new vendor records and syncs storeService.rfqs on dispatch', async () => {
+      const storeService = require('../src/services/storeService');
+      const liveRfq = {
+        rfqNumber: 'RFQ-SYNC-MEM',
+        followUpData: {
+          vendors: [
+            { id: 'legacy-1', email: 'match@vendor.test', name: '' },
+          ],
+        },
+      };
+      const getRfqSpy = jest.spyOn(storeService, 'getRFQById').mockReturnValue(liveRfq);
+
+      // Matches existing vendor via email when vendorId/id differ, and backfills name + email24h
+      scheduler._updateLiveFollowUpStats('RFQ-SYNC-MEM', 'email', {
+        id: 'other-id',
+        name: 'Matched By Email Co',
+        email: 'match@vendor.test',
+      });
+      expect(liveRfq.followUpData.vendors[0].vendorName).toBe('Matched By Email Co');
+      expect(liveRfq.followUpData.vendors[0].email24h).toMatchObject({
+        is24hReminderSent: true,
+        status: 'sent',
+      });
+
+      // Creates brand-new vendor record when not found in fup.vendors
+      scheduler._updateLiveFollowUpStats('RFQ-SYNC-MEM', 'email', {
+        id: 'new-v-2',
+        name: 'Newly Discovered Co',
+        email: 'new@vendor.test',
+      });
+      expect(liveRfq.followUpData.vendors).toHaveLength(2);
+      expect(liveRfq.followUpData.vendors[1]).toMatchObject({
+        vendorId: 'new-v-2',
+        vendorName: 'Newly Discovered Co',
+        email24h: expect.objectContaining({ is24hReminderSent: true, status: 'sent' }),
+      });
+
+      // Second email update preserves existing email24h object spread path
+      scheduler._updateLiveFollowUpStats('RFQ-SYNC-MEM', 'email', {
+        id: 'new-v-2',
+        name: 'Newly Discovered Co',
+        email: 'new@vendor.test',
+      });
+      expect(liveRfq.followUpData.emailStats.sent24h).toBe(3);
+      getRfqSpy.mockRestore();
+
+      // Production dispatchDueChaserJobs syncs updated followUpData onto matching storeService.rfqs item
+      const previousNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'production';
+      const origRfqs = storeService.rfqs;
+      const inMemRfq = {
+        id: 'mem-1',
+        rfqNumber: 'RFQ-MEM-SYNC-1',
+        title: 'In-Memory Sync RFQ',
+        followUpData: { vendors: [] },
+      };
+      storeService.rfqs = [inMemRfq];
+      try {
+        jest.spyOn(domainQueries, 'claimDueChaserJobsFromDB').mockResolvedValue([
+          {
+            id: 'job-mem-sms-1',
+            rfq_number: 'RFQ-MEM-SYNC-1',
+            channel: 'sms',
+            vendor_id: 'v-mem-1',
+            vendor_name: 'Mem SMS Co',
+            vendor_phone: '9911223344',
+            attempts: 1,
+          },
+        ]);
+        jest.spyOn(domainQueries, 'getRFQByNumberFromDB').mockResolvedValue({
+          rfqNumber: 'RFQ-MEM-SYNC-1',
+          title: 'In-Memory Sync RFQ',
+          followUpData: { vendors: [], smsStats: { total: 0, sent: 0, delivered: 0 } },
+        });
+        jest.spyOn(smsService, 'sendRFQChaserSms').mockResolvedValue({ success: true, messageId: 'sms-mem-1' });
+        jest.spyOn(domainQueries, 'markChaserJobsFiredInDB').mockResolvedValue(1);
+        jest.spyOn(domainQueries, 'upsertRFQInDB').mockResolvedValue({});
+
+        const dispatchRes = await scheduler.dispatchDueChaserJobs(5);
+        expect(dispatchRes).toEqual({ claimed: 1, sent: 1, failed: 0, skipped: 0 });
+        expect(storeService.rfqs[0].followUpData.smsStats.sent).toBeGreaterThanOrEqual(1);
+      } finally {
+        storeService.rfqs = origRfqs;
+        process.env.NODE_ENV = previousNodeEnv;
+      }
+    });
   });
 });

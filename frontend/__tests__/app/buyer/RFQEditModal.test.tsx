@@ -560,6 +560,14 @@ describe('RFQEditModal: commercial and delivery', () => {
     expect(Array.from(select.options).map((o) => o.value)).toContain('PO Generated');
   });
 
+  it('locks status editing when the RFQ is already Closed', () => {
+    renderEdit(buildRFQ({ status: 'Closed' }));
+
+    const select = screen.getByLabelText(EDIT.statusLabel) as HTMLSelectElement;
+    expect(select).toBeDisabled();
+    expect(screen.getByText(EDIT.closedStatusLockedNote)).toBeInTheDocument();
+  });
+
   it('sends each changed commercial field', async () => {
     renderEdit();
 

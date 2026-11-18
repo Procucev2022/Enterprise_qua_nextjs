@@ -416,4 +416,40 @@ describe('mailerService delivery routing', () => {
     expect(secondRun.result).toMatchObject({ sent: true, messageId: 'id-healthy-buyer-token' });
     expect(secondRun.sends.map((s) => s.token)).toEqual(['healthy-buyer-token']);
   });
+
+  test('vendor channel borrows quoteAlert when vendor and buyer fail and filters invalid recipient URLs', async () => {
+    const { mailer, sends } = loadMailer(
+      {
+        VENDOR_GMAIL_REFRESH_TOKEN: 'vendor',
+        GMAIL_REFRESH_TOKEN: 'buyer',
+        QUOTE_ALERT_GMAIL_REFRESH_TOKEN: 'quote',
+        QUOTE_ALERT_GMAIL_SENDER_EMAIL: 'alerts@procucev.com',
+        VENDOR_EMAIL_GATEWAY_ADDRESS: 'quotes@procucev.com',
+      },
+      { vendor: rateLimited, buyer: rateLimited }
+    );
+
+    expect(mailer.getGmailProviderKey('buyer')).toMatch(/^gmail:buyer:/);
+    expect(mailer.getGmailProviderKey('nonexistent')).toBeNull();
+
+    const skipped = await mailer.sendVendorCategoryMismatchEmail('http://www.google.co.in/maps/@17.038,82.123', {
+      rfqNumber: 'RFQ-URL-SKIP',
+      rfqCategory: 'IT',
+    });
+    expect(skipped).toEqual({ sent: false, success: false, status: 'skipped', reason: 'invalid recipient email' });
+    expect(sends).toHaveLength(0);
+
+    const res = await mailer.deliverVendor(
+      {
+        to: ['http://www.google.co.in/maps/@17.038', 'valid.vendor@example.com'],
+        subject: 'Category Update',
+        html: '<p>Update</p>',
+      },
+      'vendor category mismatch notification email'
+    );
+    expect(res).toEqual({ sent: true, success: true, status: 'sent', messageId: 'id-quote' });
+    expect(sends.map((s) => s.token)).toEqual(['vendor', 'buyer', 'quote']);
+    expect(sends[2].raw).toContain('To: valid.vendor@example.com');
+    expect(sends[2].raw).toContain('Reply-To: quotes@procucev.com');
+  });
 });

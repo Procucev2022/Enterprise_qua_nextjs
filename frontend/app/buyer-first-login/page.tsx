@@ -24,6 +24,7 @@ import {
   sanitize10DigitMobile,
   INDIAN_PINCODE_PATTERN,
   GSTIN_PATTERN,
+  derivePanFromGstin,
   validatePincode,
   PINCODE_PATTERN,
   isDummyPincode,
@@ -313,7 +314,7 @@ function BuyerFirstLoginContent() {
       return;
     }
 
-    const cleanPan = pan.trim() || undefined;
+    const cleanPan = pan.trim().toUpperCase() || derivePanFromGstin(cleanGstin) || undefined;
 
     setSaving(true);
     try {

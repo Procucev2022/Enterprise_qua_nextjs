@@ -22,6 +22,8 @@ import {
   formatFileSize,
   formatIndianDate,
   formatIndianDateTime,
+  isBuyerQuotesSealed,
+  resolveQuotesUnsealIso,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
@@ -539,6 +541,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
   const [isClosing, setIsClosing] = useState(false);
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   // The day count typed in the extension dialog, and its parsed value (null while blank, fractional or out of range).
   const [extensionDaysInput, setExtensionDaysInput] = useState<string>(String(DEFAULT_EXTENSION_DAYS));
@@ -584,6 +587,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     activeRfq?.sourcingMode === 'mode_2' ||
     (activeRfq?.sourcingMode as any) === 'v2' ||
     (activeRfq?.sourcingMode as any) === 'version_2';
+  const quotesSealed = !isVendor && isBuyerQuotesSealed(activeRfq, currentRole);
+  const unsealIso = resolveQuotesUnsealIso(activeRfq);
 
   const syncUpdatedRfq = async (updatedRfq?: RFQItem | null) => {
     if (updatedRfq) {
@@ -597,19 +602,29 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     await refreshFromDB();
   };
 
+  const openCloseModal = () => {
+    setCloseModalOpen(true);
+  };
+
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
       if (result.success) {
-        showToast('RFQ Closed', `RFQ ${activeRfq.rfqNumber} has been officially closed.`, 'success');
+        showToast(
+          DETAILS.closeSuccessTitle,
+          formatString(DETAILS.closeSuccessMessage, { rfqNumber: activeRfq.rfqNumber }),
+          'success'
+        );
+        setCloseModalOpen(false);
         await syncUpdatedRfq(result.rfq);
       } else {
-        throw new Error(result.error || 'Failed to close RFQ.');
+        throw new Error(result.error || DETAILS.closeFailedMessage);
       }
-    } catch (err: any) {
-      showToast('Action Failed', err?.message || 'Failed to close RFQ.', 'warning');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : DETAILS.closeFailedMessage;
+      showToast(DETAILS.closeFailedTitle, message, 'warning');
     } finally {
       setIsClosing(false);
     }
@@ -947,7 +962,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     });
 
     // 3. Quoted Vendors
-    const quotes = Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
+    const quotes = !quotesSealed && Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
     quotes.forEach((q: any) => {
       const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
       // Procucev/internal vendors are shown by name only.
@@ -980,7 +995,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         if (b.messages.length > 0 && a.messages.length === 0) return 1;
         return 0;
       });
-  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor]);
+  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor, quotesSealed]);
 
   // Live vendor presence state (Online / Offline based on heartbeat / session activity)
   const [onlineVendors, setOnlineVendors] = useState<Set<string>>(new Set());
@@ -1417,7 +1432,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
   const mode = SOURCING_MODES.find((m) => m.id === activeRfq.sourcingMode);
   const attachments = activeRfq.attachments || [];
-  const quotes = activeRfq.quotes || [];
+  const quotes = quotesSealed || (isV0 && currentRole === 'buyer' && !isVendor) ? [] : (activeRfq.quotes || []);
   const resolvedTargetDeliveryDate =
     activeRfq.targetDeliveryDate ||
     (activeRfq as any).target_delivery_date ||
@@ -1491,6 +1506,30 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {isVendor && (
+              <button
+                type="button"
+                onClick={() => {
+                  if (router) {
+                    router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                  } else {
+                    window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                  }
+                }}
+                disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+                className="btn btn-sm font-bold inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl shadow-xs px-3.5 py-1.5 cursor-pointer disabled:cursor-not-allowed border-none text-xs"
+                title={
+                  activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
+                    ? 'Bidding is closed for this RFQ'
+                    : quotes.length > 0
+                    ? 'Update or resubmit quotation'
+                    : 'Submit quotation for this RFQ'
+                }
+              >
+                <Send size={13} />
+                <span>{quotes.length > 0 ? 'Resubmit Bid' : 'Submit Quote'}</span>
+              </button>
+            )}
             {activeRfq.status !== 'Closed' &&
               activeRfq.status !== 'Expired' &&
               activeRfq.status !== 'PO Generated' &&
@@ -1524,12 +1563,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               !isVendor && (
               <button
                 type="button"
-                onClick={handleCloseRFQ}
+                onClick={openCloseModal}
                 disabled={isClosing}
                 className="btn btn-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-50"
-                title="Close RFQ and conclude bidding"
+                title={formatString(DETAILS.closeRfqAria, { rfqNumber: activeRfq.rfqNumber })}
               >
-                <Lock size={12} /> {isClosing ? 'Closing...' : 'Close RFQ'}
+                <Lock size={12} /> {isClosing ? DETAILS.closeRfqClosingAction : DETAILS.closeRfqAction}
               </button>
             )}
             {onEdit && (
@@ -1553,6 +1592,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       </header>
+
+      {/* Closed RFQ Banner (cannot be reopened) */}
+      {activeRfq.status === 'Closed' && !Boolean((activeRfq as any).poFinalised) && (
+        <div
+          role="status"
+          className="p-3.5 sm:p-4 rounded-xl bg-slate-100 dark:bg-gray-800/80 border border-slate-300 dark:border-gray-700 text-slate-800 dark:text-gray-200 text-xs flex items-start gap-3 shadow-xs"
+        >
+          <span className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center justify-center shrink-0">
+            <Lock size={16} />
+          </span>
+          <div>
+            <div className="font-extrabold text-sm text-slate-900 dark:text-white">
+              {DETAILS.closedPermanentBannerTitle}
+            </div>
+            <p className="text-slate-600 dark:text-gray-300 text-xs mt-0.5">
+              {isVendor ? DETAILS.closedPermanentBannerVendor : DETAILS.closedPermanentBannerBuyer}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Finalised PO Banner */}
       {(activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)) && (
@@ -2061,11 +2120,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           // A Procucev card always shows category, location, and score — resolve
           // each from the richest source available, so a backend-populated V3
           // vendor (which carries none of these inline) still renders them.
-          const quoteForVendor = (activeRfq?.quotes || []).find(
-            (q: any) =>
-              (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
-              (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
-          );
+          const quoteForVendor = quotesSealed
+            ? undefined
+            : (activeRfq?.quotes || []).find(
+                (q: any) =>
+                  (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
+                  (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
+              );
           const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
@@ -2519,7 +2580,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               When vendor submits quote, you will receive quote details in your email
             </span>
           </div>
-        ) : currentRole === 'buyer' && !isVendor && activeRfq?.quotesHidden ? (
+        ) : quotesSealed ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />
@@ -2530,7 +2591,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             </p>
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-900/40 px-3 py-1 rounded-full border border-amber-200 dark:border-amber-800 shadow-sm">
               <Clock size={12} />
-              Unseals: {activeRfq.quotesHiddenUntil ? new Date(activeRfq.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or when closed)
+              Unseals: {unsealIso ? new Date(unsealIso).toLocaleString() : 'After 48 hours'} (or when closed)
             </span>
           </div>
         ) : quotes.length === 0 ? (
@@ -2777,13 +2838,68 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
+      {isVendor && quotes.length === 0 && (
+        <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <Send size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Submit Your Quotation for this RFQ
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+                Review the line items and technical specifications, then submit your competitive quotation for this requirement.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+            onClick={() => {
+              if (router) {
+                router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+              } else {
+                window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              }
+            }}
+            className="btn btn-sm font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl px-4 py-2 shadow-xs shrink-0 cursor-pointer disabled:cursor-not-allowed border-none flex items-center gap-1.5"
+          >
+            <Send size={14} />
+            <span>Submit Quote</span>
+          </button>
+        </div>
+      )}
+
       {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
       {isVendor && quotes.length > 0 && (() => {
         const myQuote = quotes[0];
         return (
           <Panel
             title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+            toolbar={
+              <div className="flex items-center gap-2">
+                <span className="badge badge-emerald">Quote Submitted</span>
+                {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (router) {
+                        router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                      } else {
+                        window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                      }
+                    }}
+                    className="btn btn-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold inline-flex items-center gap-1 rounded-lg px-2.5 py-1 cursor-pointer border-none"
+                    title="Update or resubmit quotation"
+                  >
+                    <Send size={11} />
+                    <span>Resubmit Bid</span>
+                  </button>
+                )}
+              </div>
+            }
           >
             <div className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -3402,13 +3518,68 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
+      {isVendor && quotes.length === 0 && (
+        <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <Send size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Submit Your Quotation for this RFQ
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+                Review the line items and technical specifications, then submit your competitive quotation for this requirement.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            disabled={activeRfq.status === 'Closed' || activeRfq.status === 'Expired'}
+            onClick={() => {
+              if (router) {
+                router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+              } else {
+                window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              }
+            }}
+            className="btn btn-sm font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl px-4 py-2 shadow-xs shrink-0 cursor-pointer disabled:cursor-not-allowed border-none flex items-center gap-1.5"
+          >
+            <Send size={14} />
+            <span>Submit Quote</span>
+          </button>
+        </div>
+      )}
+
       {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
       {isVendor && quotes.length > 0 && (() => {
         const myQuote = quotes[0];
         return (
           <Panel
             title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+            toolbar={
+              <div className="flex items-center gap-2">
+                <span className="badge badge-emerald">Quote Submitted</span>
+                {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (router) {
+                        router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                      } else {
+                        window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                      }
+                    }}
+                    className="btn btn-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold inline-flex items-center gap-1 rounded-lg px-2.5 py-1 cursor-pointer border-none"
+                    title="Update or resubmit quotation"
+                  >
+                    <Send size={11} />
+                    <span>Resubmit Bid</span>
+                  </button>
+                )}
+              </div>
+            }
           >
             <div className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -3595,6 +3766,82 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         />
       )}
 
+
+      {/* Close RFQ Confirmation Modal */}
+      {closeModalOpen && activeRfq && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="close-rfq-modal-title"
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
+                  <Lock size={20} />
+                </div>
+                <div>
+                  <h3 id="close-rfq-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {DETAILS.closeModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {formatString(DETAILS.closeModalSubtitle, { rfqNumber: activeRfq.rfqNumber })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                aria-label={UI_STRINGS.actions.cancel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200/80 dark:border-gray-700/60 space-y-2 text-xs">
+              <div className="flex justify-between items-center gap-3">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRfqNumberLabel}</span>
+                <span className="mono font-semibold text-slate-800 dark:text-gray-200">{activeRfq.rfqNumber}</span>
+              </div>
+              <div className="flex justify-between items-center gap-3 pt-2 border-t border-slate-200 dark:border-gray-700">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRequirementLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-gray-200 truncate text-right">{activeRfq.title}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-rose-50/90 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 leading-relaxed">
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+              <div className="space-y-0.5">
+                <p className="font-bold">{DETAILS.closeModalWarningTitle}</p>
+                <p>{DETAILS.closeModalWarningBody}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="btn btn-ghost btn-sm text-xs font-semibold"
+              >
+                {UI_STRINGS.actions.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseRFQ}
+                disabled={isClosing}
+                className="btn btn-sm text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Lock size={12} />
+                <span>{isClosing ? DETAILS.closeModalConfirmingAction : DETAILS.closeModalConfirmAction}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Extend RFQ Modal */}
       {extendModalOpen && activeRfq && (

@@ -3,7 +3,7 @@
  * Single source of truth for all API payload, query parameter, and entity boundaries.
  */
 
-const EMAIL_REGEX = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const EMAIL_REGEX = /^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 const GSTIN_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 const PHONE_REGEX = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -196,6 +196,36 @@ function clearDummyPanFields(record) {
   return record;
 }
 
+/**
+ * Extract the 10-character PAN embedded at characters 2..12 of a valid Indian GSTIN,
+ * ignoring synthetic/placeholder PANs used in tests or incomplete entries.
+ */
+function derivePanFromGstin(gstin) {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_REGEX.test(clean)) return '';
+  return usablePan(clean.slice(2, 12)) || '';
+}
+
+/**
+ * Parse a legacy primaryPlantLocation label such as "Pune, Maharashtra (411001)"
+ * into structured { city, state, pincode } fields without inventing values.
+ */
+function parsePrimaryPlantLocation(location) {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
+}
+
 // MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
 // state, 4-digit year, 3-letter ownership code, 6-digit registration number.
 const CIN_REGEX = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
@@ -288,6 +318,42 @@ const VALIDATION_SCHEMAS = {
     state: { type: 'string', required: false, maxLength: 150 },
     pincode: { type: 'string', required: false, maxLength: 32 },
     gstin: { type: 'string', required: false, maxLength: 32 },
+  },
+  vendorActiveStatusUpdate: {
+    isActive: {
+      type: 'boolean',
+      required: true,
+      message: 'Specify whether the vendor should be active or inactive.',
+    },
+    vendorEmail: { type: 'string', required: false, maxLength: 320 },
+    vendorName: { type: 'string', required: false, maxLength: 512 },
+    contactPerson: { type: 'string', required: false, maxLength: 255 },
+    vendorCode: { type: 'string', required: false, maxLength: 120 },
+    phone: { type: 'string', required: false, maxLength: 64 },
+    location: { type: 'string', required: false, maxLength: 1024 },
+    city: { type: 'string', required: false, maxLength: 150 },
+    state: { type: 'string', required: false, maxLength: 150 },
+    pincode: { type: 'string', required: false, maxLength: 32 },
+    gstin: { type: 'string', required: false, maxLength: 32 },
+  },
+  vendorBulkActiveStatusUpdate: {
+    vendorIds: {
+      type: 'array',
+      required: true,
+      custom: (value) => {
+        if (!Array.isArray(value) || value.length === 0) {
+          return 'Select at least one vendor to update active status.';
+        }
+        return null;
+      },
+      message: 'Select at least one vendor to update active status.',
+    },
+    isActive: {
+      type: 'boolean',
+      required: true,
+      message: 'Specify whether selected vendors should be active or inactive.',
+    },
+    vendors: { type: 'array', required: false },
   },
   evaluationListQuery: {
     vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },
@@ -1261,6 +1327,12 @@ const VALIDATION_SCHEMAS = {
       enum: ['true', 'false', '1', '0'],
       message: 'publicOnly must be true, false, 1, or 0.',
     },
+    activeOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'activeOnly must be true, false, 1, or 0.',
+    },
   },
 
   transactionalEmailPreview: {
@@ -1824,6 +1896,8 @@ module.exports = {
   isDummyPan,
   usablePan,
   clearDummyPanFields,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,

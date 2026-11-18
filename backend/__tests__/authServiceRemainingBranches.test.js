@@ -615,6 +615,33 @@ describe('authService remaining branch tests', () => {
         address1: 'HSR Layout Sector 2',
         gstin: '29ABCDE1234F1Z5',
       }));
+
+      // Real business GSTIN automatically derives non-dummy PAN when PAN was omitted
+      jest.spyOn(authSessionQueries, 'findOtp')
+        .mockResolvedValueOnce({ code: '111222', expiresAt: Date.now() + 60000 })
+        .mockResolvedValueOnce({ code: '333444', expiresAt: Date.now() + 60000 });
+      const onboardingWithRealGst = await authService.completeBuyerOnboarding(
+        { role: 'buyer', email: 'buyer.noorg@test.com' },
+        {
+          mobile: '9381877013',
+          currentPassword: 'CorrectOldPass!',
+          newPassword: 'BrandNewSecurePass1!',
+          emailOtp: '111222',
+          mobileOtp: '333444',
+          companyName: 'Veera solutions pvt ltd',
+          registeredAddress: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          gst: '27AAACK3921P1Z9',
+        },
+        '127.0.0.1'
+      );
+      expect(onboardingWithRealGst.success).toBe(true);
+      expect(ensureOrgSpy).toHaveBeenLastCalledWith(expect.objectContaining({
+        gstin: '27AAACK3921P1Z9',
+        pan: 'AAACK3921P',
+      }));
     });
 
     test('falls back to ensureBuyerOrganization when updateProfile reports ORG_NOT_FOUND and tolerates errors', async () => {

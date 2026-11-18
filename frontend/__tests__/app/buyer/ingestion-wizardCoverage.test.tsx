@@ -1508,4 +1508,38 @@ describe('IngestionWizard coverage: free-quota controls', () => {
     expect(screen.getByTestId('sourcing-mode-btn-mode_0')).toHaveAttribute('aria-checked', 'true');
     expect(dispatchButton()).toBeEnabled();
   });
+
+  it('excludes inactive/disabled buyer-uploaded and network vendors from future RFQ creation rosters and submissions', async () => {
+    const activeVendor = vendor({
+      id: 'v-wiz-active',
+      name: 'Wizard Active Vendor',
+      email: 'active@wiz.test',
+      source: 'buyer_uploaded',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+    const inactiveVendor = vendor({
+      id: 'v-wiz-inactive',
+      name: 'Wizard Disabled Vendor',
+      email: 'inactive@wiz.test',
+      source: 'buyer_uploaded',
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+    setupStore({ currentMode: 'mode_1', buyerVendors: [activeVendor, inactiveVendor] });
+
+    renderWizard();
+    chooseSourcingMode('mode_1');
+    fillValidForm();
+
+    expect(screen.getByText(/Wizard Active Vendor/)).toBeInTheDocument();
+    expect(screen.queryByText(/Wizard Disabled Vendor/)).not.toBeInTheDocument();
+
+    await dispatchRfq();
+    const submittedIds = (mockCreateRFQ.mock.calls[0][0].assignedVendors || []).map((v: { id?: string }) => v.id);
+    expect(submittedIds).not.toContain('v-wiz-inactive');
+  });
 });

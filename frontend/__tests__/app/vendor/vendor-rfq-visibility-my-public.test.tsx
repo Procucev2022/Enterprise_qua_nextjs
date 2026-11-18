@@ -241,6 +241,10 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
       expect(screen.getByText('RFQ-INVITED-01')).toBeInTheDocument();
     });
 
+    // In My Enquiries tab, uninvited RFQ should NOT be present
+    const myEnquiriesTab = screen.getByRole('button', { name: /My Enquiries/i });
+    fireEvent.click(myEnquiriesTab);
+
     expect(screen.queryByText('RFQ-UNINVITED-02')).not.toBeInTheDocument();
   });
 
@@ -258,6 +262,8 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
     });
 
     // In My Enquiries tab, non-matching Mode 0 RFQ should NOT be present
+    const myEnquiriesTab = screen.getByRole('button', { name: /My Enquiries/i });
+    fireEvent.click(myEnquiriesTab);
     expect(screen.queryByText('RFQ-PUBLIC-03')).not.toBeInTheDocument();
 
     // Switch to Public Enquiries tab
@@ -280,6 +286,9 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
     });
 
     // In My Enquiries tab, RFQ-MATCHING-04 SHOULD be present because its minor category & pincode match
+    const myEnquiriesTab = screen.getByRole('button', { name: /My Enquiries/i });
+    fireEvent.click(myEnquiriesTab);
+
     await waitFor(() => {
       expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
     });

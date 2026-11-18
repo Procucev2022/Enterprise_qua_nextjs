@@ -52,6 +52,7 @@ import {
   entitledSourcingModes,
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
+  isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   subscribeVendorUploadHistory,
@@ -173,6 +174,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   const reconciledBuyerVendors = useMemo<VendorEntry[]>(
     () => reconcileBuyerVendorsWithUploadHistory(buyerVendors, uploadHistoryList, activeBuyerAccount),
     [buyerVendors, uploadHistoryList, activeBuyerAccount]
+  );
+
+  // Exclude inactive/disabled suppliers from all future RFQ creation and invitation flows
+  const activeReconciledVendors = useMemo<VendorEntry[]>(
+    () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
+    [reconciledBuyerVendors]
   );
   const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
   const reportedPlan = toReportedPlan(activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
@@ -319,7 +326,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             for (const v of result.candidates) byId.set(v.id, v as unknown as VendorEntry);
           }
         }
-        setFetchedCategoryVendors(Array.from(byId.values()));
+        setFetchedCategoryVendors(Array.from(byId.values()).filter((v) => isVendorActive(v)));
       });
     }, 350);
     return () => clearTimeout(t);
@@ -672,10 +679,10 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     }> | undefined = undefined;
 
     if (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') {
-      if (Array.isArray(reconciledBuyerVendors)) {
+      if (Array.isArray(activeReconciledVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? reconciledBuyerVendors.filter((v) => isBuyerUploaded(v))
-          : reconciledBuyerVendors;
+          ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
+          : activeReconciledVendors;
         const { signals, minorOnly } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
@@ -736,7 +743,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
         const already = new Set((mode1AssignedVendors || []).map((v) => v.id));
         const destination = { location: form.deliveryLocation, pincode: form.deliveryPincode };
         const procAdditions = fetchedCategoryVendors
-          .filter((v) => !already.has(v.id))
+          .filter((v) => isVendorActive(v) && !already.has(v.id))
           .sort((a, b) => {
             const locDiff =
               scoreVendorLocation(b, destination).score - scoreVendorLocation(a, destination).score;
@@ -1638,7 +1645,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                       <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                         <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                         <span className="badge badge-blue text-[9px] font-bold">
-                          {reconciledBuyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                          {activeReconciledVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                         </span>
                       </h4>
                       <p className="text-[10px] text-slate-500 dark:text-gray-400">
@@ -1652,7 +1659,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </div>
 
                 {(() => {
-                  const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                  const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                   if (allMyVendors.length === 0) {
                     return (
                       <div className="p-4 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-1">
@@ -1952,7 +1959,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_2' && (
               <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                  const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
 
                   return (
                     <>
@@ -2332,7 +2339,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_3' && (
               <div className="mt-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const myVendors = reconciledBuyerVendors.filter(isBuyerUploaded);
+                  const myVendors = activeReconciledVendors.filter(isBuyerUploaded);
 
                   return (
                     <>

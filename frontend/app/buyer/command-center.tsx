@@ -2,7 +2,8 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor, isBuyerQuotesSealed } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { RFQItem } from '@/lib/types';
 import {
   RFQFollowUpDeepDiveModal,
@@ -47,10 +48,19 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     setDeepDiveModalOpen,
     openRFQDeepDive,
     activeBuyerAccount,
+    buyerVendors,
+    currentUserSession,
     setInitialSetupModalOpen,
     initialSetupCompleted,
     isLoadingRFQs,
   } = useApp();
+
+  const hasCompletedVendorSetup = Boolean(
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true ||
+    (Array.isArray(buyerVendors) && buyerVendors.some((v) => isBuyerUploadedVendor(v)))
+  );
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry' | 'ai_extraction'>('all');
@@ -72,7 +82,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce(
-    (acc, r) => acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesHidden ? 0 : (r.quotesCount || 0))),
+    (acc, r) => {
+      if (isBuyerQuotesSealed(r, 'buyer')) return acc;
+      return acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesCount || 0));
+    },
     0
   );
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
@@ -645,56 +658,16 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {(() => {
                         const followUp = rfq.followUpData;
-                        const vCount = Math.max(
-                          rfq.assignedVendors?.length || 0,
-                          rfq.procucevVendorCount || 0,
-                          followUp?.totalInvited || 0,
-                          followUp?.whatsappStats?.total || 0,
-                          followUp?.smsStats?.total || 0,
-                          followUp?.emailStats?.total || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                        );
-
-                        // Read and delivered counts come only from the server's
-                        // stats and per-vendor statuses. Time since creation is
-                        // not evidence that a message was read or delivered.
-                        const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                        const waRead = Math.max(
-                          followUp?.whatsappStats?.read || 0,
-                          followUp?.whatsappStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-                        );
-
-                        const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                        const smsDelivered = Math.max(
-                          followUp?.smsStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-                        );
-
-                        const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                        const emailDelivered = Math.max(
-                          followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
-                        );
-                        const totalInvited = Math.max(
-                          followUp?.totalInvited || 0,
-                          vCount,
-                          waTotal,
-                          smsTotal,
-                          emailTotal
-                        );
-                        const quotesCount = Math.max(
-                          Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
-                          rfq.quotesCount || 0
-                        );
-                        const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                          ? followUp.vendors.filter((v) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-                          : 0;
-                        const responded = Math.max(
-                          followUp?.respondedCount || 0,
-                          quotesCount,
-                          vendorRespondedCount
-                        );
+                        const metrics = computeRFQFollowUpMetrics(rfq);
+                        const vCount = metrics.totalVendors;
+                        const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+                        const waRead = metrics.waDelivered ?? 0;
+                        const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+                        const smsDelivered = metrics.smsDelivered ?? 0;
+                        const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+                        const emailDelivered = metrics.emailDelivered ?? 0;
+                        const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
+                        const responded = metrics.responded;
 
                         if (!followUp && vCount === 0) {
                           return <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>;

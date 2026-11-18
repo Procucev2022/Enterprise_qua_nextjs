@@ -136,9 +136,27 @@ describe('buyerProfileClient', () => {
     });
 
     test('surfaces a 401 as a sign-in instruction, unwrapped', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn');
+      const errorSpy = jest.spyOn(logger, 'error');
       global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 401 }));
       const res = await fetchBuyerProfile();
       expect(res.error).toBe(UI_STRINGS.buyerProfile.sessionExpired);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Buyer profile load rejected',
+        expect.objectContaining({ status: 401 }),
+        'BUYER_PROFILE'
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 401 }));
+      const taxRes = await fetchCategoryTaxonomy();
+      expect(taxRes.success).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Category taxonomy load rejected',
+        expect.objectContaining({ status: 401 }),
+        'BUYER_PROFILE'
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     test('surfaces a 403 as a permissions instruction, unwrapped', async () => {

@@ -13,8 +13,22 @@ jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
 
-function renderWithProvider(ui: React.ReactElement) {
-  return render(<AppProvider>{ui}</AppProvider>);
+function SubscribedWrapper({ children, plan = 'select' }: { children: React.ReactNode; plan?: any }) {
+  const { vendorSubscription, setVendorSubscription } = useApp();
+  React.useEffect(() => {
+    if (vendorSubscription !== plan) {
+      setVendorSubscription(plan);
+    }
+  }, [plan, vendorSubscription, setVendorSubscription]);
+  return <>{children}</>;
+}
+
+function renderWithProvider(ui: React.ReactElement, plan: any = 'select') {
+  return render(
+    <AppProvider>
+      <SubscribedWrapper plan={plan}>{ui}</SubscribedWrapper>
+    </AppProvider>
+  );
 }
 
 let vendorProfileResponse: Record<string, unknown> | null = null;

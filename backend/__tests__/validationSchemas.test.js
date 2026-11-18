@@ -13,6 +13,8 @@ describe('Backend Validation Schemas Unit Tests', () => {
   test('validates category update recipient data and optional idempotency keys', () => {
     const schema = VALIDATION_SCHEMAS.requestVendorCategoryUpdate;
     expect(validatePayload(schema, { vendorEmail: 'vendor@example.test' }).isValid).toBe(true);
+    expect(EMAIL_REGEX.test('http://www.google.co.in/maps/@17.0380803,82.1494328,885a')).toBe(false);
+    expect(validatePayload(schema, { vendorEmail: 'http://www.google.co.in/maps/@17.0380803,82.1494328,885a' }).isValid).toBe(false);
     expect(validatePayload(schema, {
       vendorEmail: 'vendor@example.test',
       idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
@@ -690,6 +692,28 @@ describe('Ticket and batch chaser schema contract', () => {
         pan: 'AAMCP4349L',
         panNumber: 'BGLPK1234M',
       });
+    });
+
+    test('derivePanFromGstin and parsePrimaryPlantLocation handle real, dummy, and empty values', () => {
+      const { derivePanFromGstin, parsePrimaryPlantLocation } = require('../src/config/validationSchemas');
+      expect(derivePanFromGstin(' 27aaack3921p1z9 ')).toBe('AAACK3921P');
+      expect(derivePanFromGstin('27AAAAA0000A1Z5')).toBe('');
+      expect(derivePanFromGstin('27AAACL1234F1Z5')).toBe('');
+      expect(derivePanFromGstin('INVALID')).toBe('');
+      expect(derivePanFromGstin(null)).toBe('');
+
+      expect(parsePrimaryPlantLocation('Bengaluru, Karnataka (560037)')).toEqual({
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      });
+      expect(parsePrimaryPlantLocation('Pune, Maharashtra')).toEqual({
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '',
+      });
+      expect(parsePrimaryPlantLocation('')).toEqual({ city: '', state: '', pincode: '' });
+      expect(parsePrimaryPlantLocation(undefined)).toEqual({ city: '', state: '', pincode: '' });
     });
   });
 

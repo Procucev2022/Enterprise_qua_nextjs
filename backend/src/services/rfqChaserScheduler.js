@@ -353,6 +353,39 @@ function clearScheduledChasers(rfqNumber) {
  * Fire-and-forget WhatsApp invite for one vendor.
  * Returns the Promise so tests can await it; storeService ignores the return.
  */
+function _ensureFollowUpVendorRecord(fup, vendor) {
+  if (!Array.isArray(fup.vendors) || !vendor) return null;
+  const vendorEmailLower = String(vendor.email || '').trim().toLowerCase();
+  const vendorNameLower = String(vendor.name || vendor.vendorName || '').trim().toLowerCase();
+  let vRecord = fup.vendors.find(
+    (v) =>
+      v &&
+      ((vendor.id && (v.vendorId === vendor.id || v.id === vendor.id)) ||
+        (vendorNameLower &&
+          (String(v.vendorName || '').trim().toLowerCase() === vendorNameLower ||
+            String(v.name || '').trim().toLowerCase() === vendorNameLower)) ||
+        (vendorEmailLower && String(v.email || '').trim().toLowerCase() === vendorEmailLower))
+  );
+  if (!vRecord) {
+    vRecord = {
+      id: vendor.id,
+      vendorId: vendor.id,
+      name: vendor.name || vendor.vendorName || '',
+      vendorName: vendor.vendorName || vendor.name || '',
+      overallStatus: 'Pending',
+      bidStatus: 'Pending',
+    };
+    fup.vendors.push(vRecord);
+  } else {
+    if (!vRecord.vendorId && vRecord.id) vRecord.vendorId = vRecord.id;
+    if (!vRecord.vendorName && (vRecord.name || vendor.name)) vRecord.vendorName = vRecord.name || vendor.name;
+    if (!vRecord.name && vRecord.vendorName) vRecord.name = vRecord.vendorName;
+    if (!vRecord.overallStatus) vRecord.overallStatus = vRecord.bidStatus === 'Submitted' ? 'Responded' : 'Pending';
+    if (!vRecord.bidStatus) vRecord.bidStatus = 'Pending';
+  }
+  return vRecord;
+}
+
 /**
  * Updates in-memory RFQ follow-up stats upon successful chaser dispatch.
  */
@@ -374,6 +407,8 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       };
     }
     const fup = liveRfq.followUpData;
+    const timestamp = new Date().toISOString();
+    const vRecord = _ensureFollowUpVendorRecord(fup, vendor);
 
     if (channel === 'whatsapp') {
       // A provider acceptance is counted as "sent". "delivered" needs a real delivery receipt, and none is recorded here.
@@ -382,13 +417,9 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.whatsappStats.sent > (fup.whatsappStats.total || 0)) {
         fup.whatsappStats.total = fup.whatsappStats.sent;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-        vRecord.whatsapp = { status: 'sent', lastAttempt: new Date().toISOString() };
+      if (vRecord) {
+        vRecord.whatsapp = { status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
     } else if (channel === 'sms') {
       if (!fup.smsStats) fup.smsStats = { total: 0, sent: 0, delivered: 0, clicked: 0 };
@@ -396,13 +427,9 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.smsStats.sent > (fup.smsStats.total || 0)) {
         fup.smsStats.total = fup.smsStats.sent;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-        vRecord.sms = { status: 'sent', lastAttempt: new Date().toISOString() };
+      if (vRecord) {
+        vRecord.sms = { status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
     } else if (channel === 'email') {
       if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
@@ -410,16 +437,13 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.emailStats.sent24h > (fup.emailStats.total || 0)) {
         fup.emailStats.total = fup.emailStats.sent24h;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-          vRecord.email = { status: 'sent', lastAttempt: new Date().toISOString() };
-          vRecord.emailSent = true;
-        }
+      if (vRecord) {
+        vRecord.email = { status: 'sent', lastAttempt: timestamp };
+        vRecord.emailSent = true;
+        vRecord.email24h = { is24hReminderSent: true, status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
+    }
 
     if (options.updatedRfqNumbers instanceof Set) options.updatedRfqNumbers.add(rfqNumber);
     if (options.persist !== false) {
@@ -936,11 +960,18 @@ async function dispatchDueChaserJobs(limit = 25) {
     }
   }
 
+  const storeService = require('./storeService');
   for (const rfqNumber of updatedRfqNumbers) {
     const updatedRfq = rfqCache.get(rfqNumber);
     if (!updatedRfq) continue;
     try {
       await domainQueries.upsertRFQInDB(updatedRfq);
+      if (Array.isArray(storeService.rfqs)) {
+        const idx = storeService.rfqs.findIndex((item) => item.rfqNumber === rfqNumber || item.id === updatedRfq.id);
+        if (idx >= 0) {
+          storeService.rfqs[idx] = { ...storeService.rfqs[idx], followUpData: updatedRfq.followUpData };
+        }
+      }
     } catch (error) {
       logger.error('Could not persist RFQ follow-up status after scheduled chaser batch', {
         rfqNumber,

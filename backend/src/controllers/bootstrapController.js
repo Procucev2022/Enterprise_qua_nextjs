@@ -60,15 +60,24 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     const seenCodes = new Set(
       existingVendors.map((v) => String(v.vendorCode || '').trim().toLowerCase()).filter(Boolean)
     );
+    const seenMasterIds = new Set(
+      existingVendors.map((v) => String(v.masterRecordId || '').trim().toLowerCase()).filter(Boolean)
+    );
 
     const fallbackVendors = [];
     for (const rec of masterRecords) {
+      const normalizedMasterId = String(rec.id || '').trim().toLowerCase();
       const normalizedEmail = String(rec.email || '').trim().toLowerCase();
       const normalizedCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rec.companyName && !normalizedEmail) continue;
-      if ((normalizedEmail && seenEmails.has(normalizedEmail)) || (normalizedCode && seenCodes.has(normalizedCode))) {
+      if (
+        (normalizedMasterId && seenMasterIds.has(normalizedMasterId)) ||
+        (normalizedEmail && seenEmails.has(normalizedEmail)) ||
+        (normalizedCode && seenCodes.has(normalizedCode))
+      ) {
         continue;
       }
+      if (normalizedMasterId) seenMasterIds.add(normalizedMasterId);
       if (normalizedEmail) seenEmails.add(normalizedEmail);
       if (normalizedCode) seenCodes.add(normalizedCode);
 
@@ -97,7 +106,8 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
             ...(Array.isArray(rec.itemsSupplied) ? rec.itemsSupplied : []),
           ];
           for (const cand of candidates) {
-            const candKey = String(cand).trim().toLowerCase();
+            const candKey = String(cand || '').trim().toLowerCase();
+            if (!candKey) continue;
             for (const [mKey, actualName] of majorEntry.minors.entries()) {
               if (candKey.includes(mKey) || mKey.includes(candKey)) {
                 if (!resolvedMinors.includes(actualName)) resolvedMinors.push(actualName);
@@ -138,7 +148,8 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         evaluated: false,
         hasRecord: true,
         isExistingInDatabase: true,
-        status: 'PENDING EVALUATION',
+        status: rec.isActive === false ? 'INACTIVE' : 'PENDING EVALUATION',
+        ...(rec.isActive === false ? { isActive: false, disabled: true } : {}),
         source: 'vendor_master_ingestion',
         buyerId: buyerId || orgId,
         buyerAccountId: buyerId || orgId,
@@ -249,6 +260,7 @@ async function getBootstrap(req, res, next) {
             .filter(Boolean)
             .map((val) => String(val).toLowerCase());
           if (evalBuyerValues.some((val) => buyerIdentityValues.includes(val))) return true;
+          if (evalBuyerValues.length > 0) return false;
 
           if (buyerOwnedVendors.length > 0) {
             return (
@@ -256,7 +268,7 @@ async function getBootstrap(req, res, next) {
               (evaluation.email && buyerOwnedVendorEmailSet.has(String(evaluation.email).toLowerCase()))
             );
           }
-          return true;
+          return false;
         })
       : [];
 

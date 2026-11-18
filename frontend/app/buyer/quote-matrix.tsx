@@ -3,9 +3,10 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
-import { formatCurrency, formatIndianDate } from '@/lib/constants';
+import { formatCurrency, formatIndianDate, isBuyerQuotesSealed, resolveQuotesUnsealIso } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQItem, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
+import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
@@ -96,7 +97,13 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     );
   }
 
-  const quotes = currentRFQ.quotes || [];
+  const isV0 =
+    currentRFQ.sourcingMode === 'mode_0' ||
+    (currentRFQ.sourcingMode as any) === 'v0' ||
+    (currentRFQ.sourcingMode as any) === 'version_0';
+  const quotesSealed = isBuyerQuotesSealed(currentRFQ, currentRole);
+  const unsealIso = resolveQuotesUnsealIso(currentRFQ);
+  const quotes = quotesSealed || (currentRole === 'buyer' && isV0) ? [] : (currentRFQ.quotes || []);
 
   // Comparable total quotation amount including applicable taxes and charges
   const getComparableAmount = (q: QuoteComparison): number => {
@@ -249,64 +256,16 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
 
         {/* Multi-Channel Follow-Up Status Strip (WhatsApp, SMS, Email) */}
         {currentRFQ.followUpData && (() => {
-          const followUp = currentRFQ.followUpData;
-          const vCount = Math.max(
-            currentRFQ.assignedVendors?.length || 0,
-            currentRFQ.procucevVendorCount || 0,
-            followUp?.totalInvited || 0,
-            followUp?.whatsappStats?.total || 0,
-            followUp?.smsStats?.total || 0,
-            followUp?.emailStats?.total || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-          );
-          const isDispatched = currentRFQ.status !== 'Parsing' && vCount > 0;
-          const createdAtMs = currentRFQ.createdAt ? new Date(currentRFQ.createdAt).getTime() : Date.now();
-          const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-          const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
-          const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
-          const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
-
-          const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-          const rawWaRead = Math.max(
-            followUp?.whatsappStats?.read || 0,
-            followUp?.whatsappStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-          );
-          const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
-
-          const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-          const rawSmsDelivered = Math.max(
-            followUp?.smsStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-          );
-          const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
-
-          const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-          const rawEmailDelivered = Math.max(
-            followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.email?.status === 'delivered' || v?.email24h?.status === 'delivered' || v?.emailSent).length : 0
-          );
-          const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
-
-          const quotesCount = Math.max(
-            Array.isArray(currentRFQ.quotes) ? currentRFQ.quotes.length : 0,
-            currentRFQ.quotesCount || 0
-          );
-          const vendorRespondedCount = Array.isArray(followUp?.vendors)
-            ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-            : 0;
-          const responded = Math.max(
-            followUp?.respondedCount || 0,
-            quotesCount,
-            vendorRespondedCount
-          );
-          const totalInvited = Math.max(
-            followUp?.totalInvited || 0,
-            vCount,
-            waTotal,
-            smsTotal,
-            emailTotal
-          );
+          const metrics = computeRFQFollowUpMetrics(currentRFQ);
+          const vCount = metrics.totalVendors;
+          const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+          const waRead = metrics.waDelivered ?? 0;
+          const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+          const smsDelivered = metrics.smsDelivered ?? 0;
+          const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+          const emailDelivered = metrics.emailDelivered ?? 0;
+          const responded = metrics.responded;
+          const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
 
           return (
             <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
@@ -341,7 +300,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {currentRole === 'buyer' && (currentRFQ?.sourcingMode === 'mode_0' || (currentRFQ?.sourcingMode as any) === 'v0' || (currentRFQ?.sourcingMode as any) === 'version_0') ? (
+      {currentRole === 'buyer' && isV0 ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-sm">
           <div className="w-12 h-12 mx-auto rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shadow-inner">
             <Mail size={24} />
@@ -357,7 +316,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
             <span>Check your inbox for vendor quotations on {currentRFQ.rfqNumber}</span>
           </div>
         </div>
-      ) : currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
+      ) : quotesSealed ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
           <div className="w-12 h-12 mx-auto rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
             <Lock size={24} />
@@ -370,7 +329,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
             <Clock size={13} />
-            <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : UI_STRINGS.rfqDetails.unsetValue} (or upon RFQ closure)</span>
+            <span>Unseals on: {unsealIso ? new Date(unsealIso).toLocaleString() : UI_STRINGS.rfqDetails.unsetValue} (or upon RFQ closure)</span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
             📱 An SMS comparison acknowledgment and final evaluation email will automatically be sent to your phone and inbox upon RFQ closure.
@@ -623,7 +582,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       )}
 
       {/* Line-Item-Wise Bid Comparison (DPS Template) */}
-      {quotes.length > 0 && !currentRFQ?.quotesHidden && (currentRFQ.extractedEntities || []).length > 0 && (
+      {quotes.length > 0 && !quotesSealed && (currentRFQ.extractedEntities || []).length > 0 && (
         <div className="glass-panel rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3.5 border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-900/50">
             <div>

@@ -282,6 +282,10 @@ describe('opportunity feed navigation, matching and access failures', () => {
 });
 
 describe('catalogue workbook preview validation', () => {
+  beforeEach(() => {
+    mockApp.vendorSubscription = 'select';
+  });
+
   const row = (overrides: Partial<CatalogueUploadRow> = {}): CatalogueUploadRow => ({
     rowNumber: 2, name: 'Imported Item', sku: 'IMPORTED-1', category: 'Engineering Spares - Mechanical',
     specs: '', unitPrice: 100, leadTimeDays: 3, moq: 1, errors: [], ...overrides,
@@ -355,6 +359,10 @@ describe('catalogue workbook preview validation', () => {
 });
 
 describe('catalogue product limit from the pricing API', () => {
+  beforeEach(() => {
+    mockApp.vendorSubscription = 'select';
+  });
+
   test('refuses a new product once the limit the pricing API returns is reached', async () => {
     jest.mocked(fetchSubscriptionPricing).mockResolvedValue({
       seller: { select: { catalogueLimit: 1 } },
@@ -381,6 +389,10 @@ describe('catalogue product limit from the pricing API', () => {
 });
 
 describe('catalogue load, save and import failure paths', () => {
+  beforeEach(() => {
+    mockApp.vendorSubscription = 'select';
+  });
+
   const row = (overrides: Partial<CatalogueUploadRow> = {}): CatalogueUploadRow => ({
     rowNumber: 2, name: 'Imported Item', sku: 'IMPORTED-1', category: 'Engineering Spares - Mechanical',
     specs: '', unitPrice: 100, leadTimeDays: 3, moq: 1, errors: [], ...overrides,

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
+import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -12,7 +12,6 @@ import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { deriveInitials, resolveSessionOrgName } from '@/lib/accountIdentity';
 import type { UserRole } from '@/lib/types';
 import {
-  ShieldCheck,
   ChevronDown,
   Sun,
   Moon,
@@ -21,6 +20,7 @@ import {
   Clock,
   Building2,
   LogIn,
+  User,
 } from 'lucide-react';
 
 /**
@@ -30,7 +30,6 @@ import {
  */
 interface RoleChrome {
   designation: string;
-  authLabel: string;
   avatarGradient: string;
   badge: string;
   badgeClass: string;
@@ -39,7 +38,6 @@ interface RoleChrome {
 const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   buyer: {
     designation: 'Enterprise Buyer',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-indigo-600 to-indigo-800 text-white',
     badge: 'Buyer',
     badgeClass:
@@ -47,7 +45,6 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   category_manager: {
     designation: 'Category Manager',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-sky-600 to-blue-700 text-white',
     badge: 'Category Desk',
     badgeClass:
@@ -55,7 +52,6 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   vendor: {
     designation: 'Vendor Partner',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-emerald-600 to-teal-700 text-white',
     badge: 'Vendor',
     badgeClass:
@@ -63,20 +59,12 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   admin: {
     designation: 'Platform Administrator',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-purple-600 to-indigo-800 text-white',
     badge: 'Admin',
     badgeClass:
       'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800',
   },
 };
-
-/** Human label for the authentication method recorded on the session. */
-function authMethodLabel(method?: string): string | null {
-  if (method === 'PASSWORD') return 'Password verified';
-  if (method === 'EMAIL_OTP') return 'Email OTP verified';
-  return null;
-}
 
 /** Format remaining session duration as MM:SS (or HH:MM:SS if > 1hr). */
 export function formatSessionCountdown(seconds: number): string {
@@ -126,8 +114,7 @@ export default function Header() {
   const sessionName = currentUserSession?.name?.trim() || '';
   const sessionEmail = currentUserSession?.email || '';
   const initials = deriveInitials(sessionName, sessionEmail);
-  const authLabel = authMethodLabel(currentUserSession?.authMethod) || chrome.authLabel;
-  const moduleCount = ROLE_SIDEBAR_NAV[currentRole]?.length ?? 0;
+  const profileRoute = ROLE_PROFILE_ROUTES[currentRole];
 
   // The organisation on the verified session record is authoritative; see
   // resolveSessionOrgName for why the active buyer account is only a conditional
@@ -508,15 +495,15 @@ export default function Header() {
                 {/* Active Persona Header Card */}
                 <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 dark:from-gray-800/80 dark:to-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
                       <div
                         className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}
                       >
                         {initials}
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white truncate">
                             {sessionName || sessionEmail}
                           </h4>
                           <span
@@ -530,6 +517,21 @@ export default function Header() {
                         </p>
                       </div>
                     </div>
+
+                    {profileRoute && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserProfileDropdownOpen(false);
+                          router.push(profileRoute);
+                        }}
+                        className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-700/70 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-[11px] font-bold shadow-xs transition-colors cursor-pointer"
+                        title={UI_STRINGS.headerNav.openProfileTitle}
+                      >
+                        <User size={12} />
+                        <span>{UI_STRINGS.headerNav.profile}</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Active Login Details & Organization Box */}
@@ -544,26 +546,12 @@ export default function Header() {
                         {sessionEmail}
                       </strong>
                     </div>
-                    <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] pt-1 border-t border-slate-100 dark:border-gray-800/80">
-                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <ShieldCheck size={12} /> {authLabel}
-                      </span>
-                    </div>
                   </div>
                 </div>
 
-                {/* Workspace Summary (read-only, derived from the session) */}
-                <div className="px-1 flex items-center justify-between text-[10px]">
-                  <span className="font-black uppercase tracking-wider text-slate-400 dark:text-gray-500">
-                    Active Workspace
-                  </span>
-                  <span className="font-mono text-slate-500 dark:text-gray-400">
-                    {chrome.designation} · {moduleCount} modules
-                  </span>
-                </div>
                 {/* Session Actions Footer */}
                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
-                  {currentRole !== 'buyer' && (
+                  {!profileRoute && (
                     <button
                       type="button"
                       onClick={() => {

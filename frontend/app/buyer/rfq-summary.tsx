@@ -4,6 +4,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQPortfolioSummary, RFQSource, SourcingMode } from '@/lib/types';
 import {
@@ -121,13 +122,13 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       bySourcingMode: countBy((r) => r.sourcingMode),
       bySource: countBy((r) => r.source),
       followUps: {
-        vendorsInvited: sumChannel((r) => r.followUpData?.totalInvited),
-        vendorsResponded: sumChannel((r) => r.followUpData?.respondedCount),
-        calls: sumChannel((r) => r.followUpData?.callStats?.total),
-        callsConnected: sumChannel((r) => r.followUpData?.callStats?.connected),
-        whatsapp: sumChannel((r) => r.followUpData?.whatsappStats?.total),
-        whatsappRead: sumChannel((r) => r.followUpData?.whatsappStats?.read),
-        sms: sumChannel((r) => r.followUpData?.smsStats?.total),
+        vendorsInvited: sumChannel((r) => computeRFQFollowUpMetrics(r).totalInvited),
+        vendorsResponded: sumChannel((r) => computeRFQFollowUpMetrics(r).responded),
+        calls: sumChannel((r) => computeRFQFollowUpMetrics(r).callTotal),
+        callsConnected: sumChannel((r) => computeRFQFollowUpMetrics(r).callConnected),
+        whatsapp: sumChannel((r) => computeRFQFollowUpMetrics(r).waTotal),
+        whatsappRead: sumChannel((r) => computeRFQFollowUpMetrics(r).waRead),
+        sms: sumChannel((r) => computeRFQFollowUpMetrics(r).smsDelivered ?? computeRFQFollowUpMetrics(r).smsTotal),
       },
     };
   }, [rfqs]);
