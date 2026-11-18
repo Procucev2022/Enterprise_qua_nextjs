@@ -2124,6 +2124,16 @@ async function storeEmailAttachments(message) {
     // a PDF requisition is); saveAttachment's MIME allow-list decides what is
     // storable, exactly as for a portal upload.
     if (!attachment || !attachment.content) continue;
+    // Signature graphics, company logos, social icons, and tracking pixels are never RFQ documents.
+    const isSig = attachment.isSignature || attachment.role === 'signature' || (typeof emailIngestionService.isSignatureAttachment === 'function' && emailIngestionService.isSignatureAttachment(attachment));
+    if (isSig) {
+      logger.info(
+        `Skipped email signature graphic from RFQ attachments: ${attachment.fileName || attachment.filename || 'unnamed'}`,
+        { fileName: attachment.fileName || attachment.filename, contentType: attachment.contentType, size: attachment.size },
+        'EMAIL_GATEWAY'
+      );
+      continue;
+    }
     try {
       const result = await withTimeout(
         rfqAttachmentService.saveAttachment({

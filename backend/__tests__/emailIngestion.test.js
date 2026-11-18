@@ -418,6 +418,227 @@ describe('emailIngestionService.extractCcAddresses and resolveBodyText edge case
     expect(emailIngestionService.resolveBodyText({})).toBe('');
     expect(emailIngestionService.resolveBodyText({ text: null })).toBe('');
   });
+
+  test('covers headerText, referencesText, and detectAutomatedMessage branches', () => {
+    // Subject truncation > 200 chars and resolveEmailRfqTitle
+    const longSubj = 'A'.repeat(250);
+    const norm = emailIngestionService.decodeAndNormalizeEmailSubject(longSubj);
+    expect(norm.length).toBe(200);
+    expect(norm.endsWith('…')).toBe(true);
+    expect(emailIngestionService.decodeAndNormalizeEmailSubject(null)).toBe('');
+    expect(emailIngestionService.decodeAndNormalizeEmailSubject(undefined)).toBe('');
+    expect(emailIngestionService.resolveEmailRfqTitle('', 'Fallback Title')).toBe('Fallback Title');
+    expect(emailIngestionService.resolveEmailRfqTitle('Custom Subject', 'Fallback')).toBe('Custom Subject');
+
+    // decodeHtmlEntities with hex and dec entities
+    expect(emailIngestionService.decodeHtmlEntities(null)).toBe('');
+    expect(emailIngestionService.decodeHtmlEntities('&#65;&#x42;&apos;')).toBe("AB'");
+
+    // decodeRfc2047 edge cases
+    expect(emailIngestionService.decodeRfc2047(null)).toBe('');
+    expect(emailIngestionService.decodeRfc2047('=?utf-8?Z?unsupported?=')).toContain('=?utf-8?Z?unsupported?=');
+
+    // decodeQuotedPrintable and decodeBase64 charsets
+    expect(emailIngestionService.decodeQuotedPrintable('item_one', 'iso-8859-1')).toBe('item one');
+    expect(emailIngestionService.decodeBase64('aGVsbG8=', 'windows-1252')).toBe('hello');
+
+    // detectAutomatedMessage headers
+    const makeHeaders = (map) => ({
+      get: (k) => map[k.toLowerCase()],
+    });
+
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'auto-submitted': 'auto-generated' }))).toContain('auto-submitted');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'auto-submitted': 'no' }))).toBeNull();
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ precedence: 'bulk' }))).toContain('precedence');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ list: ['item1', 'item2'] }))).toBe('mailing list');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'list-unsubscribe': '<mailto:unsub@test.com>' }))).toBe('mailing list');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'list-id': 'list-123' }))).toBe('mailing list');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'x-auto-response-suppress': 'all' }))).toContain('x-auto-response-suppress');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'x-autoreply': { value: 'yes' } }))).toBe('auto-responder');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({ 'x-autorespond': 123 }))).toBe('auto-responder');
+    expect(emailIngestionService.detectAutomatedMessage(makeHeaders({}))).toBeNull();
+    expect(emailIngestionService.detectAutomatedMessage(null)).toBeNull();
+
+    // Additional attachment classification branches
+    expect(emailIngestionService.classifyAttachment({ contentType: 'text/tab-separated-values' })).toBe('text');
+    expect(emailIngestionService.classifyAttachment({ contentType: 'image/webp', size: 100000 })).toBe('inline');
+    expect(emailIngestionService.classifyAttachment({ contentType: 'image/jpeg', size: 100000 })).toBe('inline');
+
+    // Additional signature attachment edge branches
+    expect(emailIngestionService.isSignatureAttachment({
+      contentType: 'image/png',
+      fileName: 'banner.png',
+      content: Buffer.from('small bytes'),
+    })).toBe(true);
+    expect(emailIngestionService.isSignatureAttachment({
+      contentType: 'image/gif',
+      filename: 'footer.gif',
+      size: 500,
+    })).toBe(true);
+  });
+
+  describe('email signature filtering and table flattening fidelity', () => {
+    test('flattenHtmlBody preserves table rows and cells across nested divs, breaks and unclosed tags', () => {
+      const htmlTable = `
+        <div dir="ltr">Dear Sir,</div>
+        <div>Please find the requisition items below:</div>
+        <table border="1">
+          <thead>
+            <tr>
+              <th><div dir="ltr">SR No.</div></th>
+              <th><div dir="ltr">Material Description</div></th>
+              <th><div dir="ltr">Quantity</div></th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><div dir="ltr">1</div></td>
+              <td><div dir="ltr">DELL: Intel Core i3 Processor, 12th Gen</div><div>(DESKTOP COMPUTER)</div></td>
+              <td><div dir="ltr">1</div></td>
+            </tr>
+            <tr>
+              <td><div dir="ltr">4</div></td>
+              <td><div dir="ltr">4 MP IP CAMERA (MAKE UNV)</div></td>
+              <td><div dir="ltr">2</div></td>
+            </tr>
+            <tr>
+              <td><div dir="ltr">11</div></td>
+              <td><div dir="ltr">THERMAL PRINTER PAPER ROLL</div></td>
+              <td><div dir="ltr">100</div></td>
+            </tr>
+          </tbody>
+        </table>
+        <div>MATERIAL DELIVERY ADDRESS: CHENNAI PORT TRUST</div>
+      `;
+
+      const flattened = emailIngestionService.flattenHtmlBody(htmlTable);
+      expect(flattened).toContain('SR No. | Material Description | Quantity');
+      expect(flattened).toContain('1 | DELL: Intel Core i3 Processor, 12th Gen (DESKTOP COMPUTER) | 1');
+      expect(flattened).toContain('4 | 4 MP IP CAMERA (MAKE UNV) | 2');
+      expect(flattened).toContain('11 | THERMAL PRINTER PAPER ROLL | 100');
+      expect(flattened).toContain('CHENNAI PORT TRUST');
+    });
+
+    test('flattenHtmlBody handles malformed and unclosed table rows without throwing or losing columns', () => {
+      const unclosedHtml = '<table><tr><td>SR No.<td>Item Description<td>Qty<tr><td>1<td>Ball Valve<td>10';
+      const flattened = emailIngestionService.flattenHtmlBody(unclosedHtml);
+      expect(flattened).toContain('SR No. | Item Description | Qty');
+      expect(flattened).toContain('1 | Ball Valve | 10');
+    });
+
+    test('isSignatureAttachment correctly identifies inline and footer signature images', () => {
+      expect(emailIngestionService.isSignatureAttachment(null)).toBe(false);
+      expect(emailIngestionService.isSignatureAttachment({ contentType: 'application/pdf' })).toBe(false);
+
+      // Explicit inline disposition or CID
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/png',
+        contentDisposition: 'inline',
+        filename: 'drawing.png',
+        size: 50000,
+      })).toBe(true);
+
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/jpeg',
+        cid: 'logo123@domain',
+        filename: 'custom_header.jpg',
+        size: 80000,
+      })).toBe(true);
+
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/png',
+        related: true,
+        filename: 'inline_badge.png',
+        size: 20000,
+      })).toBe(true);
+
+      // Small logo/signature matching signature filename pattern
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/png',
+        contentDisposition: 'attachment',
+        filename: 'logo.png',
+        size: 15000,
+      })).toBe(true);
+
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/jpeg',
+        filename: 'image001.jpg',
+        size: 12000,
+      })).toBe(true);
+
+      // Real procurement attachments must NOT be classified as signatures
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'image/png',
+        contentDisposition: 'attachment',
+        filename: 'valve_dimension_drawing.png',
+        size: 250000,
+      })).toBe(false);
+
+      expect(emailIngestionService.isSignatureAttachment({
+        contentType: 'application/pdf',
+        contentDisposition: 'inline',
+        filename: 'Requisition.pdf',
+        size: 100000,
+      })).toBe(false);
+    });
+
+    test('classifyAttachment marks signature attachments with role "signature"', () => {
+      expect(emailIngestionService.classifyAttachment({
+        contentType: 'image/png',
+        contentDisposition: 'inline',
+        filename: 'logo.png',
+        size: 5000,
+      })).toBe('signature');
+
+      expect(emailIngestionService.classifyAttachment({
+        contentType: 'image/png',
+        contentDisposition: 'attachment',
+        filename: 'spare_part_drawing.png',
+        size: 300000,
+      })).toBe('inline');
+    });
+
+    test('prepareEmailForExtraction skips signature images and chooses valid document attachment', async () => {
+      const sampleEml = [
+        'From: buyer@test.com',
+        'To: rfq@qua.ai',
+        'Subject: Requisition with Signature Image',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/related; boundary="testboundary"',
+        '',
+        '--testboundary',
+        'Content-Type: text/plain; charset="utf-8"',
+        '',
+        'Please quote on attached spec.',
+        '',
+        '--testboundary',
+        'Content-Type: image/png',
+        'Content-Disposition: inline; filename="signature_logo.png"',
+        'Content-ID: <logo@signature>',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+        '',
+        '--testboundary',
+        'Content-Type: application/pdf',
+        'Content-Disposition: attachment; filename="TechnicalSpec.pdf"',
+        'Content-Transfer-Encoding: base64',
+        '',
+        'JVBERi0xLjQKJcTl8uXrp/Og0MTGCjEgMCBvYmoKPDwK...==',
+        '--testboundary--',
+      ].join('\r\n');
+
+      const prepared = await emailIngestionService.prepareEmailForExtraction({
+        fileName: 'enquiry.eml',
+        content: Buffer.from(sampleEml).toString('base64'),
+      });
+
+      expect(prepared.status).toBe('READY');
+      expect(prepared.extractionInput).toBeDefined();
+      // The inlineData sent to Gemini must be the PDF, NOT the signature logo!
+      expect(prepared.extractionInput.mimeType).toBe('application/pdf');
+    });
+  });
 });
 
 

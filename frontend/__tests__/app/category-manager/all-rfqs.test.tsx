@@ -4,11 +4,15 @@ import AllRFQsConsole from '@/app/category-manager/all-rfqs';
 import CategoryManagerAllRFQsPage from '@/app/category-manager/all-rfqs/page';
 import * as rfqClient from '@/lib/rfqClient';
 import * as storeModule from '@/lib/store';
+import * as reportsClient from '@/lib/reportsClient';
 import { RFQItem } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
 jest.mock('@/lib/rfqClient');
 jest.mock('@/lib/store');
+jest.mock('@/lib/reportsClient', () => ({
+  exportReportToCsv: jest.fn(),
+}));
 
 const push = jest.fn();
 jest.mock('next/navigation', () => ({
@@ -17,6 +21,7 @@ jest.mock('next/navigation', () => ({
 
 const S = UI_STRINGS.allRfqs;
 const S2 = UI_STRINGS.inviteVendors;
+const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
 function makeRfq(overrides: Partial<RFQItem> & { id: string }): RFQItem {
   return {
@@ -395,6 +400,165 @@ describe('AllRFQsConsole', () => {
     // Close VendorDetailsModal
     fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  describe('Date Range Filtering and CSV Export', () => {
+    it('renders start date, end date inputs and export csv button in the header', async () => {
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: ROWS });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+
+      expect(screen.getByLabelText(S.startDateLabel)).toBeInTheDocument();
+      expect(screen.getByLabelText(S.endDateLabel)).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: S.exportCsvAria })).toBeInTheDocument();
+    });
+
+    it('filters RFQs by start date and end date', async () => {
+      const variedRows: RFQItem[] = [
+        makeRfq({ id: 'd1', title: 'Jan RFQ', createdAt: '2026-01-15T10:00:00.000Z' }),
+        makeRfq({ id: 'd2', title: 'Jun RFQ', createdAt: '2026-06-15T10:00:00.000Z' }),
+        makeRfq({ id: 'd3', title: 'Dec RFQ', createdAt: '2026-12-15T10:00:00.000Z' }),
+      ];
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: variedRows });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Jun RFQ')).toBeInTheDocument());
+
+      // Filter by start date
+      fireEvent.change(screen.getByLabelText(S.startDateLabel), { target: { value: '2026-06-01' } });
+      expect(screen.queryByText('Jan RFQ')).not.toBeInTheDocument();
+      expect(screen.getByText('Jun RFQ')).toBeInTheDocument();
+      expect(screen.getByText('Dec RFQ')).toBeInTheDocument();
+
+      // Filter by end date
+      fireEvent.change(screen.getByLabelText(S.endDateLabel), { target: { value: '2026-11-30' } });
+      expect(screen.queryByText('Jan RFQ')).not.toBeInTheDocument();
+      expect(screen.getByText('Jun RFQ')).toBeInTheDocument();
+      expect(screen.queryByText('Dec RFQ')).not.toBeInTheDocument();
+
+      // Clear filters
+      fireEvent.click(screen.getByRole('button', { name: S.clearFilters }));
+      expect(screen.getByText('Jan RFQ')).toBeInTheDocument();
+      expect(screen.getByText('Jun RFQ')).toBeInTheDocument();
+      expect(screen.getByText('Dec RFQ')).toBeInTheDocument();
+      expect((screen.getByLabelText(S.startDateLabel) as HTMLInputElement).value).toBe('');
+      expect((screen.getByLabelText(S.endDateLabel) as HTMLInputElement).value).toBe('');
+    });
+
+    it('exports CSV with formatted RFQ data when Export CSV button is clicked', async () => {
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: ROWS });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+
+      const exportBtn = screen.getByRole('button', { name: S.exportCsvAria });
+      expect(exportBtn).not.toBeDisabled();
+      fireEvent.click(exportBtn);
+
+      expect(reportsClient.exportReportToCsv).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            [S.colRfqNumber]: ROWS[0].rfqNumber,
+            [S.colTitle]: ROWS[0].title,
+            [S.colCategory]: ROWS[0].category,
+            [S.colBuyer]: ROWS[0].buyerAccountName,
+          }),
+        ]),
+        expect.stringMatching(new RegExp(`^${S.downloadFilename}`))
+      );
+    });
+
+    it('disables Export CSV button when no RFQs match filters', async () => {
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: ROWS });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+
+      // Set date range that matches nothing
+      fireEvent.change(screen.getByLabelText(S.startDateLabel), { target: { value: '2029-01-01' } });
+      expect(screen.getByText(S.noMatches)).toBeInTheDocument();
+
+      const exportBtn = screen.getByRole('button', { name: S.exportCsvAria });
+      expect(exportBtn).toBeDisabled();
+    });
+
+    it('handles date filtering for RFQs with missing or empty createdAt', async () => {
+      const rowsWithMissingDate: RFQItem[] = [
+        makeRfq({ id: 'valid-date', title: 'Dated RFQ', createdAt: '2026-06-15T10:00:00.000Z' }),
+        makeRfq({ id: 'empty-date', title: 'Undated RFQ', createdAt: '' }),
+      ];
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: rowsWithMissingDate });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Dated RFQ')).toBeInTheDocument());
+
+      // Applying a date filter excludes the undated RFQ
+      fireEvent.change(screen.getByLabelText(S.startDateLabel), { target: { value: '2026-06-01' } });
+      expect(screen.getByText('Dated RFQ')).toBeInTheDocument();
+      expect(screen.queryByText('Undated RFQ')).not.toBeInTheDocument();
+    });
+
+    it('exports CSV with date suffix when single start or end date is selected and handles diverse RFQ shapes', async () => {
+      const richRows: RFQItem[] = [
+        makeRfq({
+          id: 'rich-1',
+          title: 'Rich RFQ',
+          category: '',
+          buyerAccountName: null,
+          budget: 0,
+          createdAt: '2026-06-15T10:00:00.000Z',
+          quotes: [
+            {
+              vendorId: 'v-1',
+              vendorName: 'Quoted Vendor A',
+              totalQuoteAmount: 1000,
+              submittedAt: '2026-06-16T12:00:00.000Z',
+              quoteStatus: 'Submitted',
+              lineItems: [],
+              complianceScore: 100,
+              deliveryTimelineDays: 5,
+              paymentTerms: '30 days',
+              validityPeriodDays: 30,
+            },
+          ],
+          assignedVendors: [
+            { id: 'v-assigned', name: 'Assigned Vendor B' } as any,
+          ],
+          deliveryLocation: '',
+          targetDeliveryDate: '',
+          deadline: '',
+          sourcingMode: '',
+        }),
+      ];
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: richRows });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Rich RFQ')).toBeInTheDocument());
+
+      // Export with startDate only
+      fireEvent.change(screen.getByLabelText(S.startDateLabel), { target: { value: '2026-01-01' } });
+      const exportBtn = screen.getByRole('button', { name: S.exportCsvAria });
+      fireEvent.click(exportBtn);
+
+      expect(reportsClient.exportReportToCsv).toHaveBeenCalledWith(
+        expect.arrayContaining([
+          expect.objectContaining({
+            [S.colTitle]: 'Rich RFQ',
+            [S.colCategory]: EMPTY_VALUE,
+            [S.colBuyer]: S.buyerUnknown,
+            [S.colBudget]: S.budgetUnset,
+            [S.colVendors]: 'Quoted Vendor A',
+            [S.colInvitedVendors]: 'Assigned Vendor B',
+          }),
+        ]),
+        expect.stringMatching(/2026-01-01_to_all$/)
+      );
+
+      // Export with endDate only
+      fireEvent.change(screen.getByLabelText(S.startDateLabel), { target: { value: '' } });
+      fireEvent.change(screen.getByLabelText(S.endDateLabel), { target: { value: '2026-12-31' } });
+      fireEvent.click(exportBtn);
+
+      expect(reportsClient.exportReportToCsv).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.stringMatching(/all_to_2026-12-31$/)
+      );
+    });
   });
 });
 

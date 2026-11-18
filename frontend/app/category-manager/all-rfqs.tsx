@@ -5,7 +5,8 @@ import { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
 import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchAllRFQs } from '@/lib/rfqClient';
-import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store } from 'lucide-react';
+import { exportReportToCsv } from '@/lib/reportsClient';
+import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store, Download } from 'lucide-react';
 import InviteVendorsModal from './InviteVendorsModal';
 import BuyerDetailsModal from './BuyerDetailsModal';
 import VendorDetailsModal from './VendorDetailsModal';
@@ -109,6 +110,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [buyerFilter, setBuyerFilter] = useState<string>('all');
+  const [startDate, setStartDate] = useState<string>('');
+  const [endDate, setEndDate] = useState<string>('');
   const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
 
   const [selectedBuyerInfo, setSelectedBuyerInfo] = useState<{
@@ -156,9 +159,20 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
+    const startMs = startDate ? new Date(`${startDate}T00:00:00`).getTime() : null;
+    const endMs = endDate ? new Date(`${endDate}T23:59:59.999`).getTime() : null;
+
     return rfqs.filter((r) => {
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (buyerFilter !== 'all' && (r.buyerAccountName || '') !== buyerFilter) return false;
+
+      if (startMs || endMs) {
+        const createdMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+        if (!createdMs) return false;
+        if (startMs && createdMs < startMs) return false;
+        if (endMs && createdMs > endMs) return false;
+      }
+
       if (!q) return true;
       return (
         r.rfqNumber.toLowerCase().includes(q) ||
@@ -169,13 +183,62 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         (r.assignedVendors || []).some((av) => (av.name || '').toLowerCase().includes(q))
       );
     });
-  }, [rfqs, search, statusFilter, buyerFilter]);
-  const hasFilters = search.trim().length > 0 || statusFilter !== 'all' || buyerFilter !== 'all';
+  }, [rfqs, search, statusFilter, buyerFilter, startDate, endDate]);
+
+  const hasFilters =
+    search.trim().length > 0 ||
+    statusFilter !== 'all' ||
+    buyerFilter !== 'all' ||
+    Boolean(startDate) ||
+    Boolean(endDate);
 
   const clearFilters = () => {
     setSearch('');
     setStatusFilter('all');
     setBuyerFilter('all');
+    setStartDate('');
+    setEndDate('');
+  };
+
+  const handleExportCsv = () => {
+    const rows = filtered.map((rfq) => {
+      const invitedVendorNames = (rfq.assignedVendors || [])
+        .map((av) => invitedVendorIdentity(av).name)
+        .filter(Boolean)
+        .join('; ');
+
+      const quotedVendorNames = (rfq.quotes || [])
+        .map((q) => q.vendorName)
+        .filter(Boolean)
+        .join('; ');
+
+      const latestQuote = latestQuoteSubmittedAt(rfq);
+
+      return {
+        [S.colRfqNumber]: rfq.rfqNumber,
+        [S.colTitle]: rfq.title,
+        [S.colCategory]: rfq.category || EMPTY_VALUE,
+        [S.colBuyer]: rfq.buyerAccountName || S.buyerUnknown,
+        [S.colStatus]: rfq.status,
+        [S.colQuotes]: rfq.quotes?.length || rfq.quotesCount || 0,
+        [S.colInvitedVendors]: invitedVendorNames || S.colInvitedVendorsNone,
+        [S.colVendors]: quotedVendorNames || S.colVendorsNone,
+        [S.colBudget]: rfq.budget > 0 ? formatCurrency(rfq.budget) : S.budgetUnset,
+        [S.colCreated]: rfq.createdAt ? new Date(rfq.createdAt).toLocaleDateString() : EMPTY_VALUE,
+        [S.colLatestQuote]: latestQuote ? formatIndianDateTime(latestQuote) : S.latestQuoteNone,
+        [S.colDeliveryLocation]: rfq.deliveryLocation || EMPTY_VALUE,
+        [S.colRequiredBy]: rfq.targetDeliveryDate || EMPTY_VALUE,
+        [S.colQuoteDeadline]: rfq.deadline || EMPTY_VALUE,
+        [S.colSourcingMode]: rfq.sourcingMode || EMPTY_VALUE,
+      };
+    });
+
+    const dateSuffix = startDate || endDate
+      ? `_${startDate || 'all'}_to_${endDate || 'all'}`
+      : `_${new Date().toISOString().split('T')[0]}`;
+    const fileName = `${S.downloadFilename}${dateSuffix}`;
+
+    exportReportToCsv(rows, fileName);
   };
 
   return (
@@ -188,14 +251,60 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         ) : (
           <div />
         )}
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className="btn-ghost flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:text-gray-250 ml-auto"
-        >
-          <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {S.retryAction}
-        </button>
+        <div className="flex items-center gap-2.5 flex-wrap ml-auto">
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="all-rfqs-start-date" className="text-xs font-bold text-slate-600 dark:text-gray-300 whitespace-nowrap">
+              {S.startDateLabel}
+            </label>
+            <input
+              id="all-rfqs-start-date"
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              aria-label={S.startDateLabel}
+              placeholder={S.startDatePlaceholder}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250"
+            />
+          </div>
+
+          <div className="flex items-center gap-1.5">
+            <label htmlFor="all-rfqs-end-date" className="text-xs font-bold text-slate-600 dark:text-gray-300 whitespace-nowrap">
+              {S.endDateLabel}
+            </label>
+            <input
+              id="all-rfqs-end-date"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-label={S.endDateLabel}
+              placeholder={S.endDatePlaceholder}
+              className="h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250"
+            />
+          </div>
+
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={loading || filtered.length === 0}
+            aria-label={S.exportCsvAria}
+            data-testid="all-rfqs-export-csv"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900"
+          >
+            <Download size={13} className="shrink-0" />
+            <span>{S.exportCsv}</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            aria-label={S.retryAction}
+            data-testid="all-rfqs-refresh"
+            className="btn-ghost flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:text-gray-250"
+          >
+            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {S.retryAction}
+          </button>
+        </div>
       </div>
 
       <section

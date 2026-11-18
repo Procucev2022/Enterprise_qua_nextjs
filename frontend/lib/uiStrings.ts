@@ -1472,6 +1472,18 @@ export const UI_STRINGS = {
     viewDetailsAria: 'View the full submitted detail for {rfqNumber}',
     inviteVendorsAction: 'Invite Vendors',
     inviteVendorsAria: 'Invite vendors to {rfqNumber}',
+    colCategory: 'Category',
+    colDeliveryLocation: 'Delivery Location',
+    colRequiredBy: 'Required By',
+    colQuoteDeadline: 'Quote Deadline',
+    colSourcingMode: 'Sourcing Mode',
+    startDateLabel: 'Start Date',
+    endDateLabel: 'End Date',
+    startDatePlaceholder: 'Start date',
+    endDatePlaceholder: 'End date',
+    exportCsv: 'Export CSV',
+    exportCsvAria: 'Export RFQ data to CSV',
+    downloadFilename: 'all_rfqs_export',
   },
 
   inviteVendors: {

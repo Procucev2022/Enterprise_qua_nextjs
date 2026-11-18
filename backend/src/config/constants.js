@@ -1574,6 +1574,8 @@ const EMAIL_INGESTION_CONFIG = {
   // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
   // type can never be forwarded that the extractor would then refuse.
   INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  SIGNATURE_IMAGE_MAX_BYTES: 50 * 1024,
+  SIGNATURE_FILE_NAME_PATTERN: /^(?:image\d*|logo\d*|signature\d*|banner\d*|icon\d*|footer\d*|header\d*|outlook\w*|spacer\w*|facebook|twitter|linkedin|instagram|youtube)\.(?:png|jpe?g|gif|webp|bmp|ico)$/i,
   // A line matching any of these starts the quoted thread beneath a forwarded
   // requisition; everything from there down is dropped before extraction.
   QUOTE_MARKERS: [

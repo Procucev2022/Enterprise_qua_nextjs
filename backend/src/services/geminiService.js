@@ -598,9 +598,11 @@ function extractSpreadsheetLineItems(text) {
 
       cells.forEach((cell, idx) => {
         const field = matchHeaderField(cell);
-        if (field && field !== 'sNo') {
+        if (field) {
           tempMap.set(field, idx);
-          recognizedCount++;
+          if (field !== 'sNo') {
+            recognizedCount++;
+          }
         }
       });
 
@@ -616,7 +618,15 @@ function extractSpreadsheetLineItems(text) {
     // Fallback column inference if no explicit header row was detected
     if (headerIndex === -1 && lines.length > 0) {
       const firstRowCells = lines[0].split('|').map((c) => c.trim());
+      const hasSubsequentQuantity = firstRowCells.slice(1).some((c) => parseValidQuantity(c) !== null);
+
       firstRowCells.forEach((cell, idx) => {
+        const isSmallInt = /^\d{1,5}$/.test(cell);
+        if (idx === 0 && isSmallInt && hasSubsequentQuantity && !headerColMap.has('sNo')) {
+          headerColMap.set('sNo', idx);
+          return;
+        }
+
         const qtyVal = parseValidQuantity(cell);
         if (qtyVal !== null && !headerColMap.has('quantity')) {
           headerColMap.set('quantity', idx);
@@ -630,8 +640,8 @@ function extractSpreadsheetLineItems(text) {
       });
     }
 
-    const descIdx = headerColMap.get('itemDescription') ?? 0;
-    const qtyIdx = headerColMap.get('quantity') ?? 1;
+    const descIdx = headerColMap.get('itemDescription') ?? (headerColMap.get('sNo') === 0 ? 1 : 0);
+    const qtyIdx = headerColMap.get('quantity') ?? (headerColMap.get('sNo') === 0 ? 2 : 1);
     const unitIdx = headerColMap.get('unit');
     const specIdx = headerColMap.get('specification');
     const unitPriceIdx = headerColMap.get('unitPrice');
