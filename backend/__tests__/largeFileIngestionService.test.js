@@ -621,6 +621,7 @@ describe('largeFileIngestionService unit tests', () => {
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }]);
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
       jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
       jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
@@ -1021,6 +1022,7 @@ describe('largeFileIngestionService unit tests', () => {
       jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
       jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
       jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
 
@@ -1219,6 +1221,7 @@ describe('largeFileIngestionService unit tests', () => {
       });
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
       jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
       jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
@@ -1266,9 +1269,11 @@ describe('largeFileIngestionService unit tests', () => {
         organizationId: 'org-1',
       });
       jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
       jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
       jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
       jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);

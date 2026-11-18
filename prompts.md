@@ -6266,3 +6266,10 @@ if in vendor upload data have any duplicate it as to show and skip that data
 The count should come correctly. 
 ```
 ---
+
+### Prompt 265
+**Timestamp**: 2026-11-17T20:57:11+05:30
+```text
+i give the po data of 4 vendors only but it is showing 7 mapped and 3 unmapped. Please again check the counts.
+```
+---

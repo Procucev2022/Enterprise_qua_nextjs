@@ -438,6 +438,12 @@ describe('mapping review reads', () => {
     const selfMapping = { ...MAPPING, id: 'mapping-2', vendorRecordId: 'record-2', companyName: 'Other Supplier', hasPoHistory: false, status: MAPPING_STATUS.SELF_MAP_REQUIRED, aiSuggestion: { ...MAPPING.aiSuggestion, confidence: 50 } };
     queries.findCategoryMappings.mockResolvedValue([approved, selfMapping]);
     expect((await service.listMappings(USER, SESSION.id)).vendors[0]).toMatchObject({ finalMajorCategory: 'Mechanical', finalMinorCategories: ['Valves'], confidenceBand: 'HIGH' });
+    expect((await service.listMappings(USER, SESSION.id)).vendors[1]).toMatchObject({
+      id: selfMapping.id,
+      hasPoHistory: false,
+      finalMajorCategory: '',
+      finalMinorCategories: [],
+    });
     expect((await service.listMappings(USER, SESSION.id, { status: MAPPING_STATUS.BUYER_APPROVED, confidence: 'HIGH', hasPoHistory: 'YES', search: 'valves' })).total).toBe(1);
     expect((await service.listMappings(USER, SESSION.id, { status: 'ALL', confidence: 'NEEDS_REVIEW', hasPoHistory: 'NO' })).vendors[0].id).toBe(selfMapping.id);
     expect((await service.listMappings(USER, SESSION.id, { confidence: 'ALL', search: 'missing', limit: 999, offset: -5 })).total).toBe(0);

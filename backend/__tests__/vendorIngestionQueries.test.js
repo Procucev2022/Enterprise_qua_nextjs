@@ -121,7 +121,7 @@ const SCOPED_READS = [
   ['findVendorPurchasingProfiles', [], []], ['findUnmatchedPoVendors', [], []], ['seedCategoryMappings', [[{}]], []],
   ['findCategoryMappings', [], []], ['findCategoryMappingByVendorRecord', ['vendor'], null],
   ['findQueuedCategoryMappings', [], []], ['markMappingProcessing', [], null], ['saveAiSuggestion', [{}], null],
-  ['markMappingFailed', [], null], ['requeueMapping', [], null], ['resetCategoryMappingsForReclassification', [], 0], ['saveBuyerReview', [{}], null], ['attachVendorId', [], null],
+  ['markMappingFailed', [], null], ['requeueMapping', [], null], ['resetCategoryMappingsForReclassification', [], 0], ['deleteCategoryMappingsForSession', [], 0], ['saveBuyerReview', [{}], null], ['attachVendorId', [], null],
   ['findCategorySegmentation', [], []], ['finalizeDispatch', [{}], null], ['findDispatches', [], []],
   ['markEmailSent', [], null], ['markEmailFailed', [], null], ['findEmailLogs', [], []], ['findAiClassificationLogs', [], []],
 ];
@@ -352,7 +352,7 @@ describe('scoped reads, limits and deletion results', () => {
     expect(await queries.countPoLineItems(SESSION, ORG)).toEqual({ total: 0, inHorizon: 0, outsideHorizon: 0 });
   });
 
-  test.each(['deleteVendorMasterRecords', 'deletePoLineItems', 'resetCategoryMappingsForReclassification'])('%s returns the affected count and keeps the organization predicate', async (name) => {
+  test.each(['deleteVendorMasterRecords', 'deletePoLineItems', 'deleteCategoryMappingsForSession', 'resetCategoryMappingsForReclassification'])('%s returns the affected count and keeps the organization predicate', async (name) => {
     expect(await queries[name](SESSION, ORG)).toBe(1);
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('organization_id = $2'), expect.arrayContaining([SESSION, ORG]), expect.objectContaining({ d1: true }));
     pool.query.mockResolvedValue({ rows: [] });

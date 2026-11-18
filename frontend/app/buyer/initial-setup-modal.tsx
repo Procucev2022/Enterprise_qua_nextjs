@@ -407,8 +407,9 @@ export default function InitialSetupModal() {
         pincode: local?.pincode,
       });
       const localPoLines = local ? matchPoLinesForVendor(local) : [];
-      let finalMinors = normalizeVendorCategoryList(mapping.finalMinorCategories);
-      if (mapping.finalMajorCategory !== '' && finalMinors.length === 0 && localPoLines.length > 0) {
+      const isMappedVendor = mapping.hasPoHistory && mapping.finalMajorCategory !== '';
+      let finalMinors = isMappedVendor ? normalizeVendorCategoryList(mapping.finalMinorCategories) : [];
+      if (isMappedVendor && finalMinors.length === 0 && localPoLines.length > 0) {
         finalMinors = Array.from(
           new Set(
             localPoLines
@@ -431,13 +432,13 @@ export default function InitialSetupModal() {
         gstNumber: local?.gstNumber ?? '',
         vendorRatingScore: local?.vendorRatingScore,
         hasPoHistory: mapping.hasPoHistory,
-        categoriesMappedByBuyer: mapping.finalMajorCategory !== '',
+        categoriesMappedByBuyer: isMappedVendor,
         itemsSupplied: localPoLines.map((p) => p.itemName),
         pastPoSpend: mapping.hasPoHistory
           ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
           : 'No PO History in Dump',
         poCount: mapping.poCount,
-        firstSetMajorCategory: mapping.finalMajorCategory,
+        firstSetMajorCategory: isMappedVendor ? mapping.finalMajorCategory : '',
         secondSetMinorCategories: finalMinors,
         secondSetSecondaryMajors: [],
       };

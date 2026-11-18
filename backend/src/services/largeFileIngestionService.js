@@ -846,9 +846,10 @@ async function recordVendorMasterUpload({ jobId, sessionId, organizationId, tota
 async function prepareSessionForReplacementUpload({ sessionId, organizationId, jobType }) {
   if (jobType === 'VENDOR_MASTER') {
     await queries.deleteVendorMasterRecords(sessionId, organizationId);
-  } else {
-    await queries.deletePoLineItems(sessionId, organizationId);
+    await queries.deleteCategoryMappingsForSession(sessionId, organizationId);
+    return;
   }
+  await queries.deletePoLineItems(sessionId, organizationId);
   await queries.resetCategoryMappingsForReclassification(sessionId, organizationId);
 }
 

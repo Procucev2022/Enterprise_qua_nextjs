@@ -734,6 +734,17 @@ async function countVendorMasterRecords(sessionId, organizationId) {
   return rows.length > 0 ? counter(rows[0].total) : 0;
 }
 
+/** Clear all category mappings for a session when the vendor master is replaced wholesale. */
+async function deleteCategoryMappingsForSession(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    'delete from vendor_category_mappings where session_id = $1 and organization_id = $2',
+    [sessionId, organizationId],
+    { d1: true }
+  );
+  return result.rowCount || 0;
+}
+
 /** Clear a session's vendor master so a corrected file replaces it wholesale. */
 async function deleteVendorMasterRecords(sessionId, organizationId) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
@@ -1403,6 +1414,12 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      returning *`,
         params: [
@@ -1487,6 +1504,12 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
            updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
@@ -1671,7 +1694,7 @@ async function requeueMapping(mappingId, organizationId) {
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
 }
 
-/** Reset non-approved mappings back to QUEUED when PO dump or vendor master data is replaced. */
+/** Reset non-approved mappings back to QUEUED and clear stale PO/AI derivations when PO data changes. */
 async function resetCategoryMappingsForReclassification(sessionId, organizationId) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
   const result = await pool.query(
@@ -1679,6 +1702,15 @@ async function resetCategoryMappingsForReclassification(sessionId, organizationI
         set processing_status = $3,
             status = $6,
             processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]'::jsonb,
+            ai_relevant_products = '[]'::jsonb,
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = false,
+            po_count = 0,
+            total_spend = 0,
             updated_at = CURRENT_TIMESTAMP
       where session_id = $1
         and organization_id = $2
@@ -1697,6 +1729,15 @@ async function resetCategoryMappingsForReclassification(sessionId, organizationI
         set processing_status = $3,
             status = $6,
             processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]',
+            ai_relevant_products = '[]',
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = 0,
+            po_count = 0,
+            total_spend = 0,
             updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
       where session_id = $1
         and organization_id = $2
@@ -2424,6 +2465,7 @@ module.exports = {
   markMappingFailed,
   requeueMapping,
   resetCategoryMappingsForReclassification,
+  deleteCategoryMappingsForSession,
   saveBuyerReview,
   attachVendorId,
   summarizeCategoryMappings,

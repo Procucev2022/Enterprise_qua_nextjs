@@ -502,6 +502,7 @@ async function confirmVendorMaster(sessionUser, sessionId, { rows, fileName, rep
 
   if (replaceExisting) {
     await queries.deleteVendorMasterRecords(sessionId, context.organizationId);
+    await queries.deleteCategoryMappingsForSession(sessionId, context.organizationId);
   }
 
   if (storable.length === 0) {
@@ -1441,13 +1442,23 @@ async function listMappings(sessionUser, sessionId, { status, confidence, hasPoH
   const all = await queries.findCategoryMappings(sessionId, context.organizationId);
   const needle = String(search || '').trim().toLowerCase();
 
-  const decorated = all.map((mapping) => ({
-    ...mapping,
-    confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
-    finalMajorCategory: mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory,
-    finalMinorCategories:
-      mapping.buyerMinorCategories.length > 0 ? mapping.buyerMinorCategories : mapping.aiSuggestion.minorCategories,
-  }));
+  const decorated = all.map((mapping) => {
+    const canExposeDerivedCategory =
+      mapping.status !== VENDOR_MAPPING_STATUS.SELF_MAP_REQUIRED &&
+      mapping.status !== VENDOR_MAPPING_STATUS.REJECTED;
+    return {
+      ...mapping,
+      confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
+      finalMajorCategory: canExposeDerivedCategory
+        ? mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory
+        : '',
+      finalMinorCategories: canExposeDerivedCategory
+        ? mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : mapping.aiSuggestion.minorCategories
+        : [],
+    };
+  });
 
   const filtered = decorated.filter((mapping) => {
     if (status && status !== 'ALL' && mapping.status !== status) return false;

@@ -4767,5 +4767,47 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       jest.useRealTimers();
     }
   });
+
+  it('never counts vendors with hasPoHistory=false as PO Mapped on Step 4 even if stale finalMajorCategory was present', async () => {
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'COMPLETED', totalRecords: 4, processedRecords: 4, importedRecords: 4 }),
+      mappings: [
+        ...Array.from({ length: 4 }, (_, idx) => ({
+          ...APEX_MAPPING,
+          id: `map-m-${idx}`,
+          vendorRecordId: `vr-m-${idx}`,
+          vendorCode: `V-${idx + 1}`,
+          companyName: `Mapped Vendor ${idx + 1}`,
+          email: `m${idx + 1}@co.in`,
+          hasPoHistory: true,
+          status: 'AI_MAPPED',
+          finalMajorCategory: 'Mechanical',
+          finalMinorCategories: ['Pumps'],
+        })),
+        ...Array.from({ length: 6 }, (_, idx) => ({
+          ...APEX_MAPPING,
+          id: `map-u-${idx}`,
+          vendorRecordId: `vr-u-${idx}`,
+          vendorCode: `V-${idx + 5}`,
+          companyName: `SelfMap Vendor ${idx + 1}`,
+          email: `u${idx + 1}@co.in`,
+          hasPoHistory: false,
+          status: 'SELF_MAP_REQUIRED',
+          finalMajorCategory: 'Electrical',
+          finalMinorCategories: ['Cables'],
+        })),
+      ],
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    expect(screen.getByText('10 Vendors')).toBeInTheDocument();
+    expect(screen.getByText('4 Suppliers')).toBeInTheDocument();
+    expect(screen.getByText('6 Suppliers')).toBeInTheDocument();
+  });
 });
 
