@@ -399,6 +399,24 @@ describe('Store Service — remaining branch coverage', () => {
 
       expect(res.importedCount).toBe(1);
     });
+
+    test('skips duplicate emails within the same vendorRecords batch cleanly', async () => {
+      const res = await storeService.processHistoricalPurchaseData('FY2026-batch-dup', [
+        { companyName: 'Unique Batch Vendor', email: 'dupbatch@historical.com' },
+        { companyName: 'Duplicate Batch Vendor', email: 'DUPBATCH@historical.com' },
+      ]);
+
+      expect(res.importedCount).toBe(1);
+      expect(res.skippedCount).toBe(1);
+      expect(res.skipped).toEqual([
+        expect.objectContaining({
+          row: 2,
+          vendorName: 'Duplicate Batch Vendor',
+          email: 'DUPBATCH@historical.com',
+          reason: expect.stringContaining('dupbatch@historical.com'),
+        }),
+      ]);
+    });
   });
 
   // Every fire-and-forget _persistX/_removeX/_setActiveX helper attaches its

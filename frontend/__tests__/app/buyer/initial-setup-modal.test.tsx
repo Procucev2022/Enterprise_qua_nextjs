@@ -3,7 +3,7 @@ import { render, screen, fireEvent, act, within, waitFor } from '@testing-librar
 import * as XLSX from 'xlsx';
 import InitialSetupModal, { IngestionProgressCard, parseVendorMobile } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import { PO_DUMP_TEMPLATE_HEADERS } from '@/lib/constants';
 import { logger } from '@/lib/logger';
 
@@ -4514,6 +4514,232 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     await waitFor(() => expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled());
     const submittedVendors = mockProcessHistoricalPurchaseData.mock.calls[0][1];
     expect(submittedVendors[0].secondSetMinorCategories.length).toBeGreaterThan(0);
+  });
+
+  it('skips duplicate vendors within uploaded file, displays skipped duplicate banner with reasons, and resets on Clear', async () => {
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-501',
+        'Company Name': 'Govardhan Solutions Pvt LTD',
+        'Contact Person': 'Govardhan',
+        Email: 'govardhan.kilari@procucev.com',
+        Phone: '9966766905',
+        Address: 'Bengaluru',
+        GSTIN: '27AAACA1928K1Z4',
+      },
+      {
+        'Vendor Code': 'V-502',
+        'Company Name': 'Veera Solutions Pvt LTD',
+        'Contact Person': 'veerababu',
+        Email: 'veerababu.v@procucev.com',
+        Phone: '9381877013',
+        Address: 'Bengaluru',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+      {
+        'Vendor Code': 'V-503',
+        'Company Name': 'Govardhan Duplicate Row',
+        'Contact Person': 'Govardhan',
+        Email: 'GOVARDHAN.KILARI@procucev.com',
+        Phone: '9999999901',
+        Address: 'Mumbai',
+        GSTIN: '27NEWGS1928K1Z4',
+      },
+      {
+        'Vendor Code': 'V-504',
+        'Company Name': 'Veera Dup GSTIN Row',
+        'Contact Person': 'Veera',
+        Email: 'veera-other@procucev.com',
+        Phone: '9999999902',
+        Address: 'Chennai',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const dupFile: any = new File([buf], 'Testing data.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    dupFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [dupFile] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    const skippedBanner = await screen.findByTestId('vendor-duplicate-skipped-banner');
+    expect(skippedBanner).toBeInTheDocument();
+    expect(skippedBanner).toHaveTextContent('#4');
+    expect(skippedBanner).toHaveTextContent('#5');
+    expect(skippedBanner).toHaveTextContent('Govardhan Duplicate Row');
+    expect(skippedBanner).toHaveTextContent('Veera Dup GSTIN Row');
+    expect(screen.getByText(/Stored Vendor Master Records \(2 Suppliers\)/i)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesWarningToastTitle,
+      expect.stringContaining('2 duplicate'),
+      'warning'
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
+    expect(screen.queryByTestId('vendor-duplicate-skipped-banner')).not.toBeInTheDocument();
+  });
+
+  it('skips all rows and displays all-duplicates warning banner when every uploaded vendor matches existing Buyer Directory', async () => {
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    // Both rows duplicate mockBuyerVendors[0] ('rajesh@apex.in' and Apex Supplies Ltd. + 9820144820)
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '1',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh',
+        Email: 'rajesh@apex.in',
+        Phone: '9820144820',
+        Address: 'Mumbai',
+      },
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh',
+        Email: 'rajesh-alt@apex.in',
+        Phone: '9820144820',
+        Address: 'Mumbai',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const existingDupFile: any = new File([buf], 'all_existing_dupes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    existingDupFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [existingDupFile] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(await screen.findByTestId('vendor-duplicate-skipped-banner')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.allDuplicatesBannerTitle, { count: 2 })
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Stored Vendor Master Records/i)).not.toBeInTheDocument();
+  });
+
+  it('populates skipped duplicate banner when polling returns backend duplicate_skipped errorDetails', async () => {
+    let jobPollCount = 0;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-poll-dup' } } }),
+        });
+      }
+      if (url.includes('/stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-poll-dup-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'huge_dupes.csv',
+                  status: 'PROCESSING',
+                  totalRecords: 3,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/job-poll-dup-1')) {
+        jobPollCount++;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-poll-dup-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'huge_dupes.csv',
+                  status: 'COMPLETED',
+                  totalRecords: 3,
+                  processedRecords: 3,
+                  importedRecords: 2,
+                  skippedRecords: 1,
+                  failedRecords: 0,
+                  errorDetails: [
+                    {
+                      rowNumber: 0,
+                      vendorName: 'Polled Dup Vendor',
+                      status: 'duplicate_skipped',
+                      matchedAgainst: 'EXISTING_VENDOR',
+                      reason: 'Duplicate email (polled@dup.in) — already exists in Buyer Directory',
+                    },
+                  ],
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    jest.useFakeTimers();
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+
+      const csvFile: any = new File(['Vendor Code,Company Name,Email\n'], 'huge_dupes.csv', { type: 'text/csv' });
+      Object.defineProperty(csvFile, 'size', { value: 20 * 1024 * 1024 }); // > 15MB triggers server-only streaming path
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [csvFile] } });
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2200);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(jobPollCount).toBeGreaterThanOrEqual(1);
+      const banner = await screen.findByTestId('vendor-duplicate-skipped-banner');
+      expect(banner).toHaveTextContent('Polled Dup Vendor');
+      expect(banner).toHaveTextContent('1 Duplicate Row Skipped');
+      expect(banner).toHaveTextContent('Duplicate email (polled@dup.in)');
+    } finally {
+      jest.useRealTimers();
+    }
   });
 });
 

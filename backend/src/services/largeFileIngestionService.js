@@ -23,6 +23,8 @@
 const { PutObjectCommand, GetObjectCommand, DeleteObjectCommand } = require('@aws-sdk/client-s3');
 const queries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const r2Client = require('./r2Client');
 const r2NegativeCache = require('./r2NegativeCache');
 const { getWaitUntil } = require('../db/d1Bridge');
@@ -32,6 +34,7 @@ const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
   VENDOR_INGESTION_CONFIG,
+  VENDOR_INGESTION_MESSAGES,
   resolveVendorLocationFields,
 } = require('../config/constants');
 
@@ -448,33 +451,207 @@ function mapRowValues(values, headerMap, type, rowIdx) {
   }
 }
 
-/**
- * Process a batch of Vendor Master records into the database
- */
-async function processVendorMasterBatch(sessionId, organizationId, batch) {
-  const valid = [];
-  const invalid = [];
+const PLACEHOLDER_GSTIN_VALUES = new Set(['', 'N/A', 'NA', 'NONE', 'NIL', '-', '—', 'NOTPROVIDED', 'NOTAPPLICABLE']);
 
-  // Track existing vendor codes to prevent collisions and generate sequential codes
-  const usedCodes = new Set();
-  for (const row of batch) {
-    if (row.vendorCode && String(row.vendorCode).trim()) {
-      usedCodes.add(String(row.vendorCode).trim().toLowerCase());
+function formatIngestionMessage(template, values = {}) {
+  return Object.entries(values).reduce(
+    (msg, [key, val]) => msg.replaceAll(`{${key}}`, String(val ?? '')),
+    template
+  );
+}
+
+function normalizeDedupeGstin(raw) {
+  const cleaned = String(raw || '').trim().toUpperCase().replace(/\s+/g, '');
+  if (!cleaned || PLACEHOLDER_GSTIN_VALUES.has(cleaned)) return '';
+  return cleaned.length >= 5 ? cleaned : '';
+}
+
+function normalizeDedupeCode(raw) {
+  return String(raw || '').trim().toLowerCase();
+}
+
+function normalizeDedupeCompanyPhone(companyName, phone) {
+  const normalizedCompany = String(companyName || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const digits = String(phone || '').replace(/\D/g, '');
+  const normalizedPhone = digits.length >= 10 ? digits.slice(-10) : digits;
+  if (!normalizedCompany || normalizedPhone.length < 7) return null;
+  return `${normalizedCompany}|${normalizedPhone}`;
+}
+
+function normalizeDedupeEmail(raw) {
+  const emailKey = normalizeEmail(raw);
+  return emailKey && emailKey.includes('@') ? emailKey : '';
+}
+
+function createVendorDedupeState() {
+  return {
+    existingEmails: new Set(),
+    existingGstins: new Set(),
+    existingCodes: new Set(),
+    existingCompanyPhones: new Set(),
+    fileEmails: new Map(),
+    fileGstins: new Map(),
+    fileCodes: new Map(),
+    fileCompanyPhones: new Map(),
+    usedSequentialCodes: new Set(),
+    nextSeq: 1,
+  };
+}
+
+function seedExistingVendorsIntoDedupeState(state, existingVendors = []) {
+  for (const existing of existingVendors) {
+    if (!existing) continue;
+    const emailKey = normalizeDedupeEmail(existing.email);
+    if (emailKey) state.existingEmails.add(emailKey);
+
+    const gstinKey = normalizeDedupeGstin(existing.gstNumber || existing.gstin);
+    if (gstinKey) state.existingGstins.add(gstinKey);
+
+    const codeKey = normalizeDedupeCode(existing.vendorCode);
+    if (codeKey && !/^\d+$/.test(codeKey)) state.existingCodes.add(codeKey);
+
+    const companyPhoneKey = normalizeDedupeCompanyPhone(existing.companyName || existing.name, existing.phone);
+    if (companyPhoneKey) state.existingCompanyPhones.add(companyPhoneKey);
+  }
+}
+
+async function loadExistingVendorDedupeState(session, organizationId) {
+  const state = createVendorDedupeState();
+  if (!pool.hasStorage() || !session) return state;
+  try {
+    const existingVendors = await domainQueries.getVendorsByBuyerFromDB(
+      [session.createdByUserId, organizationId].filter(Boolean),
+      500,
+      session.createdByEmail || null
+    );
+    seedExistingVendorsIntoDedupeState(state, existingVendors);
+  } catch (err) {
+    logger.warn(
+      'Failed to pre-load existing buyer vendors for duplicate check; continuing with intra-file dedupe',
+      { organizationId, error: err.message },
+      LOG_CATEGORY
+    );
+  }
+  return state;
+}
+
+function checkAndRegisterVendorDedupe(state, { rowNumber, companyName, email, phone, gstNumber, explicitVendorCode }) {
+  const emailKey = normalizeDedupeEmail(email);
+  const gstinKey = normalizeDedupeGstin(gstNumber);
+  const codeKey = normalizeDedupeCode(explicitVendorCode);
+  const companyPhoneKey = normalizeDedupeCompanyPhone(companyName, phone);
+
+  if (emailKey) {
+    if (state.existingEmails.has(emailKey)) {
+      return {
+        matchedAgainst: 'EXISTING_VENDOR',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_EMAIL_EXISTING, { value: email }),
+      };
+    }
+    const firstRow = state.fileEmails.get(emailKey);
+    if (firstRow !== undefined) {
+      return {
+        matchedAgainst: 'FILE',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_EMAIL_FILE, { value: email, firstRow }),
+      };
     }
   }
 
-  let nextSeq = 1;
-  const getNextSequentialCode = () => {
-    while (usedCodes.has(String(nextSeq).toLowerCase())) {
-      nextSeq++;
+  if (gstinKey) {
+    if (state.existingGstins.has(gstinKey)) {
+      return {
+        matchedAgainst: 'EXISTING_VENDOR',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_GSTIN_EXISTING, { value: gstinKey }),
+      };
     }
-    const code = String(nextSeq);
-    usedCodes.add(code.toLowerCase());
-    nextSeq++;
+    const firstRow = state.fileGstins.get(gstinKey);
+    if (firstRow !== undefined) {
+      return {
+        matchedAgainst: 'FILE',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_GSTIN_FILE, { value: gstinKey, firstRow }),
+      };
+    }
+  }
+
+  if (codeKey) {
+    if (!/^\d+$/.test(codeKey) && state.existingCodes.has(codeKey)) {
+      return {
+        matchedAgainst: 'EXISTING_VENDOR',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_CODE_EXISTING, {
+          value: String(explicitVendorCode).trim(),
+        }),
+      };
+    }
+    const firstRow = state.fileCodes.get(codeKey);
+    if (firstRow !== undefined) {
+      return {
+        matchedAgainst: 'FILE',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_CODE_FILE, {
+          value: String(explicitVendorCode).trim(),
+          firstRow,
+        }),
+      };
+    }
+  }
+
+  if (companyPhoneKey) {
+    if (state.existingCompanyPhones.has(companyPhoneKey)) {
+      return {
+        matchedAgainst: 'EXISTING_VENDOR',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_COMPANY_PHONE_EXISTING, {
+          company: companyName,
+          phone,
+        }),
+      };
+    }
+    const firstRow = state.fileCompanyPhones.get(companyPhoneKey);
+    if (firstRow !== undefined) {
+      return {
+        matchedAgainst: 'FILE',
+        reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_COMPANY_PHONE_FILE, {
+          company: companyName,
+          phone,
+          firstRow,
+        }),
+      };
+    }
+  }
+
+  if (emailKey) state.fileEmails.set(emailKey, rowNumber);
+  if (gstinKey) state.fileGstins.set(gstinKey, rowNumber);
+  if (codeKey) state.fileCodes.set(codeKey, rowNumber);
+  if (companyPhoneKey) state.fileCompanyPhones.set(companyPhoneKey, rowNumber);
+  return null;
+}
+
+/**
+ * Process a batch of Vendor Master records into the database
+ */
+async function processVendorMasterBatch(sessionId, organizationId, batch, dedupeState = null) {
+  const activeDedupeState = dedupeState || createVendorDedupeState();
+  const valid = [];
+  const invalid = [];
+  const duplicateSkipped = [];
+
+  // Track existing vendor codes to prevent collisions and generate sequential codes
+  for (const row of batch) {
+    if (row.vendorCode && String(row.vendorCode).trim()) {
+      activeDedupeState.usedSequentialCodes.add(String(row.vendorCode).trim().toLowerCase());
+    }
+  }
+
+  const getNextSequentialCode = () => {
+    while (activeDedupeState.usedSequentialCodes.has(String(activeDedupeState.nextSeq).toLowerCase())) {
+      activeDedupeState.nextSeq++;
+    }
+    const code = String(activeDedupeState.nextSeq);
+    activeDedupeState.usedSequentialCodes.add(code.toLowerCase());
+    activeDedupeState.nextSeq++;
     return code;
   };
 
-  for (const row of batch) {
+  for (let idx = 0; idx < batch.length; idx++) {
+    const row = batch[idx];
     const companyName = row.companyName || row.company_name || row.vendorName || row.name || '';
     if (!companyName || String(companyName).trim() === '') {
       invalid.push({ row, reason: 'Company Name is required' });
@@ -495,20 +672,50 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
       validatedPhone = norm;
     }
 
-    const vendorCode = (row.vendorCode && String(row.vendorCode).trim())
+    const explicitVendorCode = row.vendorCode && String(row.vendorCode).trim()
       ? String(row.vendorCode).trim()
-      : getNextSequentialCode();
+      : '';
+    const trimmedCompany = String(companyName).trim();
+    const resolvedEmail = row.email ? String(row.email).trim() : '';
+    const resolvedGstin = row.gstNumber || row.gstin || '';
+    const resolvedPhone = validatedPhone || (row.phone ? String(row.phone).trim() : null);
+    const rowNumber = Number(row.sourceRowNumber) > 0 ? Number(row.sourceRowNumber) + 1 : idx + 2;
+
+    const duplicateMatch = checkAndRegisterVendorDedupe(activeDedupeState, {
+      rowNumber,
+      companyName: trimmedCompany,
+      email: resolvedEmail,
+      phone: resolvedPhone,
+      gstNumber: resolvedGstin,
+      explicitVendorCode,
+    });
+    if (duplicateMatch) {
+      duplicateSkipped.push({
+        rowNumber,
+        vendorCode: explicitVendorCode || undefined,
+        companyName: trimmedCompany,
+        email: resolvedEmail,
+        phone: resolvedPhone || undefined,
+        gstNumber: resolvedGstin || undefined,
+        status: 'duplicate_skipped',
+        matchedAgainst: duplicateMatch.matchedAgainst,
+        reason: duplicateMatch.reason,
+      });
+      continue;
+    }
+
+    const vendorCode = explicitVendorCode || getNextSequentialCode();
 
     valid.push({
       ...row,
       vendorCode,
-      companyName: String(companyName).trim(),
-      phone: validatedPhone || (row.phone ? String(row.phone).trim() : null),
+      companyName: trimmedCompany,
+      phone: resolvedPhone,
     });
   }
 
   let imported = 0;
-  let skipped = invalid.length;
+  let skipped = invalid.length + duplicateSkipped.length;
 
   if (valid.length > 0) {
     try {
@@ -521,7 +728,12 @@ async function processVendorMasterBatch(sessionId, organizationId, batch) {
     }
   }
 
-  return { imported, skipped, failed: invalid.length, errors: invalid.slice(0, 5) };
+  return {
+    imported,
+    skipped,
+    failed: invalid.length,
+    errors: [...duplicateSkipped, ...invalid].slice(0, 50),
+  };
 }
 
 /**
@@ -683,6 +895,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
     let skippedRecords = 0;
     let failedRecords = 0;
     const recentErrors = [];
+    const vendorDedupeState = jobType === 'VENDOR_MASTER'
+      ? await loadExistingVendorDedupeState(session, organizationId)
+      : null;
 
     try {
       // One R2 read for the whole upload — see this file's top comment for why
@@ -745,7 +960,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
         if (currentBatch.length >= batchSize) {
           let result;
           if (jobType === 'VENDOR_MASTER') {
-            result = await processVendorMasterBatch(sessionId, organizationId, currentBatch);
+            result = await processVendorMasterBatch(sessionId, organizationId, currentBatch, vendorDedupeState);
           } else {
             result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session);
           }
@@ -766,7 +981,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
             importedRecords,
             skippedRecords,
             failedRecords,
-            errorDetails: recentErrors.slice(-10),
+            errorDetails: recentErrors.slice(-50),
           });
         }
       }
@@ -784,7 +999,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
 
         let result;
         if (jobType === 'VENDOR_MASTER') {
-          result = await processVendorMasterBatch(sessionId, organizationId, currentBatch);
+          result = await processVendorMasterBatch(sessionId, organizationId, currentBatch, vendorDedupeState);
         } else {
           result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session);
         }
@@ -810,7 +1025,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
         failedRecords,
         status: 'COMPLETED',
         completedAt: new Date().toISOString(),
-        errorDetails: recentErrors.slice(-10),
+        errorDetails: recentErrors.slice(-50),
       });
 
       logger.info(`Ingestion job ${jobId} completed`, { processedRecords, importedRecords, skippedRecords, failedRecords }, LOG_CATEGORY);
@@ -852,6 +1067,9 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
     let skippedRecords = 0;
     let failedRecords = 0;
     const recentErrors = [];
+    const vendorDedupeState = jobType === 'VENDOR_MASTER'
+      ? await loadExistingVendorDedupeState(session, organizationId)
+      : null;
     for (let i = 0; i < rows.length; i += batchSize) {
       if (activeCancellations.has(jobId) || activeCancellations.has(sessionId)) {
         logger.info(`Array ingestion job ${jobId} cancelled by user`, {}, LOG_CATEGORY);
@@ -866,7 +1084,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       const chunk = rows.slice(i, i + batchSize);
       let result;
       if (jobType === 'VENDOR_MASTER') {
-        result = await processVendorMasterBatch(sessionId, organizationId, chunk);
+        result = await processVendorMasterBatch(sessionId, organizationId, chunk, vendorDedupeState);
       } else {
         result = await processPoDumpBatch(sessionId, organizationId, chunk, session);
       }
@@ -884,7 +1102,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
         importedRecords,
         skippedRecords,
         failedRecords,
-        errorDetails: recentErrors.slice(-10),
+        errorDetails: recentErrors.slice(-50),
       });
     }
 
@@ -898,7 +1116,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       failedRecords,
       status: 'COMPLETED',
       completedAt: new Date().toISOString(),
-      errorDetails: recentErrors.slice(-10),
+      errorDetails: recentErrors.slice(-50),
     });
   } catch (err) {
     logger.error(`Array Ingestion job ${jobId} failed`, err, LOG_CATEGORY);

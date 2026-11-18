@@ -1453,6 +1453,73 @@ export interface VendorMasterUploadRecord {
   vendorRatingScore?: number; // 0 to 100 (Optional)
 }
 
+export interface VendorDuplicatePartitionCandidate {
+  vendor: VendorMasterUploadRecord;
+  rowNumber: number;
+  explicitVendorCode?: string;
+}
+
+export interface ExistingVendorDedupeCandidate {
+  vendorCode?: string | null;
+  companyName?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  gstNumber?: string | null;
+  gstin?: string | null;
+}
+
+export interface SkippedDuplicateVendorRecord {
+  rowNumber: number;
+  vendorCode?: string;
+  companyName: string;
+  email: string;
+  phone?: string;
+  gstNumber?: string;
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_VENDOR';
+}
+
+export interface VendorDuplicatePartitionResult {
+  uniqueRecords: VendorMasterUploadRecord[];
+  skippedDuplicates: SkippedDuplicateVendorRecord[];
+}
+
+export interface IngestionJobErrorDetail {
+  rowNumber?: number;
+  vendorCode?: string;
+  companyName?: string;
+  vendorName?: string;
+  email?: string;
+  phone?: string;
+  gstNumber?: string;
+  status?: string;
+  reason?: string;
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR';
+}
+
+export interface IngestionJobState {
+  id: string;
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP' | 'AI_CATEGORY';
+  fileName: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  totalRecords: number;
+  processedRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  failedRecords: number;
+  errorMessage?: string | null;
+  errorDetails?: IngestionJobErrorDetail[];
+}
+
+export interface VendorDedupeSummary {
+  fileName: string;
+  totalCount: number;
+  skippedCount: number;
+  isExcelOnly: boolean;
+  allSkippedClientSide: boolean;
+}
+
 export interface PurchaseOrderLineItemRecord {
   id: string;
   poNumber: string;

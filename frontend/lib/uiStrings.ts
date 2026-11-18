@@ -2034,6 +2034,34 @@ export const UI_STRINGS = {
       columnGstin: 'GSTIN / Address',
       columnRating: 'Rating',
       ratingNotProvided: 'Not provided',
+      duplicatesSkippedBannerTitle: '{count} Duplicate {rowWord} Skipped',
+      duplicatesSkippedBannerHint:
+        'The following duplicate vendor records were detected and skipped so they will not be imported again:',
+      allDuplicatesBannerTitle: 'No New Vendors Imported ({count} Duplicates Skipped)',
+      allDuplicatesBannerHint:
+        'Every supplier row in "{fileName}" already exists in your Vendor Directory or is duplicated within the file.',
+      allDuplicatesError:
+        'All {count} supplier rows in "{fileName}" are duplicates of existing or earlier rows and were skipped.',
+      duplicatesSummaryInline: ' ({count} duplicate(s) skipped)',
+      duplicateRowSingular: 'Row',
+      duplicateRowPlural: 'Rows',
+      duplicateColumnRow: 'Row #',
+      duplicateColumnReason: 'Skip Reason',
+      duplicateReasonEmailExisting: 'Duplicate email ({value}) — already exists in Buyer Directory',
+      duplicateReasonEmailFile: 'Duplicate email ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonGstinExisting: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+      duplicateReasonGstinFile: 'Duplicate GSTIN ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonCodeExisting: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+      duplicateReasonCodeFile: 'Duplicate vendor code ({value}) — already present at row {firstRow} of this file',
+      duplicateReasonCompanyPhoneExisting:
+        'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+      duplicateReasonCompanyPhoneFile:
+        'Duplicate company & phone ({company} / {phone}) — already present at row {firstRow} of this file',
+      duplicatesWarningToastTitle: 'Duplicate Vendors Skipped',
+      duplicatesWarningToastBody:
+        '{imported} new vendors loaded from {fileName}. {skipped} duplicate record(s) skipped.',
+      allDuplicatesToastBody:
+        'All {skipped} rows in {fileName} matched existing or earlier duplicate records and were skipped.',
     },
 
     poDump: {

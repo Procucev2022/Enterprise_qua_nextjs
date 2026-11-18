@@ -6252,3 +6252,10 @@ Remove the Gemini AI parsing document content message while extracting the rfq d
 Keep commiting the changes directly to current "test-v3" branch & keep pushing them as soon as you achieve the task,
 ```
 ---
+
+### Prompt 263
+**Timestamp**: 2026-11-17T20:54:50+05:30
+```text
+if in vendor upload data have any duplicate it as to show and skip that data
+```
+---

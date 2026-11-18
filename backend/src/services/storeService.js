@@ -53,6 +53,7 @@ const {
   resolveValidVendorCategories,
   VENDOR_ACTIVE_STATUSES,
   VENDOR_STATUS_MESSAGES,
+  VENDOR_INGESTION_MESSAGES,
   isVendorInactive,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
@@ -10586,6 +10587,7 @@ class StoreService {
     let unmappedEmailsQueued = 0;
     const failedEmails = [];
     const vendorsToEmail = [];
+    const seenBatchEmails = new Set();
 
     for (let idx = 0; idx < vendorRecords.length; idx++) {
       const rec = vendorRecords[idx];
@@ -10603,6 +10605,18 @@ class StoreService {
         });
         continue;
       }
+
+      const normalizedBatchEmail = email.toLowerCase();
+      if (seenBatchEmails.has(normalizedBatchEmail)) {
+        skipped.push({
+          row: idx + 1,
+          vendorName: name,
+          email,
+          reason: VENDOR_INGESTION_MESSAGES.DUPLICATE_EMAIL_BATCH_SKIPPED.replace('{value}', normalizedBatchEmail),
+        });
+        continue;
+      }
+      seenBatchEmails.add(normalizedBatchEmail);
 
       const isMapped = isMappedRecord(rec);
       if (isMapped) mappedCount++;

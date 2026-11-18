@@ -1164,5 +1164,130 @@ describe('largeFileIngestionService unit tests', () => {
       expect(job.id).toBe('job-meta-only');
     });
   });
+
+  describe('Vendor Master duplicate detection and skipping', () => {
+    const domainQueries = require('../src/db/domainQueries');
+    const pool = require('../src/db/pool');
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('skips intra-batch duplicates by email, GSTIN, explicit vendorCode, and company+phone without incrementing failed', async () => {
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      const batch = [
+        { sourceRowNumber: 1, vendorCode: 'V-1', companyName: 'Alpha Pumps', email: 'alpha@pumps.in', phone: '+91 9811111111', gstNumber: '27AAACA1111A1Z1' },
+        { sourceRowNumber: 2, vendorCode: 'V-2', companyName: 'Alpha Dup Email', email: 'ALPHA@pumps.in', phone: '+91 9822222222', gstNumber: 'N/A' },
+        { sourceRowNumber: 3, vendorCode: 'V-3', companyName: 'Alpha Dup Gst', email: 'other@pumps.in', phone: '+91 9833333333', gstNumber: '27AAACA1111A1Z1' },
+        { sourceRowNumber: 4, vendorCode: 'V-1', companyName: 'Alpha Dup Code', email: 'code@pumps.in', phone: '+91 9844444444', gstNumber: '29BBBBB2222B1Z2' },
+        { sourceRowNumber: 5, companyName: 'Beta Valves', email: 'not-an-email', phone: '9855555555', gstNumber: 'none' },
+        { sourceRowNumber: 6, companyName: 'Beta Valves', email: '', phone: '+91 9855555555', gstNumber: '' },
+      ];
+
+      const result = await largeFileIngestionService.processVendorMasterBatch('sess-dup', 'org-1', batch);
+      expect(result.imported).toBe(2);
+      expect(result.skipped).toBe(4);
+      expect(result.failed).toBe(0);
+      expect(upsertSpy).toHaveBeenCalledWith(
+        'sess-dup',
+        'org-1',
+        expect.arrayContaining([
+          expect.objectContaining({ companyName: 'Alpha Pumps', vendorCode: 'V-1' }),
+          expect.objectContaining({ companyName: 'Beta Valves' }),
+        ])
+      );
+      expect(result.errors).toHaveLength(4);
+      expect(result.errors.every((e) => e.status === 'duplicate_skipped' && e.matchedAgainst === 'FILE')).toBe(true);
+    });
+
+    it('detects cross-batch duplicates and pre-seeds existing DB buyer vendors in streamProcessCsvFile', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([
+        { vendorCode: '1', companyName: 'Existing Buyer Vendor', email: 'existing@buyer.in', phone: '9966766905', gstin: '27EXSTG1234A1Z1' },
+        { vendorCode: 'EXT-9', name: 'Existing Custom Code Co', email: 'custom@buyer.in', phone: '9966766906' },
+      ]);
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-csv-dup',
+        organizationId: 'org-1',
+        createdByUserId: 'buyer-1',
+        createdByEmail: 'buyer@org.in',
+      });
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      const csv = [
+        'Vendor Code,Company Name,Email,Phone,GSTIN',
+        '1,Fresh Supplier Ltd,fresh@supplier.in,9800000001,27FRESH1234A1Z1',
+        '2,Dup From DB Email,existing@buyer.in,9800000002,27OTHER1234A1Z1',
+        '3,Dup Cross Batch Email,FRESH@supplier.in,9800000003,27OTHER2234A1Z1',
+        'EXT-9,Dup DB Code,newemail@co.in,9800000004,27OTHER3234A1Z1',
+        '5,Existing Custom Code Co,,9966766906,',
+      ].join('\n');
+      mockR2Client(csv);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-csv-dup',
+        sessionId: 'sess-csv-dup',
+        organizationId: 'org-1',
+        r2Key: 'csv-dup-key',
+        fileName: 'Testing data.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 2,
+      });
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 5,
+        processedRecords: 5,
+        importedRecords: 1,
+        skippedRecords: 4,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+      expect(finalCall[2].errorDetails).toHaveLength(4);
+      expect(finalCall[2].errorDetails[0].matchedAgainst).toBe('EXISTING_VENDOR');
+    });
+
+    it('deduplicates across batches in processArrayJob and tolerates existing-vendor lookup errors gracefully', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockRejectedValue(new Error('D1 read transient error'));
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-arr-dup',
+        organizationId: 'org-1',
+      });
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-arr-dup',
+        sessionId: 'sess-arr-dup',
+        organizationId: 'org-1',
+        rows: [
+          { companyName: 'Unique One', email: 'one@dup.in', phone: '9800000011', gstNumber: '27UNIQG1234A1Z1' },
+          { companyName: 'Dup Two', email: 'ONE@dup.in', phone: '9800000012' },
+        ],
+        fileName: 'vendors.xlsx',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1,
+      });
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 2,
+        processedRecords: 2,
+        importedRecords: 1,
+        skippedRecords: 1,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+    });
+  });
 });
 

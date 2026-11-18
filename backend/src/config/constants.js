@@ -3075,6 +3075,15 @@ const VENDOR_INGESTION_MESSAGES = {
   DISPATCH_ALREADY_SENT:
     '{count} of the selected suppliers have already received this email and will be skipped. Use Retry Failed to re-attempt only the failures.',
   DISPATCH_NOTHING_TO_RETRY: 'There are no failed emails to retry for this session.',
+  DUPLICATE_EMAIL_EXISTING: 'Duplicate email ({value}) — already exists in Buyer Directory',
+  DUPLICATE_EMAIL_FILE: 'Duplicate email ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_GSTIN_EXISTING: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+  DUPLICATE_GSTIN_FILE: 'Duplicate GSTIN ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_CODE_EXISTING: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+  DUPLICATE_CODE_FILE: 'Duplicate vendor code ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_COMPANY_PHONE_EXISTING: 'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+  DUPLICATE_COMPANY_PHONE_FILE: 'Duplicate company & phone ({company} / {phone}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_EMAIL_BATCH_SKIPPED: 'Skipped duplicate email in uploaded batch: {value}',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
