@@ -764,8 +764,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
   });
 
-  it('enforces major category limit cap and shows toast', async () => {
-    // 7 taxonomy items to exceed MAX_MAJOR_CATEGORIES (5)
+  it('allows selecting more than 5 major categories without artificial cap', async () => {
     const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
       majorCategory: `Category ${i + 1}`,
       minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
@@ -780,18 +779,19 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     expect(selectionSummary()).toBe('5 Major • 5 Minor Selected');
 
-    // Try to toggle 6th category
+    // Selecting 6th and 7th major categories succeeds cleanly without limit warnings
     fireEvent.click(screen.getByText('Category 6'));
+    fireEvent.click(screen.getByText('Category 7'));
 
-    expect(mockShowToast).toHaveBeenCalledWith(
+    expect(selectionSummary()).toBe('7 Major • 9 Minor Selected');
+    expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('5'),
+      expect.any(String),
       'warning'
     );
   });
 
-  it('enforces minor category limit cap and shows toast', async () => {
-    // 1 major category with 45 minors, exceeding MAX_MINOR_CATEGORIES (40)
+  it('allows selecting unlimited minor categories beyond 10', async () => {
     const minors = Array.from({ length: 45 }, (_, i) => `Subcat ${i + 1}`);
     const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
     const initialCategories = minors.slice(0, 40).map((m) => ({
@@ -802,13 +802,14 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
     await renderLoaded();
 
-    // Try to select 41st minor
     const subcat41 = screen.getByText('Subcat 41').closest('label')!.querySelector('input')!;
     fireEvent.click(subcat41);
 
-    expect(mockShowToast).toHaveBeenCalledWith(
+    expect(subcat41).toBeChecked();
+    expect(selectionSummary()).toBe('1 Major • 41 Minor Selected');
+    expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('40'),
+      expect.any(String),
       'warning'
     );
   });
@@ -905,10 +906,9 @@ describe('app/buyer/buyer-profile.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('covers category major and minor selection cap edge cases', async () => {
-    // Return a mock taxonomy with 10 majors, each having 5 minors
+  it('supports unlimited Select All and toggleMinorCategory across more than 10 categories', async () => {
     const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const largeTaxonomy = Array.from({ length: 10 }, (_, i) => ({
+    const largeTaxonomy = Array.from({ length: 6 }, (_, i) => ({
       majorCategory: `Major Cat ${i + 1}`,
       minorCategories: [`Minor ${i + 1}-A`, `Minor ${i + 1}-B`, `Minor ${i + 1}-C`, `Minor ${i + 1}-D`, `Minor ${i + 1}-E`],
     }));
@@ -917,7 +917,6 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({
       ...PROFILE,
       categories: [
-        // 2 majors with 5 minors each = 10 minors total! (MAX_MINOR_CATEGORIES is 10)
         { major: 'Major Cat 1', minor: 'Minor 1-A' },
         { major: 'Major Cat 1', minor: 'Minor 1-B' },
         { major: 'Major Cat 1', minor: 'Minor 1-C' },
@@ -933,118 +932,29 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     await renderLoaded();
 
-    // Toggle 3rd major when remainingSlots <= 0 (lines 381-383)
-    const major3Title = screen.getByText('Major Cat 3');
-    fireEvent.click(major3Title);
-    expect(mockShowToast).toHaveBeenCalledWith(
+    // Selecting Major Cat 3 when 10 minors are already selected succeeds
+    fireEvent.click(screen.getByText('Major Cat 3'));
+    expect(selectionSummary()).toBe('3 Major • 15 Minor Selected');
+
+    // Expand Major Cat 4 and toggle a minor + Select All
+    expandMajor('Major Cat 4');
+    fireEvent.click(screen.getByText('Minor 4-A'));
+    expect(selectionSummary()).toBe('4 Major • 16 Minor Selected');
+
+    const panel5 = majorPanel('Major Cat 5');
+    expandMajor('Major Cat 5');
+    const selectAllBtn5 = Array.from(panel5.querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Select All'
+    );
+    if (selectAllBtn5) {
+      fireEvent.click(selectAllBtn5);
+      expect(selectionSummary()).toBe('5 Major • 21 Minor Selected');
+    }
+    expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('minor'),
+      expect.any(String),
       'warning'
     );
-
-    // Expand accordion for Major Cat 3 and click Select All when remainingSlots <= 0 (lines 438-439)
-    expandMajor('Major Cat 3');
-    const panel3 = majorPanel('Major Cat 3');
-    const selectAllBtn3 = Array.from(panel3.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    if (selectAllBtn3) {
-      fireEvent.click(selectAllBtn3);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('minor'),
-        'warning'
-      );
-    }
-  });
-
-  it('covers major category cap in toggleMinorCategory and selectAllMinorInMajor', async () => {
-    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const largeTaxonomy = Array.from({ length: 8 }, (_, i) => ({
-      majorCategory: `Major Cap ${i + 1}`,
-      minorCategories: [`Sub ${i + 1}-A`, `Sub ${i + 1}-B`],
-    }));
-    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
-
-    // 5 majors with 1 minor each = 5 majors (MAX_MAJOR_CATEGORIES = 5), but only 5 minors (< 10)
-    mockLoad({
-      ...PROFILE,
-      categories: [
-        { major: 'Major Cap 1', minor: 'Sub 1-A' },
-        { major: 'Major Cap 2', minor: 'Sub 2-A' },
-        { major: 'Major Cap 3', minor: 'Sub 3-A' },
-        { major: 'Major Cap 4', minor: 'Sub 4-A' },
-        { major: 'Major Cap 5', minor: 'Sub 5-A' },
-      ],
-    }, largeTaxonomy);
-
-    await renderLoaded();
-
-    // Expand Major Cap 6 (unselected major)
-    expandMajor('Major Cap 6');
-
-    // 1. Toggle minor in unselected major when major cap (5) is reached (lines 416-417)
-    const sub6A = screen.getByText('Sub 6-A');
-    fireEvent.click(sub6A);
-    expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('5 major'),
-      'warning'
-    );
-
-    // 2. Select all in unselected major when major cap (5) is reached (lines 430-431)
-    const panel6 = majorPanel('Major Cap 6');
-    const selectAllBtn6 = Array.from(panel6.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    if (selectAllBtn6) {
-      fireEvent.click(selectAllBtn6);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('5 major'),
-        'warning'
-      );
-    }
-  });
-
-  it('covers selecting minor in unselected major when caps allow and partial select all', async () => {
-    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const customTaxonomy = [
-      { majorCategory: 'Cat A', minorCategories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'] },
-      { majorCategory: 'Cat B', minorCategories: ['B1', 'B2', 'B3', 'B4', 'B5'] },
-    ];
-    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: customTaxonomy });
-
-    // 1 major with 8 minors (8 out of 10 slots filled, 2 remaining slots)
-    mockLoad({
-      ...PROFILE,
-      categories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'].map((m) => ({ major: 'Cat A', minor: m })),
-    }, customTaxonomy);
-
-    await renderLoaded();
-
-    // Expand Cat B (which has 5 minors, but only 2 slots remain)
-    expandMajor('Cat B');
-
-    // 1. Toggle minor in unselected major when slots are available (line 421)
-    const b1 = screen.getByText('B1');
-    fireEvent.click(b1);
-    // Now 9 minors selected across 2 majors
-    expect(selectionSummary()).toBe('2 Major • 9 Minor Selected');
-
-    // 2. Click select all on Cat B when allMinor.length (5) > remainingSlots (line 444 & 448)
-    const panelB = majorPanel('Cat B');
-    const selectAllBtnB = Array.from(panelB.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    if (selectAllBtnB) {
-      fireEvent.click(selectAllBtnB);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('minor'),
-        'warning'
-      );
-    }
   });
 
   it('covers postal pincode successful resolution with post office auto-populating city and state', async () => {

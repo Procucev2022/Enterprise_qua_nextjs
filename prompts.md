@@ -6337,3 +6337,14 @@ RFQ quotation visibility and notification issues
 2. Category update emails fail to arrive
 ```
 ---
+
+### Prompt 274
+**Timestamp**: 2026-11-18T05:19:49+05:30
+```text
+Buyer Vendor data upload and mapping discrepancies
+1. Data uploads show inconsistencies, displaying 12 uploaded vendors against 10 mapped vendors and 7 processed suppliers.
+2. System incorrectly marks failed data uploads as completed successfully without flagging errors.
+3. Category selection limits restrict users to a maximum of 10 categories.
+4. We noted that duplicate vendor entries distort total uploaded counts and require better duplicate removal handling.
+```
+---

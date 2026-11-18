@@ -24,13 +24,11 @@ const {
 } = require('../config/validationSchemas');
 const {
   AUTH_MESSAGES,
-  BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
   D1_OVERLOAD_CONFIG,
   DEFAULT_CATEGORY_TAXONOMY,
   VALIDATION_SCHEMAS,
   validatePayload,
-  formatMessage,
 } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_SERVICE';
@@ -358,25 +356,7 @@ function normalizeCategories(rawCategories) {
     normalized.push({ major, minor });
   });
 
-  const majors = new Set(normalized.map((entry) => entry.major.toLowerCase()));
-  const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_CONFIG;
-
-  if (majors.size > MAX_MAJOR_CATEGORIES) {
-    throw new BuyerProfileError(
-      formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MAJOR_CATEGORIES, { max: MAX_MAJOR_CATEGORIES }),
-      400,
-      { categories: formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MAJOR_CATEGORIES, { max: MAX_MAJOR_CATEGORIES }) }
-    );
-  }
-
-  if (normalized.length > MAX_MINOR_CATEGORIES) {
-    throw new BuyerProfileError(
-      formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MINOR_CATEGORIES, { max: MAX_MINOR_CATEGORIES }),
-      400,
-      { categories: formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MINOR_CATEGORIES, { max: MAX_MINOR_CATEGORIES }) }
-    );
-  }
-
+  // Unlimited major and minor procurement categories supported per organization.
   return normalized;
 }
 

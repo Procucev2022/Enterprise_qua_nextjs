@@ -233,9 +233,10 @@ function indexCategoryMaster(categoryMaster = []) {
   return majors;
 }
 
-/** Trim, de-duplicate and cap a string array from a model reply. */
-function cleanStringList(value, max) {
+/** Trim, de-duplicate and optionally cap a string array from a model reply. */
+function cleanStringList(value, max = null) {
   if (!Array.isArray(value)) return [];
+  const hasCap = typeof max === 'number' && max > 0;
   const seen = new Set();
   const out = [];
   for (const entry of value) {
@@ -246,7 +247,7 @@ function cleanStringList(value, max) {
     if (seen.has(key)) continue;
     seen.add(key);
     out.push(trimmed);
-    if (out.length >= max) break;
+    if (hasCap && out.length >= max) break;
   }
   return out;
 }
@@ -454,7 +455,6 @@ function validateAiResult(parsed, { categoryMaster = [], vendorProfile = null } 
       ...(Array.isArray(vendorProfile?.lineSummaries) ? vendorProfile.lineSummaries : []),
     ];
     for (const candidate of fallbackCandidates) {
-      if (minorCategories.length >= VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR) break;
       const matched = matchMinorCategory(candidate, matchedMajor);
       if (matched && !minorCategories.includes(matched)) {
         minorCategories.push(matched);

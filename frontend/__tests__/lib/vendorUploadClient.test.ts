@@ -1,6 +1,7 @@
 import * as XLSX from 'xlsx';
 import {
   bulkImportVendorRows,
+  downloadSkippedDuplicatesCsv,
   downloadVendorUploadTemplate,
   extractSkippedDuplicatesFromJob,
   isAllowedVendorUploadFile,
@@ -753,7 +754,7 @@ describe('vendorUploadClient', () => {
       expect(extractSkippedDuplicatesFromJob(baseJob)).toEqual([]);
     });
 
-    test('reconciles Excel and CSV duplicate offsets without double-counting', () => {
+    test('reconciles Excel and CSV duplicate offsets without double-counting or inflating stored totals', () => {
       // Mismatched filename or missing summary passes through untouched
       expect(
         reconcileVendorJobProgress(baseJob, {
@@ -765,7 +766,8 @@ describe('vendorUploadClient', () => {
         })
       ).toEqual(baseJob);
 
-      // Excel upload sent only unique rows, so client skippedCount is added to server progress
+      // Excel upload sent 8 unique rows out of 10 uploaded (2 duplicates skipped client-side):
+      // stored/processing total stays 8 while uploadedRecords = 10 and skippedRecords = 2.
       const reconciledExcel = reconcileVendorJobProgress(baseJob, {
         fileName: 'vendors.xlsx',
         totalCount: 10,
@@ -774,8 +776,9 @@ describe('vendorUploadClient', () => {
         allSkippedClientSide: false,
       });
       expect(reconciledExcel).toMatchObject({
-        totalRecords: 10,
-        processedRecords: 10,
+        uploadedRecords: 10,
+        totalRecords: 8,
+        processedRecords: 8,
         importedRecords: 8,
         skippedRecords: 2,
       });
@@ -792,8 +795,9 @@ describe('vendorUploadClient', () => {
         }
       );
       expect(reconciledCsv).toMatchObject({
-        totalRecords: 10,
-        processedRecords: 10,
+        uploadedRecords: 10,
+        totalRecords: 7,
+        processedRecords: 7,
         importedRecords: 7,
         skippedRecords: 3,
       });
@@ -802,16 +806,62 @@ describe('vendorUploadClient', () => {
       expect(reconcileVendorJobProgress(baseJob, null)).toEqual(baseJob);
       expect(
         reconcileVendorJobProgress(
-          { ...baseJob, totalRecords: 0, processedRecords: 0, skippedRecords: 0 },
+          { ...baseJob, totalRecords: 0, processedRecords: 0, importedRecords: 0, skippedRecords: 0 },
           { fileName: 'vendors.xlsx', totalCount: 5, skippedCount: 2, isExcelOnly: true, allSkippedClientSide: false }
         )
-      ).toMatchObject({ totalRecords: 5, processedRecords: 2, skippedRecords: 2 });
+      ).toMatchObject({ uploadedRecords: 5, totalRecords: 3, processedRecords: 0, skippedRecords: 2 });
       expect(
         reconcileVendorJobProgress(
           { ...baseJob, fileName: 'vendors.csv', totalRecords: 0, processedRecords: 0, importedRecords: 4, skippedRecords: 0 },
           { fileName: 'vendors.csv', totalCount: 4, skippedCount: 1, isExcelOnly: false, allSkippedClientSide: false }
         )
-      ).toMatchObject({ totalRecords: 4, processedRecords: 4, importedRecords: 3, skippedRecords: 1 });
+      ).toMatchObject({ uploadedRecords: 4, totalRecords: 3, processedRecords: 3, importedRecords: 3, skippedRecords: 1 });
+    });
+
+    test('detects GSTIN, company+phone, and existing buyer directory duplicates in parseVendorUploadFile and exports CSV', async () => {
+      const file = xlsxFile([
+        { 'Company Name': 'Alpha Corp', 'Email Id': 'alpha@co.in', 'Mobile No': '9811111111', GSTIN: '27AAACA1111A1Z1' },
+        { 'Company Name': 'Beta GST Copy', 'Email Id': 'beta@co.in', 'Mobile No': '9822222222', GSTIN: '27AAACA1111A1Z1' },
+        { 'Company Name': 'Existing Co', 'Email Id': 'newmail@co.in', 'Mobile No': '9833333333', GSTIN: '29BBBBB2222B1Z2' },
+      ]);
+      const parsed = await parseVendorUploadFile(file, {
+        existingVendors: [{ name: 'Existing Co', email: 'existing@buyer.in', phone: '9833333333' }],
+      });
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect(parsed.data.rows[0].isDuplicate).toBeUndefined();
+      expect(parsed.data.rows[1]).toMatchObject({ isDuplicate: true, matchedAgainst: 'FILE' });
+      expect(parsed.data.rows[2]).toMatchObject({ isDuplicate: true, matchedAgainst: 'EXISTING_VENDOR' });
+
+      const originalCreateObjectURL = URL.createObjectURL;
+      const originalRevokeObjectURL = URL.revokeObjectURL;
+      const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      URL.createObjectURL = jest.fn().mockReturnValue('blob:dup-url');
+      URL.revokeObjectURL = jest.fn();
+      try {
+        downloadSkippedDuplicatesCsv([]);
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+
+        downloadSkippedDuplicatesCsv([
+          {
+            rowNumber: 3,
+            vendorCode: 'V-3',
+            companyName: 'Dup, "Co"',
+            email: 'dup@co.in',
+            phone: '9811111111',
+            gstNumber: '27AAACA1111A1Z1',
+            matchedAgainst: 'EXISTING_VENDOR',
+            reason: 'Already in buyer directory',
+          },
+        ]);
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:dup-url');
+      } finally {
+        URL.createObjectURL = originalCreateObjectURL;
+        URL.revokeObjectURL = originalRevokeObjectURL;
+        clickSpy.mockRestore();
+      }
     });
   });
 });

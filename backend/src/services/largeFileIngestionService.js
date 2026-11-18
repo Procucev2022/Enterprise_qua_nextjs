@@ -34,6 +34,8 @@ const {
   VENDOR_INGESTION_SESSION_STATUS,
   VENDOR_INGESTION_STEP,
   VENDOR_INGESTION_AI_STATUS,
+  VENDOR_INGESTION_JOB_TYPE,
+  VENDOR_INGESTION_JOB_STATUS,
   VENDOR_INGESTION_CONFIG,
   VENDOR_INGESTION_MESSAGES,
   resolveVendorLocationFields,
@@ -854,20 +856,75 @@ async function prepareSessionForReplacementUpload({ sessionId, organizationId, j
 }
 
 /**
+ * Derive reconciled progress counts and completion status so failed or empty
+ * uploads are never reported as successful, and skipped duplicates do not
+ * inflate Vendor Master stored/processing totals.
+ */
+function buildFinalUploadJobPatch({ jobType, rawTotal, imported, skipped, failed, recentErrors }) {
+  const isVendorMaster = jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER;
+  const effectiveTotal = isVendorMaster ? Math.max(0, rawTotal - skipped) : rawTotal;
+  const processedRecords = isVendorMaster ? imported + failed : imported + skipped + failed;
+  const errors = Array.isArray(recentErrors) ? recentErrors : [];
+  const firstFailure = errors.find((entry) => entry && entry.status !== 'duplicate_skipped');
+  const firstReason = firstFailure?.reason || firstFailure?.message || '';
+
+  let status = VENDOR_INGESTION_JOB_STATUS.COMPLETED;
+  let errorMessage = null;
+
+  if (rawTotal === 0) {
+    status = VENDOR_INGESTION_JOB_STATUS.FAILED;
+    errorMessage = formatIngestionMessage(VENDOR_INGESTION_MESSAGES.INGESTION_JOB_NO_RECORDS_PROCESSED, {
+      total: 0,
+    });
+  } else if (
+    (failed > 0 && imported === 0) ||
+    (effectiveTotal > 0 && processedRecords === 0) ||
+    (imported === 0 && skipped === 0)
+  ) {
+    status = VENDOR_INGESTION_JOB_STATUS.FAILED;
+    errorMessage =
+      firstReason ||
+      formatIngestionMessage(VENDOR_INGESTION_MESSAGES.INGESTION_JOB_NO_RECORDS_PROCESSED, {
+        total: rawTotal,
+      });
+  } else if (failed > 0 && imported > 0) {
+    status = VENDOR_INGESTION_JOB_STATUS.PARTIAL_FAILURE;
+    errorMessage = formatIngestionMessage(VENDOR_INGESTION_MESSAGES.INGESTION_JOB_PARTIAL_FAILED, {
+      imported,
+      failed,
+    });
+  }
+
+  return {
+    totalRecords: effectiveTotal,
+    processedRecords,
+    importedRecords: imported,
+    skippedRecords: skipped,
+    failedRecords: failed,
+    status,
+    ...(errorMessage ? { errorMessage } : {}),
+    completedAt: new Date().toISOString(),
+    errorDetails: errors.slice(-50),
+  };
+}
+
+/**
  * Persist finalized session counts and advance the session step only when rows were actually stored.
  */
 async function finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType }) {
   if (jobType === 'VENDOR_MASTER') {
     const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
-    await queries.updateSession(sessionId, organizationId, {
-      vendorMasterFileName: fileName,
-      vendorMasterRowCount: totalStored,
-      status:
-        session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
-          ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
-          : session.status,
-      currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
-    });
+    if (totalStored > 0) {
+      await queries.updateSession(sessionId, organizationId, {
+        vendorMasterFileName: fileName,
+        vendorMasterRowCount: totalStored,
+        status:
+          session.status === VENDOR_INGESTION_SESSION_STATUS.DRAFT
+            ? VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED
+            : session.status,
+        currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.PO_DUMP),
+      });
+    }
     await recordVendorMasterUpload({ jobId, sessionId, organizationId, totalStored });
     return;
   }
@@ -993,9 +1050,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
 
           currentBatch = [];
 
-          // Update progress in database
+          // Update progress in database (excluding skipped duplicates from VENDOR_MASTER processed count)
           await queries.updateIngestionJobProgress(jobId, organizationId, {
-            processedRecords,
+            processedRecords: jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER ? importedRecords + failedRecords : processedRecords,
             importedRecords,
             skippedRecords,
             failedRecords,
@@ -1034,17 +1091,16 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       // Finalize session counts and state
       await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
-      // Mark job completed
-      await queries.updateIngestionJobProgress(jobId, organizationId, {
-        totalRecords: Math.max(totalLines, processedRecords),
-        processedRecords,
-        importedRecords,
-        skippedRecords,
-        failedRecords,
-        status: 'COMPLETED',
-        completedAt: new Date().toISOString(),
-        errorDetails: recentErrors.slice(-50),
+      // Mark job with reconciled outcome (COMPLETED, PARTIAL_FAILURE, or FAILED)
+      const finalPatch = buildFinalUploadJobPatch({
+        jobType,
+        rawTotal: Math.max(totalLines, processedRecords),
+        imported: importedRecords,
+        skipped: skippedRecords,
+        failed: failedRecords,
+        recentErrors,
       });
+      await queries.updateIngestionJobProgress(jobId, organizationId, finalPatch);
 
       logger.info(`Ingestion job ${jobId} completed`, { processedRecords, importedRecords, skippedRecords, failedRecords }, LOG_CATEGORY);
     } catch (err) {
@@ -1119,7 +1175,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       }
 
       await queries.updateIngestionJobProgress(jobId, organizationId, {
-        processedRecords,
+        processedRecords: jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER ? importedRecords + failedRecords : processedRecords,
         importedRecords,
         skippedRecords,
         failedRecords,
@@ -1129,16 +1185,15 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
 
     await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
 
-    await queries.updateIngestionJobProgress(jobId, organizationId, {
-      totalRecords: Math.max(rows.length, processedRecords),
-      processedRecords,
-      importedRecords,
-      skippedRecords,
-      failedRecords,
-      status: 'COMPLETED',
-      completedAt: new Date().toISOString(),
-      errorDetails: recentErrors.slice(-50),
+    const finalPatch = buildFinalUploadJobPatch({
+      jobType,
+      rawTotal: Math.max(rows.length, processedRecords),
+      imported: importedRecords,
+      skipped: skippedRecords,
+      failed: failedRecords,
+      recentErrors,
     });
+    await queries.updateIngestionJobProgress(jobId, organizationId, finalPatch);
   } catch (err) {
     logger.error(`Array Ingestion job ${jobId} failed`, err, LOG_CATEGORY);
     await queries.updateIngestionJobProgress(jobId, organizationId, {

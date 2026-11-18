@@ -1269,7 +1269,7 @@ export interface VendorEntry {
 
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories?: string[]; // Categories assigned by buyer (from PO / vendor master upload)
-  vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (max 10)
+  vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (unlimited)
   poMajorCategory?: string; // Major category derived from historical PO records
   poMinorCategories?: string[]; // Minor categories derived from historical PO records
   itemsSupplied?: string[]; // Historical item descriptions supplied by vendor
@@ -1342,6 +1342,9 @@ export interface VendorUploadRow {
   };
   isValid: boolean;
   errors: string[];
+  isDuplicate?: boolean;
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR';
+  duplicateReason?: string;
   /**
    * True when the row has no email at all. Not treated as invalid — the row
    * still uploads (email is nullable in Postgres, never fabricated) — but
@@ -1388,6 +1391,8 @@ export interface VendorBulkInvitationResponse {
 export interface VendorUploadImportResponse {
   /** Ties every chunk of one upload run together — see bulkImportVendorRows. */
   sessionId?: string;
+  /** Raw uploaded rows before duplicate removal (optional when client auto-deduped). */
+  uploadedTotal?: number;
   total: number;
   imported: number;
   /** Successfully imported rows that carried no email. */
@@ -1503,8 +1508,9 @@ export interface IngestionJobState {
   id: string;
   jobType: 'VENDOR_MASTER' | 'PO_DUMP' | 'AI_CATEGORY';
   fileName: string;
-  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'FAILED';
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL_FAILURE' | 'FAILED';
   totalRecords: number;
+  uploadedRecords?: number;
   processedRecords: number;
   importedRecords: number;
   skippedRecords: number;

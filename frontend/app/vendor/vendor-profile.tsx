@@ -48,7 +48,7 @@ export default function VendorProfilePage() {
     ensureCategoryTaxonomy,
   } = useApp();
 
-  const MAX_CATEGORIES = 10;
+  // Unlimited categories supported per vendor profile.
 
   // Loads the category master once. The store function is recreated on every render, so
   // listing it as a dependency would refetch on each render while the request fails.
@@ -293,31 +293,16 @@ export default function VendorProfilePage() {
     } else {
       setSelectedMajor((prev) => [...prev, majorName]);
       const allMinor = getMinorCategories(majorName);
-      const remainingSlots = MAX_CATEGORIES - totalSelectedMinorCount;
-      if (remainingSlots <= 0) {
-        showToast('Limit Reached', `Maximum ${MAX_CATEGORIES} categories allowed. Please uncheck some categories first.`, 'warning');
-        return;
-      }
-      const allowedMinors = allMinor.slice(0, remainingSlots);
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: allowedMinors }));
+      setSelectedMinor((prev) => ({ ...prev, [majorName]: [...allMinor] }));
     }
   };
 
-  // Toggle Minor Category (Strict Max 10 Check)
+  // Toggle Minor Category (unlimited selections)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
     const isCurrentlyChecked = currentList.includes(minorName);
 
     if (!isCurrentlyChecked) {
-      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-        showToast(
-          'Maximum 10 Categories Reached',
-          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
-          'warning'
-        );
-        return;
-      }
-
       setSelectedMajor((majors) => (majors.includes(majorName) ? majors : [...majors, majorName]));
       setSelectedMinor((prev) => ({
         ...prev,
@@ -412,15 +397,6 @@ export default function VendorProfilePage() {
         return;
       }
 
-      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-        showToast(
-          'Maximum 10 Categories Reached',
-          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to select "${matchedMinor}".`,
-          'warning'
-        );
-        return;
-      }
-
       setSelectedMajor((majors) => (majors.includes(matchedMajor) ? majors : [...majors, matchedMajor]));
       setSelectedMinor((prev) => ({
         ...prev,
@@ -443,15 +419,6 @@ export default function VendorProfilePage() {
       showToast('Category Exists', `"${trimmed}" is already added under ${otherGroup}.`, 'info');
       setExpandedMajor((prev) => ({ ...prev, [otherGroup]: true }));
       setCustomCategoryInput('');
-      return;
-    }
-
-    if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-      showToast(
-        'Maximum 10 Categories Reached',
-        `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${trimmed}".`,
-        'warning'
-      );
       return;
     }
 
@@ -1024,21 +991,17 @@ export default function VendorProfilePage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                  <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy (Max 10 Categories)
+                  <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy
                 </h2>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Manage your self-selected supply capabilities (up to 10 categories). The system reconciles buyer-mapped categories and routes RFQs across both streams.
+                Manage your self-selected supply capabilities. The system reconciles buyer-mapped categories and routes RFQs across both streams.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full border ${
-                totalSelectedMinorCount >= MAX_CATEGORIES
-                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300'
-                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200'
-              }`}>
-                {totalSelectedMinorCount} / {MAX_CATEGORIES} Categories Selected
+              <span className="text-xs font-mono font-bold px-3 py-1 rounded-full border bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200">
+                {totalSelectedMinorCount} Categories Selected
               </span>
             </div>
           </div>
@@ -1095,10 +1058,10 @@ export default function VendorProfilePage() {
               <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    ⚙️ Vendor Self-Selected <span className="text-slate-400 text-[10px] font-normal">(Max 10)</span>
+                    ⚙️ Vendor Self-Selected
                   </span>
                   <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                    {flatSelectedCategories.length} / {MAX_CATEGORIES} Selected
+                    {flatSelectedCategories.length} Selected
                   </span>
                 </div>
 
@@ -1391,7 +1354,7 @@ export default function VendorProfilePage() {
                           Minor Supply Items (Click to select/unselect)
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {totalSelectedMinorCount} / {MAX_CATEGORIES} total profile limit
+                          {selectedMinorsInCat.length} selected in category • {totalSelectedMinorCount} total
                         </span>
                       </div>
 

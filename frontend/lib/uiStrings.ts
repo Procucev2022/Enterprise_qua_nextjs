@@ -1706,7 +1706,7 @@ export const UI_STRINGS = {
     maxCategoriesReached: 'Maximum {max} categories allowed. Please remove a category before adding a new one.',
     customCategoryGroup: 'Other',
     removeCategoryTitle: 'Remove Category',
-    noCategoriesSelected: 'No categories selected. Pick up to 10 below or add your own above.',
+    noCategoriesSelected: 'No categories selected. Pick from below or add your own above.',
     validationErrorTitle: 'Validation Error',
     panValidFormat: '✓ Valid format',
     panInvalidBadge: 'Invalid Format',
@@ -2090,6 +2090,24 @@ export const UI_STRINGS = {
         '{imported} new vendors loaded from {fileName}. {skipped} duplicate record(s) skipped.',
       allDuplicatesToastBody:
         'All {skipped} rows in {fileName} matched existing or earlier duplicate records and were skipped.',
+      downloadDuplicatesCsv: 'Download Duplicates CSV',
+      dismissDuplicatesAction: 'Clear Duplicate List',
+      reconciliationUploadedLabel: 'Uploaded Rows',
+      reconciliationDuplicatesLabel: 'Duplicates Removed',
+      reconciliationStoredLabel: 'Stored Vendors',
+      reconciliationPoMappedLabel: 'PO Mapped',
+      reconciliationSelfMapLabel: 'Self-Map Required',
+      reconciliationFailedLabel: 'Failed',
+      jobUploadedStat: 'Uploaded',
+      jobDuplicatesRemovedStat: 'Dup Removed',
+      jobStatusCompleted: 'Completed Successfully',
+      jobStatusPartialFailure: 'Completed with Errors',
+      jobStatusFailed: 'Processing Failed',
+      jobStatusProcessing: 'Processing...',
+      jobStatusPending: 'Pending',
+      jobStatusAllDuplicates: 'All Duplicates (0 New)',
+      jobFailureFallbackReason:
+        'Processing failed: 0 records succeeded. Review error details and retry.',
     },
 
     poDump: {

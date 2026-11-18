@@ -30,6 +30,7 @@ import type {
 import {
   extractSkippedDuplicatesFromJob,
   partitionDuplicateVendorMasterRows,
+  downloadSkippedDuplicatesCsv,
   reconcileVendorJobProgress,
 } from '@/lib/vendorUploadClient';
 
@@ -70,6 +71,75 @@ import {
   ChevronDown,
 } from 'lucide-react';
 
+function buildStartJobStateFromResponse(params: {
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP';
+  fileName: string;
+  rawTotal: number;
+  uniqueCount: number;
+  skippedDuplicates: number;
+  ok: boolean;
+  payload: { data?: { job?: Partial<IngestionJobState> }; error?: string; message?: string };
+}): { jobState: IngestionJobState; failureMessage: string | null } {
+  const { jobType, fileName, rawTotal, uniqueCount, skippedDuplicates, ok, payload } = params;
+  const fallbackId = `${jobType === 'PO_DUMP' ? 'job-po' : 'job'}-${Date.now()}`;
+  if (!ok) {
+    const failureMessage =
+      payload?.error ||
+      payload?.message ||
+      UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason;
+    return {
+      jobState: {
+        id: `${fallbackId}-failed`,
+        jobType,
+        fileName,
+        status: 'FAILED',
+        ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+        totalRecords: uniqueCount,
+        processedRecords: 0,
+        importedRecords: 0,
+        skippedRecords: skippedDuplicates,
+        failedRecords: uniqueCount,
+        errorMessage: failureMessage,
+      },
+      failureMessage,
+    };
+  }
+
+  const j = payload?.data?.job;
+  const totalRecords = j?.totalRecords ?? uniqueCount;
+  const processedRecords = j?.processedRecords ?? uniqueCount;
+  const importedRecords = j?.importedRecords ?? uniqueCount;
+  const skippedRecords = (j?.skippedRecords || 0) + skippedDuplicates;
+  const failedRecords = j?.failedRecords || 0;
+  const serverStatus = j?.status || 'COMPLETED';
+  const status: IngestionJobState['status'] =
+    serverStatus === 'FAILED' ||
+    (failedRecords > 0 && importedRecords === 0) ||
+    (totalRecords > 0 && processedRecords === 0 && serverStatus === 'COMPLETED')
+      ? 'FAILED'
+      : failedRecords > 0
+      ? 'PARTIAL_FAILURE'
+      : serverStatus;
+
+  return {
+    jobState: {
+      id: j?.id || fallbackId,
+      jobType,
+      fileName,
+      status,
+      ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+      totalRecords,
+      processedRecords,
+      importedRecords,
+      skippedRecords,
+      failedRecords,
+      errorMessage: j?.errorMessage || null,
+      errorDetails: j?.errorDetails || [],
+    },
+    failureMessage: null,
+  };
+}
+
 export function IngestionProgressCard({
   job,
   title,
@@ -84,14 +154,55 @@ export function IngestionProgressCard({
   const imported = job.importedRecords || 0;
   const skipped = job.skippedRecords || 0;
   const failed = job.failedRecords || 0;
+  const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+
+  const isVendorMaster = job.jobType === 'VENDOR_MASTER';
+  const isAiCategory = job.jobType === 'AI_CATEGORY';
+  const uploadedTotal =
+    typeof job.uploadedRecords === 'number' && job.uploadedRecords > 0
+      ? job.uploadedRecords
+      : isVendorMaster && skipped > 0
+      ? total + skipped
+      : total || processed;
+
+  const isAllDuplicates =
+    isVendorMaster &&
+    total === 0 &&
+    imported === 0 &&
+    skipped > 0 &&
+    failed === 0 &&
+    job.status === 'COMPLETED';
+  const isZeroProcessedFailure =
+    total > 0 && processed === 0 && (job.status === 'COMPLETED' || job.status === 'FAILED');
+  const isTotalFailure =
+    job.status === 'FAILED' ||
+    isZeroProcessedFailure ||
+    (failed > 0 && imported === 0 && skipped === 0);
+  const isPartialFailure =
+    !isTotalFailure &&
+    job.status !== 'PROCESSING' &&
+    job.status !== 'PENDING' &&
+    (job.status === 'PARTIAL_FAILURE' || failed > 0);
+  const isPureCompleted =
+    !isTotalFailure && !isPartialFailure && !isAllDuplicates && job.status === 'COMPLETED';
+
   const percentage =
-    total > 0
+    isTotalFailure && processed === 0
+      ? 0
+      : total > 0
       ? Math.min(100, Math.round((processed / total) * 100))
-      : job.status === 'COMPLETED'
-      ? 100
-      : processed > 0
+      : isAllDuplicates || isPureCompleted || processed > 0
       ? 100
       : 0;
+
+  const firstFailureDetail = Array.isArray(job.errorDetails)
+    ? job.errorDetails.find((entry) => entry && entry.status !== 'duplicate_skipped' && entry.reason)
+    : undefined;
+  const displayErrorMessage =
+    job.errorMessage ||
+    (isTotalFailure || isPartialFailure
+      ? firstFailureDetail?.reason || vmStrings.jobFailureFallbackReason
+      : null);
 
   const formatNumber = (n: number) => n.toLocaleString('en-IN');
 
@@ -107,19 +218,25 @@ export function IngestionProgressCard({
               <h4 className="text-sm font-black tracking-wide text-white">
                 {title} Ingestion
               </h4>
-              {job.status === 'PROCESSING' && (
+              {job.status === 'PROCESSING' && !isTotalFailure && (
                 <span className="inline-flex items-center gap-1.5 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 border border-indigo-400/30 animate-pulse">
                   <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-ping" />
                   Processing...
                 </span>
               )}
-              {job.status === 'COMPLETED' && (
+              {isPureCompleted && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-500/20 text-emerald-300 border border-emerald-400/30 shadow-xs">
                   <CheckCircle2 size={11} className="text-emerald-400" />
                   Completed
                 </span>
               )}
-              {job.status === 'FAILED' && (
+              {(isPartialFailure || isAllDuplicates) && (
+                <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-400/30">
+                  <AlertCircle size={11} className="text-amber-400" />
+                  {isPartialFailure ? 'Completed with Errors' : 'All Duplicates'}
+                </span>
+              )}
+              {isTotalFailure && (
                 <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 border border-rose-400/30">
                   <AlertCircle size={11} className="text-rose-400" />
                   Failed
@@ -147,9 +264,11 @@ export function IngestionProgressCard({
         <div className="w-full h-3.5 bg-slate-800/80 rounded-full overflow-hidden border border-slate-700/60 p-0.5 shadow-inner">
           <div
             className={`h-full rounded-full transition-all duration-300 shadow-sm ${
-              job.status === 'FAILED'
+              isTotalFailure
                 ? 'bg-rose-500'
-                : job.status === 'COMPLETED'
+                : isPartialFailure || isAllDuplicates
+                ? 'bg-amber-500'
+                : isPureCompleted
                 ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
                 : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400'
             }`}
@@ -159,9 +278,17 @@ export function IngestionProgressCard({
       </div>
 
       {/* Metrics Breakdown Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center text-xs">
+      <div className={`grid grid-cols-2 ${isVendorMaster && skipped > 0 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center text-xs`}>
+        {isVendorMaster && skipped > 0 && (
+          <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">{vmStrings.jobUploadedStat}</span>
+            <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(uploadedTotal)}</span>
+          </div>
+        )}
         <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
-          <span className="text-[10px] uppercase font-bold text-slate-400 block">Total</span>
+          <span className="text-[10px] uppercase font-bold text-slate-400 block">
+            {isVendorMaster ? 'Stored Total' : 'Total'}
+          </span>
           <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(total || processed)}</span>
         </div>
         <div className="p-2.5 rounded-xl bg-indigo-950/60 border border-indigo-800/60">
@@ -169,11 +296,15 @@ export function IngestionProgressCard({
           <span className="font-mono font-black text-indigo-100 text-sm">{formatNumber(processed)}</span>
         </div>
         <div className="p-2.5 rounded-xl bg-emerald-950/60 border border-emerald-800/60">
-          <span className="text-[10px] uppercase font-bold text-emerald-300 block">Imported</span>
+          <span className="text-[10px] uppercase font-bold text-emerald-300 block">
+            {isAiCategory ? 'PO Mapped' : 'Imported'}
+          </span>
           <span className="font-mono font-black text-emerald-200 text-sm">{formatNumber(imported)}</span>
         </div>
         <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800/60">
-          <span className="text-[10px] uppercase font-bold text-amber-300 block">Skipped</span>
+          <span className="text-[10px] uppercase font-bold text-amber-300 block">
+            {isVendorMaster ? vmStrings.jobDuplicatesRemovedStat : isAiCategory ? 'Self-Map' : 'Skipped'}
+          </span>
           <span className="font-mono font-black text-amber-200 text-sm">{formatNumber(skipped)}</span>
         </div>
         <div className="p-2.5 rounded-xl bg-rose-950/60 border border-rose-800/60 col-span-2 sm:col-span-1">
@@ -182,24 +313,35 @@ export function IngestionProgressCard({
         </div>
       </div>
 
-      {job.errorMessage && (
-        <div className="p-2.5 rounded-xl bg-rose-950/70 border border-rose-800/70 text-xs text-rose-200 flex items-center gap-2">
-          <AlertCircle size={14} className="shrink-0 text-rose-400" />
-          <span>{job.errorMessage}</span>
+      {displayErrorMessage && (
+        <div
+          data-testid="ingestion-job-error-banner"
+          className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
+            isTotalFailure
+              ? 'bg-rose-950/70 border-rose-800/70 text-rose-200'
+              : 'bg-amber-950/70 border-amber-700/70 text-amber-200'
+          }`}
+        >
+          <AlertCircle size={14} className={`shrink-0 ${isTotalFailure ? 'text-rose-400' : 'text-amber-400'}`} />
+          <span>{displayErrorMessage}</span>
         </div>
       )}
 
       <div className="flex items-center justify-between text-[11px] text-slate-400 pt-1 border-t border-slate-800/60 flex-wrap gap-1">
         <span>
           Status:{' '}
-          <strong className="text-slate-200">
-            {job.status === 'PROCESSING'
-              ? 'Processing...'
+          <strong className={isTotalFailure ? 'text-rose-300' : isPartialFailure || isAllDuplicates ? 'text-amber-300' : 'text-slate-200'}>
+            {isTotalFailure
+              ? vmStrings.jobStatusFailed
+              : isPartialFailure
+              ? vmStrings.jobStatusPartialFailure
+              : isAllDuplicates
+              ? vmStrings.jobStatusAllDuplicates
+              : job.status === 'PROCESSING'
+              ? vmStrings.jobStatusProcessing
               : job.status === 'COMPLETED'
-              ? 'Completed Successfully'
-              : job.status === 'FAILED'
-              ? 'Processing Failed'
-              : 'Pending'}
+              ? vmStrings.jobStatusCompleted
+              : vmStrings.jobStatusPending}
           </strong>
         </span>
         <span className="text-[10px] text-indigo-300/80 italic flex items-center gap-1">
@@ -1065,6 +1207,22 @@ export default function InitialSetupModal() {
           setVendorFileName(file.name);
           setIsEditingVendorTable(false);
 
+          const localFallbackJob: IngestionJobState = {
+            id: `job-${Date.now()}`,
+            jobType: 'VENDOR_MASTER',
+            fileName: file.name,
+            status: parsedVendors.length > 0 ? 'COMPLETED' : 'FAILED',
+            uploadedRecords: totalCandidateCount,
+            totalRecords: parsedVendors.length,
+            processedRecords: parsedVendors.length,
+            importedRecords: parsedVendors.length,
+            skippedRecords: skippedDuplicates.length,
+            failedRecords: 0,
+            ...(parsedVendors.length === 0
+              ? { errorMessage: UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason }
+              : {}),
+          };
+
           if (sessionId && !isCsvOrText) {
             try {
               const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
@@ -1076,59 +1234,30 @@ export default function InitialSetupModal() {
                   jobType: 'VENDOR_MASTER',
                 }),
               });
-              if (jobRes.ok) {
-                const jobJson = await jobRes.json();
-                const j = jobJson?.data?.job;
-                setVendorJob({
-                  id: j?.id || `job-${Date.now()}`,
-                  jobType: 'VENDOR_MASTER',
-                  fileName: file.name,
-                  status: 'COMPLETED',
-                  totalRecords: totalCandidateCount,
-                  processedRecords: totalCandidateCount,
-                  importedRecords: j?.importedRecords ?? parsedVendors.length,
-                  skippedRecords: (j?.skippedRecords || 0) + skippedDuplicates.length,
-                  failedRecords: j?.failedRecords || 0,
-                });
-              } else {
-                setVendorJob({
-                  id: `job-${Date.now()}`,
-                  jobType: 'VENDOR_MASTER',
-                  fileName: file.name,
-                  status: 'COMPLETED',
-                  totalRecords: totalCandidateCount,
-                  processedRecords: totalCandidateCount,
-                  importedRecords: parsedVendors.length,
-                  skippedRecords: skippedDuplicates.length,
-                  failedRecords: 0,
-                });
+              const jobJson = await jobRes.json().catch(() => ({}));
+              const { jobState, failureMessage } = buildStartJobStateFromResponse({
+                jobType: 'VENDOR_MASTER',
+                fileName: file.name,
+                rawTotal: totalCandidateCount,
+                uniqueCount: parsedVendors.length,
+                skippedDuplicates: skippedDuplicates.length,
+                ok: jobRes.ok,
+                payload: jobJson,
+              });
+              setVendorJob(jobState);
+              if (failureMessage) {
+                showToast(
+                  UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed,
+                  failureMessage,
+                  'warning'
+                );
               }
             } catch (e) {
               logger.log('WARN', 'Vendor master background job could not start; local parsing fallback will be used', { error: e }, 'VENDOR_INGESTION');
-              setVendorJob({
-                id: `job-${Date.now()}`,
-                jobType: 'VENDOR_MASTER',
-                fileName: file.name,
-                status: 'COMPLETED',
-                totalRecords: totalCandidateCount,
-                processedRecords: totalCandidateCount,
-                importedRecords: parsedVendors.length,
-                skippedRecords: skippedDuplicates.length,
-                failedRecords: 0,
-              });
+              setVendorJob(localFallbackJob);
             }
           } else {
-            setVendorJob({
-              id: `job-${Date.now()}`,
-              jobType: 'VENDOR_MASTER',
-              fileName: file.name,
-              status: 'COMPLETED',
-              totalRecords: totalCandidateCount,
-              processedRecords: totalCandidateCount,
-              importedRecords: parsedVendors.length,
-              skippedRecords: skippedDuplicates.length,
-              failedRecords: 0,
-            });
+            setVendorJob(localFallbackJob);
           }
 
           try {
@@ -1466,32 +1595,23 @@ export default function InitialSetupModal() {
                   jobType: 'PO_DUMP',
                 }),
               });
-              if (jobRes.ok) {
-                const jobJson = await jobRes.json();
-                const j = jobJson?.data?.job;
-                setPoJob({
-                  id: j?.id || `job-po-${Date.now()}`,
-                  jobType: 'PO_DUMP',
-                  fileName: file.name,
-                  status: 'COMPLETED',
-                  totalRecords: parsedPOs.length,
-                  processedRecords: parsedPOs.length,
-                  importedRecords: parsedPOs.length,
-                  skippedRecords: j?.skippedRecords || 0,
-                  failedRecords: j?.failedRecords || 0,
-                });
-              } else {
-                setPoJob({
-                  id: `job-po-${Date.now()}`,
-                  jobType: 'PO_DUMP',
-                  fileName: file.name,
-                  status: 'COMPLETED',
-                  totalRecords: parsedPOs.length,
-                  processedRecords: parsedPOs.length,
-                  importedRecords: parsedPOs.length,
-                  skippedRecords: 0,
-                  failedRecords: 0,
-                });
+              const jobJson = await jobRes.json().catch(() => ({}));
+              const { jobState, failureMessage } = buildStartJobStateFromResponse({
+                jobType: 'PO_DUMP',
+                fileName: file.name,
+                rawTotal: parsedPOs.length,
+                uniqueCount: parsedPOs.length,
+                skippedDuplicates: 0,
+                ok: jobRes.ok,
+                payload: jobJson,
+              });
+              setPoJob(jobState);
+              if (failureMessage) {
+                showToast(
+                  UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed,
+                  failureMessage,
+                  'warning'
+                );
               }
             } catch (e) {
               logger.log('WARN', 'Purchase order background job could not start; local parsing fallback will be used', { error: e }, 'PURCHASE_ORDER_INGESTION');
@@ -1681,6 +1801,16 @@ export default function InitialSetupModal() {
       if (updated.length === 0) {
         setVendorMasterUploaded(false);
       }
+      setVendorJob((job) =>
+        job
+          ? {
+              ...job,
+              totalRecords: updated.length,
+              processedRecords: updated.length,
+              importedRecords: updated.length,
+            }
+          : job
+      );
       return updated;
     });
   };
@@ -2131,21 +2261,39 @@ export default function InitialSetupModal() {
                 data-testid="vendor-duplicate-skipped-banner"
                 className="rounded-2xl border border-amber-300/80 dark:border-amber-700/60 bg-amber-50/70 dark:bg-amber-950/30 p-4 space-y-3 shadow-sm"
               >
-                <div className="flex items-start gap-2.5">
-                  <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
-                  <div className="space-y-0.5">
-                    <h4 className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
-                      {formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerTitle, {
-                        count: skippedDuplicateVendors.length,
-                        rowWord:
-                          skippedDuplicateVendors.length === 1
-                            ? UI_STRINGS.vendorPoIngestion.vendorMaster.duplicateRowSingular
-                            : UI_STRINGS.vendorPoIngestion.vendorMaster.duplicateRowPlural,
-                      })}
-                    </h4>
-                    <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 font-medium">
-                      {UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerHint}
-                    </p>
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-2.5">
+                  <div className="flex items-start gap-2.5">
+                    <AlertTriangle size={18} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                    <div className="space-y-0.5">
+                      <h4 className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                        {formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerTitle, {
+                          count: skippedDuplicateVendors.length,
+                          rowWord:
+                            skippedDuplicateVendors.length === 1
+                              ? UI_STRINGS.vendorPoIngestion.vendorMaster.duplicateRowSingular
+                              : UI_STRINGS.vendorPoIngestion.vendorMaster.duplicateRowPlural,
+                        })}
+                      </h4>
+                      <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 font-medium">
+                        {UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerHint}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => downloadSkippedDuplicatesCsv(skippedDuplicateVendors)}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold flex items-center gap-1 border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-900 text-amber-900 dark:text-amber-200"
+                    >
+                      <Download size={12} /> {UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkippedDuplicateVendors([])}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300"
+                    >
+                      {UI_STRINGS.vendorPoIngestion.vendorMaster.dismissDuplicatesAction}
+                    </button>
                   </div>
                 </div>
 
@@ -3079,6 +3227,41 @@ export default function InitialSetupModal() {
                 </div>
               </div>
             </div>
+
+            {/* Upload & Mapping Reconciliation Trail (when duplicates were removed) */}
+            {(vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0 && (
+              <div
+                data-testid="step4-reconciliation-banner"
+                className="p-2.5 rounded-xl bg-slate-50 dark:bg-gray-800/70 border border-slate-200 dark:border-gray-700 flex flex-wrap items-center justify-between gap-2 text-[11px]"
+              >
+                <span className="font-semibold text-slate-700 dark:text-slate-200">
+                  {UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationUploadedLabel}:{' '}
+                  <strong>
+                    {vendorJob?.uploadedRecords ||
+                      joinedVendors.length + Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length)}
+                  </strong>{' '}
+                  &rarr; {UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationDuplicatesLabel}:{' '}
+                  <strong className="text-amber-600 dark:text-amber-400">
+                    {Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length)}
+                  </strong>{' '}
+                  &rarr; {UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationStoredLabel}:{' '}
+                  <strong className="text-indigo-600 dark:text-indigo-400">{joinedVendors.length}</strong>{' '}
+                  ({UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationPoMappedLabel}:{' '}
+                  <strong className="text-emerald-600 dark:text-emerald-400">{mappedVendors.length}</strong> +{' '}
+                  {UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationSelfMapLabel}:{' '}
+                  <strong className="text-amber-600 dark:text-amber-400">{unmappedVendors.length}</strong>)
+                </span>
+                {skippedDuplicateVendors.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => downloadSkippedDuplicatesCsv(skippedDuplicateVendors)}
+                    className="inline-flex items-center gap-1 text-[10px] font-bold text-amber-700 dark:text-amber-300 underline hover:no-underline"
+                  >
+                    <Download size={11} /> {UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv}
+                  </button>
+                )}
+              </div>
+            )}
 
             {/* Ingestion Totals Grid */}
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-center text-xs">

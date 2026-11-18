@@ -9,7 +9,7 @@ import {
   flattenCategorySelection,
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
-import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
+import { ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   FORM_SCHEMAS,
@@ -62,7 +62,7 @@ export default function BuyerProfilePage() {
     activeBuyerAccountRef.current = activeBuyerAccount;
   }, [activeBuyerAccount]);
 
-  const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+  // Unlimited major and minor procurement category selections supported.
 
   // Organization Form State
   const [companyName, setCompanyName] = useState('');
@@ -372,34 +372,7 @@ export default function BuyerProfilePage() {
   const minorsOf = (majorName: string) =>
     activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
-  /**
-   * Report that a cardinality cap blocked a selection.
-   *
-   * The caps exist because the RFQ distribution engine fans out per selected
-   * category, so an unbounded scope would broadcast every RFQ to the whole vendor
-   * base. The old screen let "Select All" bypass them; here every path goes
-   * through these checks.
-   */
-  const rejectForMajorCap = () => {
-    showToast(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
-      'warning'
-    );
-  };
-
-  const rejectForMinorCap = () => {
-    showToast(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMinorReached, {
-        count: totalSelectedMinorCount,
-        max: MAX_MINOR_CATEGORIES,
-      }),
-      'warning'
-    );
-  };
-
-  // Toggle Major Category
+  // Toggle Major Category (unlimited major & minor selections)
   const toggleMajorCategory = (majorName: string) => {
     if (selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
@@ -411,24 +384,11 @@ export default function BuyerProfilePage() {
       return;
     }
 
-    if (selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
-      return;
-    }
-
-    const remainingSlots = MAX_MINOR_CATEGORIES - totalSelectedMinorCount;
-    if (remainingSlots <= 0) {
-      rejectForMinorCap();
-      return;
-    }
-
     setSelectedMajor((prev) => [...prev, majorName]);
-    // Select as many minors as the remaining allowance permits, rather than all
-    // of them and then silently discarding the overflow at save time.
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: minorsOf(majorName).slice(0, remainingSlots) }));
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: minorsOf(majorName) }));
   };
 
-  // Toggle Minor Category
+  // Toggle Minor Category (unlimited selections)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
     const isChecked = currentList.includes(minorName);
@@ -447,15 +407,6 @@ export default function BuyerProfilePage() {
       return;
     }
 
-    if (totalSelectedMinorCount >= MAX_MINOR_CATEGORIES) {
-      rejectForMinorCap();
-      return;
-    }
-    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
-      return;
-    }
-
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
@@ -464,29 +415,11 @@ export default function BuyerProfilePage() {
 
   // Select all minor for a major
   const selectAllMinorInMajor = (majorName: string) => {
-    const alreadySelected = selectedMinor[majorName] || [];
-    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
-      return;
-    }
-
-    // Room left once this major's current selection is set aside, since those
-    // minors are being replaced rather than added to.
-    const remainingSlots = MAX_MINOR_CATEGORIES - (totalSelectedMinorCount - alreadySelected.length);
-    if (remainingSlots <= 0) {
-      rejectForMinorCap();
-      return;
-    }
-
     const allMinor = minorsOf(majorName);
-    if (allMinor.length > remainingSlots) {
-      rejectForMinorCap();
-    }
-
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor.slice(0, remainingSlots) }));
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: [...allMinor] }));
   };
 
   // Clear minor for a major

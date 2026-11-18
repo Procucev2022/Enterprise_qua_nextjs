@@ -639,7 +639,7 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-arr-1',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', importedRecords: 1, failedRecords: 1 })
+        expect.objectContaining({ status: 'PARTIAL_FAILURE', importedRecords: 1, failedRecords: 1 })
       );
     });
 
@@ -673,12 +673,14 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-arr-po',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', importedRecords: 1, failedRecords: 1 })
+        expect.objectContaining({ status: 'PARTIAL_FAILURE', importedRecords: 1, failedRecords: 1 })
       );
     });
 
-    it('handles empty rows array gracefully', async () => {
-      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-empty' });
+    it('marks empty or all-failed array jobs as FAILED instead of COMPLETED', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-empty', status: 'DRAFT', currentStep: 2 });
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
       await largeFileIngestionService.processArrayJob({
@@ -693,7 +695,32 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-empty',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', totalRecords: 0 })
+        expect.objectContaining({
+          status: 'FAILED',
+          totalRecords: 0,
+          errorMessage: expect.stringContaining('0 of 0'),
+        })
+      );
+
+      updateProgressSpy.mockClear();
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-all-fail',
+        sessionId: 'sess-empty',
+        organizationId: 'org-1',
+        rows: [{ companyName: '', email: 'bad' }],
+        fileName: 'bad.xlsx',
+        jobType: 'VENDOR_MASTER',
+      });
+
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-all-fail',
+        'org-1',
+        expect.objectContaining({
+          status: 'FAILED',
+          importedRecords: 0,
+          failedRecords: 1,
+          errorMessage: expect.any(String),
+        })
       );
     });
 
@@ -1250,8 +1277,8 @@ describe('largeFileIngestionService unit tests', () => {
 
       const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
       expect(finalCall[2]).toMatchObject({
-        totalRecords: 5,
-        processedRecords: 5,
+        totalRecords: 1,
+        processedRecords: 1,
         importedRecords: 1,
         skippedRecords: 4,
         failedRecords: 0,
@@ -1295,8 +1322,8 @@ describe('largeFileIngestionService unit tests', () => {
 
       const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
       expect(finalCall[2]).toMatchObject({
-        totalRecords: 2,
-        processedRecords: 2,
+        totalRecords: 1,
+        processedRecords: 1,
         importedRecords: 1,
         skippedRecords: 1,
         failedRecords: 0,

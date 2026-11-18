@@ -199,12 +199,13 @@ describe('runCategorizationJob', () => {
     await service.runCategorizationJob(RUN);
     expect(progressPatches().at(-1)).toEqual(
       expect.objectContaining({
-        status: JOB_STATUS.COMPLETED,
+        status: JOB_STATUS.PARTIAL_FAILURE,
         totalRecords: 7,
         processedRecords: 7,
         importedRecords: 6,
         skippedRecords: 0,
         failedRecords: 1,
+        errorMessage: expect.stringContaining('6 PO-matched supplier(s) mapped, 1 failed'),
       })
     );
 
@@ -231,6 +232,90 @@ describe('runCategorizationJob', () => {
         importedRecords: 0,
         skippedRecords: 2,
         failedRecords: 0,
+      })
+    );
+
+    // Case C: 10 stored vendors (7 PO-matched + 3 self-map) reconciles full 10 cohort on success AND flags FAILED if 0 / 7 PO-matched classified
+    queries.updateIngestionJobProgress.mockClear();
+    const tenProfiles = [
+      ...Array.from({ length: 7 }, (_, i) => ({ ...PROFILE, vendorRecordId: `vr-m-${i + 1}`, hasPoHistory: true })),
+      ...Array.from({ length: 3 }, (_, i) => ({ ...PROFILE, vendorRecordId: `vr-u-${i + 1}`, hasPoHistory: false })),
+    ];
+    queries.findVendorPurchasingProfiles.mockResolvedValue(tenProfiles);
+    queries.summarizeCategoryMappings.mockResolvedValue({
+      ...SUMMARY,
+      completed: 10,
+      mapped: 7,
+      pendingReview: 0,
+      selfMapRequired: 3,
+      selfMapped: 0,
+      failed: 0,
+      queued: 0,
+      processing: 0,
+    });
+
+    await service.runCategorizationJob(RUN);
+    expect(progressPatches().at(-1)).toEqual(
+      expect.objectContaining({
+        status: JOB_STATUS.COMPLETED,
+        totalRecords: 10,
+        processedRecords: 10,
+        importedRecords: 7,
+        skippedRecords: 3,
+        failedRecords: 0,
+      })
+    );
+
+    // Subcase C2: 0 / 7 matched classified -> MUST fail loudly instead of marking Completed
+    queries.updateIngestionJobProgress.mockClear();
+    queries.summarizeCategoryMappings.mockResolvedValue({
+      ...SUMMARY,
+      completed: 3,
+      mapped: 0,
+      pendingReview: 0,
+      selfMapRequired: 3,
+      selfMapped: 0,
+      failed: 7,
+      queued: 0,
+      processing: 0,
+    });
+
+    await service.runCategorizationJob(RUN);
+    expect(progressPatches().at(-1)).toEqual(
+      expect.objectContaining({
+        status: JOB_STATUS.FAILED,
+        totalRecords: 10,
+        importedRecords: 0,
+        skippedRecords: 3,
+        failedRecords: 7,
+        errorMessage: MESSAGES.AI_JOB_FAILED,
+      })
+    );
+
+    // Subcase C3: 0 / 7 matched classified and 0 explicit batch failures (stalled / unqueued 0/7) -> MUST still flag FAILED
+    queries.updateIngestionJobProgress.mockClear();
+    queries.summarizeCategoryMappings.mockResolvedValue({
+      ...SUMMARY,
+      completed: 3,
+      mapped: 0,
+      pendingReview: 0,
+      selfMapRequired: 3,
+      selfMapped: 0,
+      failed: 0,
+      queued: 0,
+      processing: 0,
+    });
+
+    await service.runCategorizationJob(RUN);
+    expect(progressPatches().at(-1)).toEqual(
+      expect.objectContaining({
+        status: JOB_STATUS.FAILED,
+        totalRecords: 10,
+        processedRecords: 0,
+        importedRecords: 0,
+        skippedRecords: 3,
+        failedRecords: 7,
+        errorMessage: expect.stringContaining('did not classify any of the 7 PO-matched'),
       })
     );
   });

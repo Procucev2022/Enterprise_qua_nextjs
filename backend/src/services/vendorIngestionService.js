@@ -957,28 +957,34 @@ function computeCategorizationJobCounts({
   summary,
 }) {
   const selfMapCount = (summary?.selfMapRequired || 0) + (summary?.selfMapped || 0);
-  const completedMatched = Math.max(
-    processedInLoop,
-    Math.min(matchedVendorCount, Math.max(0, (summary?.completed || 0) - selfMapCount))
-  );
-  const failedCount = Math.max(failedInLoop, Math.min(completedMatched, Number(summary?.failed) || 0));
-  const importedCount = Math.max(0, completedMatched - failedCount);
+  const effectiveSelfMap = Math.max(unmatchedVendorCount, selfMapCount);
+  const loopSuccess = Math.max(0, processedInLoop - failedInLoop);
+  const summarySuccess = (summary?.mapped || 0) + (summary?.pendingReview || 0);
+  const matchedSuccessCount = Math.min(matchedVendorCount, Math.max(loopSuccess, summarySuccess));
+  const summaryFailed = Number(summary?.failed) || 0;
+  const failedCount = Math.min(matchedVendorCount, Math.max(failedInLoop, summaryFailed));
 
   if (matchedVendorCount === 0 && totalVendors > 0) {
     return {
       totalRecords: totalVendors,
       processedRecords: totalVendors,
       importedRecords: 0,
-      skippedRecords: unmatchedVendorCount,
+      skippedRecords: effectiveSelfMap || unmatchedVendorCount,
       failedRecords: 0,
     };
   }
 
+  const totalCohort = Math.max(totalVendors, matchedVendorCount + effectiveSelfMap);
+  const anyMatchedHandled = matchedSuccessCount > 0 || failedCount > 0 || processedInLoop > 0;
+  const processedRecords = anyMatchedHandled
+    ? Math.min(totalCohort, matchedSuccessCount + failedCount + effectiveSelfMap)
+    : 0;
+
   return {
-    totalRecords: matchedVendorCount,
-    processedRecords: completedMatched,
-    importedRecords: importedCount,
-    skippedRecords: 0,
+    totalRecords: totalCohort,
+    processedRecords,
+    importedRecords: matchedSuccessCount,
+    skippedRecords: effectiveSelfMap,
     failedRecords: failedCount,
   };
 }
@@ -1001,10 +1007,10 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
     const join = await runVendorPoJoin(sessionUser, sessionId);
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       status: VENDOR_INGESTION_JOB_STATUS.PROCESSING,
-      totalRecords: join.matchedVendorCount,
+      totalRecords: join.totalVendors || join.matchedVendorCount,
       processedRecords: 0,
       importedRecords: 0,
-      skippedRecords: 0,
+      skippedRecords: join.unmatchedVendorCount || 0,
       failedRecords: 0,
     });
 
@@ -1012,10 +1018,10 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
     // still reaches AI_COMPLETED instead of staying at JOINED.
     let batch;
     let latestCounts = {
-      totalRecords: join.matchedVendorCount,
+      totalRecords: join.totalVendors || join.matchedVendorCount,
       processedRecords: 0,
       importedRecords: 0,
-      skippedRecords: 0,
+      skippedRecords: join.unmatchedVendorCount || 0,
       failedRecords: 0,
     };
     do {
@@ -1045,11 +1051,35 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       }
     } while (!batch.done);
 
-    const everyAttemptFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
+    const aiBatchFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
+    const noMatchedClassified = join.matchedVendorCount > 0 && latestCounts.importedRecords === 0;
+    const everyAttemptFailed = aiBatchFailed || noMatchedClassified;
+    const partialFailures = !everyAttemptFailed && latestCounts.failedRecords > 0;
+    const finalStatus = everyAttemptFailed
+      ? VENDOR_INGESTION_JOB_STATUS.FAILED
+      : partialFailures
+      ? VENDOR_INGESTION_JOB_STATUS.PARTIAL_FAILURE
+      : VENDOR_INGESTION_JOB_STATUS.COMPLETED;
+    const finalFailedRecords = everyAttemptFailed
+      ? Math.max(latestCounts.failedRecords, join.matchedVendorCount - latestCounts.importedRecords)
+      : latestCounts.failedRecords;
+    const finalErrorMessage = everyAttemptFailed
+      ? firstError ||
+        (aiBatchFailed
+          ? VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED
+          : formatMessage(VENDOR_INGESTION_MESSAGES.AI_JOB_NONE_CLASSIFIED, { total: join.matchedVendorCount }))
+      : partialFailures
+      ? formatMessage(VENDOR_INGESTION_MESSAGES.AI_JOB_PARTIAL_FAILED, {
+          imported: latestCounts.importedRecords,
+          failed: finalFailedRecords,
+        })
+      : undefined;
+
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       ...latestCounts,
-      status: everyAttemptFailed ? VENDOR_INGESTION_JOB_STATUS.FAILED : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
-      ...(everyAttemptFailed ? { errorMessage: firstError || VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED } : {}),
+      failedRecords: finalFailedRecords,
+      status: finalStatus,
+      ...(finalErrorMessage ? { errorMessage: finalErrorMessage } : {}),
       completedAt: new Date().toISOString(),
     });
     logger.info(
@@ -1200,14 +1230,6 @@ function assertCategoriesInMaster(categoryMaster, majorCategory, minorCategories
       formatMessage(VENDOR_INGESTION_MESSAGES.MAJOR_CATEGORY_UNKNOWN, { category: majorCategory }),
       422,
       { majorCategory: 'Not a category in your category master.' }
-    );
-  }
-  if (minorCategories.length > VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR) {
-    throw new VendorIngestionError(
-      formatMessage(VENDOR_INGESTION_MESSAGES.TOO_MANY_MINOR_CATEGORIES, {
-        max: VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR,
-      }),
-      422
     );
   }
 
