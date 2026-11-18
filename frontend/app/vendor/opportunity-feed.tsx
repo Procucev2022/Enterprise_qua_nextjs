@@ -1460,58 +1460,6 @@ export default function OpportunityFeed({
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 text-[11px] items-end">
-                {/* Preserved Selects for Backwards Compatibility with Tests */}
-                <div className="sr-only">
-                  <select
-                    aria-label={UI_STRINGS.vendorFeed.buyerFilterLabel}
-                    value={selectedBuyerDirect}
-                    onChange={handleBuyerChangeDirect}
-                  >
-                    <option value="all">{UI_STRINGS.vendorFeed.buyerFilterAll}</option>
-                    {directInvitationBuyers.map(renderBuyerOption)}
-                  </select>
-                  <select
-                    aria-label="Major Category"
-                    value={selectedMajorCategoryDirect}
-                    onChange={handleMajorCategoryDirect}
-                  >
-                    <option value="all">🌐 All Major Categories</option>
-                    {feedMajorCategories.map((major) => (
-                      <option key={major} value={major}>{major}</option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Direct Minor Category"
-                    value={selectedMinorCategoryDirect}
-                    onChange={handleMinorCategoryDirect}
-                  >
-                    <option value="all">All Categories</option>
-                    {allMinorCategories.map((minor) => (
-                      <option key={minor} value={minor}>{minor}</option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Network Major Category"
-                    value={selectedMajorCategoryNet}
-                    onChange={handleMajorCategoryNet}
-                  >
-                    <option value="all">🌐 All Major Categories</option>
-                    {feedMajorCategories.map((major) => (
-                      <option key={major} value={major}>{major}</option>
-                    ))}
-                  </select>
-                  <select
-                    aria-label="Network Minor Category"
-                    value={selectedMinorCategoryNet}
-                    onChange={handleMinorCategoryNet}
-                  >
-                    <option value="all">All Categories</option>
-                    {allMinorCategories.map((minor) => (
-                      <option key={minor} value={minor}>{minor}</option>
-                    ))}
-                  </select>
-                </div>
-
                 {/* Category Search Input */}
                 <div className="flex flex-col gap-1 relative">
                   <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Category</span>
@@ -1640,12 +1588,8 @@ export default function OpportunityFeed({
                     type="button"
                     aria-label="Clear Filters"
                     onClick={() => {
-                      handleResetFiltersDirect();
-                      handleResetFiltersNet();
-                      setRfqSearchTerm('');
+                      handleResetFilters();
                       setSelectedMinorCategory('all');
-                      setFilterCatalogueMatches(false);
-                      setStatusFilter('all');
                       setCurrentPage(1);
                     }}
                     className="btn btn-secondary py-2 px-3 rounded-xl text-xs font-bold inline-flex items-center justify-center gap-1.5 w-full hover:bg-slate-100 cursor-pointer"
