@@ -4362,8 +4362,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
   });
 
-  it('hydrates saved vendor_master_records on resume and tolerates non-ok or failing fetches', async () => {
-    const server = installIngestionServer({
+  it('does not render old uploaded vendor records in vendor master section on setup open', async () => {
+    installIngestionServer({
       session: {
         id: SESSION_ID,
         horizonType: 'LAST_1_YEAR',
@@ -4372,73 +4372,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         poRowCount: 0,
       },
     });
-    const baseImpl = server.getMockImplementation()!;
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            success: true,
-            data: {
-              records: [
-                {
-                  id: 'vm-1',
-                  vendorCode: 'VC-101',
-                  companyName: 'Hydrated Csv Supplier',
-                  contactPerson: 'Veera',
-                  email: 'veera@hydrated.test',
-                  phone: '+91 9876543210',
-                  address: 'Hyderabad',
-                  gstin: '36ABCDE1234F1Z5',
-                  rating: 88,
-                },
-                {
-                  id: '',
-                  vendorCode: '',
-                  companyName: '',
-                  email: '',
-                },
-              ],
-            },
-          }),
-        } as Response);
-      }
-      return baseImpl(url, init);
-    });
 
-    const { unmount } = render(<InitialSetupModal />);
-    await settleOpeningRequests();
-    await waitFor(() =>
-      expect(server).toHaveBeenCalledWith(
-        `/api/vendor-ingestion/${SESSION_ID}/vendor-master?limit=500`,
-        expect.any(Object)
-      )
-    );
-    fireEvent.click(screen.getByText('2. Vendor Master'));
-    expect(await screen.findByText('Hydrated Csv Supplier')).toBeInTheDocument();
-    unmount();
-
-    // Non-ok response branch
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) } as Response);
-      }
-      return baseImpl(url, init);
-    });
-    const r2 = render(<InitialSetupModal />);
-    await settleOpeningRequests();
-    r2.unmount();
-
-    // Fetch rejection branch
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.reject(new Error('Network down'));
-      }
-      return baseImpl(url, init);
-    });
     render(<InitialSetupModal />);
     await settleOpeningRequests();
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    expect(screen.queryByText('Hydrated Csv Supplier')).not.toBeInTheDocument();
+    expect(screen.queryByText('Testing data.csv')).not.toBeInTheDocument();
+    expect(screen.getByText('No Vendor Master file selected')).toBeInTheDocument();
   });
 
   it('extracts and persists city, state, and pincode from combined addresses and explicit columns during upload and inline edits', async () => {
