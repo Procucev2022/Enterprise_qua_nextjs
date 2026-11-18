@@ -350,11 +350,12 @@ describe('vendor history matching and AI progress', () => {
 });
 
 describe('buyer category review and vendor empanelment', () => {
-  test('resolves canonical categories, removes repeated minors and rejects unknown/oversized choices', () => {
+  test('resolves canonical categories, removes repeated minors and allows unlimited minor choices', () => {
     expect(service.assertCategoriesInMaster(CATEGORY_MASTER, ' mechanical ', ['pumps', 'PUMPS'])).toEqual({ majorCategory: 'Mechanical', minorCategories: ['Pumps'] });
     expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Invented', [])).toThrow(expect.objectContaining({ status: 422 }));
     expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Mechanical', ['Wrong Minor'])).toThrow(expect.objectContaining({ status: 422 }));
-    expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Mechanical', Array(CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR + 1).fill('Pumps'))).toThrow(expect.objectContaining({ status: 422 }));
+    const largeMaster = [{ majorCategory: 'Mechanical', minorCategories: Array.from({ length: 15 }, (_, i) => `Item-${i + 1}`) }];
+    expect(service.assertCategoriesInMaster(largeMaster, 'Mechanical', Array.from({ length: 15 }, (_, i) => `Item-${i + 1}`)).minorCategories).toHaveLength(15);
   });
 
   test.each(['APPROVE', 'EDIT', 'REJECT'])('persists the %s decision while retaining the original AI columns', async (action) => {

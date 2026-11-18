@@ -269,7 +269,7 @@ interface AppContextType {
   setOnboardingEmailModalOpen: (open: boolean) => void;
   openOnboardingEmailModal: (vendor: VendorEntry) => void;
 
-  // Dual-Stream Category Reconciliation (Client-Mapped vs Vendor-Selected up to 10)
+  // Dual-Stream Category Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories: string[];
   setClientMappedCategories: React.Dispatch<React.SetStateAction<string[]>>;
   vendorSelectedCategories: string[];
@@ -1812,8 +1812,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [vendorSelectedCategories, setVendorSelectedCategories] = useState<string[]>([]);
 
   const saveVendorProfileCategories = (email: string, clientCats: string[], vendorCats: string[]) => {
-    // Limit to max 10 categories
-    const limitedVendorCats = vendorCats.slice(0, 10);
+    // Preserve all vendor-selected categories without artificial cap
+    const limitedVendorCats = Array.from(new Set(vendorCats.map((c) => (c || '').trim()).filter(Boolean)));
     setClientMappedCategories(clientCats);
     setVendorSelectedCategories(limitedVendorCats);
 
@@ -1859,7 +1859,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // records a saved change. The page writes the audit line and the toast itself.
     void addFeedItem(
       `Vendor Category Reconciliation Saved: ${email}`,
-      `Client Mapped: [${clientCats.join(', ')}] | Vendor Selected (Max 10): [${limitedVendorCats.join(', ')}]. ${isAligned ? 'Status: 100% Aligned.' : `Status: Dual-Stream Stored (${common.length} matching, ${vendorOnly.length} vendor-extended). RFQs will be dispatched across both sets.`}`,
+      `Client Mapped: [${clientCats.join(', ')}] | Vendor Selected: [${limitedVendorCats.join(', ')}]. ${isAligned ? 'Status: 100% Aligned.' : `Status: Dual-Stream Stored (${common.length} matching, ${vendorOnly.length} vendor-extended). RFQs will be dispatched across both sets.`}`,
       'system',
       undefined,
       email,

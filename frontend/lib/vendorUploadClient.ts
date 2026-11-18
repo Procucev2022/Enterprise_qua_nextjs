@@ -84,7 +84,7 @@ export type ParseVendorFileResult = { success: true; data: ParsedVendorFile } | 
  */
 export function parseVendorUploadFile(
   file: File,
-  options?: { requireCategory?: boolean }
+  options?: { requireCategory?: boolean; existingVendors?: ExistingVendorDedupeCandidate[] }
 ): Promise<ParseVendorFileResult> {
   return new Promise((resolve) => {
     const reader = new FileReader();
@@ -143,8 +143,7 @@ export function parseVendorUploadFile(
           return;
         }
 
-        const seenEmails = new Map<string, number>(); // email -> first rowNumber it appeared on
-        const seenVendorCodes = new Map<string, number>(); // vendorCode -> first rowNumber it appeared on
+        const dedupeChecker = createVendorDedupeChecker(options?.existingVendors || []);
         const rows: VendorUploadRow[] = [];
         let blankRowCount = 0;
 
@@ -188,21 +187,21 @@ export function parseVendorUploadFile(
           if (gstin && !GSTIN_PATTERN.test(gstin)) errors.push('GSTIN format is invalid.');
           if (pincode && !INDIAN_PINCODE_PATTERN.test(pincode)) errors.push('PIN code must be 6 digits and not start with 0.');
 
-          if (vendorCode) {
-            const firstSeenCodeAt = seenVendorCodes.get(vendorCode.toLowerCase());
-            if (firstSeenCodeAt !== undefined) {
-              errors.push(`Duplicate Vendor Code "${vendorCode}" — already used on row ${firstSeenCodeAt}.`);
+          const duplicateMatch = dedupeChecker.checkAndRegister({
+            rowNumber,
+            explicitVendorCode: vendorCode,
+            companyName: name,
+            email,
+            phone,
+            gstNumber: gstin,
+          });
+          if (duplicateMatch) {
+            if (duplicateMatch.field === 'code') {
+              errors.push(`Duplicate Vendor Code "${vendorCode}" — ${duplicateMatch.reason}`);
+            } else if (duplicateMatch.field === 'email') {
+              errors.push(`Duplicate email — ${duplicateMatch.reason}`);
             } else {
-              seenVendorCodes.set(vendorCode.toLowerCase(), rowNumber);
-            }
-          }
-
-          if (email) {
-            const firstSeenAt = seenEmails.get(email);
-            if (firstSeenAt !== undefined) {
-              errors.push(`Duplicate email — already used on row ${firstSeenAt}.`);
-            } else {
-              seenEmails.set(email, rowNumber);
+              errors.push(duplicateMatch.reason);
             }
           }
 
@@ -224,6 +223,13 @@ export function parseVendorUploadFile(
             },
             isValid: errors.length === 0,
             errors,
+            ...(duplicateMatch
+              ? {
+                  isDuplicate: true,
+                  matchedAgainst: duplicateMatch.matchedAgainst,
+                  duplicateReason: duplicateMatch.reason,
+                }
+              : {}),
             missingEmail,
           });
         });
@@ -443,10 +449,18 @@ function normalizeDedupeCompanyPhone(
  * within the uploaded file by email, GSTIN, explicit vendor code, or normalized
  * (companyName + phone).
  */
-export function partitionDuplicateVendorMasterRows(
-  candidates: VendorDuplicatePartitionCandidate[],
-  existingVendors: ExistingVendorDedupeCandidate[] = []
-): VendorDuplicatePartitionResult {
+interface VendorDedupeMatch {
+  field: 'email' | 'gstin' | 'code' | 'company_phone';
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_VENDOR';
+}
+
+/**
+ * Stateful duplicate detector shared between Vendor Master Setup and Bulk Vendor Upload.
+ * Checks normalized email, GSTIN, explicit vendor code, and (companyName + phone)
+ * against pre-existing Buyer Directory vendors and earlier rows within the file.
+ */
+function createVendorDedupeChecker(existingVendors: ExistingVendorDedupeCandidate[] = []) {
   const existingEmails = new Set<string>();
   const existingGstins = new Set<string>();
   const existingCodes = new Set<string>();
@@ -471,31 +485,39 @@ export function partitionDuplicateVendorMasterRows(
   const fileGstins = new Map<string, number>();
   const fileCodes = new Map<string, number>();
   const fileCompanyPhones = new Map<string, number>();
-
-  const uniqueRecords: VendorMasterUploadRecord[] = [];
-  const skippedDuplicates: SkippedDuplicateVendorRecord[] = [];
   const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
 
-  const findDuplicateMatch = (
-    candidate: VendorDuplicatePartitionCandidate
-  ): { reason: string; matchedAgainst: 'FILE' | 'EXISTING_VENDOR' } | null => {
-    const { vendor, explicitVendorCode } = candidate;
-    const emailKey = normalizeDedupeEmail(vendor.email);
-    const gstinKey = normalizeDedupeGstin(vendor.gstNumber);
-    const codeKey = normalizeDedupeCode(explicitVendorCode);
-    const companyPhoneKey = normalizeDedupeCompanyPhone(vendor.companyName, vendor.phone);
+  const checkAndRegister = (input: {
+    rowNumber: number;
+    explicitVendorCode?: string;
+    companyName?: string;
+    email?: string;
+    phone?: string;
+    gstNumber?: string;
+  }): VendorDedupeMatch | null => {
+    const rawEmail = String(input.email || '').trim();
+    const rawCode = String(input.explicitVendorCode || '').trim();
+    const rawCompany = String(input.companyName || '').trim();
+    const rawPhone = String(input.phone || '').trim();
+
+    const emailKey = normalizeDedupeEmail(rawEmail);
+    const gstinKey = normalizeDedupeGstin(input.gstNumber);
+    const codeKey = normalizeDedupeCode(rawCode);
+    const companyPhoneKey = normalizeDedupeCompanyPhone(rawCompany, rawPhone);
 
     if (emailKey) {
       if (existingEmails.has(emailKey)) {
         return {
-          reason: formatString(vmStrings.duplicateReasonEmailExisting, { value: vendor.email.trim() }),
+          field: 'email',
+          reason: formatString(vmStrings.duplicateReasonEmailExisting, { value: rawEmail }),
           matchedAgainst: 'EXISTING_VENDOR',
         };
       }
       const firstRow = fileEmails.get(emailKey);
       if (firstRow !== undefined) {
         return {
-          reason: formatString(vmStrings.duplicateReasonEmailFile, { value: vendor.email.trim(), firstRow }),
+          field: 'email',
+          reason: formatString(vmStrings.duplicateReasonEmailFile, { value: rawEmail, firstRow }),
           matchedAgainst: 'FILE',
         };
       }
@@ -504,6 +526,7 @@ export function partitionDuplicateVendorMasterRows(
     if (gstinKey) {
       if (existingGstins.has(gstinKey)) {
         return {
+          field: 'gstin',
           reason: formatString(vmStrings.duplicateReasonGstinExisting, { value: gstinKey }),
           matchedAgainst: 'EXISTING_VENDOR',
         };
@@ -511,6 +534,7 @@ export function partitionDuplicateVendorMasterRows(
       const firstRow = fileGstins.get(gstinKey);
       if (firstRow !== undefined) {
         return {
+          field: 'gstin',
           reason: formatString(vmStrings.duplicateReasonGstinFile, { value: gstinKey, firstRow }),
           matchedAgainst: 'FILE',
         };
@@ -520,17 +544,16 @@ export function partitionDuplicateVendorMasterRows(
     if (codeKey) {
       if (!/^\d+$/.test(codeKey) && existingCodes.has(codeKey)) {
         return {
-          reason: formatString(vmStrings.duplicateReasonCodeExisting, { value: String(explicitVendorCode).trim() }),
+          field: 'code',
+          reason: formatString(vmStrings.duplicateReasonCodeExisting, { value: rawCode }),
           matchedAgainst: 'EXISTING_VENDOR',
         };
       }
       const firstRow = fileCodes.get(codeKey);
       if (firstRow !== undefined) {
         return {
-          reason: formatString(vmStrings.duplicateReasonCodeFile, {
-            value: String(explicitVendorCode).trim(),
-            firstRow,
-          }),
+          field: 'code',
+          reason: formatString(vmStrings.duplicateReasonCodeFile, { value: rawCode, firstRow }),
           matchedAgainst: 'FILE',
         };
       }
@@ -539,9 +562,10 @@ export function partitionDuplicateVendorMasterRows(
     if (companyPhoneKey) {
       if (existingCompanyPhones.has(companyPhoneKey)) {
         return {
+          field: 'company_phone',
           reason: formatString(vmStrings.duplicateReasonCompanyPhoneExisting, {
-            company: vendor.companyName.trim(),
-            phone: vendor.phone.trim(),
+            company: rawCompany,
+            phone: rawPhone,
           }),
           matchedAgainst: 'EXISTING_VENDOR',
         };
@@ -549,9 +573,10 @@ export function partitionDuplicateVendorMasterRows(
       const firstRow = fileCompanyPhones.get(companyPhoneKey);
       if (firstRow !== undefined) {
         return {
+          field: 'company_phone',
           reason: formatString(vmStrings.duplicateReasonCompanyPhoneFile, {
-            company: vendor.companyName.trim(),
-            phone: vendor.phone.trim(),
+            company: rawCompany,
+            phone: rawPhone,
             firstRow,
           }),
           matchedAgainst: 'FILE',
@@ -559,11 +584,33 @@ export function partitionDuplicateVendorMasterRows(
       }
     }
 
+    if (emailKey) fileEmails.set(emailKey, input.rowNumber);
+    if (gstinKey) fileGstins.set(gstinKey, input.rowNumber);
+    if (codeKey) fileCodes.set(codeKey, input.rowNumber);
+    if (companyPhoneKey) fileCompanyPhones.set(companyPhoneKey, input.rowNumber);
     return null;
   };
 
+  return { checkAndRegister };
+}
+
+export function partitionDuplicateVendorMasterRows(
+  candidates: VendorDuplicatePartitionCandidate[],
+  existingVendors: ExistingVendorDedupeCandidate[] = []
+): VendorDuplicatePartitionResult {
+  const dedupeChecker = createVendorDedupeChecker(existingVendors);
+  const uniqueRecords: VendorMasterUploadRecord[] = [];
+  const skippedDuplicates: SkippedDuplicateVendorRecord[] = [];
+
   for (const candidate of candidates) {
-    const match = findDuplicateMatch(candidate);
+    const match = dedupeChecker.checkAndRegister({
+      rowNumber: candidate.rowNumber,
+      explicitVendorCode: candidate.explicitVendorCode,
+      companyName: candidate.vendor.companyName,
+      email: candidate.vendor.email,
+      phone: candidate.vendor.phone,
+      gstNumber: candidate.vendor.gstNumber,
+    });
     if (match) {
       skippedDuplicates.push({
         rowNumber: candidate.rowNumber,
@@ -577,16 +624,6 @@ export function partitionDuplicateVendorMasterRows(
       });
       continue;
     }
-
-    const emailKey = normalizeDedupeEmail(candidate.vendor.email);
-    const gstinKey = normalizeDedupeGstin(candidate.vendor.gstNumber);
-    const codeKey = normalizeDedupeCode(candidate.explicitVendorCode);
-    const companyPhoneKey = normalizeDedupeCompanyPhone(candidate.vendor.companyName, candidate.vendor.phone);
-
-    if (emailKey) fileEmails.set(emailKey, candidate.rowNumber);
-    if (gstinKey) fileGstins.set(gstinKey, candidate.rowNumber);
-    if (codeKey) fileCodes.set(codeKey, candidate.rowNumber);
-    if (companyPhoneKey) fileCompanyPhones.set(companyPhoneKey, candidate.rowNumber);
 
     uniqueRecords.push(candidate.vendor);
   }
@@ -618,7 +655,44 @@ export function extractSkippedDuplicatesFromJob(job: IngestionJobState): Skipped
     }));
 }
 
-/** Merge client-side Vendor Master duplicate exclusions with polled/streamed server job counts. */
+/** Trigger a browser CSV download listing skipped duplicate vendor rows and reasons. */
+export function downloadSkippedDuplicatesCsv(
+  records: SkippedDuplicateVendorRecord[],
+  fileName = 'skipped_duplicate_vendors.csv'
+): void {
+  if (typeof window === 'undefined' || records.length === 0) return;
+  const escapeCsvCell = (value: unknown) => {
+    const raw = String(value ?? '');
+    return /[",\n\r]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+  };
+  const header = ['Row Number', 'Vendor Code', 'Company Name', 'Email', 'Phone', 'GSTIN', 'Match Type', 'Skip Reason'];
+  const lines = [
+    header.map(escapeCsvCell).join(','),
+    ...records.map((rec) =>
+      [
+        rec.rowNumber || '',
+        rec.vendorCode || '',
+        rec.companyName || '',
+        rec.email || '',
+        rec.phone || '',
+        rec.gstNumber || '',
+        rec.matchedAgainst === 'EXISTING_VENDOR' ? 'Existing Buyer Directory' : 'Within Uploaded File',
+        rec.reason || '',
+      ]
+        .map(escapeCsvCell)
+        .join(',')
+    ),
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+/** Merge client-side Vendor Master duplicate exclusions with polled/streamed server job counts without inflating stored totals. */
 export function reconcileVendorJobProgress(
   serverJob: IngestionJobState,
   summary: VendorDedupeSummary | null
@@ -626,22 +700,39 @@ export function reconcileVendorJobProgress(
   if (!summary || (serverJob.fileName && serverJob.fileName !== summary.fileName)) {
     return serverJob;
   }
+  const serverTotal = serverJob.totalRecords || 0;
+  const serverProcessed = serverJob.processedRecords || 0;
+  const serverImported = serverJob.importedRecords || 0;
+  const serverSkipped = serverJob.skippedRecords || 0;
+  const serverFailed = serverJob.failedRecords || 0;
+
   if (summary.isExcelOnly && summary.skippedCount > 0) {
+    const combinedSkipped = serverSkipped + summary.skippedCount;
+    const uploadedTotal = Math.max(summary.totalCount, serverTotal + combinedSkipped);
+    const storedTarget = Math.max(0, uploadedTotal - combinedSkipped);
+    const effectiveTotal = Math.max(serverTotal, storedTarget);
+    const effectiveProcessed = Math.min(effectiveTotal, Math.max(serverProcessed, serverImported + serverFailed));
     return {
       ...serverJob,
-      totalRecords: Math.max(serverJob.totalRecords || 0, summary.totalCount),
-      processedRecords: (serverJob.processedRecords || 0) + summary.skippedCount,
-      skippedRecords: (serverJob.skippedRecords || 0) + summary.skippedCount,
+      uploadedRecords: uploadedTotal,
+      totalRecords: effectiveTotal,
+      processedRecords: effectiveProcessed,
+      skippedRecords: combinedSkipped,
     };
   }
-  if (!summary.isExcelOnly && serverJob.status === 'COMPLETED' && summary.skippedCount > 0 && !serverJob.skippedRecords) {
+
+  if (!summary.isExcelOnly && serverJob.status === 'COMPLETED' && summary.skippedCount > 0 && !serverSkipped) {
+    const uploadedTotal = Math.max(summary.totalCount, serverTotal);
+    const storedTarget = Math.max(0, uploadedTotal - summary.skippedCount);
     return {
       ...serverJob,
-      totalRecords: Math.max(serverJob.totalRecords || 0, summary.totalCount),
-      processedRecords: Math.max(serverJob.processedRecords || 0, summary.totalCount),
+      uploadedRecords: uploadedTotal,
+      totalRecords: storedTarget,
+      processedRecords: storedTarget,
       skippedRecords: summary.skippedCount,
-      importedRecords: Math.max(0, summary.totalCount - summary.skippedCount),
+      importedRecords: storedTarget,
     };
   }
+
   return serverJob;
 }

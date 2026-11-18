@@ -205,12 +205,10 @@ describe('vendor categorization evidence, validation and persistence', () => {
       }
     );
     expect(fallbackResult.suggestion.minorCategories.length).toBeGreaterThan(0);
-    expect(fallbackResult.suggestion.minorCategories.length).toBeLessThanOrEqual(
-      config.MAX_MINOR_CATEGORIES_PER_VENDOR
-    );
     expect(fallbackResult.suggestion.minorCategories).toEqual(
       expect.arrayContaining(['Battery', 'Motors'])
     );
+    expect(service.cleanStringList(['a', 'b', 'c'], 2)).toEqual(['a', 'b']);
 
     // Non-matching candidate returns empty minorCategories
     const emptyMinorRes = service.validateAiResult(

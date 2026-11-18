@@ -149,40 +149,17 @@ describe('Buyer profile service', () => {
       );
     });
 
-    test('enforces the major category cap', () => {
-      const tooMany = ['A', 'B', 'C', 'D', 'E', 'F'].map((major) => ({ major, minor: 'x' }));
-      try {
-        buyerProfileService.normalizeCategories(tooMany);
-        throw new Error('should have thrown');
-      } catch (err) {
-        expect(err.status).toBe(400);
-        expect(err.message).toContain(String(BUYER_PROFILE_CONFIG.MAX_MAJOR_CATEGORIES));
-        expect(err.details).toHaveProperty('categories');
-      }
+    test('accepts unlimited major categories without artificial cap', () => {
+      const manyMajors = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((major) => ({ major, minor: 'x' }));
+      expect(buyerProfileService.normalizeCategories(manyMajors)).toHaveLength(8);
     });
 
-    test('enforces the minor category cap', () => {
-      const tooMany = Array.from({ length: BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES + 1 }, (_, i) => ({
+    test('accepts unlimited minor categories without artificial cap', () => {
+      const manyMinors = Array.from({ length: 25 }, (_, i) => ({
         major: 'IT',
         minor: `minor-${i}`,
       }));
-      try {
-        buyerProfileService.normalizeCategories(tooMany);
-        throw new Error('should have thrown');
-      } catch (err) {
-        expect(err.status).toBe(400);
-        expect(err.message).toContain(String(BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES));
-      }
-    });
-
-    test('accepts a selection exactly at both caps', () => {
-      const atCap = Array.from({ length: BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES }, (_, i) => ({
-        major: `major-${i % BUYER_PROFILE_CONFIG.MAX_MAJOR_CATEGORIES}`,
-        minor: `minor-${i}`,
-      }));
-      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(
-        BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES
-      );
+      expect(buyerProfileService.normalizeCategories(manyMinors)).toHaveLength(25);
     });
   });
 

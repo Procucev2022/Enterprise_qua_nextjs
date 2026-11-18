@@ -4588,6 +4588,28 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       'warning'
     );
 
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:dup-modal');
+    URL.revokeObjectURL = jest.fn();
+    try {
+      fireEvent.click(
+        screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv })
+      );
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+      clickSpy.mockRestore();
+    }
+
+    fireEvent.click(
+      screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.dismissDuplicatesAction })
+    );
+    expect(screen.queryByTestId('vendor-duplicate-skipped-banner')).not.toBeInTheDocument();
+
     fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
     expect(screen.queryByTestId('vendor-duplicate-skipped-banner')).not.toBeInTheDocument();
   });
@@ -4823,6 +4845,323 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(
       unmappedInfoBox.compareDocumentPosition(totalSummaryLabel) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+
+  it('does not mark 0-processed or partial-failure jobs as Completed Successfully and shows reconciliation banner & duplicate actions', () => {
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:init-dup');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      // Screenshot 1 regression: status: COMPLETED returned when 0 / 7 suppliers processed
+      const { rerender } = render(
+        <IngestionProgressCard
+          job={{
+            id: 'ai-zero-processed',
+            jobType: 'AI_CATEGORY',
+            fileName: 'po latest one.xlsx',
+            status: 'COMPLETED',
+            totalRecords: 7,
+            processedRecords: 0,
+            importedRecords: 0,
+            skippedRecords: 0,
+            failedRecords: 0,
+          }}
+          title="AI Category"
+          unit="suppliers"
+        />
+      );
+      expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed)).toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusCompleted)).not.toBeInTheDocument();
+      expect(screen.getByTestId('ingestion-job-error-banner')).toHaveTextContent(
+        UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason
+      );
+
+      // Partial failure status
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'ai-partial',
+            jobType: 'AI_CATEGORY',
+            fileName: 'po latest one.xlsx',
+            status: 'PARTIAL_FAILURE',
+            totalRecords: 10,
+            processedRecords: 10,
+            importedRecords: 6,
+            skippedRecords: 3,
+            failedRecords: 1,
+            errorMessage: '6 PO-matched mapped, 1 failed.',
+          }}
+          title="AI Category"
+          unit="suppliers"
+        />
+      );
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText('PO Mapped')).toBeInTheDocument();
+      expect(screen.getByText('Self-Map')).toBeInTheDocument();
+      expect(screen.getByTestId('ingestion-job-error-banner')).toHaveTextContent('6 PO-matched mapped, 1 failed.');
+
+      // Vendor Master with 12 uploaded, 2 duplicates removed -> 10 stored
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'vm-dedupe',
+            jobType: 'VENDOR_MASTER',
+            fileName: 'Testing data.xlsx',
+            status: 'COMPLETED',
+            uploadedRecords: 12,
+            totalRecords: 10,
+            processedRecords: 10,
+            importedRecords: 10,
+            skippedRecords: 2,
+            failedRecords: 0,
+          }}
+          title="Vendor Master"
+          unit="vendors"
+        />
+      );
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobUploadedStat)).toBeInTheDocument();
+      expect(screen.getByText('12')).toBeInTheDocument();
+      expect(screen.getByText('Stored Total')).toBeInTheDocument();
+      expect(screen.getByText('10 / 10 vendors processed (100%)')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobDuplicatesRemovedStat)).toBeInTheDocument();
+
+      // All rows duplicates
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'vm-all-dups',
+            jobType: 'VENDOR_MASTER',
+            fileName: 'dups.xlsx',
+            status: 'COMPLETED',
+            uploadedRecords: 5,
+            totalRecords: 0,
+            processedRecords: 0,
+            importedRecords: 0,
+            skippedRecords: 5,
+            failedRecords: 0,
+          }}
+          title="Vendor Master"
+          unit="vendors"
+        />
+      );
+      expect(screen.getByText('All Duplicates')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusAllDuplicates)).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('reconciles uploaded vs skipped duplicate vs stored counts on Step 2 and Step 4 reconciliation banner', async () => {
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:step4-dup');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      installIngestionServer({
+        startJob: completedAiJob({ status: 'COMPLETED', totalRecords: 2, processedRecords: 2, importedRecords: 2 }),
+      });
+      const customFetch = global.fetch as jest.Mock;
+      const baseFetchImpl = customFetch.getMockImplementation();
+      customFetch.mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/start-job')) {
+          const parsedBody = init?.body ? JSON.parse(init.body as string) : {};
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: `job-${parsedBody.jobType || 'VM'}`,
+                    jobType: parsedBody.jobType || 'VENDOR_MASTER',
+                    fileName: parsedBody.fileName || 'vendors.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: (parsedBody.rows || []).length,
+                    processedRecords: (parsedBody.rows || []).length,
+                    importedRecords: (parsedBody.rows || []).length,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return baseFetchImpl ? baseFetchImpl(url, init) : Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+
+      const { container } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+
+      // 3 rows where 1 is duplicate -> 2 unique stored
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'R-1', 'Company Name': 'Reconcile One', 'Contact Person': 'A', Email: 'r1@co.in', Phone: '9800000001' },
+        { 'Vendor Code': 'R-2', 'Company Name': 'Reconcile Two', 'Contact Person': 'B', Email: 'r2@co.in', Phone: '9800000002' },
+        { 'Vendor Code': 'R-3', 'Company Name': 'Reconcile Dup', 'Contact Person': 'C', Email: 'R1@co.in', Phone: '9800000003' },
+      ]);
+      XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+      const vBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      const vFile: any = new File([vBuf], 'reconcile.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      vFile.__buffer = vBuf;
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(await screen.findByText('2 / 2 vendors processed (100%)')).toBeInTheDocument();
+
+      // Entering edit mode & deleting a vendor row keeps stored count & job total synchronized
+      fireEvent.click(screen.getByRole('button', { name: /Edit Data/i }));
+      fireEvent.click(screen.getByTitle('Delete Reconcile One'));
+      expect(await screen.findByText('1 / 1 vendors processed (100%)')).toBeInTheDocument();
+
+      // Upload PO dump via Step 3 and run AI Category Cross-Match to reach Step 4
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const wbPo = XLSX.utils.book_new();
+      const wsPo = XLSX.utils.json_to_sheet([
+        { 'Vendor/Supplier Name': 'Unmatched Corp', 'Item Description': 'Bolts', Specifications: 'SS304' },
+      ]);
+      XLSX.utils.book_append_sheet(wbPo, wsPo, 'PO');
+      const poBuf = XLSX.write(wbPo, { type: 'array', bookType: 'xlsx' });
+      const poFile: any = new File([poBuf], 'po.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile.__buffer = poBuf;
+
+      const poInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = poInputs[poInputs.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+      const recBanner = await screen.findByTestId('step4-reconciliation-banner');
+      expect(recBanner).toHaveTextContent(UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationUploadedLabel);
+      expect(recBanner).toHaveTextContent(UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationDuplicatesLabel);
+      fireEvent.click(
+        screen.getAllByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv })[0]
+      );
+      expect(clickSpy).toHaveBeenCalled();
+
+      // Also cover PARTIAL_FAILURE, explicit server FAILED, and 0-processed false-COMPLETED responses
+      fireEvent.click(screen.getByRole('button', { name: /2. Vendor Master/i }));
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-partial',
+                    jobType: 'VENDOR_MASTER',
+                    fileName: 'reconcile.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: 3,
+                    processedRecords: 3,
+                    importedRecords: 2,
+                    skippedRecords: 0,
+                    failedRecords: 1,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const vInputs2 = container.querySelectorAll('input[type="file"]');
+      const vInput2 = vInputs2[vInputs2.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput2, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+
+      // Server returning 0 processed while claiming COMPLETED must display FAILED
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-zero',
+                    jobType: 'VENDOR_MASTER',
+                    fileName: 'reconcile.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: 2,
+                    processedRecords: 0,
+                    importedRecords: 0,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const vInputs3 = container.querySelectorAll('input[type="file"]');
+      const vInput3 = vInputs3[vInputs3.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput3, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed)).toBeInTheDocument();
+
+      // Cover PO_DUMP /start-job partial failure too
+      fireEvent.click(screen.getByRole('button', { name: '3. PO Dump' }));
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-po-partial',
+                    jobType: 'PO_DUMP',
+                    fileName: 'po.xlsx',
+                    status: 'PARTIAL_FAILURE',
+                    totalRecords: 2,
+                    processedRecords: 2,
+                    importedRecords: 1,
+                    skippedRecords: 0,
+                    failedRecords: 1,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const poInputs2 = container.querySelectorAll('input[type="file"]');
+      const poInput2 = poInputs2[poInputs2.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(poInput2, { target: { files: [poFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
   });
 
   it('does not render Buyer Initial Setup popup when initialSetupModalOpen is false', () => {

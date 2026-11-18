@@ -2756,8 +2756,8 @@ const BUYER_PROFILE_CONFIG = {
   // most 5 divisions, at most 10 minor categories in total. They exist because
   // the RFQ distribution engine fans out per selected category, so an unbounded
   // selection would broadcast every RFQ to the entire vendor base.
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 
   // The rupee sign is rewritten before storage, exactly as updateBuyer does.
   // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹
@@ -2946,6 +2946,7 @@ const VENDOR_INGESTION_JOB_STATUS = {
   PENDING: 'PENDING',
   PROCESSING: 'PROCESSING',
   COMPLETED: 'COMPLETED',
+  PARTIAL_FAILURE: 'PARTIAL_FAILURE',
   FAILED: 'FAILED',
 };
 
@@ -3067,7 +3068,7 @@ const VENDOR_INGESTION_CONFIG = {
   // which is what makes this one call per vendor rather than one per PO row.
   AI_MAX_PO_LINES_PER_VENDOR: 60,
   AI_MAX_DESCRIPTION_CHARS: 240,
-  MAX_MINOR_CATEGORIES_PER_VENDOR: 10,
+  MAX_MINOR_CATEGORIES_PER_VENDOR: null,
   // Recipients per dispatch request, so one campaign cannot hold the event loop
   // on a few thousand sequential SMTP sends.
   MAX_RECIPIENTS_PER_DISPATCH: 500,
@@ -3116,6 +3117,14 @@ const VENDOR_INGESTION_MESSAGES = {
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
   AI_JOB_FAILED: 'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
+  AI_JOB_PARTIAL_FAILED:
+    'AI categorization finished with errors: {imported} PO-matched supplier(s) mapped, {failed} failed. Review error details or retry failed classifications.',
+  AI_JOB_NONE_CLASSIFIED:
+    'AI categorization did not classify any of the {total} PO-matched supplier(s). Verify AI configuration and retry categorization.',
+  INGESTION_JOB_PARTIAL_FAILED:
+    'Upload finished with errors: {imported} record(s) imported, {failed} failed. Review the error report and re-upload corrected rows.',
+  INGESTION_JOB_NO_RECORDS_PROCESSED:
+    'Upload failed: 0 of {total} uploaded record(s) could be processed. Check the file columns and error details before trying again.',
   MAPPING_NO_PO_HISTORY:
     'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:

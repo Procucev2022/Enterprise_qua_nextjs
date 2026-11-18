@@ -235,7 +235,10 @@ describe('VendorProfilePage Comprehensive Suite', () => {
       fireEvent.click(civilHeader); // toggles major category
     }
 
-    // Now select checkboxes up to 10 limit
+    // Expand IT & select checkboxes freely beyond 10 without artificial cap
+    const itHeader = screen.getByText('IT');
+    fireEvent.click(itHeader);
+
     const allCheckboxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
     allCheckboxes.forEach((cb) => {
       if (!cb.checked) {
@@ -243,15 +246,7 @@ describe('VendorProfilePage Comprehensive Suite', () => {
       }
     });
 
-    // When 10 are selected, click an unchecked checkbox (tests toggleMinorCategory limit reached toast)
-    const uncheckedCb = allCheckboxes.find((cb) => !cb.checked);
-    if (uncheckedCb) {
-      fireEvent.click(uncheckedCb);
-    }
-
-    // When 10 are selected, click an unselected Major category (tests toggleMajorCategory remainingSlots <= 0 toast)
-    const itHeader = screen.getByText('IT');
-    fireEvent.click(itHeader);
+    expect(screen.getAllByRole('checkbox').every((cb) => (cb as HTMLInputElement).checked)).toBe(true);
 
     // Toggle off Mechanical Major (tests unselecting major category)
     const mechanicalMajorHeader = screen.getByText('Engineering Spares - Mechanical');

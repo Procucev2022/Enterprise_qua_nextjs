@@ -827,9 +827,12 @@ export const BUYER_PROFILE_ENDPOINTS = {
  * the cap rather than at submit, and re-enforced server-side because a client
  * cannot be trusted to hold the line.
  */
-export const BUYER_PROFILE_LIMITS = {
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+export const BUYER_PROFILE_LIMITS: {
+  MAX_MAJOR_CATEGORIES: number | null;
+  MAX_MINOR_CATEGORIES: number | null;
+} = {
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 };
 
 /**

@@ -24,13 +24,14 @@ import { isPlaceholderVendorCategory, resolveVendorLocationFields } from '@/lib/
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
+  downloadSkippedDuplicatesCsv,
   downloadVendorUploadTemplate,
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
   sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
-import type { VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
+import type { SkippedDuplicateVendorRecord, VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
 
 interface VendorUploadModalProps {
   isOpen: boolean;
@@ -71,7 +72,7 @@ const PREVIEW_PAGE_SIZE = 50;
 const HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
 export default function VendorUploadModal({ isOpen, onClose, onImportComplete }: VendorUploadModalProps) {
-  const { showToast, refreshFromDB, activeBuyerAccount } = useApp();
+  const { showToast, refreshFromDB, activeBuyerAccount, buyerVendors } = useApp();
   const isBuyerSession = authClient.getSessionUser?.()?.role === 'buyer';
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -82,9 +83,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   const [isParsing, setIsParsing] = useState(false);
   const [fileName, setFileName] = useState('');
   const [rows, setRows] = useState<VendorUploadRow[]>([]);
+  const [removedDuplicates, setRemovedDuplicates] = useState<VendorUploadRow[]>([]);
   const [blankRowCount, setBlankRowCount] = useState(0);
   const [previewPage, setPreviewPage] = useState(0);
-  const [previewFilter, setPreviewFilter] = useState<'all' | 'valid' | 'invalid'>('all');
+  const [previewFilter, setPreviewFilter] = useState<'all' | 'valid' | 'duplicates' | 'invalid'>('all');
   const [importProgress, setImportProgress] = useState<VendorUploadImportResponse | null>(null);
   const [importResult, setImportResult] = useState<VendorUploadImportResponse | null>(null);
   const [isSendingInvitations, setIsSendingInvitations] = useState(false);
@@ -103,23 +105,56 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   }, [isOpen]);
 
   const validRows = useMemo(() => rows.filter((r) => r.isValid), [rows]);
-  const invalidRows = useMemo(() => rows.filter((r) => !r.isValid), [rows]);
+  const invalidRows = useMemo(() => rows.filter((r) => !r.isValid && !r.isDuplicate), [rows]);
+  const duplicateRows = useMemo(() => rows.filter((r) => Boolean(r.isDuplicate)), [rows]);
+  const nonDuplicateRows = useMemo(() => rows.filter((r) => !r.isDuplicate), [rows]);
   const missingEmailRows = useMemo(() => validRows.filter((r) => r.missingEmail), [validRows]);
 
   const filteredRows = useMemo(() => {
     if (previewFilter === 'valid') return validRows;
+    if (previewFilter === 'duplicates') return duplicateRows;
     if (previewFilter === 'invalid') return invalidRows;
     return rows;
-  }, [rows, validRows, invalidRows, previewFilter]);
+  }, [rows, validRows, duplicateRows, invalidRows, previewFilter]);
 
   const pageCount = Math.max(1, Math.ceil(filteredRows.length / PREVIEW_PAGE_SIZE));
   const pageRows = filteredRows.slice(previewPage * PREVIEW_PAGE_SIZE, (previewPage + 1) * PREVIEW_PAGE_SIZE);
+
+  function toSkippedDuplicateRecord(row: VendorUploadRow): SkippedDuplicateVendorRecord {
+    const fallbackReason = UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerHint;
+    return {
+      rowNumber: row.rowNumber,
+      vendorCode: row.vendor.vendorCode,
+      companyName: row.vendor.name || '—',
+      email: row.vendor.email || '—',
+      phone: row.vendor.phone,
+      gstNumber: row.vendor.gstin,
+      reason: row.duplicateReason || row.errors[0] || fallbackReason,
+      matchedAgainst: row.matchedAgainst || 'FILE',
+    };
+  }
+
+  function handleRemoveAllDuplicates() {
+    setRemovedDuplicates((prev) => [...prev, ...duplicateRows]);
+    setRows((prev) => prev.filter((r) => !r.isDuplicate));
+    setPreviewFilter((cur) => (cur === 'duplicates' ? 'all' : cur));
+    setPreviewPage(0);
+  }
+
+  function handleRemovePreviewRow(rowNumber: number) {
+    const target = rows.find((r) => r.rowNumber === rowNumber);
+    if (target?.isDuplicate) {
+      setRemovedDuplicates((prev) => [...prev, target]);
+    }
+    setRows((prev) => prev.filter((r) => r.rowNumber !== rowNumber));
+  }
 
   function resetState() {
     setStep('select');
     setShowHistory(false);
     setFileName('');
     setRows([]);
+    setRemovedDuplicates([]);
     setBlankRowCount(0);
     setPreviewPage(0);
     setPreviewFilter('all');
@@ -150,8 +185,12 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       return;
     }
     setIsParsing(true);
+    const existingList = isBuyerSession && Array.isArray(buyerVendors) && buyerVendors.length > 0 ? buyerVendors : undefined;
     const result = await (isBuyerSession
-      ? parseVendorUploadFile(file, { requireCategory: true })
+      ? parseVendorUploadFile(file, {
+          requireCategory: true,
+          ...(existingList ? { existingVendors: existingList } : {}),
+        })
       : parseVendorUploadFile(file));
     setIsParsing(false);
     if (!result.success) {
@@ -164,6 +203,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     }
     setFileName(file.name);
     setRows(result.data.rows);
+    setRemovedDuplicates([]);
     setBlankRowCount(result.data.blankRowCount);
     setPreviewPage(0);
     setPreviewFilter('all');
@@ -184,10 +224,83 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   }
 
   async function handleImport() {
-    if (rows.length === 0) return;
+    if (rows.length === 0 && removedDuplicates.length === 0) return;
+    const preExcludedDuplicates = [...removedDuplicates, ...duplicateRows];
+    const rowsToSubmit = nonDuplicateRows;
+    const uploadedTotal = rows.length + removedDuplicates.length;
+
+    const toDuplicateResultRows = (list: VendorUploadRow[]) =>
+      list.map((dup) => ({
+        rowNumber: dup.rowNumber,
+        status: 'duplicate' as const,
+        email: dup.vendor.email || undefined,
+        reason:
+          dup.duplicateReason ||
+          dup.errors[0] ||
+          UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerHint,
+      }));
+
+    if (rowsToSubmit.length === 0) {
+      const result: VendorUploadImportResponse = {
+        uploadedTotal,
+        total: 0,
+        imported: 0,
+        missingEmail: 0,
+        duplicates: preExcludedDuplicates.length,
+        failed: 0,
+        results: toDuplicateResultRows(preExcludedDuplicates),
+      };
+      setImportResult(result);
+      setStep('result');
+      return;
+    }
+
     setStep('importing');
-    setImportProgress({ total: 0, imported: 0, missingEmail: 0, duplicates: 0, failed: 0, onboardingFailed: 0, onboardingSkipped: 0, results: [] });
-    const result = await bulkImportVendorRows(rows, (soFar) => setImportProgress(soFar));
+    setImportProgress({
+      total: rowsToSubmit.length,
+      imported: 0,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      onboardingFailed: 0,
+      onboardingSkipped: 0,
+      results: [],
+    });
+
+    let result: VendorUploadImportResponse;
+    try {
+      const apiResult = await bulkImportVendorRows(rowsToSubmit, (soFar) => setImportProgress(soFar));
+      result = {
+        ...apiResult,
+        ...(uploadedTotal > apiResult.total ? { uploadedTotal } : {}),
+        duplicates: (apiResult.duplicates || 0) + preExcludedDuplicates.length,
+        results: [...(apiResult.results || []), ...toDuplicateResultRows(preExcludedDuplicates)],
+      };
+    } catch (err: unknown) {
+      const msg =
+        err instanceof Error
+          ? err.message
+          : UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason;
+      result = {
+        uploadedTotal,
+        total: rowsToSubmit.length,
+        imported: 0,
+        missingEmail: 0,
+        duplicates: preExcludedDuplicates.length,
+        failed: rowsToSubmit.length,
+        results: [
+          ...rowsToSubmit.map((r) => ({
+            rowNumber: r.rowNumber,
+            status: 'failed' as const,
+            email: r.vendor.email || undefined,
+            errors: [msg],
+            reason: msg,
+          })),
+          ...toDuplicateResultRows(preExcludedDuplicates),
+        ],
+      };
+    }
+
     setImportResult(result);
     setStep('result');
 
@@ -196,7 +309,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       id: `up-${Date.now()}`,
       fileName: fileName || 'vendors.xlsx',
       timestamp: new Date().toLocaleString(),
-      total: rows.length,
+      total: rowsToSubmit.length,
       imported: result.imported,
       duplicates: result.duplicates,
       failed: result.failed,
@@ -204,7 +317,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       onboardingSkipped: result.onboardingSkipped,
       ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
       ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
-      records: rows.slice(0, 100).map((r) => {
+      records: rowsToSubmit.slice(0, 100).map((r) => {
         const loc = resolveVendorLocationFields({
           city: r.vendor.city,
           state: r.vendor.state,
@@ -296,11 +409,12 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   function downloadFailedRowsReport() {
     if (!importResult) return;
     const lines = ['Row Number,Vendor Code,Email,Status,Reason'];
+    const lookupRows = [...rows, ...removedDuplicates];
     importResult.results
       .filter((r) => r.status !== 'imported')
       .forEach((r) => {
         const reason = (r.errors || [r.reason || '']).join('; ').replace(/,/g, ';');
-        const originalRow = rows.find((row) => row.rowNumber === r.rowNumber);
+        const originalRow = lookupRows.find((row) => row.rowNumber === r.rowNumber);
         lines.push(`${r.rowNumber},${originalRow?.vendor.vendorCode || ''},${r.email || ''},${r.status},${reason}`);
       });
     const blob = new Blob([lines.join('\n')], { type: 'text/csv' });
@@ -495,15 +609,21 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 </button>
               </div>
 
-              <div className="grid grid-cols-4 gap-2">
+              <div className={`grid gap-2 ${duplicateRows.length > 0 || removedDuplicates.length > 0 ? 'grid-cols-2 sm:grid-cols-5' : 'grid-cols-4'}`}>
                 <div className="p-2.5 rounded-lg border border-slate-200 dark:border-gray-800 text-center">
-                  <div className="text-lg font-black text-slate-900 dark:text-white">{rows.length}</div>
+                  <div className="text-lg font-black text-slate-900 dark:text-white">{rows.length + removedDuplicates.length}</div>
                   <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Total Rows</div>
                 </div>
                 <div className="p-2.5 rounded-lg border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 text-center">
                   <div className="text-lg font-black text-emerald-700 dark:text-emerald-300">{validRows.length}</div>
                   <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Valid</div>
                 </div>
+                {(duplicateRows.length > 0 || removedDuplicates.length > 0) && (
+                  <div className="p-2.5 rounded-lg border border-amber-300 dark:border-amber-800 bg-amber-50/60 dark:bg-amber-950/30 text-center">
+                    <div className="text-lg font-black text-amber-700 dark:text-amber-300">{duplicateRows.length + removedDuplicates.length}</div>
+                    <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Duplicates</div>
+                  </div>
+                )}
                 <div className="p-2.5 rounded-lg border border-amber-200 dark:border-amber-900/60 bg-amber-50/40 dark:bg-amber-950/20 text-center">
                   <div className="text-lg font-black text-amber-700 dark:text-amber-300">{missingEmailRows.length}</div>
                   <div className="text-[10px] uppercase text-slate-450 dark:text-gray-500">Missing Email</div>
@@ -514,8 +634,46 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 </div>
               </div>
 
-              <div className="flex items-center gap-2">
-                {(['all', 'valid', 'invalid'] as const).map((f) => (
+              {(duplicateRows.length > 0 || removedDuplicates.length > 0) && (
+                <div
+                  data-testid="bulk-upload-duplicates-banner"
+                  className="p-3 rounded-xl border border-amber-300/80 dark:border-amber-800 bg-amber-50/70 dark:bg-amber-950/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs"
+                >
+                  <div className="space-y-0.5">
+                    <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                      <AlertTriangle size={14} className="text-amber-600 dark:text-amber-400" />
+                      {duplicateRows.length > 0
+                        ? `${duplicateRows.length} duplicate vendor row(s) detected — excluded from stored import totals (${nonDuplicateRows.length} unique ready).`
+                        : `${removedDuplicates.length} duplicate vendor row(s) removed (${nonDuplicateRows.length} unique ready to import).`}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        downloadSkippedDuplicatesCsv(
+                          [...removedDuplicates, ...duplicateRows].map(toSkippedDuplicateRecord)
+                        )
+                      }
+                      className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1"
+                    >
+                      <Download size={12} /> {UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv}
+                    </button>
+                    {duplicateRows.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={handleRemoveAllDuplicates}
+                        className="btn btn-secondary btn-xs font-bold text-amber-800 dark:text-amber-200 border-amber-300 dark:border-amber-700"
+                      >
+                        Remove {duplicateRows.length} Duplicate{duplicateRows.length === 1 ? '' : 's'}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 flex-wrap">
+                {(['all', 'valid', ...(duplicateRows.length > 0 ? (['duplicates'] as const) : []), 'invalid'] as const).map((f) => (
                   <button
                     key={f}
                     onClick={() => {
@@ -543,6 +701,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                       <th className="p-2">GSTIN</th>
                       <th className="p-2">City</th>
                       <th className="p-2">Errors</th>
+                      <th className="p-2 text-right">Action</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -550,13 +709,21 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                       <tr
                         key={r.rowNumber}
                         className={`border-b border-slate-100 dark:border-gray-850 ${
-                          r.missingEmail ? 'bg-amber-50/60 dark:bg-amber-950/20' : ''
+                          r.isDuplicate
+                            ? 'bg-amber-50/70 dark:bg-amber-950/30'
+                            : r.missingEmail
+                            ? 'bg-amber-50/60 dark:bg-amber-950/20'
+                            : ''
                         }`}
                       >
                         <td className="p-2 font-mono">{r.rowNumber}</td>
                         <td className="p-2 font-mono font-semibold">{r.vendor.vendorCode || '—'}</td>
                         <td className="p-2">
-                          {!r.isValid ? (
+                          {r.isDuplicate ? (
+                            <span className="inline-flex items-center gap-1 text-amber-700 dark:text-amber-300 font-bold">
+                              <AlertTriangle size={12} /> Duplicate (auto-excluded)
+                            </span>
+                          ) : !r.isValid ? (
                             <span className="inline-flex items-center gap-1 text-rose-600 dark:text-rose-400 font-bold">
                               <AlertTriangle size={12} /> Issue — imported anyway
                             </span>
@@ -577,6 +744,16 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                         <td className="p-2">{r.vendor.gstin || '—'}</td>
                         <td className="p-2">{r.vendor.city || '—'}</td>
                         <td className="p-2 text-rose-600 dark:text-rose-400">{r.errors.join('; ')}</td>
+                        <td className="p-2 text-right">
+                          <button
+                            type="button"
+                            onClick={() => handleRemovePreviewRow(r.rowNumber)}
+                            aria-label={`Remove row ${r.rowNumber}`}
+                            className="text-[10px] font-bold text-slate-500 hover:text-rose-600 dark:text-gray-400 dark:hover:text-rose-400 underline"
+                          >
+                            Remove
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
@@ -620,10 +797,12 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 </button>
                 <button
                   onClick={handleImport}
-                  disabled={rows.length === 0}
+                  disabled={rows.length === 0 && removedDuplicates.length === 0}
                   className="btn btn-primary btn-sm font-bold disabled:opacity-40"
                 >
-                  Import {rows.length} Vendor{rows.length === 1 ? '' : 's'}
+                  {duplicateRows.length > 0
+                    ? `Import ${nonDuplicateRows.length} Unique Vendor${nonDuplicateRows.length === 1 ? '' : 's'}`
+                    : `Import ${nonDuplicateRows.length} Vendor${nonDuplicateRows.length === 1 ? '' : 's'}`}
                   {invalidRows.length > 0 && ` (${invalidRows.length} with issues)`}
                 </button>
               </div>
@@ -638,7 +817,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 <p className="text-[11px] text-slate-450 dark:text-gray-500">
                   {formatString(UI_STRINGS.vendorBulkImport.progressSummary, {
                     processed: importProgress.total,
-                    total: rows.length,
+                    total: nonDuplicateRows.length || rows.length,
                     imported: importProgress.imported,
                     missingEmail: importProgress.missingEmail,
                     duplicates: importProgress.duplicates,
@@ -664,12 +843,15 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
             // was a duplicate). "Completed" means every row imported; "Partially
             // Completed" means some imported and some did not; "No Vendors
             // Imported" / "Upload Failed" means zero rows imported.
+            const uniqueSubmittedTotal = nonDuplicateRows.length;
+            const rawUploadedTotal = importResult.uploadedTotal ?? rows.length + removedDuplicates.length;
+            const excludedBeforeSend = Math.max(0, rawUploadedTotal - uniqueSubmittedTotal);
             const outcome =
               importResult.imported === 0
                 ? importResult.duplicates > 0 && importResult.failed === 0
                   ? 'none_duplicates'
                   : 'failed'
-                : importResult.imported < rows.length
+                : importResult.imported < uniqueSubmittedTotal || importResult.failed > 0
                 ? 'partial'
                 : 'completed';
             const outcomeTitle =
@@ -693,11 +875,12 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                 <h3 className="text-sm font-black text-slate-900 dark:text-white">{outcomeTitle}</h3>
                 {outcome === 'none_duplicates' && (
                   <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                    All {rows.length} record(s) already exist as vendors — nothing new was imported.
+                    All {rawUploadedTotal || importResult.duplicates} record(s) already exist as vendors — nothing new was imported.
                   </p>
                 )}
                 <p className="text-[11px] text-slate-500 dark:text-gray-400">
-                  Total: {rows.length} · Imported: {importResult.imported} · Failed: {importResult.failed} · Duplicates:{' '}
+                  {excludedBeforeSend > 0 ? `Uploaded: ${rawUploadedTotal} · Excluded Duplicates: ${excludedBeforeSend} · ` : ''}
+                  Total: {uniqueSubmittedTotal} · Imported: {importResult.imported} · Failed: {importResult.failed} · Duplicates:{' '}
                   {importResult.duplicates}
                 </p>
                 {importResult.missingEmail > 0 && (
@@ -772,7 +955,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
                         </thead>
                         <tbody className="divide-y divide-rose-100 dark:divide-rose-900/40">
                           {failedOrDuplicateRows.map((r) => {
-                            const originalRow = rows.find((row) => row.rowNumber === r.rowNumber);
+                            const originalRow = [...rows, ...removedDuplicates].find((row) => row.rowNumber === r.rowNumber);
                             const name = originalRow?.vendor.name || '—';
                             const reason = (r.errors && r.errors.length > 0 ? r.errors.join('; ') : r.reason) || 'Could not be uploaded.';
                             return (
