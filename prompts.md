@@ -6301,3 +6301,16 @@ When we click the close rfq button, it should show warning "after close not able
 my data not appearing GST address
 ```
 ---
+
+### Prompt 270
+**Timestamp**: 2026-11-17T21:12:52+05:30
+```text
+now this is the 4th page step.
+
+Above the three summary boxes, please add two separate information boxes:
+
+Mapped Vendors: "All mapped vendors with categories will be informed through email along with their login details."
+
+Unmapped Vendors: "Vendors who don't have a mapped category will be informed through email to update their categories, along with their login details."
+```
+---

@@ -2197,6 +2197,12 @@ export const UI_STRINGS = {
       columnStatus: 'Status',
       columnDetail: 'Detail',
       columnSentAt: 'Sent',
+      mappedVendorsInfoTitle: 'Mapped Vendors',
+      mappedVendorsInfoBody:
+        'All mapped vendors with categories will be informed through email along with their login details.',
+      unmappedVendorsInfoTitle: 'Unmapped Vendors',
+      unmappedVendorsInfoBody:
+        'Vendors who don\'t have a mapped category will be informed through email to update their categories, along with their login details.',
     },
 
     audit: {
