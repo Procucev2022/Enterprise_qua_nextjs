@@ -350,6 +350,32 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(dataParams).toEqual(['ba-42', 10, 0]);
       });
 
+      test('skips full-table COUNT(*) on D1 free-text search and uses limit + 1 pagination window', async () => {
+        const d1Bridge = require('../src/db/d1Bridge');
+        jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+        try {
+          const query = jest
+            .fn()
+            .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1' } }, { raw: { id: 'v-2' } }, { raw: { id: 'v-3' } }] })
+            .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-4' } }] });
+          pool.pool = { query };
+
+          const morePage = await domainQueries.getVendorsPageFromDB({ limit: 2, offset: 0, search: 'steel' });
+          expect(query).toHaveBeenCalledTimes(1);
+          expect(query.mock.calls[0][0]).not.toContain('COUNT(*)');
+          expect(query.mock.calls[0][1].slice(-2)).toEqual([3, 0]);
+          expect(morePage.rows).toHaveLength(2);
+          expect(morePage.total).toBe(3);
+
+          const exactPage = await domainQueries.getVendorsPageFromDB({ limit: 2, offset: 2, search: 'steel' });
+          expect(query).toHaveBeenCalledTimes(2);
+          expect(exactPage.rows).toHaveLength(1);
+          expect(exactPage.total).toBe(3);
+        } finally {
+          jest.restoreAllMocks();
+        }
+      });
+
       test('keeps D1 buyer page predicates aligned with normalized owner indexes', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
         const query = jest.spyOn(pool, 'query')
@@ -2870,8 +2896,9 @@ describe('D1 streamlined vendor search queries', () => {
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'stainless steel' });
 
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries).toHaveLength(2);
+    expect(d1Queries).toHaveLength(1);
     expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
+    expect(d1Queries[0]).not.toContain('COUNT(*)');
     expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.name')) LIKE lower($1)");
   });
 

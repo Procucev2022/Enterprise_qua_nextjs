@@ -2885,5 +2885,39 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       expect(histRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, importedCount: 1 }));
       expect(markSpy).toHaveBeenCalledTimes(3);
     });
+
+    test('resolves promoted v-master-<id> vendor via masterRecordId and falls back to buyerAccount.id org scope', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const account = {
+        id: 'buyer-org-fallback-1',
+        corporateEmail: 'fallback-org@buyer.test',
+      };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(account);
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(account);
+      const promoted = {
+        id: 'v-promoted-real-1',
+        masterRecordId: 'vmr-promoted-99',
+        name: 'Promoted Master Vendor',
+        email: 'promoted@vendor.test',
+        buyerAccountId: 'buyer-org-fallback-1',
+        majorCategory: 'IT',
+      };
+      storeService.vendors = [promoted];
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      const updDurable = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({
+        ...promoted,
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+
+      const res = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmr-promoted-99' },
+        user: { role: 'buyer', email: 'fallback-org@buyer.test' },
+        body: { majorCategory: 'Engineering Spares - Mechanical', minorCategories: ['Bearings'] },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+      expect(updDurable).toHaveBeenCalledWith('v-promoted-real-1', expect.any(Object));
+    });
   });
 });

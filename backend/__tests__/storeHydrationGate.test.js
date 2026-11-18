@@ -290,6 +290,7 @@ describe('createStoreHydrationGate', () => {
   });
 
   test('bypasses full-store hydration for direct single-vendor GET routes', () => {
+    expect(isDirectDatabaseRead({ method: 'GET', path: '/api/rfqs/rfq-1/vendor-candidates' })).toBe(true);
     expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123' })).toBe(true);
     expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/user%40example.com/' })).toBe(true);
     expect(isDirectDatabaseRead({ method: 'GET', path: '/api/vendors/v-123/rfq-credits' })).toBe(true);

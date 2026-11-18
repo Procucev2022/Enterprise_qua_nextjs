@@ -5224,6 +5224,35 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
       expect(screen.getByText('84%')).toBeInTheDocument();
     });
+
+    it('skips buyer profile pincode lookup when currentUserSession role is not buyer', async () => {
+      mockFetchBuyerProfile.mockClear();
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        currentUserSession: { email: 'v@vendor.test', role: 'vendor', name: 'Vendor' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      await Promise.resolve();
+      expect(mockFetchBuyerProfile).not.toHaveBeenCalled();
+    });
   });
 });
 

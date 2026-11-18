@@ -22,6 +22,8 @@ import {
   formatFileSize,
   formatIndianDate,
   formatIndianDateTime,
+  isBuyerQuotesSealed,
+  resolveQuotesUnsealIso,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
@@ -585,6 +587,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     activeRfq?.sourcingMode === 'mode_2' ||
     (activeRfq?.sourcingMode as any) === 'v2' ||
     (activeRfq?.sourcingMode as any) === 'version_2';
+  const quotesSealed = !isVendor && isBuyerQuotesSealed(activeRfq, currentRole);
+  const unsealIso = resolveQuotesUnsealIso(activeRfq);
 
   const syncUpdatedRfq = async (updatedRfq?: RFQItem | null) => {
     if (updatedRfq) {
@@ -958,7 +962,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     });
 
     // 3. Quoted Vendors
-    const quotes = Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
+    const quotes = !quotesSealed && Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
     quotes.forEach((q: any) => {
       const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
       // Procucev/internal vendors are shown by name only.
@@ -991,7 +995,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         if (b.messages.length > 0 && a.messages.length === 0) return 1;
         return 0;
       });
-  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor]);
+  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor, quotesSealed]);
 
   // Live vendor presence state (Online / Offline based on heartbeat / session activity)
   const [onlineVendors, setOnlineVendors] = useState<Set<string>>(new Set());
@@ -1428,7 +1432,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
   const mode = SOURCING_MODES.find((m) => m.id === activeRfq.sourcingMode);
   const attachments = activeRfq.attachments || [];
-  const quotes = activeRfq.quotes || [];
+  const quotes = quotesSealed || (isV0 && currentRole === 'buyer' && !isVendor) ? [] : (activeRfq.quotes || []);
   const resolvedTargetDeliveryDate =
     activeRfq.targetDeliveryDate ||
     (activeRfq as any).target_delivery_date ||
@@ -2116,11 +2120,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           // A Procucev card always shows category, location, and score — resolve
           // each from the richest source available, so a backend-populated V3
           // vendor (which carries none of these inline) still renders them.
-          const quoteForVendor = (activeRfq?.quotes || []).find(
-            (q: any) =>
-              (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
-              (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
-          );
+          const quoteForVendor = quotesSealed
+            ? undefined
+            : (activeRfq?.quotes || []).find(
+                (q: any) =>
+                  (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
+                  (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
+              );
           const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
@@ -2574,7 +2580,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               When vendor submits quote, you will receive quote details in your email
             </span>
           </div>
-        ) : currentRole === 'buyer' && !isVendor && activeRfq?.quotesHidden ? (
+        ) : quotesSealed ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />
@@ -2585,7 +2591,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             </p>
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-900/40 px-3 py-1 rounded-full border border-amber-200 dark:border-amber-800 shadow-sm">
               <Clock size={12} />
-              Unseals: {activeRfq.quotesHiddenUntil ? new Date(activeRfq.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or when closed)
+              Unseals: {unsealIso ? new Date(unsealIso).toLocaleString() : 'After 48 hours'} (or when closed)
             </span>
           </div>
         ) : quotes.length === 0 ? (

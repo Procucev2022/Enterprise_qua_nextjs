@@ -2590,6 +2590,12 @@ describe('rfqClient.requestVendorCategoryUpdateEmail', () => {
         expect.objectContaining({ errorName: 'Error', errorMessage: 'fetch failed' }),
         'RFQ_CLIENT'
       );
+
+      errorLog.mockClear();
+      global.fetch = jest.fn().mockRejectedValue(Object.assign(new Error('Aborted'), { name: 'AbortError' }));
+      const abortedRes = await fetchVendorRfqCredits();
+      expect(abortedRes.success).toBe(false);
+      expect(errorLog).not.toHaveBeenCalled();
     });
   });
 

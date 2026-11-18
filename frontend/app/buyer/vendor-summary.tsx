@@ -162,6 +162,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       setBuyerPincode(String(activeBuyerAccount.pincode).trim() || null);
       return;
     }
+    if (currentUserSession?.role && currentUserSession.role !== 'buyer') {
+      return;
+    }
     void fetchBuyerProfile({ signal: controller.signal }).then((result) => {
       if (cancelled) return;
       if (result.success && result.data?.pincode) {
@@ -172,7 +175,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       cancelled = true;
       controller.abort();
     };
-  }, [activeBuyerAccount?.pincode]);
+  }, [activeBuyerAccount?.pincode, currentUserSession?.role]);
 
   useEffect(() => {
     if (ensureCategoryTaxonomy) {

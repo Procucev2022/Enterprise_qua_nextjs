@@ -1034,6 +1034,58 @@ export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDea
 }
 
 /**
+ * Whether an RFQ has reached a concluded state (Closed, PO Generated, PO finalised, or Expired).
+ */
+export function isRfqConcluded(
+  rfq?: Partial<Pick<RFQItem, 'status' | 'poFinalised' | 'poNumber'>> | null
+): boolean {
+  if (!rfq) return false;
+  return (
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    Boolean(rfq.poFinalised) ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired'
+  );
+}
+
+/**
+ * Resolves the ISO timestamp when buyer quotations unseal, honoring extended closing deadlines.
+ */
+export function resolveQuotesUnsealIso(
+  rfq?: Partial<Pick<RFQItem, 'quotesHiddenUntil' | 'closingDeadline' | 'createdAt'>> | null
+): string | null {
+  if (!rfq) return null;
+  const hiddenUntil = parseRfqTimestamp(rfq.quotesHiddenUntil);
+  if (hiddenUntil !== null) return new Date(hiddenUntil).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return windowEnd > Date.now() ? new Date(windowEnd).toISOString() : null;
+}
+
+/**
+ * Whether received quotations must remain sealed from the buyer view (before RFQ closure or 48h/deadline expiration).
+ */
+export function isBuyerQuotesSealed(
+  rfq?: Partial<Pick<RFQItem, 'sourcingMode' | 'status' | 'poFinalised' | 'poNumber' | 'createdAt' | 'closingDeadline' | 'quotesHidden'>> | null,
+  role?: UserRole | string | null
+): boolean {
+  if (!rfq) return false;
+  if (role && role !== 'buyer') return false;
+  const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+  if (mode === RFQ_MODES.MODE_0 || mode === 'v0' || mode === 'version_0') return false;
+  if (isRfqConcluded(rfq)) return false;
+
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return Boolean(rfq.quotesHidden) || (windowEnd > 0 && Date.now() < windowEnd);
+}
+
+/**
  * The closing time after a one-time extension of a whole number of days, as an ISO instant. The days are
  * added to the current closing time, or to now when that time has already passed.
  */

@@ -396,6 +396,83 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(res.data).toMatchObject({ success: true, deliveryStatus: 'sent' });
       expect(dispatch).not.toHaveBeenCalled();
     });
+
+    test('rejects invalid vendor emails, sanitizes invalid buyerEmail, and reports 503 when outbox hits auth cooldown or dead-letter', async () => {
+      const { EMAIL_REGEX, RFQ_NOTIFICATION_MESSAGES } = require('../src/config/constants');
+      expect(EMAIL_REGEX.test('http://www.google.co.in/maps/@17.038,82.123')).toBe(false);
+
+      // Vendor record with URL in email field is rejected cleanly before enqueueing
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-url-email',
+        name: 'Bad Email Vendor',
+        email: 'http://www.google.co.in/maps/@17.038',
+      });
+      const resBadEmail = mockRes();
+      await rfqController.requestVendorCategoryUpdate({ body: { vendorId: 'v-url-email' } }, resBadEmail, jest.fn());
+      expect(resBadEmail.statusCode).toBe(400);
+
+      // Invalid buyer corporateEmail is nulled out instead of dead-lettering persisted payload
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const validVendor = { id: 'v-auth-fail', name: 'Vendor', email: 'v@example.test', majorCategory: 'IT' };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(validVendor);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        companyName: ' ',
+        corporateEmail: 'not-valid',
+      });
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
+        id: 'cat-auth-1',
+        status: 'pending',
+      });
+      const cooledDispatch = { claimed: 1, completed: 0, retried: 1, dead: 0, completedIds: [] };
+      Object.defineProperty(cooledDispatch, 'authUnavailable', { value: true, enumerable: false });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValueOnce(cooledDispatch);
+
+      const resAuthFail = mockRes();
+      await rfqController.requestVendorCategoryUpdate(
+        {
+          body: { vendorId: validVendor.id, rfqNumber: ' ', rfqCategory: ' ', rfqTitle: ' ' },
+          user: { email: 'buyer@test.com', name: 'Buyer' },
+        },
+        resAuthFail,
+        jest.fn()
+      );
+      expect(enqueueSpy).toHaveBeenCalledWith(
+        EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+        expect.any(String),
+        expect.objectContaining({
+          buyerEmail: null,
+          rfqNumber: 'NEW-RFQ',
+          rfqTitle: 'Procurement Requisition',
+        })
+      );
+      expect(resAuthFail.statusCode).toBe(503);
+      expect(resAuthFail.data).toMatchObject({
+        success: false,
+        retryable: true,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE,
+      });
+
+      // Permanent dead-letter refusal returns 503 with retryable: false
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValueOnce({
+        claimed: 1,
+        completed: 0,
+        retried: 0,
+        dead: 1,
+        completedIds: [],
+      });
+      const resDead = mockRes();
+      await rfqController.requestVendorCategoryUpdate(
+        { body: { vendorId: validVendor.id } },
+        resDead,
+        jest.fn()
+      );
+      expect(resDead.statusCode).toBe(503);
+      expect(resDead.data).toMatchObject({
+        success: false,
+        retryable: false,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+      });
+    });
   });
 
   describe('createRFQ category and line item validations, and post-creation hooks', () => {
@@ -2547,6 +2624,101 @@ describe('rfqController Comprehensive Branch Coverage', () => {
         syncSpy.mockRestore();
         getRfqsSpy.mockRestore();
       }
+    });
+
+    test('enforces comparison confidentiality before closing or 48h/extended-deadline expiration across all open statuses', async () => {
+      const { parseRfqTimestampMs, isRfqConcluded, resolveRfqBiddingWindowEndMs } = require('../src/config/constants');
+      expect(parseRfqTimestampMs(null)).toBe(0);
+      expect(parseRfqTimestampMs('')).toBe(0);
+      expect(parseRfqTimestampMs(1700000000000)).toBe(1700000000000);
+      expect(parseRfqTimestampMs('2026-11-18 02:00 UTC')).toBeGreaterThan(0);
+      expect(parseRfqTimestampMs('not-a-date')).toBe(0);
+      expect(isRfqConcluded(null)).toBe(false);
+      expect(resolveRfqBiddingWindowEndMs(null)).toBe(0);
+
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      for (const openStatus of ['In Evaluation', 'AI Recommended', 'Quotes Received', 'Published']) {
+        const masked = rfqController.applyQuotesVisibility(
+          {
+            id: `rfq-${openStatus}`,
+            status: openStatus,
+            sourcingMode: 'mode_2',
+            createdAt: twoHoursAgo,
+            quotes: [{ id: 'q1', unitPrice: 1000 }],
+            aiRecommendation: { recommendedVendor: 'V1' },
+          },
+          'buyer'
+        );
+        expect(masked.quotesHidden).toBe(true);
+        expect(masked.quotes).toEqual([]);
+        expect(masked.aiRecommendation).toBeNull();
+      }
+
+      // Extended closingDeadline keeps quotes sealed even >48h after creation until extended deadline elapses
+      const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+      const futureClosing = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+      const extendedMasked = rfqController.applyQuotesVisibility(
+        {
+          id: 'rfq-extended',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          createdAt: fiftyHoursAgo,
+          closingDeadline: futureClosing,
+          quotes: [{ id: 'q1', unitPrice: 500 }],
+        },
+        'buyer'
+      );
+      expect(extendedMasked.quotesHidden).toBe(true);
+      expect(extendedMasked.quotes).toEqual([]);
+      expect(extendedMasked.quotesHiddenUntil).toBe(futureClosing);
+
+      // Unseals when explicitly closed even within 48h window
+      const closedVisible = rfqController.applyQuotesVisibility(
+        {
+          id: 'rfq-closed-early',
+          status: 'Closed',
+          sourcingMode: 'mode_1',
+          createdAt: twoHoursAgo,
+          quotes: [{ id: 'q1', unitPrice: 500 }],
+        },
+        'buyer'
+      );
+      expect(closedVisible.quotesHidden).toBe(false);
+      expect(closedVisible.quotes).toHaveLength(1);
+
+      // inviteVendors masks quotes in buyer response
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce({
+        id: 'rfq-inv-mask',
+        buyerAccountId: 'b-mask-1',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        createdAt: twoHoursAgo,
+      });
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({ id: 'b-mask-1' });
+      jest.spyOn(storeService, 'inviteVendorsToRFQ').mockResolvedValueOnce({
+        updatedRFQ: {
+          id: 'rfq-inv-mask',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          createdAt: twoHoursAgo,
+          quotes: [{ id: 'q-secret', unitPrice: 999 }],
+        },
+        invitedCount: 1,
+        excludedCount: 0,
+        excludedVendors: [],
+      });
+      const invRes = mockRes();
+      await rfqController.inviteVendors(
+        {
+          params: { id: 'rfq-inv-mask' },
+          body: { vendorIds: ['v-1'] },
+          user: { role: 'buyer', email: 'b@mask.test' },
+        },
+        invRes,
+        jest.fn()
+      );
+      expect(invRes.data.data.quotesHidden).toBe(true);
+      expect(invRes.data.data.quotes).toEqual([]);
     });
   });
 });

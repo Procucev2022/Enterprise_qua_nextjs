@@ -10,6 +10,9 @@ const {
   RFQ_MINOR_SHORTFALL_ALERT,
   VENDOR_CREDITS_EXHAUSTED_NOTIFICATION,
   VENDOR_FREE_CREDITS_LIMIT,
+  EMAIL_REGEX,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
   formatMessage,
 } = require('../config/constants');
 const {
@@ -492,6 +495,11 @@ function gmailProviderKey(identity) {
   return `gmail:${identity.id}:${tokenFingerprint(identity.refreshToken)}`;
 }
 
+function getGmailProviderKey(identityId = 'buyer') {
+  const identity = findGmailIdentity(identityId);
+  return identity ? gmailProviderKey(identity) : null;
+}
+
 /** True when the buyer/system Gmail identity (GMAIL_CLIENT_ID/SECRET/REFRESH_TOKEN) is set. */
 function isGmailApiConfigured() {
   const hasClientId = Boolean(getGmailClientId());
@@ -618,9 +626,11 @@ function deliveryPlan(channel, critical) {
   // hours while the quote-alert mailbox sat idle). The vendor mailbox is never
   // borrowed for buyer mail — its quota is kept for vendor RFQ invites. Replies
   // are pointed back at the buyer mailbox.
-  if (channel === DELIVERY_CHANNEL.BUYER && !critical) {
+  if ((channel === DELIVERY_CHANNEL.BUYER || channel === DELIVERY_CHANNEL.VENDOR) && !critical) {
     const used = new Set(route.map((identity) => identity.id));
-    ['quoteAlert']
+    const fallbackIds = channel === DELIVERY_CHANNEL.VENDOR ? ['quoteAlert', 'otp'] : ['quoteAlert'];
+    const fallbackReplyTo = channel === DELIVERY_CHANNEL.VENDOR ? vendorGatewayAddress() : buyerReplyAddress();
+    fallbackIds
       .filter((id) => !used.has(id))
       .map((id) => findGmailIdentity(id))
       .filter(Boolean)
@@ -629,7 +639,10 @@ function deliveryPlan(channel, critical) {
           key: gmailProviderKey(identity),
           label: `Gmail API (${identity.id}, borrowed)`,
           run: (message) =>
-            sendViaGmailIdentity(identity, { ...message, replyTo: message.replyTo || buyerReplyAddress() }),
+            sendViaGmailIdentity(identity, {
+              ...message,
+              ...(message.replyTo || fallbackReplyTo ? { replyTo: message.replyTo || fallbackReplyTo } : {}),
+            }),
         });
       });
   }
@@ -672,7 +685,18 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
     return { sent: false, success: false, status: 'skipped', reason: 'missing recipient email' };
   }
 
-  const outgoing = { ...message };
+  const validTo = mailTransport
+    .toAddressList(message.to)
+    .filter((entry) => EMAIL_REGEX.test(mailTransport.bareAddress(entry)));
+  if (validTo.length === 0) {
+    logger.warn(`${label} not sent: invalid recipient email address`, { to: message.to, channel }, 'MAILER_SERVICE');
+    return { sent: false, success: false, status: 'skipped', reason: 'invalid recipient email' };
+  }
+
+  const outgoing = {
+    ...message,
+    to: Array.isArray(message.to) ? validTo : validTo.join(', '),
+  };
   // Vendor replies must reach the vendor gateway inbox even when the message is
   // sent from a borrowed (buyer/pool) mailbox, or quote replies are lost.
   const gatewayAddress = vendorGatewayAddress();
@@ -699,9 +723,9 @@ async function routeDelivery(message, label, { channel = DELIVERY_CHANNEL.BUYER,
       }
       for (let attempt = 1; attempt <= 2; attempt += 1) {
         try {
-          logger.info(`Dispatching ${label} to ${message.to} via ${step.label}`, { subject: message.subject }, 'MAILER_SERVICE');
+          logger.info(`Dispatching ${label} to ${outgoing.to} via ${step.label}`, { subject: outgoing.subject }, 'MAILER_SERVICE');
           const result = await step.run(outgoing);
-          logger.info(`${label} sent successfully to ${message.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
+          logger.info(`${label} sent successfully to ${outgoing.to} via ${step.label}`, { messageId: result.messageId }, 'MAILER_SERVICE');
           return { sent: true, success: true, status: 'sent', messageId: result.messageId };
         } catch (err) {
           lastError = err;
@@ -1523,11 +1547,9 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
     String(rfq.sourcingMode || '').toLowerCase().includes('version 0') ||
     String(rfq.sourcingMode || '').toLowerCase().includes('mode_0') ||
     String(rfq.sourcingModeName || '').toLowerCase().includes('version 0');
-  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-  const isWithin48h = !isEmailSource && !isV0 && ((createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS) || Boolean(rfq.quotesHidden));
-  const isClosed = rfq.status === 'Closed';
-  const isSealed = isWithin48h && !isClosed;
+  const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+  const isWithin48h = !isEmailSource && !isV0 && (windowEndMs > 0 ? Date.now() < windowEndMs : Boolean(rfq.quotesHidden));
+  const isSealed = isWithin48h && !isRfqConcluded(rfq);
 
   const frontendUrl = getPublicFrontendUrl();
   const matrixUrl = `${frontendUrl}/buyer/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber || rfq.id || '')}`;
@@ -1545,8 +1567,8 @@ function buildQuoteReceivedEmail(to, { rfq = {}, quote = {}, recipientName }) {
   }
 
   if (isSealed) {
-    const unsealDateStr = createdAtMs > 0
-      ? new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toLocaleString('en-IN')
+    const unsealDateStr = windowEndMs > 0
+      ? new Date(windowEndMs).toLocaleString('en-IN')
       : 'in 48 hours';
 
     const inner = `
@@ -2972,6 +2994,7 @@ module.exports = {
   getVendorGmailOAuthClient,
   isQuoteAlertGmailApiConfigured,
   getGmailOAuthClient,
+  getGmailProviderKey,
   deliver,
   getDeliveryHealth,
   DELIVERY_CHANNEL,

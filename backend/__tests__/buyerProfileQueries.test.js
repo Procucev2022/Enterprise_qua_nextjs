@@ -700,7 +700,7 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(statements.map((statement) => statement._sql).join('\n')).not.toContain('insert into');
     });
 
-    test('collapses duplicate selections and splits inserts at D1 parameter limits', async () => {
+    test('collapses duplicate selections into single-row D1 inserts without compound SELECTs', async () => {
       const categories = Array.from({ length: 17 }, (_, index) => ({ major: 'IT', minor: `Item ${index}` }));
       categories.push({ major: ' it ', minor: ' item 0 ' });
 
@@ -714,8 +714,8 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
       expect(result.categoryCount).toBe(17);
       const statements = d1Binding.batch.mock.calls[0][0];
       const inserts = statements.filter((statement) => statement._sql.includes('insert into org_division_category'));
-      expect(inserts).toHaveLength(2);
-      expect(inserts.map((statement) => statement._params.length)).toEqual([96, 6]);
+      expect(inserts).toHaveLength(17);
+      expect(inserts.every((statement) => statement._params.length === 6 && !/UNION ALL/i.test(statement._sql))).toBe(true);
     });
 
     test('rolls back the complete batch when any D1 write fails', async () => {
@@ -1456,6 +1456,48 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
             patch: { companyName: 'Err Corp' },
           })
         ).rejects.toThrow('no such column: unexpected_col');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
+    });
+
+    test('emits single-row INSERT statements without UNION ALL compound SELECTs for atomic D1 category replacement', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      const preparedSqls = [];
+      const d1Binding = {
+        prepare: jest.fn((sql) => {
+          preparedSqls.push(sql);
+          return {
+            bind: (...params) => ({ _sql: sql, _params: params }),
+          };
+        }),
+        batch: jest.fn(async (stmts) =>
+          stmts.map((s, idx) => (idx === 0 ? { results: [{ uuid: 'org-cat-1' }] } : { results: [], meta: { changes: 1 } }))
+        ),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        const categories = Array.from({ length: 10 }, (_, idx) => ({
+          major: 'Engineering',
+          minor: `Minor-${idx + 1}`,
+        }));
+        const result = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-cat-1',
+          userId: 'user-cat-1',
+          patch: { companyName: 'Atomic Categories Corp' },
+          categories,
+        });
+
+        expect(result).toEqual({ updated: true, fieldsUpdated: 3, categoryCount: 10 });
+        expect(d1Binding.batch).toHaveBeenCalledTimes(1);
+        const categoryInserts = preparedSqls.filter((sql) => /insert into org_division_category/i.test(sql));
+        expect(categoryInserts).toHaveLength(10);
+        expect(categoryInserts.some((sql) => /UNION ALL/i.test(sql))).toBe(false);
       } finally {
         globalThis.__CF_ENV__ = originalCfEnv;
         dbPool.pool = originalPool;

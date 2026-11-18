@@ -4381,6 +4381,36 @@ function makeInquiry(overrides: any = {}): any {
       );
       expect(screen.getByText(DETAILS.closedPermanentBannerVendor)).toBeInTheDocument();
     });
+
+    it('keeps buyer quotations and vendor quote scores sealed while open within extended closing window', () => {
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      const futureClosing = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { name: 'Buyer Co', email: 'buyer@test.com', role: 'buyer' },
+      });
+
+      renderDetails(
+        buildRFQ({
+          id: 'rfq-details-sealed-live',
+          rfqNumber: 'RFQ-CONFIDENTIAL-1',
+          status: 'In Evaluation',
+          quotesHidden: false,
+          createdAt: twoHoursAgo,
+          closingDeadline: futureClosing,
+          assignedVendors: [{ id: 'v-001', name: 'Apex Industrial Dynamics Pvt Ltd' }],
+          quotes: [quote({ vendorId: 'v-001', aiMatchScore: 96 })],
+          quotesCount: 1,
+        })
+      );
+
+      expect(screen.getByText(/Quotes Sealed \(48-Hour Bidding Period\)/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Download Comparison/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/4,25,000/)).not.toBeInTheDocument();
+    });
   });
 });
 

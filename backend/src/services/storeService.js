@@ -23,6 +23,8 @@ const {
   PERSISTENCE_MESSAGES,
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_REASON,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
   RFQ_CLOSURE_MESSAGES,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
@@ -31,6 +33,7 @@ const {
   EVENT_OUTBOX_TYPES,
   EVENT_OUTBOX_MAX_BATCH_SIZE,
   EMAIL_REGEX,
+  CHANNEL_DISPATCH_CONCURRENCY,
   MAJOR_CATEGORY_ALIASES,
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
@@ -620,6 +623,28 @@ class StoreService {
       })
       .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
     return tracked;
+  }
+
+  /**
+   * Drain queued channel notifications with bounded concurrency so large RFQ
+   * fan-outs never exhaust Worker outbound socket pools and abort in-flight SMS/HTTP calls.
+   */
+  _dispatchChannelWave(tasks) {
+    if (!Array.isArray(tasks) || tasks.length === 0) return Promise.resolve([]);
+    let nextIndex = 0;
+    const workerCount = Math.min(CHANNEL_DISPATCH_CONCURRENCY, tasks.length);
+    const workers = [];
+    for (let i = 0; i < workerCount; i += 1) {
+      workers.push((async () => {
+        while (nextIndex < tasks.length) {
+          const runTask = tasks[nextIndex];
+          nextIndex += 1;
+          const { promise, errorMessage, metadata, feedDetails } = runTask();
+          await this._sendWithFeedOutcome(promise, errorMessage, metadata, feedDetails);
+        }
+      })());
+    }
+    return this._background(Promise.all(workers), 'Failed to drain queued channel dispatches');
   }
 
   /** Records a direct (initial) SMS or WhatsApp send onto RFQ follow-up vendor status and sent counter. */
@@ -1757,7 +1782,10 @@ class StoreService {
   }
 
   getVendorById(id, scopedBuyerId = null) {
-    const vendor = this.vendors.find((v) => v.id === id || v.email === id);
+    const masterSuffix = typeof id === 'string' && id.startsWith('v-master-') ? id.slice('v-master-'.length) : '';
+    const vendor = this.vendors.find(
+      (v) => v.id === id || v.email === id || (masterSuffix && v.masterRecordId === masterSuffix)
+    );
     if (!vendor) return undefined;
     if (scopedBuyerId === 'all') return vendor;
     if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
@@ -5488,7 +5516,7 @@ class StoreService {
       const resolved = vendor && vendor.id ? this.getVendorById(vendor.id, 'all') : null;
       if (isVendorInactive(resolved || vendor)) continue;
       const recipientEmail = resolveVendorEmail(vendor);
-      if (!recipientEmail) continue;
+      if (!recipientEmail || !EMAIL_REGEX.test(recipientEmail)) continue;
 
       const emailKey = recipientEmail.toLowerCase();
       if (targetsByEmail.has(emailKey)) continue;
@@ -8380,6 +8408,7 @@ class StoreService {
     }
 
     const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    const v0ChannelTasks = [];
 
     for (const vendor of resolvedAdditions) {
       const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -8414,7 +8443,7 @@ class StoreService {
       }
 
       const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
-      if (vendor.email && !sendEmailViaOutboxOnly) {
+      if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8438,21 +8467,24 @@ class StoreService {
       }
 
       if (vendor.phone) {
-        const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-        this._sendWithFeedOutcome(
-          smsService.sendRFQChaserSms({
-            mobile: vendor.phone,
-            vendorName: vendor.name,
-            rfqNumber: updated.rfqNumber,
-            rfqTitle: updated.title,
-            bidLink: bidUrl,
-          }),
-          'Failed to dispatch initial SMS alert',
-          {},
-          { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-        );
+        v0ChannelTasks.push(() => {
+          const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+          return {
+            promise: smsService.sendRFQChaserSms({
+              mobile: vendor.phone,
+              vendorName: vendor.name,
+              rfqNumber: updated.rfqNumber,
+              rfqTitle: updated.title,
+              bidLink: bidUrl,
+            }),
+            errorMessage: 'Failed to dispatch initial SMS alert',
+            metadata: {},
+            feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+          };
+        });
       }
     }
+    this._dispatchChannelWave(v0ChannelTasks);
 
     if (updated.followUpData) {
       const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
@@ -8745,6 +8777,7 @@ class StoreService {
       }
 
       const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      const autoChannelTasks = [];
       try {
         for (const vendor of resolvedAdditions) {
           const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -8779,7 +8812,7 @@ class StoreService {
           }
 
           const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
-          if (vendor.email && !sendEmailViaOutboxOnly) {
+          if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
               mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8803,23 +8836,25 @@ class StoreService {
           }
 
           if (vendor.phone) {
-            const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-            this._sendWithFeedOutcome(
-              smsService.sendRFQChaserSms({
-                mobile: vendor.phone,
-                vendorName: vendor.name,
-                rfqNumber: updated.rfqNumber,
-                rfqTitle: updated.title,
-                bidLink: bidUrl,
-              }),
-              'Failed to dispatch initial SMS alert',
-              {},
-              { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-            );
+            autoChannelTasks.push(() => {
+              const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+              return {
+                promise: smsService.sendRFQChaserSms({
+                  mobile: vendor.phone,
+                  vendorName: vendor.name,
+                  rfqNumber: updated.rfqNumber,
+                  rfqTitle: updated.title,
+                  bidLink: bidUrl,
+                }),
+                errorMessage: 'Failed to dispatch initial SMS alert',
+                metadata: {},
+                feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              };
+            });
 
             if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
-              this._sendWithFeedOutcome(
-                whatsAppService.sendRFQInvitationWhatsApp({
+              autoChannelTasks.push(() => ({
+                promise: whatsAppService.sendRFQInvitationWhatsApp({
                   phone: vendor.phone,
                   vendorName: vendor.name,
                   contactPerson: vendor.contactPerson,
@@ -8829,13 +8864,14 @@ class StoreService {
                   deliveryDate: updated.targetDeliveryDate || updated.deadline,
                   deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
                 }),
-                'Failed to dispatch initial WhatsApp prompt',
-                {},
-                { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-              );
+                errorMessage: 'Failed to dispatch initial WhatsApp prompt',
+                metadata: {},
+                feedDetails: { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              }));
             }
           }
         }
+        this._dispatchChannelWave(autoChannelTasks);
       } catch (dispatchError) {
         logger.error('RFQ assignments were saved but automatic vendor dispatch failed', {
           rfqId: updated.id,
@@ -9928,40 +9964,24 @@ class StoreService {
    * Whether an RFQ is currently within its 48-hour bidding integrity window.
    */
   isWithin48HourWindow(rfq) {
-    if (!rfq || rfq.status === 'Closed' || rfq.status === 'PO Generated' || rfq.poFinalised || Boolean(rfq.poNumber) || rfq.status === 'Expired') return false;
+    if (!rfq || isRfqConcluded(rfq)) return false;
     const isV0 =
       rfq.sourcingMode === 'mode_0' ||
       rfq.sourcingMode === 'v0' ||
       rfq.sourcingMode === 'version_0';
     if (isV0) return false;
-    if (rfq.quotesHidden) return true;
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return true;
-    return Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return true;
+    return Date.now() < windowEndMs;
   }
 
   /**
    * Calculates the remaining milliseconds in the 48-hour bidding window.
    */
   getRemaining48HourMs(rfq) {
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq && rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return FORTY_EIGHT_HOURS_MS;
-    const elapsed = Date.now() - createdAtMs;
-    return Math.max(0, FORTY_EIGHT_HOURS_MS - elapsed);
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return RFQ_AUTO_CLOSE_AFTER_MS;
+    return Math.max(0, windowEndMs - Date.now());
   }
 
   /**

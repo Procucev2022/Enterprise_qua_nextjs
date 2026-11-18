@@ -6321,3 +6321,19 @@ Unmapped Vendors: "Vendors who don't have a mapped category will be informed thr
 the save button at the top is not working in buyer proffile
 ```
 ---
+
+### Prompt 272
+**Timestamp**: 2026-11-17T21:17:42+05:30
+```text
+Please check the error logs, & fix all issues.
+```
+---
+
+### Prompt 273
+**Timestamp**: 2026-11-18T05:18:56+05:30
+```text
+RFQ quotation visibility and notification issues
+1. Quotations remain visible before closing or before the 48-hour expiration window, violating comparison confidentiality rules.
+2. Category update emails fail to arrive
+```
+---

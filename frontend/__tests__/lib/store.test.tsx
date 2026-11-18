@@ -4034,5 +4034,84 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         authClient.setSession(null);
       }
     });
+
+    it('skips buyer-account bootstrap for vendor sessions and resolves promoted v-master vendors via masterRecordId', async () => {
+      try {
+        const ctx = await mountStore(STORE_RFQ_FIXTURES[0] as unknown as RFQItem);
+        mockFetch.mockClear();
+        await act(async () => {
+          authClient.setSession(
+            {
+              id: 'u-vendor-only',
+              email: 'only@vendor.test',
+              name: 'Only Vendor',
+              role: 'vendor',
+              orgId: '',
+              orgName: '',
+            },
+            'vendor-tok'
+          );
+          ctx().setCurrentRole('vendor');
+        });
+        const calledUrls = mockFetch.mock.calls.map(([u]: [string]) => String(u));
+        expect(calledUrls.some((u) => u.includes('/api/buyer-accounts'))).toBe(false);
+        await act(async () => {
+          ctx().setCurrentRole('buyer');
+        });
+
+        // Update promoted vendor using synthetic v-master-<masterRecordId> id when stored vendor has promoted id
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'v-promoted-real-55',
+              masterRecordId: 'rec-55',
+              name: 'Promoted Supplier 55',
+              email: 'p55@vendor.test',
+              majorCategory: 'IT',
+              minorCategories: ['Laptop'],
+            },
+          }),
+        });
+        await act(async () => {
+          await ctx().addBuyerVendor({
+            id: 'v-promoted-real-55',
+            masterRecordId: 'rec-55',
+            name: 'Promoted Supplier 55',
+            email: 'p55@vendor.test',
+            majorCategory: 'IT',
+            minorCategories: [],
+          } as unknown as Parameters<ReturnType<typeof ctx>['addBuyerVendor']>[0]);
+        });
+        mockFetch.mockClear();
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'v-promoted-real-55',
+              masterRecordId: 'rec-55',
+              name: 'Promoted Supplier 55',
+              email: 'p55@vendor.test',
+              majorCategory: 'IT',
+              minorCategories: ['Laptop'],
+            },
+          }),
+        });
+        let updated = false;
+        await act(async () => {
+          updated = await ctx().updateBuyerVendor('v-master-rec-55', {
+            majorCategory: 'IT',
+            minorCategories: ['Laptop'],
+          });
+        });
+        expect(updated).toBe(true);
+      } finally {
+        authClient.setSession(null);
+      }
+    });
   });
 });

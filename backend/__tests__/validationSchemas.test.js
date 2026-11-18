@@ -13,6 +13,8 @@ describe('Backend Validation Schemas Unit Tests', () => {
   test('validates category update recipient data and optional idempotency keys', () => {
     const schema = VALIDATION_SCHEMAS.requestVendorCategoryUpdate;
     expect(validatePayload(schema, { vendorEmail: 'vendor@example.test' }).isValid).toBe(true);
+    expect(EMAIL_REGEX.test('http://www.google.co.in/maps/@17.0380803,82.1494328,885a')).toBe(false);
+    expect(validatePayload(schema, { vendorEmail: 'http://www.google.co.in/maps/@17.0380803,82.1494328,885a' }).isValid).toBe(false);
     expect(validatePayload(schema, {
       vendorEmail: 'vendor@example.test',
       idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',

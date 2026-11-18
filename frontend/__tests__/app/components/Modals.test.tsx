@@ -1928,4 +1928,69 @@ describe('Modals.tsx', () => {
       }
     });
   });
+
+  describe('SupplierQuotesModal confidentiality sealing', () => {
+    it('omits quotations from sealed or V0 RFQs while showing unsealed quotes', () => {
+      const sealedRfq: RFQItem = {
+        id: 'rfq-modal-sealed',
+        rfqNumber: 'RFQ-MODAL-SEALED',
+        title: 'Sealed Modal Bid',
+        category: 'IT',
+        createdAt: new Date(Date.now() - 3600 * 1000).toISOString(),
+        targetDeliveryDate: '2026-12-20',
+        budget: 50000,
+        quotes: [
+          {
+            vendorId: 'v-hidden',
+            vendorName: 'Hidden Modal Supplier',
+            vendorCategory: 'Client List',
+            unitPrice: 12000,
+            totalPrice: 12000,
+            leadTimeDays: 7,
+            aiMatchScore: 91,
+            isBestPrice: true,
+            warrantyYears: 1,
+            complianceStatus: 'Fully Compliant',
+            paymentTerms: 'Net 30',
+            remarks: '',
+          },
+        ],
+        chasingActive: false,
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        quotesCount: 1,
+        source: 'web_portal',
+        extractedEntities: [],
+      };
+      const v0Rfq: RFQItem = {
+        ...sealedRfq,
+        id: 'rfq-modal-v0',
+        rfqNumber: 'RFQ-MODAL-V0',
+        sourcingMode: 'mode_0',
+        createdAt: '2026-08-01T00:00:00.000Z',
+        quotes: [{ ...sealedRfq.quotes[0], vendorName: 'V0 Hidden Supplier' }],
+      };
+      const closedRfq: RFQItem = {
+        ...sealedRfq,
+        id: 'rfq-modal-closed',
+        rfqNumber: 'RFQ-MODAL-CLOSED',
+        status: 'Closed',
+        quotes: [{ ...sealedRfq.quotes[0], vendorName: 'Unsealed Closed Supplier' }],
+      };
+
+      render(
+        <SupplierQuotesModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqs={[sealedRfq, v0Rfq, closedRfq]}
+          onNavigateToMatrix={jest.fn()}
+          onOpenDeepDive={jest.fn()}
+        />
+      );
+
+      expect(screen.getByText('Unsealed Closed Supplier')).toBeInTheDocument();
+      expect(screen.queryByText('Hidden Modal Supplier')).not.toBeInTheDocument();
+      expect(screen.queryByText('V0 Hidden Supplier')).not.toBeInTheDocument();
+    });
+  });
 });

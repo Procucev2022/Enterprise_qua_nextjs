@@ -41,6 +41,11 @@ const {
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
   RFQ_CLOSURE_MESSAGES,
+  EMAIL_REGEX,
+  RFQ_AUTO_CLOSE_AFTER_MS,
+  RFQ_QUOTES_SEALED_REASON,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
   resolveAttachmentContentType,
 } = require('../config/constants');
 const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
@@ -282,27 +287,19 @@ function applyQuotesVisibility(rfq, role) {
     };
   }
 
-  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-  const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
-  const isConcluded =
-    rfq.status === 'Closed' ||
-    rfq.status === 'PO Generated' ||
-    rfq.poFinalised ||
-    Boolean(rfq.poNumber) ||
-    rfq.status === 'Expired' ||
-    rfq.status === 'In Evaluation' ||
-    rfq.status === 'AI Recommended' ||
-    rfq.status === 'Quotes Received';
+  const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+  const isWithinWindow = windowEndMs > 0 ? Date.now() < windowEndMs : Boolean(rfq.quotesHidden);
+  const concluded = isRfqConcluded(rfq);
 
-  if (isWithin48h && !isConcluded) {
-    const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
+  if (isWithinWindow && !concluded) {
+    const unsealMs = windowEndMs > 0 ? windowEndMs : Date.now() + RFQ_AUTO_CLOSE_AFTER_MS;
     return {
       ...rfq,
       quotes: [],
+      ...(rfq.aiRecommendation !== undefined ? { aiRecommendation: null } : {}),
       quotesHidden: true,
-      quotesHiddenUntil: unhideAt,
-      quotesHiddenReason: 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.',
+      quotesHiddenUntil: new Date(unsealMs).toISOString(),
+      quotesHiddenReason: RFQ_QUOTES_SEALED_REASON,
     };
   }
 
@@ -642,9 +639,10 @@ async function inviteVendors(req, res, next) {
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+    const role = req.user && req.user.role;
     res.json({
       success: true,
-      data: result.updatedRFQ,
+      data: applyQuotesVisibility(result.updatedRFQ, role),
       invitedCount: result.invitedCount,
       excludedCount: result.excludedCount || 0,
       excludedVendors: result.excludedVendors || [],
@@ -727,33 +725,41 @@ async function requestVendorCategoryUpdate(req, res, next) {
       vendor = await storeService.getVendorByIdWithDBFallback(vendorEmail, 'all', { fresh: true });
     }
     const targetEmail = String((vendor && vendor.email) || vendorEmail || '').trim();
-    if (!targetEmail) {
-      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    if (!targetEmail || !EMAIL_REGEX.test(targetEmail)) {
+      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId with a valid email address is required.' });
     }
 
     const buyerAccount = req.user && req.user.email ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
-    const buyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
-    const buyerEmail = buyerAccount ? buyerAccount.corporateEmail : (req.user ? req.user.email : null);
+    const rawBuyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
+    const buyerName = String(rawBuyerName || '').trim() || 'Buyer';
+    const rawBuyerEmail = (buyerAccount && buyerAccount.corporateEmail) || (req.user ? req.user.email : '');
+    const buyerEmail = EMAIL_REGEX.test(String(rawBuyerEmail).trim()) ? String(rawBuyerEmail).trim() : null;
 
-    const targetVendorName = (vendor && (vendor.name || vendor.contactPerson)) || vendorName || 'Supplier';
-    const targetCurrentCategory = (vendor && (vendor.majorCategory
+    const rawVendorName = (vendor && (vendor.name || vendor.contactPerson)) || vendorName || '';
+    const targetVendorName = String(rawVendorName).trim() || 'Supplier';
+    const rawCurrentCategory = (vendor && (vendor.majorCategory
       || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')))
-      || 'Not specified';
+      || '';
+    const targetCurrentCategory = String(rawCurrentCategory).trim() || 'Not specified';
+
+    const safeRfqNumber = String(rfqNumber || '').trim() || 'NEW-RFQ';
+    const safeRfqTitle = String(rfqTitle || '').trim() || 'Procurement Requisition';
+    const safeRfqCategory = String(rfqCategory || '').trim() || 'Required Procurement Category';
 
     const deliveryContext = {
       vendorId: vendor ? vendor.id : vendorId || null,
-      rfqNumber: rfqNumber || 'NEW-RFQ',
+      rfqNumber: safeRfqNumber,
       operation: 'request-vendor-category-update',
       recipientPresent: true,
     };
     const notificationPayload = {
       recipientEmail: targetEmail,
-      rfqNumber: rfqNumber || 'NEW-RFQ',
-      rfqTitle: rfqTitle || 'Procurement Requisition',
-      rfqCategory: rfqCategory || 'Required Procurement Category',
+      rfqNumber: safeRfqNumber,
+      rfqTitle: safeRfqTitle,
+      rfqCategory: safeRfqCategory,
       vendorName: targetVendorName,
       vendorCurrentCategory: targetCurrentCategory,
-      buyerAccountName: buyerName || 'Buyer',
+      buyerAccountName: buyerName,
       buyerEmail,
       vendorId: vendor ? vendor.id : vendorId || null,
     };
@@ -791,7 +797,18 @@ async function requestVendorCategoryUpdate(req, res, next) {
         deliveryStatus = 'queued';
         try {
           const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [queuedEvent.id]);
-          if (dispatch.completedIds?.includes(queuedEvent.id)) deliveryStatus = 'sent';
+          if (dispatch.completedIds?.includes(queuedEvent.id)) {
+            deliveryStatus = 'sent';
+          } else if (dispatch.dead > 0 || dispatch.authUnavailable) {
+            return res.status(503).json({
+              success: false,
+              outboxId,
+              error: dispatch.authUnavailable
+                ? RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE
+                : RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+              retryable: dispatch.dead === 0,
+            });
+          }
         } catch (dispatchError) {
           logger.error('Immediate vendor category update dispatch failed; durable retry remains scheduled', {
             error: dispatchError,

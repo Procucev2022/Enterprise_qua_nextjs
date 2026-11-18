@@ -1221,9 +1221,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // In unit test environment without browser routing shell, hydrate test fixtures:
     if (process.env.NODE_ENV === 'test') {
       void dataLoadersRef.current.refreshFromDB();
-      void dataLoadersRef.current.refreshActiveBuyerAccount();
+      if (currentRole === 'buyer') {
+        void dataLoadersRef.current.refreshActiveBuyerAccount();
+      }
       void dataLoadersRef.current.refreshCategoryTaxonomy();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const lastUserSessionIdRef = useRef<string | null>(null);
@@ -1257,7 +1260,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     lastUserSessionIdRef.current = currentUserSession?.id || null;
 
-    void loaders.ensureActiveBuyerAccount(true);
+    if (currentRole === 'buyer') {
+      void loaders.ensureActiveBuyerAccount(true);
+    }
 
     if (currentRole === 'vendor') {
       void loaders.refreshVendorCredits();
@@ -2264,18 +2269,20 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         : undefined) ||
       hintVendor;
     const resolvedEmailLower = String(matchedVendor?.email || hintVendor?.email || '').trim().toLowerCase();
-    const persistedByEmail =
-      isSyntheticId && resolvedEmailLower
+    const masterIdSuffix = vendorId.startsWith('v-master-') ? vendorId.slice('v-master-'.length) : '';
+    const persistedMatch =
+      isSyntheticId
         ? buyerVendors.find(
           (v) =>
             !String(v.id || '').startsWith('v-master-') &&
             !String(v.id || '').startsWith('v-hist-local-') &&
-            String(v.email || '').trim().toLowerCase() === resolvedEmailLower
+            ((masterIdSuffix && v.masterRecordId === masterIdSuffix) ||
+              (resolvedEmailLower && String(v.email || '').trim().toLowerCase() === resolvedEmailLower))
         )
         : undefined;
-    const targetVendorId = persistedByEmail?.id || vendorId;
+    const targetVendorId = persistedMatch?.id || vendorId;
     const syntheticHints: Record<string, unknown> = {};
-    if (isSyntheticId && !persistedByEmail && matchedVendor) {
+    if (isSyntheticId && !persistedMatch && matchedVendor) {
       const hintMapping: ReadonlyArray<readonly [keyof VendorEntry, string]> = [
         ['email', 'vendorEmail'],
         ['name', 'vendorName'],

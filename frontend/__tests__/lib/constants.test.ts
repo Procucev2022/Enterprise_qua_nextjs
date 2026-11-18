@@ -1125,4 +1125,33 @@ describe('Indian address location extraction helpers', () => {
     const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyer);
     expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor']);
   });
+
+  it('enforces comparison confidentiality helpers isRfqConcluded, resolveQuotesUnsealIso, and isBuyerQuotesSealed', () => {
+    const {
+      isRfqConcluded,
+      resolveQuotesUnsealIso,
+      isBuyerQuotesSealed,
+    } = require('@/lib/constants');
+
+    expect(isRfqConcluded(null)).toBe(false);
+    expect(isBuyerQuotesSealed(null, 'buyer')).toBe(false);
+    expect(resolveQuotesUnsealIso(null)).toBeNull();
+    expect(resolveQuotesUnsealIso({ quotesHiddenUntil: '2026-12-01T00:00:00.000Z' })).toBe('2026-12-01T00:00:00.000Z');
+    expect(resolveQuotesUnsealIso({ createdAt: 'not-a-date' })).toBeNull();
+
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+    const futureClosing = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(true);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'admin')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_0', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_2', createdAt: fiftyHoursAgo, closingDeadline: futureClosing }, 'buyer')).toBe(true);
+    expect(isBuyerQuotesSealed({ status: 'Closed', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'PO Generated', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ poFinalised: true, sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ poNumber: 'PO-9', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'Expired', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(resolveQuotesUnsealIso({ createdAt: fiftyHoursAgo, closingDeadline: futureClosing })).toBe(futureClosing);
+  });
 });

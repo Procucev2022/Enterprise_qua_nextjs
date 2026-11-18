@@ -5,7 +5,7 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord, VendorModuleScore } from '@/lib/types';
-import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime } from '@/lib/constants';
+import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime, isBuyerQuotesSealed } from '@/lib/constants';
 import { computeRFQFollowUpTimes, computeRFQFollowUpMetrics, normalizeFollowUpVendors } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -2504,10 +2504,13 @@ export function SupplierQuotesModal({
 }: SupplierQuotesModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Flatten quotes across active RFQs
+  // Flatten quotes across active RFQs (respecting 48h/closure sealing & V0 privacy)
   const allQuotesWithRfq = useMemo(() => {
     const list: Array<{ quote: QuoteComparison; rfq: RFQItem }> = [];
     rfqs.forEach((rfq) => {
+      const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+      if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') return;
+      if (isBuyerQuotesSealed(rfq, 'buyer')) return;
       if (rfq.quotes && rfq.quotes.length > 0) {
         rfq.quotes.forEach((quote) => {
           list.push({ quote, rfq });

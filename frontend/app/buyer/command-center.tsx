@@ -2,7 +2,7 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor, isBuyerQuotesSealed } from '@/lib/constants';
 import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { RFQItem } from '@/lib/types';
 import {
@@ -82,7 +82,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce(
-    (acc, r) => acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesHidden ? 0 : (r.quotesCount || 0))),
+    (acc, r) => {
+      if (isBuyerQuotesSealed(r, 'buyer')) return acc;
+      return acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesCount || 0));
+    },
     0
   );
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;

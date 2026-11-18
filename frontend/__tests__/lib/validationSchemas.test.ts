@@ -938,4 +938,10 @@ describe('resolveCityAndStateFromPostalResult', () => {
     expect(resolveLocationFromPostalResult('560034', offices)).toBe('Bangalore Urban, Karnataka');
     expect(resolveLocationFromPostalResult('999999', [{ Name: 'PO', District: 'Dist' }] as PostOfficeDetail[])).toBe('Dist');
   });
+
+  test('EMAIL_PATTERN rejects URLs containing @ such as map links while accepting standard addresses', () => {
+    expect(EMAIL_PATTERN.test('http://www.google.co.in/maps/@17.038,82.123')).toBe(false);
+    expect(EMAIL_PATTERN.test('https://maps.example.com/@coord/place')).toBe(false);
+    expect(EMAIL_PATTERN.test('buyer.team+rfq@procucev.co.in')).toBe(true);
+  });
 });

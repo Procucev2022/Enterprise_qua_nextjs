@@ -3103,4 +3103,38 @@ describe('_sendWithFeedOutcome direct channel followUpData updates and _reconcil
     expect(reconciled.followUpData.emailStats.sent24h).toBe(1);
     expect(reconciled.followUpData.emailStats.delivered).toBe(0);
   });
+
+  test('_dispatchChannelWave caps concurrent outbound channel fetches, handles empty/errors, and extended 48h window', async () => {
+    const { CHANNEL_DISPATCH_CONCURRENCY } = require('../src/config/constants');
+    expect(await storeService._dispatchChannelWave([])).toEqual([]);
+
+    let inFlight = 0;
+    let maxInFlight = 0;
+    const tasks = Array.from({ length: 10 }, (_, idx) => () => ({
+      promise: (async () => {
+        inFlight += 1;
+        maxInFlight = Math.max(maxInFlight, inFlight);
+        await new Promise((r) => setTimeout(r, 5));
+        inFlight -= 1;
+        if (idx === 3) throw new Error('simulated sms abort');
+        return { sent: true, messageId: `msg-${idx}` };
+      })(),
+      errorMessage: `failed task ${idx}`,
+      metadata: { idx },
+    }));
+    await storeService._dispatchChannelWave(tasks);
+    expect(maxInFlight).toBeLessThanOrEqual(CHANNEL_DISPATCH_CONCURRENCY);
+
+    // Promoted master vendor lookup via v-master-<masterRecordId>
+    const promoted = { id: 'v-store-master-1', masterRecordId: 'vmr-store-88', name: 'Master Promoted' };
+    storeService.vendors = [promoted];
+    expect(storeService.getVendorById('v-master-vmr-store-88', 'all')).toEqual(promoted);
+
+    // Extended closingDeadline keeps 48h window active beyond initial 48h from createdAt
+    const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+    const futureClosing = new Date(Date.now() + 10 * 3600 * 1000).toISOString();
+    const extendedRfq = { sourcingMode: 'mode_1', status: 'In Evaluation', createdAt: fiftyHoursAgo, closingDeadline: futureClosing };
+    expect(storeService.isWithin48HourWindow(extendedRfq)).toBe(true);
+    expect(storeService.getRemaining48HourMs(extendedRfq)).toBeGreaterThan(0);
+  });
 });

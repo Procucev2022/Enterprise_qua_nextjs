@@ -30,6 +30,7 @@ const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
+const mailTransport = require('./mailTransport');
 const cryptoService = require('./cryptoService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
@@ -179,6 +180,12 @@ async function getOrCreateLabelId(gmail, labelName) {
         return existing.id;
       }
     } catch (err) {
+      if (
+        typeof mailTransport.classifyDeliveryError === 'function' &&
+        mailTransport.classifyDeliveryError(err) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+      ) {
+        throw err;
+      }
       logger.warn(`Failed to list Gmail labels for "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
     }
   }
@@ -203,6 +210,12 @@ async function getOrCreateLabelId(gmail, labelName) {
         return createRes.data.id;
       }
     } catch (err) {
+      if (
+        typeof mailTransport.classifyDeliveryError === 'function' &&
+        mailTransport.classifyDeliveryError(err) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+      ) {
+        throw err;
+      }
       logger.warn(`Failed to create Gmail label "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
     }
   }
@@ -3387,6 +3400,30 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   }
 
+  const providerKey = options.providerKey || (
+    typeof mailerService.getGmailProviderKey === 'function'
+      ? mailerService.getGmailProviderKey(config.isVendorMailbox ? 'vendor' : 'buyer')
+      : null
+  );
+  if (providerKey && typeof mailTransport.loadPersistedCooldowns === 'function') {
+    await mailTransport.loadPersistedCooldowns();
+    const cooldown = typeof mailTransport.getCooldown === 'function' ? mailTransport.getCooldown(providerKey) : null;
+    if (cooldown) {
+      state.lastError = cooldown.reason;
+      logger.warn('Email gateway poll skipped: Gmail credentials are cooling down', {
+        providerKey,
+        isVendorMailbox: !!config.isVendorMailbox,
+        until: new Date(cooldown.until).toISOString(),
+        reason: cooldown.reason,
+      }, 'EMAIL_GATEWAY');
+      return {
+        skipped: true,
+        status: 'cooling_down',
+        reason: cooldown.reason,
+      };
+    }
+  }
+
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
@@ -3425,8 +3462,21 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     const processedLabelName = config.labelProcessed || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED;
     const errorLabelName = config.labelError || EMAIL_GATEWAY_CONFIG.LABEL_ERROR;
 
-    const processedLabelId = await getOrCreateLabelId(gmail, processedLabelName).catch(() => null);
-    const errorLabelId = await getOrCreateLabelId(gmail, errorLabelName).catch(() => null);
+    const resolveLabel = async (labelName) => {
+      try {
+        return await getOrCreateLabelId(gmail, labelName);
+      } catch (labelErr) {
+        if (
+          typeof mailTransport.classifyDeliveryError === 'function' &&
+          mailTransport.classifyDeliveryError(labelErr) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+        ) {
+          throw labelErr;
+        }
+        return null;
+      }
+    };
+    const processedLabelId = await resolveLabel(processedLabelName);
+    const errorLabelId = await resolveLabel(errorLabelName);
 
     const moveMessageToLabel = (id, targetLabelId, labelName, operationLabel) => {
       const addLabelIds = targetLabelId ? [targetLabelId] : [];
@@ -3774,8 +3824,14 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     };
   } catch (err) {
     // An API or auth failure (e.g. an insufficiently-scoped refresh token).
-    // Reported through status rather than thrown, same convention as the
-    // IMAP path, so the panel can explain it and the interval keeps trying.
+    // Record auth/rate-limit cooldowns in the shared mail_provider_cooldowns
+    // table so subsequent 5-minute crons skip polling until credentials are rotated.
+    if (providerKey && typeof mailTransport.noteProviderFailure === 'function') {
+      mailTransport.noteProviderFailure(providerKey, err);
+      if (typeof mailTransport.flushPendingCooldownWrites === 'function') {
+        await mailTransport.flushPendingCooldownWrites();
+      }
+    }
     state.lastError = err.message;
     logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
     return { skipped: false, error: err.message, considered: state.consideredThisRun, outcomes };

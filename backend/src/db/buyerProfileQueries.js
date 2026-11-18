@@ -528,9 +528,10 @@ async function replaceCategories(client, organizationId, userId, categories) {
 
 /**
  * Build D1 category replacement statements for updateProfile's atomic batch.
- * Every insert has an organization existence guard. D1 expands repeated `$n`
- * placeholders to positional bindings, so each 16-row INSERT SELECT stays
- * below the 100-parameter statement limit even with the repeated guard value.
+ * Every insert has an organization existence guard. Each row uses its own
+ * single-row INSERT SELECT inside the atomic `db.batch()` call rather than
+ * `UNION ALL` compound selects, which hit D1's low SQLITE_MAX_COMPOUND_SELECT
+ * compile limit (`D1_ERROR: too many terms in compound SELECT`).
  */
 function buildD1CategoryStatements(organizationId, userId, categories) {
   const statements = [{
@@ -549,23 +550,15 @@ function buildD1CategoryStatements(organizationId, userId, categories) {
   }
 
   const normalizedCategories = normalizeCategories(categories);
-  for (let offset = 0; offset < normalizedCategories.length; offset += 16) {
-    const chunk = normalizedCategories.slice(offset, offset + 16);
-    const params = [];
-    const inserts = chunk.map((entry) => {
-      const base = params.length;
-      params.push(crypto.randomUUID(), entry.major, entry.minor, organizationId, userId || null);
-      return `select $${base + 1}, $${base + 2}, $${base + 3}, $${base + 4}, $${base + 5},
-                     true, strftime('%Y-%m-%dT%H:%M:%fZ','now')
-               where exists (select 1 from organization where uuid = $${base + 4})`;
-    });
+  normalizedCategories.forEach((entry) => {
     statements.push({
       text: `insert into org_division_category
                (uuid, division, category, organization_id, user_id, is_active, created_ts)
-             ${inserts.join('\nUNION ALL\n')}`,
-      params,
+             select $1, $2, $3, $4, $5, true, strftime('%Y-%m-%dT%H:%M:%fZ','now')
+              where exists (select 1 from organization where uuid = $4)`,
+      params: [crypto.randomUUID(), entry.major, entry.minor, organizationId, userId || null],
     });
-  }
+  });
 
   return { statements, categoryCount: normalizedCategories.length };
 }

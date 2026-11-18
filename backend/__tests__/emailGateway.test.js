@@ -810,6 +810,42 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     // must not be reported as configured just because the buyer's is.
     expect(emailGatewayService.isConfigured(vendorConfig)).toBe(false);
   });
+
+  test('pollViaGmailApi records AUTH_REVOKED cooldown on invalid_grant and skips subsequent polls until rotated', async () => {
+    const mailTransport = require('../src/services/mailTransport');
+    mailTransport.resetCooldowns();
+    jest.spyOn(mailTransport, 'loadPersistedCooldowns').mockResolvedValue(true);
+    jest.spyOn(mailTransport, 'flushPendingCooldownWrites').mockResolvedValue();
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(mailerService, 'getGmailProviderKey').mockReturnValue('gmail:buyer:testfp');
+
+    const invalidGrantErr = new Error('invalid_grant');
+    const api = {
+      users: {
+        labels: {
+          list: jest.fn().mockRejectedValue(invalidGrantErr),
+          create: jest.fn(),
+        },
+        messages: {
+          list: jest.fn(),
+        },
+      },
+    };
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const first = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(first.error).toBe('invalid_grant');
+    // Rethrows AUTH_REVOKED from label lookup immediately rather than issuing additional messages.list calls
+    expect(api.users.messages.list).not.toHaveBeenCalled();
+    expect(mailTransport.getCooldown('gmail:buyer:testfp')).toBeTruthy();
+
+    api.users.labels.list.mockClear();
+    const second = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(second).toMatchObject({ skipped: true, status: 'cooling_down' });
+    expect(api.users.labels.list).not.toHaveBeenCalled();
+    expect(api.users.messages.list).not.toHaveBeenCalled();
+    mailTransport.resetCooldowns();
+  });
 });
 
 describe('emailGatewayService start and stop', () => {
