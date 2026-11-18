@@ -691,5 +691,27 @@ describe('Ticket and batch chaser schema contract', () => {
         panNumber: 'BGLPK1234M',
       });
     });
+
+    test('derivePanFromGstin and parsePrimaryPlantLocation handle real, dummy, and empty values', () => {
+      const { derivePanFromGstin, parsePrimaryPlantLocation } = require('../src/config/validationSchemas');
+      expect(derivePanFromGstin(' 27aaack3921p1z9 ')).toBe('AAACK3921P');
+      expect(derivePanFromGstin('27AAAAA0000A1Z5')).toBe('');
+      expect(derivePanFromGstin('27AAACL1234F1Z5')).toBe('');
+      expect(derivePanFromGstin('INVALID')).toBe('');
+      expect(derivePanFromGstin(null)).toBe('');
+
+      expect(parsePrimaryPlantLocation('Bengaluru, Karnataka (560037)')).toEqual({
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      });
+      expect(parsePrimaryPlantLocation('Pune, Maharashtra')).toEqual({
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '',
+      });
+      expect(parsePrimaryPlantLocation('')).toEqual({ city: '', state: '', pincode: '' });
+      expect(parsePrimaryPlantLocation(undefined)).toEqual({ city: '', state: '', pincode: '' });
+    });
   });
 });

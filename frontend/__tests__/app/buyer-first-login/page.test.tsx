@@ -894,6 +894,37 @@ describe('BuyerFirstLoginPage', () => {
       });
     });
 
+    it('derives non-dummy PAN automatically from genuine GSTIN when PAN input is blank', async () => {
+      const updatedUser = {
+        email: 'buyer@example.com',
+        role: 'buyer',
+        onboardingRequired: false,
+        passwordChangeRequired: false,
+      };
+      (authClient.completeBuyerOnboarding as jest.Mock).mockResolvedValue({
+        success: true,
+        user: updatedUser,
+        token: 'new-jwt-token',
+      });
+
+      render(<BuyerFirstLoginPage />);
+      fillValidForm();
+      fireEvent.change(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.gstinPlaceholder), {
+        target: { value: '27AAACK3921P1Z9' },
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.auth.buyerOnboarding.submitBtn }));
+
+      await waitFor(() => {
+        expect(authClient.completeBuyerOnboarding).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gstin: '27AAACK3921P1Z9',
+            pan: 'AAACK3921P',
+          })
+        );
+      });
+    });
+
     it('shows error when completeBuyerOnboarding throws', async () => {
       (authClient.completeBuyerOnboarding as jest.Mock).mockRejectedValue(new Error('Network error'));
 

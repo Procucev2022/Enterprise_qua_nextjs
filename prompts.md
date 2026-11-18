@@ -6294,3 +6294,10 @@ This functionality should come as popup for the new buyer only. after buyer uplo
 When we click the close rfq button, it should show warning "after close not able to open again" and if the buyer closes the RFQ, the rfq close message should go to all invited vendors for that rfq.
 ```
 ---
+
+### Prompt 269
+**Timestamp**: 2026-11-17T21:11:55+05:30
+```text
+my data not appearing GST address
+```
+---

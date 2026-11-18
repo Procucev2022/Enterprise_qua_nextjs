@@ -895,7 +895,49 @@ describe('LoginPage', () => {
           expect.objectContaining({
             street: 'Plot 42, Electronics City',
             address1: 'Plot 42, Electronics City',
+            address: 'Plot 42, Electronics City',
+            zipCode: '411001',
             gstin: '27AAAAA0000A1Z5',
+            gstNumber: '27AAAAA0000A1Z5',
+          })
+        );
+      });
+    });
+
+    it('derives non-dummy PAN automatically from genuine GSTIN during buyer registration', async () => {
+      (authClient.requestOtp as jest.Mock).mockResolvedValue({ success: true });
+      (authClient.register as jest.Mock).mockResolvedValue({
+        success: true,
+        user: BUYER_SESSION,
+        token: 'jwt',
+      });
+
+      render(<LoginPage />);
+      openRegister();
+      fillValidForm();
+      typeInto(/GST Number/i, '27AAACK3921P1Z9');
+      typeInto(/Registered Address/i, '302 Sharada, AECS Layout');
+      fireEvent.click(submitButton(/Create Account/i));
+      await waitFor(() => {
+        expect(screen.getByText(/Dual OTP Identity Verification/i)).toBeInTheDocument();
+      });
+      completeDualOtp();
+
+      await waitFor(() => {
+        expect(authClient.register).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gstin: '27AAACK3921P1Z9',
+            pan: 'AAACK3921P',
+            street: '302 Sharada, AECS Layout',
+          })
+        );
+        expect(addBuyerAccount).toHaveBeenCalledWith(
+          expect.objectContaining({
+            gstin: '27AAACK3921P1Z9',
+            gstNumber: '27AAACK3921P1Z9',
+            pan: 'AAACK3921P',
+            panNumber: 'AAACK3921P',
+            address: '302 Sharada, AECS Layout',
           })
         );
       });

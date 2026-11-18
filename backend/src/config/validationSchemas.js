@@ -196,6 +196,36 @@ function clearDummyPanFields(record) {
   return record;
 }
 
+/**
+ * Extract the 10-character PAN embedded at characters 2..12 of a valid Indian GSTIN,
+ * ignoring synthetic/placeholder PANs used in tests or incomplete entries.
+ */
+function derivePanFromGstin(gstin) {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_REGEX.test(clean)) return '';
+  return usablePan(clean.slice(2, 12)) || '';
+}
+
+/**
+ * Parse a legacy primaryPlantLocation label such as "Pune, Maharashtra (411001)"
+ * into structured { city, state, pincode } fields without inventing values.
+ */
+function parsePrimaryPlantLocation(location) {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
+}
+
 // MCA Corporate Identity Number: listing status, 5-digit industry code, 2-letter
 // state, 4-digit year, 3-letter ownership code, 6-digit registration number.
 const CIN_REGEX = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
@@ -1812,6 +1842,8 @@ module.exports = {
   isDummyPan,
   usablePan,
   clearDummyPanFields,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
   CIN_REGEX,
   CIN_MESSAGE,
   WEBSITE_REGEX,

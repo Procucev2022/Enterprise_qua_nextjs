@@ -1326,6 +1326,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const created: BuyerAccount = json.data;
     setBuyerAccounts((prev) => [created, ...prev]);
     setActiveBuyerAccount(created);
+    setSessionCache('activeBuyerAccount', created);
     loadedEntitiesRef.current.activeBuyerAccount = true;
 
     void addAuditLog(`Created buyer account for ${created.organizationName}`);
@@ -1367,6 +1368,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setBuyerAccounts((prev) => prev.map((acc) => (acc.id === id ? updatedAcc : acc)));
         if (activeBuyerAccount?.id === id) {
           setActiveBuyerAccount(updatedAcc);
+          setSessionCache('activeBuyerAccount', updatedAcc);
         }
         addAuditLog(`Updated account specifications for buyer ID ${id}`);
         showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
