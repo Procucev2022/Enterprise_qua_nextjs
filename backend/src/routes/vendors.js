@@ -11,7 +11,7 @@ router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkI
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
 router.post('/bulk-status', authenticate, vendorController.bulkUpdateVendorStatus);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
-router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendorsPresence);
+router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorsPresence);
 router.post('/heartbeat', authenticate, requireRole('vendor'), vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
 // Protected Vendor Directory — Category Manager with active directory session only.

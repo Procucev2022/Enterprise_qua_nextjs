@@ -641,13 +641,32 @@ export function isRfqDownloadedByVendor(
   options?: {
     vendorUnlockedRfqIds?: string[];
     localUnlockedIds?: string[];
+    vendorEmail?: string;
+    vendorId?: string;
   }
 ): boolean {
   if (!rfq) return false;
-  if (rfq.quotes && rfq.quotes.length > 0) return true;
 
   const rfqNum = String(rfq.rfqNumber || '').toLowerCase().trim();
   const rfqId = String(rfq.id || '').toLowerCase().trim();
+
+  // If vendor context is provided, check if THIS vendor has already submitted a quote
+  const vEmail = (options?.vendorEmail || '').toLowerCase().trim();
+  const vId = (options?.vendorId || '').toLowerCase().trim();
+  if (Array.isArray(rfq.quotes) && rfq.quotes.length > 0) {
+    if (vEmail || vId) {
+      const hasMyQuote = rfq.quotes.some((q: any) => {
+        if (!q) return false;
+        const qEmail = String(q.vendorEmail || q.submittedBy || '').toLowerCase().trim();
+        const qId = String(q.vendorId || '').toLowerCase().trim();
+        return (vEmail && qEmail && qEmail === vEmail) || (vId && qId && qId === vId);
+      });
+      if (hasMyQuote) return true;
+    } else {
+      // Fallback for callers/tests without vendor session options
+      return true;
+    }
+  }
 
   const isUnlockedInStore = (options?.vendorUnlockedRfqIds || []).some((id) => {
     const norm = String(id).toLowerCase().trim();
@@ -824,11 +843,15 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     return isRfqDownloadedByVendor(activeRfq, {
       vendorUnlockedRfqIds,
       localUnlockedIds: locallyDownloaded ? [activeRfq?.rfqNumber || '', activeRfq?.id || ''] : [],
+      vendorEmail: currentUserSession?.email,
+      vendorId: currentUserSession?.orgId || (currentUserSession as any)?.vendorId || (currentUserSession as any)?.id,
     });
-  }, [activeRfq, vendorUnlockedRfqIds, locallyDownloaded]);
+  }, [activeRfq, vendorUnlockedRfqIds, locallyDownloaded, currentUserSession]);
 
+  const isPublicOpportunity = isPublic || isV0 || isV3 || Boolean((activeRfq as any)?.isPublic);
+  const requiresDownload = isPublicOpportunity && !isDownloaded;
   const isClosedOrExpired = activeRfq ? (activeRfq.status === 'Closed' || activeRfq.status === 'Expired') : false;
-  const isSubmitDisabled = isClosedOrExpired || (isPublic && !isDownloaded);
+  const isSubmitDisabled = isClosedOrExpired || requiresDownload;
 
   const handleDownloadRfq = async () => {
     if (!activeRfq || isDownloading) return;
@@ -1338,6 +1361,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   useEffect(() => {
     let mounted = true;
     const fetchPresence = async () => {
+      if (isVendor) return;
       const identifiers = vendorChannels.flatMap((c) =>
         [c.vendorEmail, c.vendorId].filter(Boolean) as string[]
       );
@@ -1354,7 +1378,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       mounted = false;
       clearInterval(timer);
     };
-  }, [vendorChannels]);
+  }, [vendorChannels, isVendor]);
 
   // Set default selected vendor
   useEffect(() => {
@@ -1848,7 +1872,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   onClick={handleDownloadRfq}
                   disabled={isDownloading}
                   className={`btn btn-sm font-bold inline-flex items-center gap-1.5 rounded-xl shadow-xs px-3.5 py-1.5 cursor-pointer text-xs border transition-all ${
-                    isPublic && !isDownloaded
+                    requiresDownload
                       ? 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600'
                       : 'bg-white hover:bg-slate-100 text-slate-700 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-200 border-slate-300 dark:border-gray-600'
                   }`}
@@ -1884,7 +1908,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   title={
                     activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
                       ? 'Bidding is closed for this RFQ'
-                      : isPublic && !isDownloaded
+                      : requiresDownload
                       ? 'Download RFQ first to enable bidding'
                       : quotes.length > 0
                       ? 'Update or resubmit quotation'
@@ -3748,7 +3772,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             </div>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
-            {isPublic && !isDownloaded && (
+            {requiresDownload && (
               <button
                 type="button"
                 onClick={handleDownloadRfq}
@@ -3780,7 +3804,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               title={
                 activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
                   ? 'Bidding is closed for this RFQ'
-                  : isPublic && !isDownloaded
+                  : requiresDownload
                   ? 'Download RFQ first to enable bidding'
                   : 'Submit quotation for this RFQ'
               }

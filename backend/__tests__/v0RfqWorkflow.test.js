@@ -184,6 +184,34 @@ describe('V0 RFQ Complete Workflow — Procucev Network Vendors', () => {
       expect(storeService.isRfqUnlockedForVendor(vendor.id, rfq5.id)).toBe(true);
       expect(storeService.isRfqUnlockedForVendor(vendor.id, rfq6.id)).toBe(false);
     });
+
+    test('deducts 1 credit for buyer-mapped vendor downloading a public RFQ', async () => {
+      const vendor = storeService.addVendor({
+        name: 'Mapped Public Bidder',
+        email: 'mapped@vendor.com',
+        addedByBuyerCompany: 'Acme Corp',
+        majorCategory: 'Pumps & Valves',
+        freeQuotationCredits: 5,
+      });
+
+      const publicRfq = clearAutoInvites(storeService.createRFQ({
+        title: 'Public Pump Tender',
+        category: 'Pumps & Valves',
+        buyerAccountName: 'Acme Corp',
+        sourcingMode: 'mode_0',
+      }));
+
+      // Before downloading, it is not unlocked
+      expect(storeService.isRfqUnlockedForVendor(vendor.id, publicRfq.id)).toBe(false);
+
+      // Downloading public RFQ MUST deduct 1 credit even though vendor is buyer-mapped
+      const unlockRes = await storeService.unlockRFQForVendor(vendor.id, publicRfq.id);
+      expect(unlockRes.success).toBe(true);
+      expect(unlockRes.alreadyUnlocked).toBe(false);
+      expect(unlockRes.creditCharged).toBe(1);
+      expect(unlockRes.freeCreditsRemaining).toBe(4);
+      expect(storeService.isRfqUnlockedForVendor(vendor.id, publicRfq.id)).toBe(true);
+    });
   });
 
   describe('4. Mandatory RFQ Download Before Bid Submission', () => {

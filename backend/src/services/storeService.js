@@ -1686,6 +1686,26 @@ class StoreService {
   }
 
   /**
+   * True when an RFQ is public (Mode 0 / V0, Mode 3 / V3 double-blind, marketplace, or marked isPublic).
+   */
+  isPublicRfq(rfq) {
+    if (!rfq) return false;
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    return (
+      mode === 'mode_0' ||
+      mode === 'v0' ||
+      mode === 'version_0' ||
+      mode === 'mode_3' ||
+      mode === 'v3' ||
+      mode === 'version_3' ||
+      Boolean(rfq.isPublic) ||
+      rfq.type === 'marketplace' ||
+      rfq.type === 'network_open' ||
+      rfq.type === 'public_enquiry'
+    );
+  }
+
+  /**
    * Apply the sourcing-credit rule for a single RFQ creation, regardless of
    * how the RFQ was raised (portal, AI wizard, or inbound email gateway).
    *
@@ -3020,8 +3040,9 @@ class StoreService {
     if (!vendor) return false;
     const rfq = this.getRFQById(rfqIdOrNumber);
 
-    // Direct buyer-mapped vendors always have access without lock
-    if (rfq && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+    // Direct buyer-mapped vendors always have access without lock on private (non-public) RFQs
+    const isPublic = this.isPublicRfq(rfq);
+    if (rfq && !isPublic && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
       return true;
     }
 
@@ -3094,9 +3115,9 @@ class StoreService {
     const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
     const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
     const isNetworkMode = isV0 || isV2 || isV3;
-
-    const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
-    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
+    const isPublicRfq = this.isPublicRfq(rfq);
+    const isBuyerMapped = this.isVendorMappedToRfqBuyer(vendor, rfq);
+    const isDirect = !isPublicRfq && isBuyerMapped;
     const isInvited = this._isInvitedVendor(vendor, rfq);
     const coversRfq = this.vendorCoversRFQ(vendor, rfq);
     const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
@@ -3214,7 +3235,7 @@ class StoreService {
       // Only a first-time download of a non-buyer-mapped RFQ counts against a
       // subscriber's plan quota; re-downloads and direct invites are free.
       const updates = { unlockedRfqIds: unlockedList };
-      if (!isDirect) updates.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
+      if (!isBuyerMapped) updates.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
       Object.assign(vendor, updates);
       this.updateVendor(vendor.id, updates);
       const balanceAfter = this.getVendorRfqCredits(vendor.id).freeCreditsRemaining;
@@ -3223,7 +3244,7 @@ class StoreService {
         vendorId: vendor.id,
         rfqId: rfq.id,
         creditCharged: 0,
-        source: isDirect ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
+        source: isBuyerMapped ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
       });
 
       this.addAuditLog({

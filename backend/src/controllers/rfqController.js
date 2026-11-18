@@ -2130,10 +2130,10 @@ async function addQuote(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
-    const isMode0 = targetRfq.sourcingMode === 'mode_0' || targetRfq.sourcingMode === 'v0';
+    const isPublic = storeService.isPublicRfq(targetRfq);
     const isUnlimitedVendor = hasUnlimitedQuoteAccess(vendorRecord) || hasUnlimitedQuoteAccess(req.user);
     const isUnlocked = storeService.isRfqUnlockedForVendor(vendorRecord.id, targetRfq.id);
-    if (isMode0 && !isUnlocked && !isUnlimitedVendor) {
+    if (isPublic && !isUnlocked && !isUnlimitedVendor) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} without downloading/unlocking it first`,
         { id, vendorId: vendorRecord.id },

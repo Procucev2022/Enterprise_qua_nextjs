@@ -130,6 +130,9 @@ describe('isPublicRfqForVendor & isRfqDownloadedByVendor helpers', () => {
 
     // Quotes already submitted
     expect(isRfqDownloadedByVendor({ ...baseRfq, quotes: [{ quoteId: 'q-1' } as any] })).toBe(true);
+    expect(isRfqDownloadedByVendor({ ...baseRfq, quotes: [{ quoteId: 'q-1', vendorEmail: 'other@vendor.com' } as any] }, { vendorEmail: 'me@vendor.com' })).toBe(false);
+    expect(isRfqDownloadedByVendor({ ...baseRfq, quotes: [{ quoteId: 'q-1', vendorEmail: 'me@vendor.com' } as any] }, { vendorEmail: 'me@vendor.com' })).toBe(true);
+    expect(isRfqDownloadedByVendor({ ...baseRfq, quotes: [{ quoteId: 'q-1', vendorId: 'ven-1' } as any] }, { vendorId: 'ven-1' })).toBe(true);
 
     // In vendorUnlockedRfqIds
     expect(isRfqDownloadedByVendor(baseRfq, { vendorUnlockedRfqIds: ['rfq-test-100'] })).toBe(true);

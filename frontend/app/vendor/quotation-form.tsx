@@ -1068,17 +1068,29 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   const isRfqUnlocked = useCallback((rfqNumber: string) => {
-    if (isOwnBuyerRfq(rfqNumber)) return true;
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    const isPublic = Boolean((rfq as any)?.isPublic || (rfqRecord as any)?.isPublic);
+    const isPublicMode = isV0 || isV3 || isPublic;
+
+    // Public RFQs are NEVER automatically unlocked - they require download
+    if (!isPublicMode && isOwnBuyerRfq(rfqNumber)) return true;
+
     const norm = String(rfqNumber).toLowerCase();
     return (
       vendorUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm) ||
       locallyUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm)
     );
-  }, [isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
+  }, [vendorOpportunities, rfqs, isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
-      const isDirect = isOwnBuyerRfq(opp.rfqNumber);
+      const oppMode = String(opp.sourcingMode || '').toLowerCase().trim();
+      const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic);
+      const isDirect = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
       const wasUnlocked = isRfqUnlocked(opp.rfqNumber);
 
       const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
@@ -1572,7 +1584,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       null
                     );
                     const parentCompany = getParentCompany(opp.buyer);
-                    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+                    const oppMode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+                    const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic || (rfqRecord as any)?.isPublic);
+                    const isDirectBuyer = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
                     const isLocked = isRfqLockedForVendor(opp.rfqNumber);
                     
                     const isQuoteSubmitted = !!quote || opp.status === 'submitted';
