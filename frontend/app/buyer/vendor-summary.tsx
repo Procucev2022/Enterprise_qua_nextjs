@@ -1996,25 +1996,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         >
           <Plus size={14} /> Add Vendor
         </button>
-        {/* After initial vendor upload, open Add Vendor Bulk (required columns) instead of the Buyer Initial Setup popup */}
-        {hasUploadedVendors ? (
+        {/* Upload Vendor Wizard Button */}
+        {onNavigateToWizard && (
           <button
             type="button"
-            data-testid="open-add-vendor-bulk-modal"
-            onClick={() => setBulkUploadModalOpen(true)}
-            className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
-          >
-            <UploadCloud size={14} /> {UI_STRINGS.vendorBulkImport.buyerButtonLabel}
-          </button>
-        ) : onNavigateToWizard ? (
-          <button
-            type="button"
+            data-testid="open-upload-vendor-modal"
             onClick={onNavigateToWizard}
             className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
           >
             <UploadCloud size={14} /> Upload Vendor
           </button>
-        ) : null}
+        )}
       </div>
 
       {/* Stats Counter Bar */}
@@ -2229,15 +2221,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               >
                 <Plus size={12} /> Add Vendor
               </button>
-              {hasUploadedVendors ? (
-                <button
-                  type="button"
-                  onClick={() => setBulkUploadModalOpen(true)}
-                  className="btn btn-secondary btn-xs font-semibold flex items-center gap-1"
-                >
-                  <UploadCloud size={12} /> {UI_STRINGS.vendorBulkImport.buyerButtonLabel}
-                </button>
-              ) : onNavigateToWizard ? (
+              {onNavigateToWizard && (
                 <button
                   type="button"
                   onClick={onNavigateToWizard}
@@ -2245,7 +2229,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 >
                   <UploadCloud size={12} /> Ingest Master / POs
                 </button>
-              ) : null}
+              )}
             </div>
           </div>
         )}
@@ -4192,18 +4176,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       You haven&apos;t uploaded any vendor master or PO data batches yet. Upload your vendor spreadsheet to see historical records here.
                     </p>
                   </div>
-                  {hasUploadedVendors ? (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setShowUploadHistoryModal(false);
-                        setBulkUploadModalOpen(true);
-                      }}
-                      className="btn btn-primary btn-sm font-bold text-xs inline-flex items-center gap-1.5 shadow-sm mt-1"
-                    >
-                      <UploadCloud size={13} /> {UI_STRINGS.vendorBulkImport.buyerButtonLabel}
-                    </button>
-                  ) : onNavigateToWizard ? (
+                  {onNavigateToWizard && (
                     <button
                       type="button"
                       onClick={() => {
@@ -4214,7 +4187,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <UploadCloud size={13} /> Upload Vendor Master Now
                     </button>
-                  ) : null}
+                  )}
                 </div>
               )}
             </div>

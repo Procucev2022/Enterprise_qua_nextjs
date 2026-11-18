@@ -3999,7 +3999,7 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       }
     });
 
-    it('blocks reopening InitialSetupModal for a buyer once initialSetupCompleted or vendorMasterUploaded is true', async () => {
+    it('allows opening InitialSetupModal for a buyer', async () => {
       authClient.setSession(
         {
           id: 'u-lock-1',
@@ -4029,7 +4029,7 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         await act(async () => {
           ctx().setInitialSetupModalOpen(true);
         });
-        expect(ctx().initialSetupModalOpen).toBe(false);
+        expect(ctx().initialSetupModalOpen).toBe(true);
       } finally {
         authClient.setSession(null);
       }

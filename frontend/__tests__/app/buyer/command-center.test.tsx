@@ -486,7 +486,7 @@ describe('app/buyer/command-center.tsx', () => {
 
     expect(screen.getByText(/PO History Ingested/i)).toBeInTheDocument();
     fireEvent.click(screen.getByText(/PO History Ingested/i));
-    expect(mockSetInitialSetupModalOpen).not.toHaveBeenCalled();
+    expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(true);
     // Banner is removed completely
     expect(screen.queryByText(/Sourcing Plan:/i)).not.toBeInTheDocument();
   });

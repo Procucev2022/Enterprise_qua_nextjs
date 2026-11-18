@@ -307,11 +307,10 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     // The roster has no trigger action: no evaluation is started without a real endpoint behind it.
     expect(screen.queryAllByRole('button', { name: /Trigger Evaluation/i })).toHaveLength(0);
 
-    // After buyer has uploaded vendors, opens Add Vendor Bulk modal instead of wizard
-    const uploadBtn = screen.getByTestId('open-add-vendor-bulk-modal');
+    // Upload Vendor button
+    const uploadBtn = screen.getByRole('button', { name: /Upload Vendor/i });
     fireEvent.click(uploadBtn);
-    expect(screen.getByTestId('vendor-upload-modal')).toBeInTheDocument();
-    expect(mockOnNavigateToWizard).not.toHaveBeenCalled();
+    expect(mockOnNavigateToWizard).toHaveBeenCalled();
   });
 
   it('exercises IngestionWizard line item mutations, auto categorization, and resets', async () => {
