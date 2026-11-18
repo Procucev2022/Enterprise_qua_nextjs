@@ -824,6 +824,7 @@ export const UI_STRINGS = {
     dropZoneIdlePrompt: 'Drag and drop BOQ spreadsheets or .eml / .msg emails here',
     extractingLabel: 'Reading your document with QUA AI…',
     extractingHint: 'Identifying line items, quantities, units and specifications.',
+    defaultModelLabel: 'QUA AI',
 
     // Step 2 outcome banners
     successTitle: 'AI Extraction Complete',
@@ -860,7 +861,7 @@ export const UI_STRINGS = {
       AI_FAILED:
         'The AI could not read this document — its layout may be unusual or the scan unclear. Try a spreadsheet or clearer PDF, or enter the line items manually.',
       QUOTA_EXCEEDED:
-        'AI extraction reached the Gemini API quota or rate limit. Check the Google AI project quota or retry later, or enter the line items manually.',
+        'AI extraction reached its quota or rate limit. Retry in a moment, or enter the line items manually.',
       NO_ITEMS_FOUND:
         'No procurement line items could be identified in this document. Check that quantities are stated, or enter the line items manually.',
       NETWORK:
@@ -933,7 +934,7 @@ export const UI_STRINGS = {
     dropZoneHeading: 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet',
     dropZoneHint:
       'Supports Excel (.xlsx, .xls), CSV, PDF drawings, Word specifications (.docx), text files (.txt), or forwarded requisition emails (.eml, .msg) up to 15 MB.',
-    extractFooterHint: 'Your document is read by Gemini AI, then you confirm the line items in Step 2.',
+    extractFooterHint: 'Your document is read by QUA AI, then you confirm the line items in Step 2.',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
 

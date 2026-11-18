@@ -3623,12 +3623,14 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
     clickExtract();
 
     expect(await screen.findByText(UI_STRINGS.rfqExtraction.extractingStatus)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.rfqExtraction.extractingHint)).toBeInTheDocument();
     expect(screen.getByRole('status')).toHaveTextContent(UI_STRINGS.rfqExtraction.extractingStatus);
     expect(screen.getByRole('button', { name: UI_STRINGS.rfqExtraction.extractingButtonLabel })).toBeDisabled();
     expect(screen.queryByText(/Gemini AI/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/parsing document/i)).not.toBeInTheDocument();
 
     await act(async () => {
-      resolveExtract?.(successResult());
+      resolveExtract?.({ ...successResult(), extraction: undefined });
       await pendingPromise;
     });
 

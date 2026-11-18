@@ -999,7 +999,7 @@ export default function IngestionWizard({
         }));
 
         setExtractionSummary({
-          model: result.extraction?.model || 'Gemini 2.5 AI',
+          model: result.extraction?.model || EXTRACTION.defaultModelLabel,
           accepted: result.classification?.accepted ?? extracted.length,
           needsReview: result.classification?.needsReview ?? 0,
           fileName: primaryFile.name,
@@ -1517,6 +1517,9 @@ export default function IngestionWizard({
               <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
                 {EXTRACTION.extractingStatus}
               </h3>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                {EXTRACTION.extractingHint}
+              </p>
             </div>
           ) : (
             <>

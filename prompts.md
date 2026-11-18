@@ -6370,3 +6370,10 @@ Please identify and fix the root cause rather than applying a temporary workarou
 For submit quotation, for one line item Rfq also, reuse the multiple line item details UI.
 ```
 ---
+
+### Prompt 277
+**Timestamp**: 2026-11-18T14:31:29+05:30
+```text
+Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
+```
+---
