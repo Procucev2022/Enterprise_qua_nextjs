@@ -696,7 +696,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const majorCategory = newVendorMajorCategory.trim() || rfq?.category || '';
 
     if (!name || !contactPerson || !email || !phone || !majorCategory) {
-      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Major Category).');
+      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Division).');
       return;
     }
 
@@ -1406,7 +1406,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Major Category *
+                    Division *
                   </label>
                   <select
                     value={newVendorMajorCategory}
@@ -1422,7 +1422,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Minor Category
+                    Category
                   </label>
                   <input
                     type="text"

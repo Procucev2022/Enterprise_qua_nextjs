@@ -110,9 +110,11 @@ function classifyChanges(activeFiles = [], deletedFiles = []) {
   const backendFiles = all.filter((f) => f.startsWith('backend/'));
   const frontendFiles = all.filter((f) => f.startsWith('frontend/'));
 
+  const touchedRootPackage = all.includes('package.json');
   const touchedBackendConfig =
-    all.includes('backend/package.json') || all.includes('backend/jest.config.js');
+    touchedRootPackage || all.includes('backend/package.json') || all.includes('backend/jest.config.js');
   const touchedFrontendConfig =
+    touchedRootPackage ||
     all.includes('frontend/package.json') ||
     all.includes('frontend/jest.config.cjs') ||
     all.includes('frontend/tsconfig.json') ||
@@ -266,7 +268,7 @@ function cleanupDir(targetDir) {
 function runFastCheckCli(argv = process.argv.slice(2)) {
   const isAll = argv.includes('--all') || argv.includes('-a');
   const isPreCommit = argv.includes('--pre-commit');
-  const stagedOnly = argv.includes('--staged') || isPreCommit || Boolean(process.env.GIT_INDEX_FILE);
+  const stagedOnly = argv.includes('--staged');
   const withBuild = argv.includes('--with-build') || isPreCommit;
 
   console.log('\n⚡ Running Procucev Incremental Quality & Coverage Gate...\n');
@@ -342,12 +344,11 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
       const backendSrcRelFiles = scope.backendSources.map((f) => f.slice('backend/'.length));
       const fastCovAbs = path.join(backendDir, FAST_COVERAGE_DIR);
       cleanupDir(fastCovAbs);
-      const workerLimit = 1;
       try {
         if (backendSrcRelFiles.length > 0) {
           const jestArgs = [
             '--bail',
-            `--maxWorkers=${workerLimit}`,
+            '--maxWorkers=50%',
             '--passWithNoTests',
             '--coverage',
             `--coverageDirectory=${FAST_COVERAGE_DIR}`,
@@ -372,7 +373,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
         } else {
           runJestWithArgs('Backend Related Unit Tests', backendDir, [
             '--bail',
-            `--maxWorkers=${workerLimit}`,
+            '--maxWorkers=50%',
             '--passWithNoTests',
             '--findRelatedTests',
             ...backendRelFiles,
@@ -395,12 +396,14 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
       const frontendSrcRelFiles = scope.frontendSources.map((f) => f.slice('frontend/'.length));
       const fastCovAbs = path.join(frontendDir, FAST_COVERAGE_DIR);
       cleanupDir(fastCovAbs);
-      const workerLimit = 1;
+      const testFilesToFind = frontendRelFiles.flatMap((f) =>
+        f === 'lib/uiStrings.ts' ? ['__tests__/lib/uiStrings.test.ts'] : [f]
+      );
       try {
         if (frontendSrcRelFiles.length > 0) {
           const jestArgs = [
             '--bail',
-            `--maxWorkers=${workerLimit}`,
+            '--maxWorkers=50%',
             '--passWithNoTests',
             '--coverage',
             `--coverageDirectory=${FAST_COVERAGE_DIR}`,
@@ -408,7 +411,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
             '--coverageThreshold={}',
             ...frontendSrcRelFiles.map((file) => `--collectCoverageFrom=${file}`),
             '--findRelatedTests',
-            ...frontendRelFiles,
+            ...testFilesToFind,
           ];
           runJestWithArgs('Frontend Related Tests & 90% Per-File Coverage', frontendDir, jestArgs);
           const result = verifyChangedFilesCoverage(

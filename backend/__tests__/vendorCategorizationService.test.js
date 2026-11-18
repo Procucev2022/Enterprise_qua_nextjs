@@ -245,4 +245,190 @@ describe('vendor categorization evidence, validation and persistence', () => {
       expect.objectContaining({ mappingId: 'map-2', status: service.CLASSIFICATION_STATUS.AI_FAILED, error: 'Classification failed unexpectedly' }),
     ]);
   });
+
+  test('classifyVendorsBatchDirect processes multiple suppliers in batch and falls back gracefully', async () => {
+    // 1. Empty mappings
+    expect(await service.classifyVendorsBatchDirect({ ...args, mappings: [] })).toEqual([]);
+
+    // 2. Mapping with no PO history
+    const noPoMapping = { ...mapping, id: 'map-nopo', vendorRecordId: 'vm-nopo', companyName: 'No PO Supplier' };
+    const noPoProfile = { ...profile, hasPoHistory: false };
+    const noPoRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [noPoMapping],
+      profilesByRecordId: new Map([['vm-nopo', noPoProfile]]),
+    });
+    expect(noPoRes[0].status).toBe(service.CLASSIFICATION_STATUS.NO_CONTENT);
+
+    // 3. Empty category master
+    const emptyMasterRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      categoryMaster: [],
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(emptyMasterRes[0].status).toBe(service.CLASSIFICATION_STATUS.NO_CONTENT);
+
+    // 4. Batch Gemini response success
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockResolvedValueOnce({
+      status: gemini.EXTRACTION_STATUS.SUCCESS,
+      model: 'gemini-2.0-flash',
+      data: [
+        {
+          vendorRecordId: 'vm-1',
+          vendorCode: 'V1',
+          primaryCategory: 'Mechanical',
+          minorCategories: ['Pumps'],
+          relevantProducts: ['Pump'],
+          confidenceScore: 90,
+          reason: 'Pumps purchases',
+        },
+      ],
+    });
+    queries.saveAiSuggestion.mockResolvedValueOnce({ id: 'map-1', majorCategory: 'Mechanical' });
+
+    const batchRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(batchRes[0].status).toBe(service.CLASSIFICATION_STATUS.SUCCESS);
+    expect(batchRes[0].suggestion.majorCategory).toBe('Mechanical');
+
+    // 5. Test buildBatchCategorizationPrompt
+    const batchPrompt = service.buildBatchCategorizationPrompt({
+      vendorProfiles: [{ ...profile, vendorRecordId: 'vm-1' }],
+      categoryMaster: args.categoryMaster,
+      horizon: { startDate: '2024-01-01', endDate: '2026-01-01' },
+    });
+    expect(batchPrompt).toContain('Mechanical');
+    expect(batchPrompt).toContain('vm-1');
+
+    // 6. When batch Gemini throws, avoid N+1 API storm and do not call gemini.generateJson for each individual mapping
+    gemini.generateJson.mockReset();
+    gemini.generateJson.mockRejectedValueOnce(new Error('Rate limit exceeded (HTTP 429)'));
+    const stormRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping, { ...mapping, id: 'map-2', vendorRecordId: 'vm-2' }],
+      profilesByRecordId: new Map([['vm-1', profile], ['vm-2', profile]]),
+    });
+    expect(stormRes.length).toBe(2);
+    expect(stormRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(stormRes[0].error).toContain('Rate limit exceeded');
+    expect(stormRes[1].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(gemini.generateJson).toHaveBeenCalledTimes(1);
+
+    // 7. When batch Gemini returns non-SUCCESS status
+    gemini.generateJson.mockReset();
+    gemini.generateJson.mockResolvedValueOnce({
+      status: gemini.EXTRACTION_STATUS.ERROR,
+      error: 'Model overload',
+    });
+    const errorStatusRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(errorStatusRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+    expect(errorStatusRes[0].error).toBe('Model overload');
+
+    // 8. When gemini is NOT configured, falls back to classifyVendor
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(false);
+    gemini.generateJson.mockResolvedValue({ status: gemini.EXTRACTION_STATUS.NOT_CONFIGURED });
+    const unconfiguredRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(unconfiguredRes.length).toBe(1);
+    expect(unconfiguredRes[0].status).toBe(service.CLASSIFICATION_STATUS.NOT_CONFIGURED);
+
+    // 8b. When item is omitted from batch Gemini result, individual call succeeds
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockReset();
+    gemini.generateJson
+      .mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: [] })
+      .mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: reply });
+    const singleFallbackRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [mapping],
+      profilesByRecordId: new Map([['vm-1', profile]]),
+    });
+    expect(singleFallbackRes[0].status).toBe(service.CLASSIFICATION_STATUS.SUCCESS);
+
+    // 9. Exception in loop
+    const throwingMapping = { ...mapping, id: 'throw-map', vendorRecordId: 'vm-throw' };
+    queries.markMappingProcessing.mockRejectedValueOnce(new Error('Processing mark failed'));
+    jest.spyOn(gemini, 'isConfigured').mockReturnValue(true);
+    gemini.generateJson.mockResolvedValueOnce({ status: gemini.EXTRACTION_STATUS.SUCCESS, data: [] });
+    const exRes = await service.classifyVendorsBatchDirect({
+      ...args,
+      mappings: [throwingMapping],
+      profilesByRecordId: new Map([['vm-throw', profile]]),
+    });
+    expect(exRes[0].status).toBe(service.CLASSIFICATION_STATUS.AI_FAILED);
+  });
+
+  test('heuristicClassifyVendor provides accurate fallback classification across diverse profiles', () => {
+    // 1. Guard conditions
+    expect(service.heuristicClassifyVendor(null, master)).toBeNull();
+    expect(service.heuristicClassifyVendor(profile, [])).toBeNull();
+    expect(service.heuristicClassifyVendor(profile, null)).toBeNull();
+
+    // 2. Direct minor match
+    const h1 = service.heuristicClassifyVendor(profile, master);
+    expect(h1).toMatchObject({
+      primaryCategory: 'Mechanical',
+      minorCategories: expect.arrayContaining(['Pumps', 'Bearings']),
+      confidenceScore: 82,
+    });
+
+    // 3. Technical keyword match
+    const keywordProf = {
+      companyName: 'Network Tech',
+      lineSummaries: ['24 port ethernet switch'],
+    };
+    const itMaster = [
+      { majorCategory: 'IT', minorCategories: ['Networking Equipment', 'Computer'] },
+      { majorCategory: 'Civil', minorCategories: ['Bricks'] },
+    ];
+    const h2 = service.heuristicClassifyVendor(keywordProf, itMaster);
+    expect(h2.primaryCategory).toBe('IT');
+    expect(h2.minorCategories).toContain('Networking Equipment');
+
+    // 4. Company name match with major
+    const nameProf = {
+      companyName: 'Civil Construction Co',
+      lineSummaries: [],
+    };
+    const h3 = service.heuristicClassifyVendor(nameProf, itMaster);
+    expect(h3.primaryCategory).toBe('Civil');
+
+    // 5. Fallback when no match scores
+    const unknownProf = {
+      companyName: 'XYZ Enterprise',
+      lineSummaries: ['mystery item'],
+    };
+    const otherMaster = [
+      { majorCategory: 'Others – New Product', minorCategories: ['Furniture'] },
+    ];
+    const h4 = service.heuristicClassifyVendor(unknownProf, otherMaster);
+    expect(h4.primaryCategory).toBe('Others – New Product');
+    expect(h4.confidenceScore).toBe(65);
+
+    // 6. Fallback with empty group minorCategories
+    const emptyMinorMaster = [
+      { majorCategory: 'General Supplies', minorCategories: [] },
+    ];
+    const h5 = service.heuristicClassifyVendor(unknownProf, emptyMinorMaster);
+    expect(h5.primaryCategory).toBe('General Supplies');
+    expect(h5.minorCategories).toEqual([]);
+
+    // 7. Profile without companyName or lineSummaries
+    const emptyProf = {};
+    const h6 = service.heuristicClassifyVendor(emptyProf, master);
+    expect(h6).toBeDefined();
+    expect(h6.relevantProducts).toContain('Supplies');
+  });
 });

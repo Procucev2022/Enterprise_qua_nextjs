@@ -43,8 +43,8 @@ DATE: ${email.dispatchedAt}
 DEAR ${email.recipientContactPerson.toUpperCase()} (${email.recipientVendorName}),
 
 You are invited by ${email.buyerCompany} to submit a formal quotation for the procurement of items categorized under:
-Major Category: ${email.matchedMajorCategory}
-Minor Categories: ${email.matchedMinorCategories.join(', ')}
+Division: ${email.matchedMajorCategory}
+Categories: ${email.matchedMinorCategories.join(', ')}
 
 REQUISITION DETAILS:
 - RFQ Number: ${email.rfqNumber}
@@ -55,7 +55,7 @@ REQUISITION DETAILS:
 - Commercial Terms: ${email.paymentTerms}
 
 BILL OF QUANTITIES (BOQ):
-${email.lineItems.map(item => `${item.itemNumber}. ${item.itemName} | Specs: ${item.technicalSpecs} | Minor Category: ${item.minorCategory} | Qty: ${item.quantity} ${item.unit} | Target: ${item.targetDate}`).join('\n')}
+${email.lineItems.map(item => `${item.itemNumber}. ${item.itemName} | Specs: ${item.technicalSpecs} | Category: ${item.minorCategory} | Qty: ${item.quantity} ${item.unit} | Target: ${item.targetDate}`).join('\n')}
 
 SPECIAL INSTRUCTIONS:
 ${email.specialInstructions}
@@ -203,7 +203,7 @@ ${email.shaSignature ? `SHA-256 DIGITAL AUDIT SEAL: ${email.shaSignature}` : ''}
                     <tr>
                       <th className="p-2.5 text-center w-10">#</th>
                       <th className="p-2.5">Item Description &amp; Specifications</th>
-                      <th className="p-2.5">Minor Category</th>
+                      <th className="p-2.5">Category</th>
                       <th className="p-2.5 text-center w-16">Qty</th>
                       <th className="p-2.5 text-center w-16">Unit</th>
                       <th className="p-2.5 w-24">Target Date</th>

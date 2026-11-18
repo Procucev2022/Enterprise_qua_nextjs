@@ -116,13 +116,23 @@ function VendorRFQDetailsView() {
         return !myVendorId && !sessionEmail;
       });
 
+      const rfqMode = String(result.rfq.sourcingMode || '').toLowerCase().trim();
+      const isPublic =
+        rfqMode === 'mode_0' ||
+        rfqMode === 'v0' ||
+        rfqMode === 'version_0' ||
+        rfqMode === 'mode_3' ||
+        rfqMode === 'v3' ||
+        rfqMode === 'version_3';
+
       const scopedRfq: RFQItem = {
         ...result.rfq,
         buyerAccountName: undefined,
         buyerCompany: undefined,
-        sourcingMode: undefined as any,
+        sourcingMode: result.rfq.sourcingMode,
+        isPublic: isPublic || Boolean((result.rfq as any).isPublic),
         quotes: scopedQuotes,
-      };
+      } as any;
       setState({ status: 'loaded', rfq: scopedRfq });
     },
     [currentUserSession?.email, currentUserSession?.name, currentUserSession?.orgName]

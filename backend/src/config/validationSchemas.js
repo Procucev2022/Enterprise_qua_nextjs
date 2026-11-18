@@ -353,7 +353,20 @@ const VALIDATION_SCHEMAS = {
       required: true,
       message: 'Specify whether selected vendors should be active or inactive.',
     },
-    vendors: { type: 'array', required: false },
+    vendors: {
+      type: 'array',
+      required: false,
+      custom: (value) => {
+        if (!Array.isArray(value)) {
+          return 'vendors must be an array of vendor hint objects.';
+        }
+        const invalidEntry = value.some((item) => !item || typeof item !== 'object' || Array.isArray(item));
+        if (invalidEntry) {
+          return 'Each entry in vendors must be an object.';
+        }
+        return null;
+      },
+    },
   },
   evaluationListQuery: {
     vendorId: { type: 'string', required: false, minLength: 1, maxLength: 128 },

@@ -105,4 +105,34 @@ describe('vendorIngestionController unit tests', () => {
       });
     });
   });
+
+  describe('categorizeDirect', () => {
+    it('executes direct AI categorization and returns 200 with result', async () => {
+      const vendorIngestionService = require('../src/services/vendorIngestionService');
+      jest.spyOn(vendorIngestionService, 'runDirectCategorization').mockResolvedValueOnce({
+        job: { id: 'job-1', status: 'COMPLETED' },
+        mappings: [{ id: 'm-1' }],
+      });
+
+      await controller.categorizeDirect(mockReq, mockRes, mockNext);
+
+      expect(mockRes.json).toHaveBeenCalledWith({
+        success: true,
+        data: expect.objectContaining({
+          job: expect.objectContaining({ status: 'COMPLETED' }),
+          mappings: expect.any(Array),
+        }),
+      });
+    });
+
+    it('handles error in categorizeDirect and responds with error', async () => {
+      const vendorIngestionService = require('../src/services/vendorIngestionService');
+      const err = new Error('Categorization failed');
+      jest.spyOn(vendorIngestionService, 'runDirectCategorization').mockRejectedValueOnce(err);
+
+      await controller.categorizeDirect(mockReq, mockRes, mockNext);
+
+      expect(mockNext).toHaveBeenCalledWith(err);
+    });
+  });
 });

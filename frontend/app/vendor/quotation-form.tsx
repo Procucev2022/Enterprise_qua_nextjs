@@ -9,8 +9,8 @@ import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { LineItemBid, QuoteComparison, RFQItem, RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import {
   getPaidVendorPlanPrice,
   getPaidVendorPlanRfqQuota,
@@ -66,6 +66,84 @@ function extractPin(pinVal?: any, addrVal?: any): string {
   if (digits.length === 6) return digits;
   const match = String(addrVal || '').match(/\b\d{6}\b/);
   return match ? match[0] : '';
+}
+
+interface RawLineEntity {
+  id?: string;
+  itemName?: string;
+  description?: string;
+  quantity?: number;
+  unit?: string | null;
+}
+
+/** Converts extracted RFQ entities into bid line items with empty vendor rates. */
+function mapEntitiesToLineItems(entities: RawLineEntity[], fallbackTitle: string): LineItemBid[] {
+  return entities.map((ent, idx) => ({
+    id: ent.id || `item-${idx}`,
+    description: ent.itemName || ent.description || fallbackTitle,
+    quantity: typeof ent.quantity === 'number' ? ent.quantity : Number(ent.quantity) || 0,
+    unit: ent.unit || undefined,
+    unitPrice: 0,
+    leadTimeDays: 0,
+    marketBandStatus: 'optimal',
+    paymentTerms: '',
+  }));
+}
+
+/** Ensures an opportunity carries line items from its backing RFQ record when available. */
+function resolveOpportunityForBid(opp: VendorOpportunity, rfqs: RFQItem[]): VendorOpportunity {
+  if (Array.isArray(opp.lineItems) && opp.lineItems.length > 0) {
+    return opp;
+  }
+  const rfqRecord = rfqs.find(
+    (r) => (Boolean(opp.rfqNumber) && r.rfqNumber === opp.rfqNumber) || (Boolean(opp.id) && r.id === opp.id)
+  );
+  if (!rfqRecord) return opp;
+  const rawEntities: RawLineEntity[] = rfqRecord.extractedEntities?.length
+    ? rfqRecord.extractedEntities
+    : Array.isArray(rfqRecord.lineItems)
+    ? (rfqRecord.lineItems as RawLineEntity[])
+    : [];
+  if (rawEntities.length === 0) return opp;
+  return {
+    ...opp,
+    lineItems: mapEntitiesToLineItems(rawEntities, opp.title),
+  };
+}
+
+/** Pre-fills per-line-item rates when reopening an existing quotation for resubmission. */
+function buildInitialLineItemPrices(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemPrices: Record<string, string> = {};
+  if (!existingQuote) return itemPrices;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    if (lq.lineItemId && lq.unitPrice != null) {
+      itemPrices[lq.lineItemId] = String(lq.unitPrice);
+    }
+  });
+  lineItems.forEach((li) => {
+    if (itemPrices[li.id] != null) return;
+    const normalizedDesc = (li.description || '').trim().toLowerCase();
+    if (!normalizedDesc) return;
+    const matchedByName = lineItemQuotes.find(
+      (lq) => lq.unitPrice != null && (lq.itemName || '').trim().toLowerCase() === normalizedDesc
+    );
+    if (matchedByName) {
+      itemPrices[li.id] = String(matchedByName.unitPrice);
+    }
+  });
+  if (
+    lineItems.length === 1 &&
+    itemPrices[lineItems[0].id] == null &&
+    lineItemQuotes.length === 0 &&
+    existingQuote.unitPrice != null
+  ) {
+    itemPrices[lineItems[0].id] = String(existingQuote.unitPrice);
+  }
+  return itemPrices;
 }
 
 interface QuotationFormProps {
@@ -639,10 +717,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
-  // One unit price per RFQ line item, keyed by line item id — only rendered
-  // (and only required) when the RFQ has more than one line item. For the
-  // common single-item case the form stays exactly as it was: just
-  // bidUnitPrice above.
+  // One unit price per RFQ line item, keyed by line item id — rendered and
+  // required whenever the RFQ has one or more line items. Only RFQs without
+  // any line item details fall back to bidUnitPrice above.
   const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
@@ -715,19 +792,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // Opens quotation form modal on explicit user action (Submit Quote / Resubmit Bid).
   // Pre-populates previously submitted values when resubmitting a quotation.
   const openBidForm = (opp: VendorOpportunity) => {
-    setBiddingOn(opp);
-    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber) as any;
+    const resolvedOpp = resolveOpportunityForBid(opp, rfqs);
+    setBiddingOn(resolvedOpp);
+    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === resolvedOpp.rfqNumber) as any;
     if (existingQuote) {
       setBidUnitPrice(existingQuote.unitPrice != null ? String(existingQuote.unitPrice) : (existingQuote.totalPrice != null ? String(existingQuote.totalPrice) : ''));
-      const itemPrices: Record<string, string> = {};
-      if (Array.isArray(existingQuote.lineItemQuotes)) {
-        existingQuote.lineItemQuotes.forEach((lq: any) => {
-          if (lq.lineItemId && lq.unitPrice != null) {
-            itemPrices[lq.lineItemId] = String(lq.unitPrice);
-          }
-        });
-      }
-      setBidLineItemPrices(itemPrices);
+      setBidLineItemPrices(buildInitialLineItemPrices(resolvedOpp.lineItems || [], existingQuote));
       setBidLeadTimeDays(existingQuote.leadTimeDays != null ? String(existingQuote.leadTimeDays) : '');
       setBidWarrantyYears(existingQuote.warrantyYears != null ? String(existingQuote.warrantyYears) : '');
       setBidPaymentTerms(existingQuote.paymentTerms || '');
@@ -828,10 +898,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     setSubmitModalError(null);
 
     const rfqLineItems = biddingOn.lineItems || [];
-    const isMultiItem = rfqLineItems.length > 1;
+    const hasLineItems = rfqLineItems.length > 0;
 
-    // Multi-item RFQs price every line item individually; the single-item
-    // case keeps today's one blanket-price field unchanged.
+    // Any RFQ with one or more line items prices each row via the line-item
+    // pricing UI; only line-item-less RFQs fall back to a blanket unit price.
     let unitPrice: number;
     let totalPrice: number;
     let lineItemQuotes: Array<{
@@ -842,7 +912,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       totalPrice: number;
     }> | undefined;
 
-    if (isMultiItem) {
+    if (hasLineItems) {
       const missing = rfqLineItems.some((li) => {
         const v = Number(bidLineItemPrices[li.id]);
         return !v || v <= 0;
@@ -2127,7 +2197,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 )}
 
                 <div className="space-y-3">
-                  {(biddingOn.lineItems?.length || 0) > 1 ? (
+                  {(biddingOn.lineItems?.length || 0) > 0 ? (
                     <div>
                       {(biddingOn.lineItems?.length || 0) > 10 && (
                         <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
@@ -2139,7 +2209,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       )}
                       <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Line Item Pricing ({biddingOn.lineItems.length} items) *
+                          {formatString(
+                            biddingOn.lineItems.length === 1
+                              ? UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingSingular
+                              : UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingPlural,
+                            { count: biddingOn.lineItems.length }
+                          )}
                         </label>
                         <div className="flex items-center gap-2">
                           <input

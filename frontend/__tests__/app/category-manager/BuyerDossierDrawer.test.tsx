@@ -439,24 +439,24 @@ describe('BuyerDossierDrawer', () => {
       />
     );
 
-    expect(screen.getByText('Supported Major Categories')).toBeInTheDocument();
+    expect(screen.getByText('Supported Divisions')).toBeInTheDocument();
     expect(screen.getByText('General Procurement')).toBeInTheDocument();
 
     const editBtn = screen.getByText('Edit');
     fireEvent.click(editBtn);
 
-    expect(screen.getByText('Edit Supported Major Categories')).toBeInTheDocument();
+    expect(screen.getByText('Edit Supported Divisions')).toBeInTheDocument();
 
     // Test Escape key closes modal
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
+    expect(screen.queryByText('Edit Supported Divisions')).toBeNull();
 
     // Reopen modal and test X button (line 1349)
     fireEvent.click(screen.getByText('Edit'));
     const xButtons = screen.getAllByRole('button');
     const modalX = xButtons.find(b => b.querySelector('.lucide-x') && b.closest('.max-w-lg'));
     if (modalX) fireEvent.click(modalX);
-    expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
+    expect(screen.queryByText('Edit Supported Divisions')).toBeNull();
 
     // Reopen modal for full operations
     fireEvent.click(screen.getByText('Edit'));
@@ -478,7 +478,7 @@ describe('BuyerDossierDrawer', () => {
     fireEvent.click(itCatBtn);
 
     // Add custom category - test empty and duplicate branches (line 124)
-    const customInput = screen.getByPlaceholderText(/Type custom major category/i);
+    const customInput = screen.getByPlaceholderText(/Type custom division/i);
     const addCustomBtn = screen.getByRole('button', { name: /Add Category/i });
     fireEvent.change(customInput, { target: { value: '   ' } });
     fireEvent.click(addCustomBtn);
@@ -530,7 +530,7 @@ describe('BuyerDossierDrawer', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
+    expect(screen.queryByText('Edit Supported Divisions')).toBeNull();
   });
 
   test('6. RFQs tab renders RFQ table, filtering, searching, clicking RFQ Number opens popup modal, Escape, and handles view full details', () => {
@@ -809,7 +809,7 @@ describe('BuyerDossierDrawer', () => {
     );
 
     // Profile tab
-    expect(screen.getByText('Supported Major Categories')).toBeInTheDocument();
+    expect(screen.getByText('Supported Divisions')).toBeInTheDocument();
 
     // RFQ tab
     fireEvent.click(screen.getByRole('button', { name: /RFQs/i }));
@@ -1425,16 +1425,16 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     fireEvent.click(profileTab);
     const editCatBtn = screen.getByText('Edit');
     fireEvent.click(editCatBtn);
-    expect(screen.getByText('Edit Supported Major Categories')).toBeInTheDocument();
+    expect(screen.getByText('Edit Supported Divisions')).toBeInTheDocument();
 
     // Inner click does not close
-    fireEvent.click(screen.getByText('Edit Supported Major Categories'));
-    expect(screen.getByText('Edit Supported Major Categories')).toBeInTheDocument();
+    fireEvent.click(screen.getByText('Edit Supported Divisions'));
+    expect(screen.getByText('Edit Supported Divisions')).toBeInTheDocument();
 
     // Backdrop click closes
-    const catDialog = screen.getByText('Edit Supported Major Categories').closest('[role="dialog"]');
+    const catDialog = screen.getByText('Edit Supported Divisions').closest('[role="dialog"]');
     if (catDialog) fireEvent.click(catDialog);
-    expect(screen.queryByText('Edit Supported Major Categories')).toBeNull();
+    expect(screen.queryByText('Edit Supported Divisions')).toBeNull();
 
     // Test Add Credit modal edge cases
     const openAddCredit = () => {

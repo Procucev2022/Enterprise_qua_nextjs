@@ -627,6 +627,83 @@ async function classifyVendor({ session, organizationId, mapping, vendorProfile,
   return { status: lastStatus, error: lastError || VENDOR_INGESTION_MESSAGES.AI_INVALID_RESPONSE };
 }
 
+function heuristicClassifyVendor(profile, categoryMaster = []) {
+  if (!profile || !categoryMaster || categoryMaster.length === 0) return null;
+  const poSummaries = Array.isArray(profile.lineSummaries) ? profile.lineSummaries : [];
+  const existingCats = Array.isArray(profile.existingCategories) ? profile.existingCategories : [];
+  const depts = Array.isArray(profile.departments) ? profile.departments : [];
+  const companyName = String(profile.companyName || '').toLowerCase();
+
+  const combinedText = [
+    companyName,
+    ...existingCats,
+    ...depts,
+    ...poSummaries,
+  ].join(' ').toLowerCase();
+
+  let bestMajor = null;
+  let bestMajorScore = -1;
+  let bestMinors = [];
+
+  for (const group of categoryMaster) {
+    const majorName = String(group.majorCategory || '').trim();
+    if (!majorName) continue;
+    const majorLower = majorName.toLowerCase();
+    let score = 0;
+    const matchedMinors = [];
+
+    // Company name or existing category direct match
+    if (combinedText.includes(majorLower) || majorLower.includes(companyName)) {
+      score += 15;
+    }
+
+    const minorList = Array.isArray(group.minorCategories) ? group.minorCategories : [];
+    for (const minor of minorList) {
+      const minorLower = String(minor || '').trim().toLowerCase();
+      if (!minorLower) continue;
+
+      const stemMinor = stemCategoryToken(minorLower);
+      if (combinedText.includes(minorLower) || combinedText.includes(stemMinor)) {
+        score += 10;
+        if (!matchedMinors.includes(minor)) matchedMinors.push(minor);
+      } else {
+        // Keyword checks
+        for (const tk of MINOR_TECHNICAL_KEYWORDS) {
+          if (tk.words.some((w) => combinedText.includes(w)) && (categoryKey(tk.minor) === categoryKey(minor) || stemCategoryToken(categoryKey(tk.minor)) === stemMinor)) {
+            score += 8;
+            if (!matchedMinors.includes(minor)) matchedMinors.push(minor);
+          }
+        }
+      }
+    }
+
+    if (score > bestMajorScore) {
+      bestMajorScore = score;
+      bestMajor = majorName;
+      bestMinors = matchedMinors;
+    }
+  }
+
+  if (!bestMajor || bestMajorScore <= 0) {
+    const fallbackGroup = categoryMaster.find((g) => /others|general|raw/i.test(g.majorCategory)) || categoryMaster[0];
+    bestMajor = fallbackGroup ? fallbackGroup.majorCategory : 'Raw Material';
+    bestMinors = fallbackGroup && Array.isArray(fallbackGroup.minorCategories) && fallbackGroup.minorCategories.length > 0
+      ? [fallbackGroup.minorCategories[0]]
+      : [];
+  }
+
+  const sampleProducts = poSummaries.slice(0, 5).map((p) => String(p).split('|')[0].trim()).filter(Boolean);
+
+  return {
+    primaryCategory: bestMajor,
+    minorCategories: bestMinors.slice(0, 5),
+    relevantProducts: sampleProducts.length > 0 ? sampleProducts : [profile.companyName || 'Supplies'],
+    confidenceScore: bestMajorScore > 0 ? 82 : 65,
+    reason: `Classified based on purchasing history and supply data (${profile.companyName || 'Vendor'}).`,
+    suggestedNewCategory: null,
+  };
+}
+
 /** Record one classification attempt (delegates to vendorIngestionQueries; table dropped in DB per migration 0029). */
 async function logClassification({
   session,
@@ -668,6 +745,251 @@ async function logClassification({
       LOG_CATEGORY
     );
   }
+}
+
+/**
+ * Build batch prompt for multiple vendors to classify them together in a single Gemini prompt.
+ */
+function buildBatchCategorizationPrompt({ vendorProfiles, categoryMaster, horizon }) {
+  const renderedProfiles = vendorProfiles.map((vendorProfile, idx) => {
+    const pattern = summarizePurchasePattern(vendorProfile.lineSummaries);
+    const patternText = pattern.length > 0
+      ? pattern.slice(0, 8).map((entry, pIdx) => `${pIdx + 1}. ${entry.description}`).join('; ')
+      : '(none)';
+    const departments = Array.isArray(vendorProfile.departments) && vendorProfile.departments.length > 0
+      ? vendorProfile.departments.join(', ')
+      : '(not stated)';
+    const existingCats = Array.isArray(vendorProfile.existingCategories) && vendorProfile.existingCategories.length > 0
+      ? vendorProfile.existingCategories.join(', ')
+      : '(none)';
+
+    return `[SUPPLIER ${idx + 1}]
+- vendorRecordId: ${vendorProfile.vendorRecordId}
+- vendorCode: ${vendorProfile.vendorCode || '(none)'}
+- companyName: ${vendorProfile.companyName}
+- PO count: ${vendorProfile.poCount || 0} | Spend: ${vendorProfile.totalSpend || 0}
+- Departments: ${departments}
+- Existing Category in PO: ${existingCats}
+- Line Items: ${patternText}`;
+  }).join('\n\n');
+
+  const horizonText =
+    horizon && horizon.startDate && horizon.endDate
+      ? `${horizon.startDate} to ${horizon.endDate}`
+      : 'not specified';
+
+  return `You are categorising multiple suppliers for an enterprise procurement platform based on their actual historical purchasing/supply data.
+
+EVIDENCE RULES — these override everything else:
+- Categorise based on the purchasing history (line items, descriptions, spend, PO lines).
+- DO NOT infer a category solely from the company name, industry, or business type.
+- "primaryCategory" MUST be copied EXACTLY from the AVAILABLE MAJOR CATEGORIES list.
+- Every entry in "minorCategories" MUST be copied EXACTLY from the AVAILABLE MINOR CATEGORIES for that primary category.
+- If nothing in the list fits, set "primaryCategory" to "${NEW_CATEGORY_SENTINEL}" and set "suggestedNewCategory".
+- "relevantProducts" are concrete product lines evident in the PO history.
+- "confidenceScore" is an integer 0-100.
+- "reason" is one or two sentences citing purchasing evidence.
+
+AVAILABLE MAJOR CATEGORIES:
+${renderCategoryMaster(categoryMaster)}
+
+PURCHASING HORIZON: ${horizonText}
+
+SUPPLIERS TO CATEGORISE:
+${renderedProfiles}
+
+Return a single JSON array with one object per supplier in this exact format:
+[
+  {
+    "vendorRecordId": "String, echo the vendorRecordId exactly as provided",
+    "vendorCode": "String, echo the vendorCode",
+    "primaryCategory": "String, major category copied exactly from list, or \\"${NEW_CATEGORY_SENTINEL}\\"",
+    "minorCategories": ["String, minor categories from that major category"],
+    "relevantProducts": ["String, product lines"],
+    "confidenceScore": 85,
+    "reason": "String, purchasing evidence justification",
+    "suggestedNewCategory": "String or null"
+  }
+]`;
+}
+
+/**
+ * Classify a batch of suppliers in a single direct Gemini call.
+ * Falls back to individual classifyVendor on per-vendor issues.
+ */
+async function classifyVendorsBatchDirect({ session, organizationId, mappings, profilesByRecordId, categoryMaster }) {
+  if (!mappings || mappings.length === 0) return [];
+
+  // Filter to mappings that have PO history
+  const eligibleMappings = [];
+  const noPoMappings = [];
+  for (const m of mappings) {
+    const profile = profilesByRecordId.get(m.vendorRecordId);
+    if (!profile || profile.hasPoHistory !== true) {
+      noPoMappings.push(m);
+    } else {
+      eligibleMappings.push({ mapping: m, profile });
+    }
+  }
+
+  const outcomes = [];
+
+  // Mappings without PO history are flagged NO_CONTENT
+  for (const m of noPoMappings) {
+    outcomes.push({
+      mappingId: m.id,
+      vendorRecordId: m.vendorRecordId,
+      companyName: m.companyName,
+      status: CLASSIFICATION_STATUS.NO_CONTENT,
+      error: VENDOR_INGESTION_MESSAGES.MAPPING_NO_PO_HISTORY,
+    });
+  }
+
+  if (eligibleMappings.length === 0) {
+    return outcomes;
+  }
+
+  if (categoryMaster.length === 0) {
+    for (const { mapping: m } of eligibleMappings) {
+      await vendorIngestionQueries.markMappingFailed(m.id, organizationId, VENDOR_INGESTION_MESSAGES.CATEGORY_MASTER_EMPTY);
+      outcomes.push({
+        mappingId: m.id,
+        vendorRecordId: m.vendorRecordId,
+        companyName: m.companyName,
+        status: CLASSIFICATION_STATUS.NO_CONTENT,
+        error: VENDOR_INGESTION_MESSAGES.CATEGORY_MASTER_EMPTY,
+      });
+    }
+    return outcomes;
+  }
+
+  // Mark all eligible as processing
+  for (const { mapping: m } of eligibleMappings) {
+    await Promise.resolve(vendorIngestionQueries.markMappingProcessing(m.id, organizationId)).catch(() => {});
+  }
+
+  // Attempt batch Gemini call if configured
+  const batchResultsMap = new Map();
+  let batchSucceeded = false;
+  let batchApiFailed = false;
+  let batchApiErrorMessage = null;
+
+  if (geminiService.isConfigured()) {
+    try {
+      const prompt = buildBatchCategorizationPrompt({
+        vendorProfiles: eligibleMappings.map((e) => e.profile),
+        categoryMaster,
+        horizon: { startDate: session?.horizonStart, endDate: session?.horizonEnd },
+      });
+
+      const startedAt = Date.now();
+      const result = await geminiService.generateJson({
+        prompt,
+        label: `batch vendor categorisation for ${eligibleMappings.length} suppliers`,
+        budgetMs: 90000,
+      });
+      const durationMs = Date.now() - startedAt;
+
+      if (result.status === geminiService.EXTRACTION_STATUS.SUCCESS && Array.isArray(result.data)) {
+        batchSucceeded = true;
+        for (const item of result.data) {
+          if (item && typeof item === 'object') {
+            const key = String(item.vendorRecordId || item.vendorCode || '').trim();
+            if (key) {
+              batchResultsMap.set(key, { data: item, model: result.model, durationMs });
+            }
+          }
+        }
+      } else {
+        batchApiFailed = true;
+        batchApiErrorMessage = result.error || 'Batch AI categorisation did not return a successful response';
+        logger.warn('Batch AI categorisation failed', { status: result.status, error: result.error }, LOG_CATEGORY);
+      }
+    } catch (batchErr) {
+      batchApiFailed = true;
+      batchApiErrorMessage = batchErr?.message || 'Batch AI categorisation encountered an error';
+      logger.warn('Batch AI categorisation encountered an error', { error: batchErr?.message }, LOG_CATEGORY);
+    }
+  }
+
+  // Process outcomes for each eligible supplier
+  for (const { mapping: m, profile } of eligibleMappings) {
+    try {
+      const matchedBatch = batchResultsMap.get(String(m.vendorRecordId)) || batchResultsMap.get(String(m.vendorCode || ''));
+      if (batchSucceeded && matchedBatch) {
+        const validated = validateAiResult(matchedBatch.data, { categoryMaster, vendorProfile: profile });
+        if (validated.valid) {
+          const suggestion = { ...validated.suggestion, model: matchedBatch.model, source: VENDOR_MAPPING_SOURCE.AI };
+          const saved = await vendorIngestionQueries.saveAiSuggestion(m.id, organizationId, suggestion);
+          outcomes.push({
+            mappingId: m.id,
+            vendorRecordId: m.vendorRecordId,
+            companyName: m.companyName,
+            status: CLASSIFICATION_STATUS.SUCCESS,
+            mapping: saved,
+            suggestion,
+          });
+          continue;
+        }
+      }
+
+      // If the batch API call itself failed (service down, rate limit, timeout, etc.),
+      // avoid N+1 query and API storm by recording the failure directly without individual API calls
+      if (batchApiFailed) {
+        await vendorIngestionQueries.markMappingFailed(m.id, organizationId, batchApiErrorMessage).catch(() => {});
+        outcomes.push({
+          mappingId: m.id,
+          vendorRecordId: m.vendorRecordId,
+          companyName: m.companyName,
+          status: CLASSIFICATION_STATUS.AI_FAILED,
+          error: batchApiErrorMessage,
+        });
+        continue;
+      }
+
+      // Fallback: classify individually only when batch Gemini wasn't configured or specific item was omitted from batch result
+      const singleResult = await classifyVendor({
+        session,
+        organizationId,
+        mapping: m,
+        vendorProfile: profile,
+        categoryMaster,
+      });
+
+      if (singleResult.status === CLASSIFICATION_STATUS.SUCCESS) {
+        const saved = await vendorIngestionQueries.saveAiSuggestion(m.id, organizationId, singleResult.suggestion);
+        outcomes.push({
+          mappingId: m.id,
+          vendorRecordId: m.vendorRecordId,
+          companyName: m.companyName,
+          status: CLASSIFICATION_STATUS.SUCCESS,
+          mapping: saved,
+          suggestion: singleResult.suggestion,
+        });
+      } else {
+        await vendorIngestionQueries.markMappingFailed(m.id, organizationId, singleResult.error);
+        outcomes.push({
+          mappingId: m.id,
+          vendorRecordId: m.vendorRecordId,
+          companyName: m.companyName,
+          status: singleResult.status,
+          error: singleResult.error,
+        });
+      }
+    } catch (err) {
+      logger.error(`Error processing direct categorisation for ${m.companyName}`, err, LOG_CATEGORY);
+      await Promise.resolve(vendorIngestionQueries.markMappingFailed(m.id, organizationId, err.message)).catch(() => {});
+      outcomes.push({
+        mappingId: m.id,
+        vendorRecordId: m.vendorRecordId,
+        companyName: m.companyName,
+        status: CLASSIFICATION_STATUS.AI_FAILED,
+        error: err.message,
+      });
+    }
+  }
+
+  return outcomes;
 }
 
 /**
@@ -764,6 +1086,9 @@ module.exports = {
   confidenceBand,
   validateAiResult,
   classifyVendor,
+  classifyVendorsBatchDirect,
+  buildBatchCategorizationPrompt,
+  heuristicClassifyVendor,
   logClassification,
   runCategorizationBatch,
 };

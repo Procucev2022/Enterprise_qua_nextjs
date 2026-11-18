@@ -40,6 +40,7 @@ function opportunityFromRfq(rfq: RFQItem): VendorOpportunity {
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
       quantity: ent.quantity,
+      unit: ent.unit || undefined,
       unitPrice: 0,
       leadTimeDays: 0,
       marketBandStatus: 'optimal',

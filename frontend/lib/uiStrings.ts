@@ -129,7 +129,7 @@ export const UI_STRINGS = {
       closeDossier: 'Close Dossier',
       consoleTitle: 'Category Manager Operations Console',
       editCategories: 'Edit',
-      supportedMajorCategories: 'Supported Major Categories',
+      supportedMajorCategories: 'Supported Divisions',
       // Shown in the vault section of the dossier when the vault document list cannot be read.
       vaultLoadFailed: 'The Document Vault could not be loaded, so its documents cannot be attached here. Check your connection, then reopen this dossier to try again. A local file can still be attached.',
       corporateContact: 'Corporate Contact',
@@ -939,6 +939,7 @@ export const UI_STRINGS = {
     dropZoneIdlePrompt: 'Drag and drop BOQ spreadsheets or .eml / .msg emails here',
     extractingLabel: 'Reading your document with QUA AI…',
     extractingHint: 'Identifying line items, quantities, units and specifications.',
+    defaultModelLabel: 'QUA AI',
 
     // Step 2 outcome banners
     successTitle: 'AI Extraction Complete',
@@ -975,7 +976,7 @@ export const UI_STRINGS = {
       AI_FAILED:
         'The AI could not read this document — its layout may be unusual or the scan unclear. Try a spreadsheet or clearer PDF, or enter the line items manually.',
       QUOTA_EXCEEDED:
-        'AI extraction reached the Gemini API quota or rate limit. Check the Google AI project quota or retry later, or enter the line items manually.',
+        'AI extraction reached its quota or rate limit. Retry in a moment, or enter the line items manually.',
       NO_ITEMS_FOUND:
         'No procurement line items could be identified in this document. Check that quantities are stated, or enter the line items manually.',
       NETWORK:
@@ -1048,7 +1049,7 @@ export const UI_STRINGS = {
     dropZoneHeading: 'Click to Browse or Drag & Drop RFQ Document / BOQ Spreadsheet',
     dropZoneHint:
       'Supports Excel (.xlsx, .xls), CSV, PDF drawings, Word specifications (.docx), text files (.txt), or forwarded requisition emails (.eml, .msg) up to 15 MB.',
-    extractFooterHint: 'Your document is read by Gemini AI, then you confirm the line items in Step 2.',
+    extractFooterHint: 'Your document is read by QUA AI, then you confirm the line items in Step 2.',
     attachmentStoreFailedMessage:
       'The RFQ was created, but {fileName} could not be stored with it, so it will not appear under Supporting Documents. {reason} You can attach it again from the RFQ details screen.',
 
@@ -1196,12 +1197,12 @@ export const UI_STRINGS = {
     lineItemSearchAria: 'Search the line items of this RFQ',
     allMinorCategories: 'All Categories',
     minorFilterAria: 'Filter line items by category',
-    supplierMajorFilterLabel: 'Division (Major)',
-    supplierMajorFilterAria: 'Filter invited suppliers by major category division',
+    supplierMajorFilterLabel: 'Division',
+    supplierMajorFilterAria: 'Filter invited suppliers by division',
     allSupplierMajors: 'All Divisions',
-    supplierMinorFilterLabel: 'Minor Category',
-    supplierMinorFilterAria: 'Filter invited suppliers by minor category',
-    allSupplierMinors: 'All Minor Categories',
+    supplierMinorFilterLabel: 'Category',
+    supplierMinorFilterAria: 'Filter invited suppliers by category',
+    allSupplierMinors: 'All Categories',
     clearSupplierFiltersAction: 'Clear filter',
     showingSuppliersCount: 'Showing {shown} of {total} invited suppliers',
     exportCsvAction: 'Export CSV',
@@ -1530,10 +1531,10 @@ export const UI_STRINGS = {
     cityLabel: 'City',
     pincodeBadge: 'PIN: {pincode}',
     pincodeLabel: 'Pincode',
-    categoryLabel: 'Category',
-    allCategories: 'All categories',
-    minorCategoryLabel: 'Minor Category',
-    allMinorCategories: 'All minor categories',
+    categoryLabel: 'Division',
+    allCategories: 'All divisions',
+    minorCategoryLabel: 'Category',
+    allMinorCategories: 'All categories',
     maxSelectionWarning: 'Maximum of {max} vendors can be selected per invitation.',
     limitReachedNotice: 'Maximum 20 vendors limit reached. Remove some to select others.',
     duplicateIgnored: 'Vendor already invited',
@@ -1543,7 +1544,7 @@ export const UI_STRINGS = {
     contactPersonPlaceholder: 'Contact person full name',
     contactNumberPlaceholder: 'Phone number with country code',
     emailPlaceholder: 'name@company.com',
-    minorCategoryPlaceholder: 'Minor category',
+    minorCategoryPlaceholder: 'Category',
     cityPlaceholder: 'City',
     statePlaceholder: 'State',
     pincodePlaceholder: 'PIN code',
@@ -1903,13 +1904,13 @@ export const UI_STRINGS = {
       'Corporate Website must be a full URL beginning http:// or https://, for example https://example.com.',
     pincodeInvalid: 'PIN Code must be 6 digits and cannot start with 0, for example 400001.',
     categoriesRequired:
-      'Select at least one minor procurement category so RFQs can be matched to vendors.',
+      'Select at least one procurement category so RFQs can be matched to vendors.',
 
     // Cardinality caps
     maxMajorReached:
-      'You can select at most {max} major procurement categories. Clear one before adding another.',
+      'You can select at most {max} procurement divisions. Clear one before adding another.',
     maxMinorReached:
-      'You have selected {count} of {max} minor procurement categories. Clear one before adding another.',
+      'You have selected {count} of {max} procurement categories. Clear one before adding another.',
   },
 
   // ============================================================================
@@ -1989,8 +1990,8 @@ export const UI_STRINGS = {
   // extractor could not place, and who it came from.
   categoryManagerKanban: {
     buyerLabel: 'Buyer',
-    majorCategoryLabel: 'Major category',
-    minorCategoryLabel: 'Minor category',
+    majorCategoryLabel: 'Division',
+    minorCategoryLabel: 'Category',
     itemsLabel: 'Line items',
     receivedLabel: 'Received',
     confidenceLabel: 'Avg. extraction confidence',
@@ -2037,7 +2038,7 @@ export const UI_STRINGS = {
     // circulated the RFQ. It does neither: extraction and categorization are
     // automatic, release to vendors is a Category Manager decision.
     howItWorksAddressed:
-      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns major and minor categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
+      'When a requisition arrives from a registered buyer at {address}, the system automatically extracts the line items and assigns divisions and categories, then raises the RFQ for Category Manager review. No vendor is shortlisted or contacted at this stage.',
 
     // The intake address buyers send TO. Distinct from the IMAP login below,
     // which is the account the backend reads and is an operational detail.
@@ -2059,7 +2060,7 @@ export const UI_STRINGS = {
 
     // What happens next, and explicitly what does not.
     nextStepsTitle: 'What happens next',
-    nextStepExtract: 'Line items and major/minor categories are extracted automatically.',
+    nextStepExtract: 'Line items, divisions, and categories are extracted automatically.',
     nextStepReview: 'The RFQ is created and appears on the Category Manager board for review.',
     nextStepNoVendors: 'No vendor is contacted from here. Releasing to vendors is the Category Manager\u2019s step.',
 
@@ -2540,6 +2541,8 @@ export const UI_STRINGS = {
     directClientBadge: 'Direct Client',
     directClientExclusive: 'Client Exclusive',
     myRequestsGroup: 'My Requests (Direct & Submitted)',
+    lineItemPricingHeadingSingular: 'Line Item Pricing ({count} item) *',
+    lineItemPricingHeadingPlural: 'Line Item Pricing ({count} items) *',
   },
 
   publicVendorDirectory: {
@@ -3729,9 +3732,12 @@ export const UI_STRINGS = {
     singleEnabledToast: '{vendorName} has been reactivated for future sourcing flows.',
     bulkDisabledToast: 'Marked {count} vendor(s) inactive. Historical data is preserved.',
     bulkEnabledToast: 'Reactivated {count} vendor(s) for future sourcing flows.',
+    bulkPartialUpdateToast: 'Updated {updatedCount} vendor(s); {skippedCount} could not be updated.',
     updateFailedTitle: 'Status Update Failed',
     singleUpdateFailedMessage: 'Failed to update vendor active status. Please retry.',
     bulkUpdateFailedMessage: 'Failed to update status for selected vendors. Please try again.',
+    bulkUpdateNoneUpdatedMessage: 'None of the selected vendors could be updated. Please refresh the directory and try again.',
+    bulkSelectedListHeading: 'Selected Suppliers ({count})',
     networkErrorMessage: 'The server could not be reached to update vendor status. Check your connection and retry.',
     inactiveVendorEvalBlocked: 'This vendor is marked inactive. Reactivate the vendor before sending a new evaluation request.',
     activeCountSummary: '{activeCount} active · {inactiveCount} inactive',

@@ -394,6 +394,94 @@ describe('scoped reads, limits and deletion results', () => {
     expect(await queries.deleteVendorMasterRecordsByIdsOrEmails(['rec-nonexistent'], ORG)).toBe(0);
   });
 
+  test('mapRowToVendorMaster and updateVendorMasterRecordActiveStatus preserve active/inactive lifecycle metadata cleanly', async () => {
+    expect(queries.updateVendorMasterRecordActiveStatus('', ORG, { isActive: false })).resolves.toBeNull();
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-1', '', { isActive: false })).toBeNull();
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-1', ORG, { isActive: false })).toBeNull();
+
+    // Not found returns null
+    pool.rows.mockResolvedValueOnce([]);
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-missing', ORG, { isActive: false })).toBeNull();
+
+    // Map inactive + active raw states
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        raw: JSON.stringify({
+          isActive: false,
+          disabled: true,
+          status: 'INACTIVE',
+          previousStatus: 'PENDING EVALUATION',
+          disabledAt: '2026-11-18T00:00:00Z',
+          disabledBy: 'buyer@test.com',
+        }),
+      })
+    ).toMatchObject({
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      previousStatus: 'PENDING EVALUATION',
+      disabledAt: '2026-11-18T00:00:00Z',
+      disabledBy: 'buyer@test.com',
+    });
+
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        raw: JSON.stringify({
+          isActive: true,
+          disabled: false,
+          status: 'PENDING EVALUATION',
+          reactivatedAt: '2026-11-18T01:00:00Z',
+          reactivatedBy: 'buyer@test.com',
+        }),
+      })
+    ).toMatchObject({
+      isActive: true,
+      disabled: false,
+      status: 'PENDING EVALUATION',
+      reactivatedAt: '2026-11-18T01:00:00Z',
+      reactivatedBy: 'buyer@test.com',
+    });
+
+    // Merges statusUpdates onto existing raw JSON and updates DB row
+    pool.rows.mockResolvedValueOnce([{ ...RECORD, raw: JSON.stringify({ vendorCode: 'V-1', city: 'Pune' }) }]);
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          ...RECORD,
+          raw: JSON.stringify({
+            vendorCode: 'V-1',
+            city: 'Pune',
+            isActive: false,
+            disabled: true,
+            status: 'INACTIVE',
+            previousStatus: 'PENDING EVALUATION',
+          }),
+        },
+      ],
+    });
+    const updatedMaster = await queries.updateVendorMasterRecordActiveStatus('master', ORG, {
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      previousStatus: 'PENDING EVALUATION',
+    });
+    expect(updatedMaster).toMatchObject({
+      id: RECORD.id,
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      city: 'Pune',
+    });
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('update vendor_master_records'),
+      ['master', ORG, expect.stringContaining('"isActive":false')],
+      expect.objectContaining({ d1: true, d1Text: expect.stringContaining('update vendor_master_records') })
+    );
+  });
+
   test('matches PO data in identifier priority order and reports each outcome', async () => {
     pool.query.mockResolvedValueOnce({ rowCount: 20 }).mockResolvedValueOnce({ rowCount: 5 })
       .mockResolvedValueOnce({ rowCount: 3 }).mockResolvedValueOnce({ rowCount: 2 }).mockResolvedValueOnce({ rowCount: 1 });

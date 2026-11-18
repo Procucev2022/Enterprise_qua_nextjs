@@ -327,7 +327,7 @@ describe('SupplierDossierDrawer', () => {
     const editBtn = screen.getByRole('button', { name: /^Edit$/i });
     fireEvent.click(editBtn);
 
-    expect(screen.getByText('Select Major Procurement Categories:')).toBeInTheDocument();
+    expect(screen.getByText('Select Procurement Divisions:')).toBeInTheDocument();
 
     // Toggle a category checkbox
     const spareCheckbox = await screen.findByLabelText('Raw Materials & Metallurgy');
@@ -371,7 +371,7 @@ describe('SupplierDossierDrawer', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
-    expect(screen.getByText(/Please select at least one major category/i)).toBeInTheDocument();
+    expect(screen.getByText(/Please select at least one division/i)).toBeInTheDocument();
 
     // Add back category and test API failure
     const customInput = screen.getByPlaceholderText('Enter custom category...');
@@ -459,10 +459,10 @@ describe('SupplierDossierDrawer', () => {
     // Test Category modal dismiss
     fireEvent.click(screen.getByRole('button', { name: /^Profile$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
-    expect(screen.getByText('Select Major Procurement Categories:')).toBeInTheDocument();
+    expect(screen.getByText('Select Procurement Divisions:')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('Select Major Procurement Categories:')).not.toBeInTheDocument();
+    expect(screen.queryByText('Select Procurement Divisions:')).not.toBeInTheDocument();
   });
 
   test('6. Credit Tab displays summary cards, transaction table, sorting, pagination and CSV export', async () => {
@@ -1019,7 +1019,7 @@ describe('SupplierDossierDrawer', () => {
       />
     );
 
-    expect(screen.getByText(/Major: Packaging Materials/i)).toBeInTheDocument();
+    expect(screen.getByText(/Division: Packaging Materials/i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
     const customInput = screen.getByPlaceholderText('Enter custom category...');
@@ -1052,7 +1052,7 @@ describe('SupplierDossierDrawer', () => {
     );
 
     // Tests category fallback to seller.category
-    expect(screen.getByText(/Major: Chemical Reagents/i)).toBeInTheDocument();
+    expect(screen.getByText(/Division: Chemical Reagents/i)).toBeInTheDocument();
 
     // Credit Tab failure
     fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));

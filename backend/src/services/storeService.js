@@ -1830,6 +1830,11 @@ class StoreService {
       : domainQueries.getVendorByEmailFromDB(normalizedId);
     let vendor = isEmail ? await lookupByEmail() : await lookupById();
     if (!vendor && !isEmail) vendor = await lookupByEmail();
+    if (!vendor && inMemory?.id && inMemory.id !== normalizedId) {
+      vendor = await (fresh
+        ? domainQueries.getVendorByIdFromDB(inMemory.id, { fresh: true })
+        : domainQueries.getVendorByIdFromDB(inMemory.id));
+    }
     if (!vendor) {
       const normalizedEmail = isEmail
         ? normalizedId.toLowerCase()
@@ -2655,18 +2660,25 @@ class StoreService {
     };
   }
 
-  async updateVendorActiveStatusDurably(id, isActive, actorEmail = null) {
-    const existing = await this.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+  async updateVendorActiveStatusDurably(
+    id,
+    isActive,
+    actorEmail = null,
+    { preloadedVendor = null, skipAuditLog = false } = {}
+  ) {
+    const existing = preloadedVendor || (await this.getVendorByIdWithDBFallback(id, 'all', { fresh: true }));
     if (!existing) return null;
     const statusUpdates = this.buildVendorActiveStatusUpdates(existing, isActive, actorEmail);
     const updated = await this.updateVendorDurably(existing.id, statusUpdates);
     if (!updated) return null;
-    this.addAuditLog({
-      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
-      action: isActive
-        ? `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) ACTIVE and eligible for future workflows`
-        : `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) INACTIVE (historical data preserved; excluded from future flows)`,
-    });
+    if (!skipAuditLog) {
+      this.addAuditLog({
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+        action: isActive
+          ? `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) ACTIVE and eligible for future workflows`
+          : `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) INACTIVE (historical data preserved; excluded from future flows)`,
+      });
+    }
     return updated;
   }
 
@@ -3084,21 +3096,30 @@ class StoreService {
     const isNetworkMode = isV0 || isV2 || isV3;
 
     const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
+    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
+    const isInvited = this._isInvitedVendor(vendor, rfq);
+    const coversRfq = this.vendorCoversRFQ(vendor, rfq);
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
+    const normRfqId = String(rfq.id);
+    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
+    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
-    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
+    const hasAccess =
+      hasUnlimitedDownloads ||
+      isAlreadyUnlocked ||
+      isV0 ||
+      coversRfq ||
+      isDirect ||
+      isInvited ||
+      (isNetworkMode && categoryMatches);
+
+    if (!hasAccess) {
       return {
         success: false,
         error: RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED,
         unauthorized: true,
       };
     }
-
-    // Check if RFQ has already been unlocked for this vendor
-    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
-    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
-    const normRfqId = String(rfq.id);
-    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
-    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
     const creditInfo = this.getVendorRfqCredits(vendor.id);
 

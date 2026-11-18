@@ -181,6 +181,19 @@ async function startCategorizationJob(req, res, next) {
   }
 }
 
+/**
+ * Execute vendor-PO join and AI category classification directly in a single request.
+ * Returns the completed job, session status, and category mappings without polling.
+ */
+async function categorizeDirect(req, res, next) {
+  try {
+    const result = await vendorIngestionService.runDirectCategorization(req.user, req.params.sessionId);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error running direct AI categorization');
+  }
+}
+
 async function reRunAi(req, res, next) {
   try {
     const result = await vendorIngestionService.reRunCategorization(
@@ -470,6 +483,7 @@ module.exports = {
   runJoin,
   categorizeBatch,
   startCategorizationJob,
+  categorizeDirect,
   reRunAi,
   listVendors,
   reviewVendorCategory,

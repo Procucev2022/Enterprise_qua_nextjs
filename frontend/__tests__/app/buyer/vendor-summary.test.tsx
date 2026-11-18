@@ -5,7 +5,7 @@ import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
 import { logger } from '@/lib/logger';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { VendorEntry } from '@/lib/types';
 
 const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
@@ -1676,7 +1676,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('Bare Minimum Traders').length).toBeGreaterThan(0);
       // Missing values show a dash, and no category is invented for a vendor that has none.
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
-      expect(screen.getByText('No specific minors tagged')).toBeInTheDocument();
+      expect(screen.getByText('No specific categories tagged')).toBeInTheDocument();
       expect(screen.queryByText('General Industrial')).not.toBeInTheDocument();
       // GSTIN, PAN, MSME and turnover are all missing for this vendor, so each one reads as not applicable.
       expect(screen.getAllByText(NOT_APPLICABLE)).toHaveLength(4);
@@ -2594,6 +2594,121 @@ describe('app/buyer/vendor-summary.tsx', () => {
           metadata: expect.objectContaining({ error: expect.any(Error) }),
         }),
       ]));
+    });
+
+    it('keeps bulk modal open and selection intact when bulk status returns false, and reflects immediate UI update on selected vendors only', async () => {
+      const thirdVendor: VendorEntry = {
+        ...mockBuyerVendors[1],
+        id: 'v-3',
+        name: 'Third Unaffected Supplier',
+        email: 'third@unaffected.test',
+        source: 'buyer_uploaded',
+      };
+      const initialList: VendorEntry[] = [mockBuyerVendors[0], mockBuyerVendors[1], thirdVendor];
+      const liveMockBulkUpdate = jest.fn(async (ids: string[], isActive: boolean) => {
+        if (ids.includes('v-fail-check')) {
+          return false;
+        }
+        return true;
+      });
+
+      const { rerender } = render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Update mock to simulate failure first (modal stays open, selection preserved)
+      mockSetMultipleBuyerVendorsActiveStatus.mockResolvedValueOnce(false);
+      fireEvent.click(screen.getByTestId('select-vendor-v-1'));
+      fireEvent.click(screen.getByTestId('select-vendor-v-2'));
+      fireEvent.click(screen.getByTestId('bulk-disable-vendors-button'));
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('confirm-bulk-status-button'));
+      });
+      expect(screen.getByTestId('bulk-vendor-status-modal')).toBeInTheDocument();
+      fireEvent.click(screen.getByTestId('close-bulk-status-modal'));
+
+      // Re-render with 3 vendors where v-1 is INACTIVE and v-2, v-3 are ACTIVE while v-1 and v-2 remained selected!
+      const mixedVendors: VendorEntry[] = [
+        { ...initialList[0], isActive: false, disabled: true, status: 'INACTIVE' },
+        initialList[1],
+        initialList[2],
+      ];
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: mockEvaluationRecords,
+        currentMode: 'mode_3',
+        rfqs: mockRFQs,
+        showToast: mockShowToast,
+        buyerVendors: mixedVendors,
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        setMultipleBuyerVendorsActiveStatus: liveMockBulkUpdate,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+        fetchVendorEvaluation: mockFetchVendorEvaluation,
+      });
+
+      rerender(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // Since selection stayed intact after failure, v-1 (inactive) and v-2 (active) are still checked, leaving v-3 unchecked
+      expect(screen.getByTestId('select-vendor-v-1')).toBeChecked();
+      expect(screen.getByTestId('select-vendor-v-2')).toBeChecked();
+      expect(screen.getByTestId('select-vendor-v-3')).not.toBeChecked();
+      fireEvent.click(screen.getByTestId('bulk-disable-vendors-button'));
+
+      const modal = screen.getByTestId('bulk-vendor-status-modal');
+      expect(within(modal).getByText(
+        formatString(UI_STRINGS.vendorStatusControl.bulkSelectedListHeading, { count: 1 })
+      )).toBeInTheDocument();
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('confirm-bulk-status-button'));
+      });
+      expect(liveMockBulkUpdate).toHaveBeenCalledWith(['v-2'], false, expect.arrayContaining([expect.objectContaining({ id: 'v-2' })]));
+      expect(screen.queryByTestId('bulk-vendor-status-modal')).not.toBeInTheDocument();
+
+      // Simulate store state update propagating into VendorSummary
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: mockEvaluationRecords,
+        currentMode: 'mode_3',
+        rfqs: mockRFQs,
+        showToast: mockShowToast,
+        buyerVendors: [
+          mixedVendors[0],
+          { ...initialList[1], isActive: false, disabled: true, status: 'INACTIVE' },
+          initialList[2],
+        ],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        setMultipleBuyerVendorsActiveStatus: liveMockBulkUpdate,
+        categoryTaxonomy: [{ majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] }],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Larsen & Toubro Limited' },
+        fetchVendorEvaluation: mockFetchVendorEvaluation,
+      });
+      rerender(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      expect(screen.getByTestId('status-badge-inactive-v-1')).toBeInTheDocument();
+      expect(screen.getByTestId('status-badge-inactive-v-2')).toBeInTheDocument();
+      expect(screen.queryByTestId('status-badge-inactive-v-3')).not.toBeInTheDocument();
     });
   });
 

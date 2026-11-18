@@ -999,7 +999,7 @@ export default function IngestionWizard({
         }));
 
         setExtractionSummary({
-          model: result.extraction?.model || 'Gemini 2.5 AI',
+          model: result.extraction?.model || EXTRACTION.defaultModelLabel,
           accepted: result.classification?.accepted ?? extracted.length,
           needsReview: result.classification?.needsReview ?? 0,
           fileName: primaryFile.name,
@@ -1517,6 +1517,9 @@ export default function IngestionWizard({
               <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
                 {EXTRACTION.extractingStatus}
               </h3>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                {EXTRACTION.extractingHint}
+              </p>
             </div>
           ) : (
             <>
@@ -2508,7 +2511,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2882,7 +2885,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2960,7 +2963,7 @@ export default function IngestionWizard({
                                   return (
                                     <span
                                       className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
-                                      title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
+                                      title={`Category: ${displayMinor} | Division: ${v.majorCategory || 'General Industrial'}`}
                                     >
                                       {displayMinor}
                                     </span>

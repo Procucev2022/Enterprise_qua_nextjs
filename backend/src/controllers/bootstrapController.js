@@ -148,8 +148,18 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         evaluated: false,
         hasRecord: true,
         isExistingInDatabase: true,
-        status: rec.isActive === false ? 'INACTIVE' : 'PENDING EVALUATION',
-        ...(rec.isActive === false ? { isActive: false, disabled: true } : {}),
+        status: rec.isActive === false ? 'INACTIVE' : (rec.status || 'PENDING EVALUATION'),
+        ...(rec.isActive === false
+          ? {
+              isActive: false,
+              disabled: true,
+              ...(rec.previousStatus ? { previousStatus: rec.previousStatus } : {}),
+              ...(rec.disabledAt ? { disabledAt: rec.disabledAt } : {}),
+              ...(rec.disabledBy ? { disabledBy: rec.disabledBy } : {}),
+            }
+          : rec.isActive === true
+            ? { isActive: true, disabled: false }
+            : {}),
         source: 'vendor_master_ingestion',
         buyerId: buyerId || orgId,
         buyerAccountId: buyerId || orgId,

@@ -1496,26 +1496,23 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
   const rows = result.rows.map((row) => {
     const rawParsed = typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw ? { ...row.raw } : {});
     const parsedVendor = parseVendorRaw(row.raw) || {};
-    const pan = rawParsed.pan || parsedVendor.pan || '';
-    const gstin = rawParsed.gstin || parsedVendor.gstin || '';
-    const source = rawParsed.source || parsedVendor.source || 'buyer_uploaded';
-    const comp = row.company_name || rawParsed.companyName || rawParsed.name || parsedVendor.companyName || 'Vendor Company';
+    const comp = row.company_name || rawParsed.companyName || 'Vendor Company';
     return {
       ...parsedVendor,
       ...rawParsed,
-      id: row.id || parsedVendor.id || rawParsed.id,
-      name: row.name || rawParsed.name || comp,
+      id: row.id || rawParsed.id,
+      name: row.name || comp,
       companyName: comp,
-      email: row.email || rawParsed.email || parsedVendor.email || '',
-      phone: row.phone || rawParsed.phone || parsedVendor.phone || '',
+      email: row.email || rawParsed.email || '',
+      phone: row.phone || rawParsed.phone || '',
       majorCategory: row.major_category || rawParsed.majorCategory || 'General',
       status: row.status || rawParsed.status || 'ACTIVE',
-      source,
-      pan,
-      gstin,
-      created_at: row.created_at || rawParsed.created_at || parsedVendor.created_at,
-      createdAt: row.created_at || rawParsed.createdAt || parsedVendor.createdAt,
-      updated_at: row.updated_at || rawParsed.updated_at || parsedVendor.updated_at,
+      source: rawParsed.source || 'buyer_uploaded',
+      pan: rawParsed.pan || '',
+      gstin: rawParsed.gstin || '',
+      created_at: row.created_at || rawParsed.created_at,
+      createdAt: row.created_at || rawParsed.createdAt,
+      updated_at: row.updated_at || rawParsed.updated_at,
       raw: rawParsed,
     };
   });
@@ -1554,17 +1551,17 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
   addEmail(vendor.buyerEmail);
   addCompany(vendor.addedByBuyerCompany);
 
-  const vendorEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : null;
-  const vendorPhone = vendor.phone || vendor.contactPhone || null;
+  const vendorEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : '';
+  const vendorPhone = vendor.phone ? String(vendor.phone).trim() : '';
 
   if (vendorEmail || vendorPhone) {
     try {
       const relatedResult = await pool.query(
         `SELECT raw FROM vendors
-         WHERE (lower(email) = lower($1) OR (raw->>'phone' = $2 AND $2 IS NOT NULL))
+         WHERE (lower(email) = lower($1) OR (raw->>'phone' = $2 AND $2 != ''))
            AND (raw->>'buyerId' IS NOT NULL OR raw->>'buyerAccountId' IS NOT NULL OR raw->>'buyerEmail' IS NOT NULL OR raw->>'addedByBuyerCompany' IS NOT NULL)
          LIMIT 25`,
-        [vendorEmail || '', vendorPhone || ''],
+        [vendorEmail, vendorPhone],
         { d1: true }
       );
       for (const row of relatedResult.rows || []) {
@@ -1631,7 +1628,7 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
         for (const row of buyersResult.rows || []) {
           const rawBuyer = parseRaw(row.raw) || {};
           const buyerKey = String(row.id || rawBuyer.id || row.corporate_email).toLowerCase();
-          const org = row.organization_name || rawBuyer.organizationName || rawBuyer.companyName || 'Enterprise Buyer';
+          const org = row.organization_name || rawBuyer.organizationName || 'Enterprise Buyer';
           if (!foundBuyers.has(buyerKey)) {
             foundBuyers.set(buyerKey, {
               id: row.id || rawBuyer.id,
@@ -1639,12 +1636,12 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
               companyName: org,
               contactPerson: row.contact_person || rawBuyer.contactPerson || 'Primary Contact',
               email: row.corporate_email || rawBuyer.corporateEmail || '',
-              phone: rawBuyer.mobileNumber || rawBuyer.phone || '',
-              uploadDate: row.created_at || vendor.createdAt || vendor.created_at || rawBuyer.createdAt,
+              phone: rawBuyer.phone || '',
+              uploadDate: row.created_at || vendor.createdAt || '',
               status: row.status || rawBuyer.status || 'ACTIVE_VERIFIED',
               sourcingMode: rawBuyer.sourcingMode || 'Mode 1',
               subscriptionPlan: rawBuyer.subscriptionPlan || 'Version_3',
-              location: rawBuyer.location || rawBuyer.city || '',
+              location: rawBuyer.location || '',
             });
           }
         }
@@ -1654,21 +1651,24 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
     }
   }
 
-  if (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail) {
-    const fallbackKey = String(vendor.buyerId || vendor.buyerEmail || vendor.addedByBuyerCompany).toLowerCase();
+  const fallbackCompany = vendor.addedByBuyerCompany || 'Enterprise Client';
+  const fallbackEmail = vendor.buyerEmail || '';
+  const fallbackId = vendor.buyerId || (fallbackEmail ? `buyer-ext-${fallbackEmail.split('@')[0]}` : '');
+  if (fallbackId || fallbackEmail || vendor.addedByBuyerCompany) {
+    const fallbackKey = String(fallbackId || fallbackEmail || fallbackCompany).toLowerCase();
     if (!foundBuyers.has(fallbackKey)) {
       foundBuyers.set(fallbackKey, {
-        id: vendor.buyerId || `buyer-ext-${fallbackKey.slice(0, 12)}`,
-        name: vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client',
-        companyName: vendor.addedByBuyerCompany || 'Enterprise Client',
-        contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Manager',
-        email: vendor.buyerEmail || '',
+        id: fallbackId || `buyer-ext-${fallbackKey.slice(0, 12)}`,
+        name: fallbackCompany,
+        companyName: fallbackCompany,
+        contactPerson: fallbackEmail ? fallbackEmail.split('@')[0] : 'Procurement Manager',
+        email: fallbackEmail,
         phone: '',
-        uploadDate: vendor.createdAt || vendor.created_at || new Date().toISOString(),
+        uploadDate: vendor.createdAt || new Date().toISOString(),
         status: 'ACTIVE_VERIFIED',
         sourcingMode: 'Mode 1',
         subscriptionPlan: 'Enterprise',
-        location: vendor.city ? `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}` : '',
+        location: vendor.city || '',
       });
     }
   }
@@ -1715,7 +1715,7 @@ async function getActiveCategoryMatchedRFQsForVendorFromDB(vendor, limit = 100) 
     rfq.status = row.status || rfq.status;
     rfq.category = row.category || rfq.category;
 
-    const closingDate = rfq.closingDate || rfq.deadline || rfq.bidClosingDate;
+    const closingDate = rfq.closingDate || rfq.deadline;
     if (closingDate) {
       const parsedTime = new Date(closingDate).getTime();
       if (!isNaN(parsedTime) && parsedTime < now) {
@@ -1723,7 +1723,7 @@ async function getActiveCategoryMatchedRFQsForVendorFromDB(vendor, limit = 100) 
       }
     }
 
-    const rfqCategory = rfq.category || rfq.procurementCategory || rfq.majorCategory;
+    const rfqCategory = rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General';
     const matchesCategory =
       storeService.vendorCoversCategory(vendor, rfqCategory) ||
       (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) ||
@@ -1736,20 +1736,20 @@ async function getActiveCategoryMatchedRFQsForVendorFromDB(vendor, limit = 100) 
         id: rfq.id,
         rfqNumber: rfq.rfqNumber,
         title: rfq.title || `RFQ ${rfq.rfqNumber}`,
-        category: rfqCategory || 'General',
-        procurementCategory: rfqCategory || 'General',
+        category: rfqCategory,
+        procurementCategory: rfqCategory,
         buyerCompanyName: buyerName,
         buyerCompany: buyerName,
         buyerName,
-        location: rfq.deliveryLocation || rfq.location || '—',
+        location: rfq.deliveryLocation || '—',
         publishedDate: rfq.publishedDate || row.created_at || '',
         closingDate: closingDate || null,
         status: rfq.status,
         budget: rfq.budget ?? 0,
         sourcingMode: rfq.sourcingMode || 'Mode 1',
         extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
-        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : (Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : []),
-        description: rfq.description || rfq.notes || '',
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : [],
+        description: rfq.description || '',
       });
     }
   }

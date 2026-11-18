@@ -3055,9 +3055,8 @@ const VENDOR_INGESTION_CONFIG = {
   // 200,000 PO rows at a generous ~250 bytes/row is ~50MB; this leaves
   // headroom above that without risking an unbounded buffer.
   MAX_UPLOAD_BYTES: Number(process.env.VENDOR_INGESTION_MAX_UPLOAD_BYTES || 75 * 1024 * 1024),
-  // Vendors classified per AI batch. The job is chunked so a large run reports
-  // progress and can be resumed, rather than holding one long request open.
-  AI_BATCH_SIZE: 8,
+  // Vendors classified per AI batch. Increased to 50 so normal vendor batches (10-40) finish in 1 batch.
+  AI_BATCH_SIZE: 50,
   // A model reply that is not valid JSON of the expected shape is retried this
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.
@@ -3690,6 +3689,9 @@ const VENDOR_STATUS_MESSAGES = Object.freeze({
   INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
   MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
   MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+  BULK_NO_VENDORS_UPDATED: 'None of the selected vendors could be updated. Please verify your roster permissions or refresh the directory.',
+  BULK_OWNERSHIP_DENIED: 'You do not have permission to change the status of the selected vendor(s).',
+  BULK_VENDOR_NOT_FOUND: 'Selected vendor record(s) could not be found in storage. Please refresh and retry.',
 });
 
 /** Returns true when a vendor record has been disabled / marked inactive. */

@@ -11,7 +11,7 @@ jest.mock('@/lib/store', () => ({
 }));
 
 const MISSING_ADD_FIELDS_MESSAGE =
-  'Complete the required fields: Organization legal name, Corporate email, Mobile number, Contact person name, GSTIN, Sourcing mode, Subscription tier, Account source, Free RFQs remaining (a whole number, 0 or more), At least one major category.';
+  'Complete the required fields: Organization legal name, Corporate email, Mobile number, Contact person name, GSTIN, Sourcing mode, Subscription tier, Account source, Free RFQs remaining (a whole number, 0 or more), At least one division.';
 
 const minorsFor = (majors: string[]): string[] =>
   Array.from(

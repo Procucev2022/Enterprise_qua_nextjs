@@ -134,7 +134,7 @@ export default function BuyerAccountTable() {
     if (freeRfqs.trim() === '' || !Number.isInteger(remaining) || remaining < 0) {
       missing.push('Free RFQs remaining (a whole number, 0 or more)');
     }
-    if (selectedMajors.length === 0) missing.push('At least one major category');
+    if (selectedMajors.length === 0) missing.push('At least one division');
     return missing;
   };
 
@@ -865,7 +865,7 @@ export default function BuyerAccountTable() {
               {/* Major Category Scope Selector */}
               <div>
                 <label className="block text-[10px] uppercase font-bold text-slate-400 mb-1.5">
-                  Supported Procurement Major Categories: *
+                  Supported Procurement Divisions: *
                 </label>
                 <div className="flex flex-wrap gap-1.5 max-h-[140px] overflow-y-auto p-2 bg-slate-50 dark:bg-gray-800/40 rounded-xl border border-slate-200 dark:border-gray-800">
                   {categoryTaxonomy.length === 0 && (

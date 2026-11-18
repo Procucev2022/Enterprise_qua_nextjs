@@ -6603,7 +6603,55 @@ Buyer Vendor data upload and mapping discrepancies
 ```
 ---
 
+### Prompt 275
+
+**Timestamp**: 2026-11-18T10:47:30+05:30
+
+```text
+On the Buyer side, the Vendor Directory page is displaying vendor data correctly. However, when I select multiple vendors and try to mark them as *Inactive using the bulk action*, nothing happens.
+
+Please investigate and fix the bulk inactive functionality. Ensure that:
+1. Selected vendors are successfully marked as Inactive.
+2. The status is updated correctly in the database.
+3. The updated status is reflected immediately in the Vendor Directory UI.
+4. Bulk inactive works correctly for all selected vendors without affecting other vendors.
+
+Please identify and fix the root cause rather than applying a temporary workaround.
+```
+
+---
+
+### Prompt 276
+
+**Timestamp**: 2026-11-18T13:16:35+05:30
+
+```text
+For submit quotation, for one line item Rfq also, reuse the multiple line item details UI.
+```
+
+---
+
+### Prompt 277
+
+**Timestamp**: 2026-11-18T14:31:29+05:30
+
+```text
+Remove the Gemini AI parsing document content message while extracting the rfq data. Add something like: "AI Extracting..." or some loading kind of thing
+```
+
+---
+
 ### Prompt 278
+
+**Timestamp**: 2026-11-18T14:31:36+05:30
+
+```text
+Everywhere in complete codebase UI, Replace major category with "Division" & minor Category to "Category",. UI change only
+```
+
+---
+
+### Prompt 279
 
 **Timestamp**: 2026-11-18T14:45:00+05:30
 
@@ -6613,7 +6661,7 @@ Tell me create rfq via email time to create every time?
 
 ---
 
-### Prompt 279
+### Prompt 280
 
 **Timestamp**: 2026-11-18T14:58:39+05:30
 
@@ -6624,12 +6672,32 @@ and in the signature mail it is taking the images as documnets firrst identify t
 
 ---
 
-### Prompt 280
+### Prompt 281
 
 **Timestamp**: 2026-11-18T15:15:00+05:30
 
 ```text
 processed this implemetation and fix all the issue and check and fix if any other issue also there in create rfq via email and ensure apply all the testing that can not come this error once again in future
+```
+
+---
+
+### Prompt 282
+
+**Timestamp**: 2026-11-18T15:26:24+05:30
+
+```text
+Add the export csv button to dowmload the all rfq data and add starting date and ending date to select the data  in the place at refresh buttton reuse the existing functionalities and methods
+```
+
+---
+
+### Prompt 283
+
+**Timestamp**: 2026-11-18T16:04:17+05:30
+
+```text
+create the pr from new branch and merge in the test-v3
 ```
 
 ---

@@ -780,6 +780,60 @@ describe("QuotationForm Comprehensive Suite", () => {
     expect(body.totalPrice).toBe(2800); // 2000 + 800
   });
 
+  test("reuses the line-item pricing details UI for a single line item RFQ", async () => {
+    const singleItemRfq = {
+      ...DEFAULT_RFQ,
+      id: "rfq-single-001",
+      rfqNumber: "RFQ-2026-SINGLE01",
+      title: "Business Laptops Procurement",
+      extractedEntities: [
+        { id: "li-single-1", itemName: "Business Laptops", quantity: 10, unit: "Nos", targetDate: "", technicalSpecs: "", confidence: 1, category: "IT", minorCategory: "Laptops" },
+      ],
+    };
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      const method = options.method || "GET";
+      if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [singleItemRfq] }) });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="select" />,
+    );
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
+
+    expect(screen.getByText(/Line Item Pricing \(1 item\)/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Upload Priced Excel/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Export as Excel/i })).toBeInTheDocument();
+
+    const rateInput = screen.getByLabelText(/Rate for Business Laptops/i);
+    fireEvent.change(rateInput, { target: { value: "50000" } });
+    expect(screen.getAllByText("5,00,000").length).toBeGreaterThanOrEqual(2);
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 14"), { target: { value: "7" } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Submit Quotation/i }));
+    });
+
+    const quoteCall = (global.fetch as jest.Mock).mock.calls.find(([url, opts]) =>
+      /\/api\/rfqs\/[^/]+\/quotes$/.test(url) && opts?.method === "POST",
+    );
+    expect(quoteCall).toBeDefined();
+    const body = JSON.parse(quoteCall![1].body);
+    expect(body.lineItemQuotes).toEqual([
+      { lineItemId: "li-single-1", itemName: "Business Laptops", quantity: 10, unitPrice: 50000, totalPrice: 500000 },
+    ]);
+    expect(body.unitPrice).toBe(50000);
+    expect(body.totalPrice).toBe(500000);
+  });
+
   test("displays small supporting-document sizes in KB instead of rounding them to 0.0 MB", async () => {
     renderWithProvider(
       <QuotationFormCustomWrapper onBack={jest.fn()} withSession customSubscription="select" />,

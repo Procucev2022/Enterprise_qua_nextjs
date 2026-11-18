@@ -598,17 +598,56 @@ describe('Dossier Tab Enhancements', () => {
             pan: 'ABCDE1234F',
           },
         },
+        {
+          id: null,
+          name: null,
+          company_name: null,
+          email: null,
+          phone: null,
+          created_at: null,
+          status: null,
+          major_category: null,
+          raw: JSON.stringify({
+            id: 'v-2',
+            name: 'Vendor Two Raw',
+            companyName: 'Vendor Two Corp',
+            email: 'two@v.com',
+            phone: '9876543211',
+            majorCategory: 'Electrical',
+            status: 'PENDING',
+            source: 'imported',
+            pan: 'PAN9999',
+            gstin: 'GST9999',
+            created_at: '2026-11-02',
+            createdAt: '2026-11-02',
+            updated_at: '2026-11-02',
+          }),
+        },
+        {
+          id: null,
+          name: null,
+          company_name: null,
+          email: null,
+          phone: null,
+          created_at: null,
+          status: null,
+          major_category: null,
+          raw: null,
+        },
       ];
       jest.spyOn(pool, 'query').mockImplementation(async () => ({ rows: JSON.parse(JSON.stringify(mockDbRows)) }));
 
       const { queryCache } = require('../src/db/queryCache');
       queryCache.invalidate('vendors');
       const result = await domainQueries.getVendorsUploadedByBuyerFromDB('buyer-unique-test-1', 'b@org.com', 'Buyer Org');
-      expect(result.length).toBe(1);
+      expect(result.length).toBe(3);
       expect(result[0].id).toBe('v-1');
       expect(result[0].companyName).toBe('Vendor One Corp');
       expect(result[0].gstin).toBe('29ABCDE1234F1Z5');
       expect(result[0].pan).toBe('ABCDE1234F');
+      expect(result[1].id).toBe('v-2');
+      expect(result[1].companyName).toBe('Vendor Two Corp');
+      expect(result[2].companyName).toBe('Vendor Company');
     });
 
     it('getAssociatedBuyersForVendorFromDB returns empty when vendor is missing', async () => {
@@ -642,15 +681,46 @@ describe('Dossier Tab Enhancements', () => {
             location: 'Hyderabad',
           },
         },
+        {
+          id: null,
+          organization_name: null,
+          contact_person: null,
+          corporate_email: null,
+          created_at: null,
+          status: null,
+          raw: {
+            id: 'b-2-raw',
+            organizationName: 'Raw Org 2',
+            contactPerson: 'Contact Person 2',
+            corporateEmail: 'raw2@buyer.com',
+            phone: '9988776655',
+            status: 'PENDING',
+            sourcingMode: 'Mode 2',
+            subscriptionPlan: 'Version_1',
+            location: 'Chennai',
+          },
+        },
+        {
+          id: null,
+          organization_name: null,
+          contact_person: null,
+          corporate_email: null,
+          created_at: null,
+          status: null,
+          raw: null,
+        },
       ];
 
       jest.spyOn(pool, 'query').mockImplementation(async () => ({ rows: mockBuyerRows }));
 
       const result = await domainQueries.getAssociatedBuyersForVendorFromDB(mockVendor);
-      expect(result.length).toBe(1);
+      expect(result.length).toBe(3);
       expect(result[0].id).toBe('b-1');
       expect(result[0].companyName).toBe('Veera solutions pvt ltd');
       expect(result[0].sourcingMode).toBe('Mode 1');
+      expect(result[1].id).toBe('b-2-raw');
+      expect(result[1].companyName).toBe('Raw Org 2');
+      expect(result[2].companyName).toBe('Enterprise Buyer');
     });
 
     it('getActiveCategoryMatchedRFQsForVendorFromDB returns empty when vendor is missing', async () => {
@@ -763,6 +833,20 @@ describe('Dossier Tab Enhancements', () => {
       expect(fallbackBuyers.length).toBe(1);
       expect(fallbackBuyers[0].name).toBe('Fallback Buyer Only');
 
+      const fallbackVendor2 = {
+        id: 'v-fallback-email',
+        email: '',
+        phone: '',
+        buyerEmail: 'ops.manager@company.org',
+        buyerId: 'b-ops-1',
+        addedByBuyerCompany: '',
+        city: '',
+      };
+      const fallbackBuyers2 = await domainQueries.getAssociatedBuyersForVendorFromDB(fallbackVendor2);
+      expect(fallbackBuyers2.length).toBe(1);
+      expect(fallbackBuyers2[0].contactPerson).toBe('ops.manager');
+      expect(fallbackBuyers2[0].location).toBe('');
+
       // 4. getActiveCategoryMatchedRFQsForVendorFromDB: pool.query throws
       jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('RFQs table locked'));
       const emptyRfqs = await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB({ id: 'v-1' });
@@ -786,6 +870,44 @@ describe('Dossier Tab Enhancements', () => {
             closingDate: futureDate,
             category: 'Unmatched Category',
             extractedEntities: [{ majorCategory: 'Hardware' }],
+            deliveryLocation: 'Mumbai',
+            publishedDate: '2026-11-10',
+            buyerAccountName: 'Buyer Corp Name',
+            lineItems: [{ name: 'Item 1' }],
+          },
+        },
+        // Direct category match with fallbacks and deadline
+        {
+          id: null,
+          rfq_number: null,
+          status: 'Open',
+          raw: {
+            id: 'rfq-direct',
+            rfqNumber: 'RFQ-DIR-1',
+            deadline: futureDate,
+            category: 'Hardware',
+            procurementCategory: 'Hardware',
+            buyerCompanyName: 'Fallback Buyer Co',
+            budget: 5000,
+            sourcingMode: 'Mode 2',
+            description: 'Sample description',
+          },
+        },
+        // No closingDate and majorCategory fallback
+        {
+          id: 'rfq-no-closing',
+          status: 'Open',
+          raw: {
+            majorCategory: 'Hardware',
+            budget: 0,
+          },
+        },
+        // Match via _vendorCoversRFQCategories
+        {
+          id: 'rfq-covers-custom',
+          status: 'Open',
+          raw: {
+            category: 'CustomCategory',
           },
         },
       ];
@@ -793,10 +915,29 @@ describe('Dossier Tab Enhancements', () => {
       jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: rfqRows });
       const storeService = require('../src/services/storeService');
       jest.spyOn(storeService, 'vendorCoversCategory').mockImplementation((v, cat) => cat === 'Hardware');
+      storeService._vendorCoversRFQCategories = jest.fn((v, r) => r?.category === 'CustomCategory');
 
       const matchedRfqs = await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB({ id: 'v-1', majorCategory: 'Hardware' });
-      expect(matchedRfqs.length).toBe(1);
+      expect(matchedRfqs.length).toBe(4);
       expect(matchedRfqs[0].id).toBe('rfq-entities');
+      expect(matchedRfqs[1].id).toBe('rfq-direct');
+      expect(matchedRfqs[2].id).toBe('rfq-no-closing');
+      expect(matchedRfqs[3].id).toBe('rfq-covers-custom');
+
+      // 5b. Parameter fallbacks for getVendorsUploadedByBuyerFromDB, getActiveCategoryMatchedRFQsForVendorFromDB, snapshots
+      expect(await domainQueries.getVendorsUploadedByBuyerFromDB(null)).toEqual([]);
+      expect(await domainQueries.getVendorsUploadedByBuyerFromDB('', null, 'invalid-limit')).toEqual([]);
+      expect(await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB({ id: 'v-1' }, 'invalid-limit')).toEqual([]);
+      expect(await domainQueries.getVendorSnapshotByIdFromDB(null)).toBeNull();
+      expect(await domainQueries.getVendorSnapshotByEmailFromDB(null)).toBeNull();
+
+      jest.spyOn(pool, 'query')
+        .mockResolvedValueOnce({ rows: [{ id: 'v-str-1', raw: JSON.stringify({ id: 'v-str-1', name: 'String Raw Vendor' }) }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'v-str-2', raw: JSON.stringify({ id: 'v-str-2', name: 'Email String Raw Vendor' }) }] });
+      const snap1 = await domainQueries.getVendorSnapshotByIdFromDB('v-str-1');
+      expect(snap1?.id).toBe('v-str-1');
+      const snap2 = await domainQueries.getVendorSnapshotByEmailFromDB('snap@test.com');
+      expect(snap2?.id).toBe('v-str-2');
 
       // 6. executePincodeTieredPublicVendorQuery: single arm stage (digits.length <= 3) & >85 params fallback
       const mockVendorRow = { id: 'v-pin-1', raw: { id: 'v-pin-1', pincode: '560001', majorCategory: 'Hardware' } };
@@ -859,6 +1000,29 @@ describe('Dossier Tab Enhancements', () => {
       jest.spyOn(queryCache, 'getStale').mockReturnValueOnce({ rows: [], total: 0 });
       const stalePage = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0 });
       expect(stalePage).toEqual({ rows: [], total: 0 });
+
+      // 12. Non-retryable DB error throwing in getVendorsPageFromDB & getVendorsUploadedByBuyerFromDB
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('Fatal DB crash'));
+      jest.spyOn(d1Bridge, 'isRetryableD1Error').mockReturnValue(false);
+      await expect(domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, skipCount: true })).rejects.toThrow('Fatal DB crash');
+
+      await expect(domainQueries.getVendorsUploadedByBuyerFromDB('fatal-b-id')).rejects.toThrow('Fatal DB crash');
+
+      // 13. getPublicVendorsByMinorCategoryFromDB: verified primary count reaching safeLimit
+      jest.spyOn(pool, 'query').mockReset();
+      jest.spyOn(d1Bridge, 'isRetryableD1Error').mockReset();
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({
+        rows: [{ id: 'v-match-1', raw: { id: 'v-match-1', name: 'Centrifugal Co', products: 'centrifugal pumps', majorCategory: 'Machinery' } }],
+      });
+      const satisfiedVendors = await domainQueries.getPublicVendorsByMinorCategoryFromDB(['centrifugal'], ['Machinery'], 1);
+      expect(satisfiedVendors.length).toBe(1);
+
+      // 14. getRetryableStaleCacheValue: missing isRetryableD1Error function branch
+      const origIsRetryable = d1Bridge.isRetryableD1Error;
+      delete d1Bridge.isRetryableD1Error;
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('No retryable fn'));
+      await expect(domainQueries.getVendorsPageFromDB({ limit: 5, skipCount: true })).rejects.toThrow('No retryable fn');
+      d1Bridge.isRetryableD1Error = origIsRetryable;
     });
   });
 });

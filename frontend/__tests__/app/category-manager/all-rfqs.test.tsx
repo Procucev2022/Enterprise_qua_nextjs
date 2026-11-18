@@ -94,6 +94,11 @@ describe('AllRFQsConsole', () => {
         { vendorId: 'v-1', vendorName: 'Early Vendor', submittedAt: '2026-10-01T09:00:00.000Z' },
         // The later timestamp is the one that must surface as "latest".
         { vendorId: 'v-2', vendorName: 'Late Vendor', submittedAt: '2026-10-05T14:30:00.000Z' },
+        // An earlier timestamp to test the false branch of reduce comparator
+        { vendorId: 'v-3', vendorName: 'Oldest Vendor', submittedAt: '2026-09-01T00:00:00.000Z' },
+        // Invalid and missing timestamps
+        { vendorId: 'v-4', vendorName: 'Invalid Vendor', submittedAt: 'invalid-date' },
+        { vendorId: 'v-5', vendorName: 'No Timestamp Vendor' } as any,
       ] as RFQItem['quotes'],
     });
     mockFetch.mockResolvedValue({ success: true, rfqs: [quoted, ROWS[0]] });
@@ -196,6 +201,13 @@ describe('AllRFQsConsole', () => {
     fireEvent.click(screen.getAllByRole('button', { name: S.retryAction })[1]);
 
     await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+  });
+
+  it('surfaces default load failure when error property is omitted', async () => {
+    mockFetch.mockResolvedValueOnce({ success: false });
+    render(<AllRFQsConsole />);
+
+    await waitFor(() => expect(screen.getByText(S.loadFailed)).toBeInTheDocument());
   });
 
   it('reloads when the header refresh button is pressed', async () => {
@@ -402,6 +414,190 @@ describe('AllRFQsConsole', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
+  it('filters by search term matching quoted vendor name or invited vendor name', async () => {
+    const searchRows: RFQItem[] = [
+      makeRfq({
+        id: 'q-search',
+        title: 'Special Item',
+        quotes: [{ vendorId: 'vq-1', vendorName: 'Specialist Supplies', totalPrice: 500, leadTimeDays: 2, warrantyYears: 1, submittedAt: '2026-06-01' } as any],
+        assignedVendors: [],
+      }),
+      makeRfq({
+        id: 'a-search',
+        title: 'Another Item',
+        quotes: [],
+        assignedVendors: [{ id: 'va-1', name: 'Nominated Partner' } as any],
+      }),
+    ];
+    mockFetch.mockResolvedValueOnce({ success: true, rfqs: searchRows });
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Special Item')).toBeInTheDocument());
+
+    const searchInput = screen.getByPlaceholderText(S.searchPlaceholder);
+    fireEvent.change(searchInput, { target: { value: 'specialist' } });
+    expect(screen.getByText('Special Item')).toBeInTheDocument();
+    expect(screen.queryByText('Another Item')).not.toBeInTheDocument();
+
+    fireEvent.change(searchInput, { target: { value: 'nominated' } });
+    expect(screen.queryByText('Special Item')).not.toBeInTheDocument();
+    expect(screen.getByText('Another Item')).toBeInTheDocument();
+  });
+
+  it('opens VendorDetailsModal when an invited vendor chip is clicked', async () => {
+    const rfqWithAssigned: RFQItem[] = [
+      makeRfq({
+        id: 'rfq-assigned-chip',
+        title: 'Equipment Purchase',
+        assignedVendors: [
+          { id: 'av-1', name: 'Alpha Logistics' } as any,
+        ],
+      }),
+    ];
+    mockFetch.mockResolvedValueOnce({ success: true, rfqs: rfqWithAssigned });
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Equipment Purchase')).toBeInTheDocument());
+
+    const vendorChip = screen.getByTitle('Invited vendor: Alpha Logistics. Click to view details.');
+    fireEvent.click(vendorChip);
+
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('opens VendorListModal for assigned vendors with +more button and views details', async () => {
+    const rfqManyAssigned: RFQItem[] = [
+      makeRfq({
+        id: 'rfq-many-assigned',
+        title: 'Heavy Machinery',
+        assignedVendors: [
+          { id: 'av-1', name: 'Alpha Logistics', contactPerson: 'John Doe', city: 'Mumbai' } as any,
+          { id: 'av-2', name: 'Beta Freight' } as any,
+          { id: 'av-3', name: 'Gamma Supply' } as any,
+        ],
+      }),
+    ];
+    mockFetch.mockResolvedValueOnce({ success: true, rfqs: rfqManyAssigned });
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Heavy Machinery')).toBeInTheDocument());
+
+    const moreBtn = screen.getByTitle('Click to view all invited vendors');
+    fireEvent.click(moreBtn);
+
+    expect(screen.getByText(/Invited Vendors \(3\)/i)).toBeInTheDocument();
+    expect(screen.getByText('Contact: John Doe')).toBeInTheDocument();
+    expect(screen.getByText('Mumbai')).toBeInTheDocument();
+
+    // Click view details on first assigned vendor in modal
+    const viewDetailsButtons = screen.getAllByRole('button', { name: 'View Details' });
+    fireEvent.click(viewDetailsButtons[0]);
+
+    // Vendor details modal opened
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  });
+
+  it('supports string representation of assigned vendors and modal close interactions', async () => {
+    const rfqStringAssigned: RFQItem[] = [
+      makeRfq({
+        id: 'rfq-str-assigned',
+        title: 'Textile Fiber',
+        quotes: [
+          { vendorId: 'vq-best', vendorName: 'Best Bidder Corp', totalPrice: 400, isBestPrice: true, submittedAt: '2026-06-01' } as any,
+          { vendorId: 'vq-2', vendorName: 'Second Bidder', totalPrice: 600, submittedAt: '2026-06-02' } as any,
+          { vendorId: 'vq-3', vendorName: 'Third Bidder', totalPrice: 700, submittedAt: '2026-06-03' } as any,
+        ],
+        assignedVendors: [
+          'String Vendor One' as any,
+          { companyName: 'Company Only Vendor' } as any,
+          { vendorName: 'Named Vendor Only' } as any,
+        ],
+      }),
+    ];
+    mockFetch.mockResolvedValueOnce({ success: true, rfqs: rfqStringAssigned });
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Textile Fiber')).toBeInTheDocument());
+
+    // Open Quotes modal (+1 more)
+    fireEvent.click(screen.getByTitle('Click to view all quoted vendors'));
+    expect(screen.getByText('L1 Best Price')).toBeInTheDocument();
+
+    // Close modal using close button
+    const closeButtons = screen.getAllByRole('button');
+    const closeX = closeButtons.find(b => b.className.includes('rounded-lg p-1.5 text-slate-400'));
+    if (closeX) {
+      fireEvent.click(closeX);
+    }
+
+    // Open assigned vendors modal and close using bottom Close button
+    fireEvent.click(screen.getByTitle('Click to view all invited vendors'));
+    expect(screen.getAllByText('String Vendor One').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Company Only Vendor').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Named Vendor Only').length).toBeGreaterThanOrEqual(1);
+
+    const closeBottom = screen.getByRole('button', { name: 'Close' });
+    fireEvent.click(closeBottom);
+  });
+
+  it('renders category signals and needsAssignment indicators for mode_0 and v0 RFQs', async () => {
+    const rfqWithEntities: RFQItem[] = [
+      makeRfq({
+        id: 'rfq-v0-header',
+        title: 'V0 With Header',
+        sourcingMode: 'v0' as any,
+        category: 'Electronics',
+        assignedVendors: [],
+      }),
+      makeRfq({
+        id: 'rfq-entities-cat',
+        title: 'Entity Driven RFQ',
+        sourcingMode: 'mode_0',
+        category: '',
+        needsCategoryManagerAssignment: true,
+        extractedEntities: [
+          { majorCategory: 'Electronics', minorCategory: 'Semiconductors' } as any,
+        ],
+        assignedVendors: [],
+      }),
+      makeRfq({
+        id: 'rfq-minor-cat',
+        title: 'Minor Only RFQ',
+        sourcingMode: 'mode_0',
+        category: '',
+        extractedEntities: [
+          { minorCategory: 'Wires' } as any,
+        ],
+        assignedVendors: [],
+      }),
+      makeRfq({
+        id: 'rfq-generic-cat',
+        title: 'Generic Only RFQ',
+        sourcingMode: 'mode_0',
+        category: '',
+        extractedEntities: [
+          { category: 'General Goods' } as any,
+        ],
+        assignedVendors: [],
+      }),
+      makeRfq({
+        id: 'rfq-no-signal',
+        title: 'No Category Signal RFQ',
+        status: 'v0' as any,
+        sourcingMode: 'mode_0',
+        category: '',
+        extractedEntities: [{ majorCategory: '' } as any],
+        assignedVendors: [],
+      }),
+    ];
+    mockFetch.mockResolvedValueOnce({ success: true, rfqs: rfqWithEntities });
+    render(<AllRFQsConsole />);
+    await waitFor(() => expect(screen.getByText('Entity Driven RFQ')).toBeInTheDocument());
+    expect(screen.getByText('No Category Signal RFQ')).toBeInTheDocument();
+    expect(screen.getAllByText('Pending CM Assignment').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('Assign Vendors').length).toBeGreaterThanOrEqual(1);
+  });
+
   describe('Date Range Filtering and CSV Export', () => {
     it('renders start date, end date inputs and export csv button in the header', async () => {
       mockFetch.mockResolvedValueOnce({ success: true, rfqs: ROWS });
@@ -507,14 +703,16 @@ describe('AllRFQsConsole', () => {
             {
               vendorId: 'v-1',
               vendorName: 'Quoted Vendor A',
-              totalQuoteAmount: 1000,
-              submittedAt: '2026-06-16T12:00:00.000Z',
-              quoteStatus: 'Submitted',
-              lineItems: [],
-              complianceScore: 100,
-              deliveryTimelineDays: 5,
+              vendorCategory: 'Client List',
+              unitPrice: 100,
+              totalPrice: 1000,
+              leadTimeDays: 5,
+              aiMatchScore: 90,
+              warrantyYears: 1,
+              complianceStatus: 'Fully Compliant',
               paymentTerms: '30 days',
-              validityPeriodDays: 30,
+              remarks: 'Standard bid',
+              submittedAt: '2026-06-16T12:00:00.000Z',
             },
           ],
           assignedVendors: [
@@ -523,7 +721,7 @@ describe('AllRFQsConsole', () => {
           deliveryLocation: '',
           targetDeliveryDate: '',
           deadline: '',
-          sourcingMode: '',
+          sourcingMode: 'mode_1',
         }),
       ];
       mockFetch.mockResolvedValueOnce({ success: true, rfqs: richRows });

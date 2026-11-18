@@ -1154,6 +1154,170 @@ async function startCategorizationJob(sessionUser, sessionId) {
 }
 
 /**
+ * Run the PO join and AI category classification in a single direct API call.
+ * This classifies all queued suppliers immediately and returns the completed job
+ * along with the updated mappings, eliminating multi-step background polling.
+ */
+async function runDirectCategorization(sessionUser, sessionId) {
+  const context = await resolveBuyerContext(sessionUser);
+  const session = await requireSession(context, sessionId);
+
+  if (session.vendorMasterRowCount === 0) {
+    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.VENDOR_MASTER_REQUIRED_FIRST, 409);
+  }
+  if (session.poRowCount === 0) {
+    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.PO_DUMP_REQUIRED_FIRST, 409);
+  }
+
+  // 1. Run or refresh the Vendor-PO join
+  const join = await runVendorPoJoin(sessionUser, sessionId);
+
+  // 2. Fetch profiles and category master
+  const profiles = await queries.findVendorPurchasingProfiles(sessionId, context.organizationId);
+  const profilesByRecordId = new Map(profiles.map((p) => [p.vendorRecordId, p]));
+  const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
+
+  // 3. Find queued mappings that have PO history
+  const queued = await queries.findQueuedCategoryMappings(sessionId, context.organizationId, 500);
+
+  let outcomes = [];
+  if (queued.length > 0) {
+    outcomes = await categorizationService.classifyVendorsBatchDirect({
+      session,
+      organizationId: context.organizationId,
+      mappings: queued,
+      profilesByRecordId,
+      categoryMaster,
+    });
+
+    // If any mappings failed (e.g. Gemini 503 unavailable, rate limit, or timeout),
+    // apply intelligent heuristic taxonomy fallback so buyer onboarding is not blocked
+    for (const o of outcomes) {
+      if (o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS) {
+        const m = queued.find((q) => q.id === o.mappingId);
+        const prof = m ? profilesByRecordId.get(m.vendorRecordId) : null;
+        if (m && prof && categoryMaster.length > 0) {
+          const fallback = categorizationService.heuristicClassifyVendor(prof, categoryMaster);
+          if (fallback) {
+            const validated = categorizationService.validateAiResult(fallback, { categoryMaster, vendorProfile: prof });
+            if (validated.valid) {
+              const suggestion = {
+                ...validated.suggestion,
+                model: 'heuristic-rules-engine',
+                source: VENDOR_MAPPING_SOURCE.AI,
+              };
+              await queries.saveAiSuggestion(m.id, context.organizationId, suggestion).catch(() => {});
+              o.status = categorizationService.CLASSIFICATION_STATUS.SUCCESS;
+              o.suggestion = suggestion;
+              o.mapping = { ...m, ...suggestion };
+              o.error = null;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const importedCount = outcomes.filter((o) => o.status === categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
+  const failedCount = outcomes.filter((o) => o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
+
+  // 4. Update session status to AI_COMPLETED
+  const updatedSession = await queries.updateSession(sessionId, context.organizationId, {
+    status: VENDOR_INGESTION_SESSION_STATUS.AI_COMPLETED,
+    currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
+    aiStatus: VENDOR_INGESTION_AI_STATUS.COMPLETED,
+    aiProcessedCount: join.matchedVendorCount,
+    aiTotalCount: join.totalVendors,
+    aiFailedCount: failedCount,
+  });
+
+  const jobCounts = computeCategorizationJobCounts({
+    totalVendors: join.totalVendors,
+    matchedVendorCount: join.matchedVendorCount,
+    unmatchedVendorCount: join.unmatchedVendorCount,
+    processedInLoop: join.matchedVendorCount,
+    failedInLoop: failedCount,
+    summary: {
+      mapped: importedCount,
+      pendingReview: 0,
+      selfMapRequired: join.unmatchedVendorCount,
+      selfMapped: 0,
+      failed: failedCount,
+    },
+  });
+
+  // 5. Create or update ingestion job record for UI consistency
+  let job = null;
+  try {
+    job = await queries.createIngestionJob({
+      sessionId,
+      organizationId: context.organizationId,
+      jobType: VENDOR_INGESTION_JOB_TYPE.AI_CATEGORY,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+      totalRecords: jobCounts.totalRecords,
+    });
+    if (job?.id) {
+      job = await queries.updateIngestionJobProgress(job.id, context.organizationId, {
+        ...jobCounts,
+        status: failedCount > 0 && importedCount === 0
+          ? VENDOR_INGESTION_JOB_STATUS.FAILED
+          : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+        completedAt: new Date().toISOString(),
+        errorMessage: failedCount > 0 && importedCount === 0
+          ? 'AI Categorization encountered errors for all suppliers. Please retry or continue to Step 4 to review/self-map.'
+          : null,
+      });
+    }
+  } catch (jobErr) {
+    logger.warn('Could not record ingestion job row for direct categorization', { error: jobErr }, LOG_CATEGORY);
+    job = {
+      id: `direct-job-${sessionId}`,
+      status: failedCount > 0 && importedCount === 0
+        ? VENDOR_INGESTION_JOB_STATUS.FAILED
+        : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      ...jobCounts,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+    };
+  }
+
+  // 6. Fetch all updated mappings
+  const rawMappings = await queries.findCategoryMappings(sessionId, context.organizationId);
+
+  // Decorate mappings as listMappings does
+  const decoratedMappings = rawMappings.map((mapping) => {
+    const canExposeDerivedCategory =
+      mapping.status !== VENDOR_MAPPING_STATUS.SELF_MAP_REQUIRED &&
+      mapping.status !== VENDOR_MAPPING_STATUS.REJECTED;
+    return {
+      ...mapping,
+      confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
+      finalMajorCategory: canExposeDerivedCategory
+        ? mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory
+        : '',
+      finalMinorCategories: canExposeDerivedCategory
+        ? mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : mapping.aiSuggestion.minorCategories
+        : [],
+    };
+  });
+
+  return {
+    job: {
+      ...job,
+      ...jobCounts,
+      status: VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+    },
+    session: updatedSession,
+    totalVendors: join.totalVendors,
+    matchedVendorCount: join.matchedVendorCount,
+    unmatchedVendorCount: join.unmatchedVendorCount,
+    mappings: decoratedMappings,
+  };
+}
+
+/**
  * Re-run classification for one supplier.
  *
  * Only the AI columns change; a buyer decision already recorded against the row
@@ -2059,6 +2223,7 @@ module.exports = {
   processCategorizationBatch,
   startCategorizationJob,
   runCategorizationJob,
+  runDirectCategorization,
   reRunCategorization,
   // review
   reviewMapping,

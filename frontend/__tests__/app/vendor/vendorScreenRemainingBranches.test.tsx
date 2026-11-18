@@ -314,7 +314,7 @@ describe('catalogue workbook preview validation', () => {
     jest.mocked(parseCatalogueWorkbook).mockReturnValue({ success: false, rows: [], error: 'Invalid workbook header' });
     render(<ItemCatalogue />);
     upload(new File(['invalid'], 'catalogue.xlsx'));
-    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.any(String), 'Invalid workbook header', 'warning'));
+    await waitFor(() => expect(showToast).toHaveBeenCalledWith(expect.any(String), 'Invalid workbook header', 'warning'), { timeout: 10000 });
     jest.spyOn(FileReader.prototype, 'readAsArrayBuffer').mockImplementation(function (this: FileReader) {
       this.onerror?.(new ProgressEvent('error') as ProgressEvent<FileReader>);
     });

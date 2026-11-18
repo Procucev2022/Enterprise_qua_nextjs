@@ -72,7 +72,11 @@ describe('UI Strings Constants & i18n Format Tests', () => {
       ] as const;
       for (const reason of reasons) {
         expect(UI_STRINGS.rfqExtraction.reasonMessages[reason]).toMatch(/manually/i);
+        expect(UI_STRINGS.rfqExtraction.reasonMessages[reason]).not.toMatch(/gemini/i);
       }
+      expect(UI_STRINGS.rfqExtraction.extractingStatus).toBe('AI Extracting...');
+      expect(UI_STRINGS.rfqExtraction.extractFooterHint).not.toMatch(/gemini/i);
+      expect(UI_STRINGS.rfqExtraction.defaultModelLabel).not.toMatch(/gemini/i);
     });
 
     test('prefers a non-empty server message over the reason map', () => {

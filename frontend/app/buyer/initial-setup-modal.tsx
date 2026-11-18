@@ -14,7 +14,7 @@ import {
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
 } from '@/lib/constants';
-import { resolveMinorCategory } from '@/lib/categoryTaxonomy';
+import { autoCategorizeItem, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import type {
   HistoricalPurchaseVendorRecord,
   IngestionJobState,
@@ -551,13 +551,28 @@ export default function InitialSetupModal() {
         pincode: local?.pincode,
       });
       const localPoLines = local ? matchPoLinesForVendor(local) : [];
-      const isMappedVendor = mapping.hasPoHistory && mapping.finalMajorCategory !== '';
-      let finalMinors = isMappedVendor ? normalizeVendorCategoryList(mapping.finalMinorCategories) : [];
+      let derivedMajor = mapping.finalMajorCategory || mapping.buyerMajorCategory || mapping.aiSuggestion?.majorCategory || '';
+      let finalMinors = normalizeVendorCategoryList(mapping.finalMinorCategories || mapping.buyerMinorCategories || mapping.aiSuggestion?.minorCategories || []);
+
+      if (!derivedMajor && localPoLines.length > 0) {
+        for (const p of localPoLines) {
+          const auto = autoCategorizeItem(p.itemName, p.specs);
+          if (auto?.majorCategory) {
+            derivedMajor = auto.majorCategory;
+            if (auto.minorCategory && !finalMinors.includes(auto.minorCategory)) {
+              finalMinors.push(auto.minorCategory);
+            }
+            break;
+          }
+        }
+      }
+
+      const isMappedVendor = mapping.hasPoHistory && derivedMajor !== '';
       if (isMappedVendor && finalMinors.length === 0 && localPoLines.length > 0) {
         finalMinors = Array.from(
           new Set(
             localPoLines
-              .map((p) => resolveMinorCategory(p.itemName, p.specs, mapping.finalMajorCategory))
+              .map((p) => resolveMinorCategory(p.itemName, p.specs, derivedMajor))
               .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
           )
         );
@@ -582,7 +597,7 @@ export default function InitialSetupModal() {
           ? `${formatCurrency(mapping.totalSpend)} (${mapping.poCount} POs)`
           : 'No PO History in Dump',
         poCount: mapping.poCount,
-        firstSetMajorCategory: isMappedVendor ? mapping.finalMajorCategory : '',
+        firstSetMajorCategory: isMappedVendor ? derivedMajor : '',
         secondSetMinorCategories: finalMinors,
         secondSetSecondaryMajors: [],
       };
@@ -1924,20 +1939,44 @@ export default function InitialSetupModal() {
     setIsProcessingPOJoin(true);
     setPoUploadError(null);
     try {
-      const res = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-job`, {
+      // 1. Direct AI categorization: classify all suppliers in one single request without multi-step polling
+      const directRes = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-direct`, {
         method: 'POST',
         headers: authFetchHeaders(),
       });
-      const json = await res.json().catch(() => null);
-      const job: IngestionJobState | undefined = json?.data?.job;
-      if (!res.ok || !job) {
-        const msg: string = json?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
-        setPoUploadError(msg);
-        showToast('AI Category Cross-Match', msg, 'warning');
+      const directJson = await directRes.json().catch(() => null);
+
+      if (directRes.ok && directJson?.data?.job) {
+        const directJob: IngestionJobState = directJson.data.job;
+        setAiJob({ ...directJob, fileName: directJob.fileName || poFileName });
+        setApiJoinedVendors(recordsFromMappings(directJson.data.mappings || []));
+        setStep(4);
+        logger.log('INFO', 'AI category direct execution finished', { sessionId, jobId: directJob.id, status: directJob.status }, 'VENDOR_INGESTION');
         return;
       }
-      setAiJob({ ...job, fileName: job.fileName || poFileName });
-      logger.log('INFO', 'AI category job started', { sessionId, jobId: job.id, status: job.status }, 'VENDOR_INGESTION');
+
+      // 2. Fallback to background job endpoint only if direct route is 404 (legacy server)
+      if (directRes.status === 404) {
+        const res = await fetch(`/api/vendor-ingestion/${sessionId}/ai-categorize-job`, {
+          method: 'POST',
+          headers: authFetchHeaders(),
+        });
+        const json = await res.json().catch(() => null);
+        const job: IngestionJobState | undefined = json?.data?.job;
+        if (!res.ok || !job) {
+          const msg: string = json?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
+          setPoUploadError(msg);
+          showToast('AI Category Cross-Match', msg, 'warning');
+          return;
+        }
+        setAiJob({ ...job, fileName: job.fileName || poFileName });
+        logger.log('INFO', 'AI category job started', { sessionId, jobId: job.id, status: job.status }, 'VENDOR_INGESTION');
+        return;
+      }
+
+      const msg: string = directJson?.error || UI_STRINGS.vendorPoIngestion.aiCategory.startFailed;
+      setPoUploadError(msg);
+      showToast('AI Category Cross-Match', msg, 'warning');
     } catch (err) {
       logger.log('ERROR', 'Could not start the AI category job', { error: err }, 'VENDOR_INGESTION');
       setPoUploadError(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed);
@@ -2931,7 +2970,7 @@ export default function InitialSetupModal() {
             )}
 
             {/* Failure of the AI category job, with the server's reason */}
-            {aiJob?.status === 'FAILED' && (
+            {(aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0) && (
               <div
                 data-testid="ai-job-error-banner"
                 className="p-3.5 rounded-2xl bg-rose-50 dark:bg-rose-950/40 border border-rose-300 dark:border-rose-800 text-rose-800 dark:text-rose-200 text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs"
@@ -2941,7 +2980,7 @@ export default function InitialSetupModal() {
                   <div className="flex-1 min-w-0">
                     <p className="font-bold text-rose-900 dark:text-rose-100">{UI_STRINGS.vendorPoIngestion.aiCategory.failedTitle}</p>
                     <p className="mt-0.5 text-[11px] leading-relaxed">
-                      {aiJob.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
+                      {aiJob?.errorMessage || UI_STRINGS.vendorPoIngestion.aiCategory.genericFailure}
                     </p>
                   </div>
                 </div>
@@ -3154,7 +3193,7 @@ export default function InitialSetupModal() {
                 Back to Vendor Master
               </button>
               <div className="flex items-center gap-2">
-                {aiJob?.status === 'FAILED' && (
+                {(aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -3174,7 +3213,7 @@ export default function InitialSetupModal() {
                 >
                   {isProcessingPOJoin || isAiRunning
                     ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
-                    : aiJob?.status === 'FAILED'
+                    : (aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0)
                     ? 'Retry AI Category Cross-Match'
                     : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
                   <ArrowRight size={14} />

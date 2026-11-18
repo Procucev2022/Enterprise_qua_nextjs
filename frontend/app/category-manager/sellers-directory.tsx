@@ -558,7 +558,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     },
     {
       key: 'category',
-      label: 'Major Category',
+      label: 'Division',
       render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
           {String(item.majorCategory || item.category || EMPTY_VALUE)}

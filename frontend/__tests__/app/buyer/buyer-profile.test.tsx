@@ -408,12 +408,12 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
   it('restores the stored category selection and shows count badge', async () => {
     await renderLoaded();
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
   it('filters categories using the search bar', async () => {
     await renderLoaded();
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'Pumps' } });
     expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
     fireEvent.change(searchInput, { target: { value: '' } });
@@ -424,10 +424,10 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     fireEvent.click(screen.getByText('Logistics'));
-    expect(selectionSummary()).toBe('3 Major • 3 Minor Selected');
+    expect(selectionSummary()).toBe('3 Divisions • 3 Categories Selected');
 
     fireEvent.click(screen.getByText('Logistics'));
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
   it('blocks a save with no procurement category selected', async () => {
@@ -722,11 +722,11 @@ describe('app/buyer/buyer-profile.tsx', () => {
     const excavationInput = excavationLabel.querySelector('input')!;
     fireEvent.click(excavationInput);
 
-    expect(selectionSummary()).toBe('2 Major • 3 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 3 Categories Selected');
 
     // Deselect 'Excavation'
     fireEvent.click(excavationInput);
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
 
     // Deselect 'Piling' (the only selected minor in Civil Works)
     const pilingLabel = screen.getByText('Piling').closest('label')!;
@@ -734,7 +734,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     fireEvent.click(pilingInput);
 
     // Deselecting all minors should deselect the major
-    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+    expect(selectionSummary()).toBe('1 Division • 1 Category Selected');
   });
 
   it('supports Select All and Clear buttons within a major category', async () => {
@@ -742,7 +742,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // Select All in Civil Works (5 minors)
     selectAllIn('Civil Works');
-    expect(selectionSummary()).toBe('2 Major • 6 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 6 Categories Selected');
 
     // Clear Civil Works
     const panel = majorPanel('Civil Works');
@@ -751,13 +751,13 @@ describe('app/buyer/buyer-profile.tsx', () => {
     )!;
     fireEvent.click(clearBtn);
 
-    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+    expect(selectionSummary()).toBe('1 Division • 1 Category Selected');
   });
 
   it('filters by minor category keyword in search bar', async () => {
     await renderLoaded();
 
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'Laptop' } });
 
     expect(screen.getByText('IT')).toBeInTheDocument();
@@ -777,13 +777,13 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({ ...PROFILE, categories: initialMajors }, bigTaxonomy);
     await renderLoaded();
 
-    expect(selectionSummary()).toBe('5 Major • 5 Minor Selected');
+    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
 
     // Selecting 6th and 7th major categories succeeds cleanly without limit warnings
     fireEvent.click(screen.getByText('Category 6'));
     fireEvent.click(screen.getByText('Category 7'));
 
-    expect(selectionSummary()).toBe('7 Major • 9 Minor Selected');
+    expect(selectionSummary()).toBe('7 Divisions • 9 Categories Selected');
     expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
       expect.any(String),
@@ -806,7 +806,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     fireEvent.click(subcat41);
 
     expect(subcat41).toBeChecked();
-    expect(selectionSummary()).toBe('1 Major • 41 Minor Selected');
+    expect(selectionSummary()).toBe('1 Division • 41 Categories Selected');
     expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
       expect.any(String),
@@ -934,12 +934,12 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // Selecting Major Cat 3 when 10 minors are already selected succeeds
     fireEvent.click(screen.getByText('Major Cat 3'));
-    expect(selectionSummary()).toBe('3 Major • 15 Minor Selected');
+    expect(selectionSummary()).toBe('3 Divisions • 15 Categories Selected');
 
     // Expand Major Cat 4 and toggle a minor + Select All
     expandMajor('Major Cat 4');
     fireEvent.click(screen.getByText('Minor 4-A'));
-    expect(selectionSummary()).toBe('4 Major • 16 Minor Selected');
+    expect(selectionSummary()).toBe('4 Divisions • 16 Categories Selected');
 
     const panel5 = majorPanel('Major Cat 5');
     expandMajor('Major Cat 5');
@@ -948,7 +948,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     );
     if (selectAllBtn5) {
       fireEvent.click(selectAllBtn5);
-      expect(selectionSummary()).toBe('5 Major • 21 Minor Selected');
+      expect(selectionSummary()).toBe('5 Divisions • 21 Categories Selected');
     }
     expect(mockShowToast).not.toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
@@ -1006,7 +1006,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad();
     await renderLoaded();
 
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'NONEXISTENT_KEYWORD_XYZ' } });
 
     expect(screen.getByText(/No categories found matching "NONEXISTENT_KEYWORD_XYZ"./i)).toBeInTheDocument();
@@ -1278,7 +1278,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       fireEvent.click(selectAllBtn);
     }
     // Now Raw Material is selected in selectedMajor (line 447 branch 100.0)
-    expect(selectionSummary()).toContain('3 Major');
+    expect(selectionSummary()).toContain('3 Divisions');
   });
 
   it('hydrates GSTIN and registered address from legacy alias fields on activeBuyerAccount', async () => {

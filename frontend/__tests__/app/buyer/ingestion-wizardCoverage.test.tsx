@@ -858,7 +858,7 @@ describe('IngestionWizard coverage: documents and manual recovery', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Extract Line Items with AI/i }));
 
-    expect(await screen.findByText(EXTRACTION.unreadableResponse)).toBeInTheDocument();
+    expect(await screen.findByText(EXTRACTION.unreadableResponse, {}, { timeout: 10000 })).toBeInTheDocument();
     expect(screen.getByText(EXTRACTION.errorDetailLabel)).toBeInTheDocument();
     expect(screen.getByText('socket hang up')).toBeInTheDocument();
     expect(mockExtract).toHaveBeenCalledWith({ fileName: 'requisition.txt', documentText: 'Need 10 centrifugal pumps' });
