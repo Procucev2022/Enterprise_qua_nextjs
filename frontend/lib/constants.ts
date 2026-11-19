@@ -1858,7 +1858,7 @@ export function isVendorActive(v: Partial<VendorEntry> | null | undefined): bool
 
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
 export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
-  if (!v) return false;
+  if (!v || v.isProcucevNetwork) return false;
   const s = String(v.source || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
@@ -1874,6 +1874,33 @@ export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined
     Boolean(v.buyerId) ||
     Boolean(v.buyerAccountId)
   );
+}
+
+/**
+ * Determines whether a buyer has permission to edit or toggle active status for a vendor.
+ * Network vendors and vendors belonging to other buyer accounts cannot be edited or deactivated.
+ */
+export function canBuyerManageVendor(
+  vendor: Partial<VendorEntry> | null | undefined,
+  activeBuyerAccount?: { id?: string; corporateEmail?: string; organizationName?: string } | null
+): boolean {
+  if (!vendor || vendor.isProcucevNetwork) return false;
+  if (!isBuyerUploadedVendor(vendor)) return false;
+  if (!activeBuyerAccount) return true;
+
+  const buyerId = String(activeBuyerAccount.id || '').trim().toLowerCase();
+  const buyerEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
+  const buyerOrg = String(activeBuyerAccount.organizationName || '').trim().toLowerCase();
+
+  const vBuyerId = String(vendor.buyerId || vendor.buyerAccountId || '').trim().toLowerCase();
+  const vBuyerEmail = String(vendor.buyerEmail || '').trim().toLowerCase();
+  const vCompany = String(vendor.addedByBuyerCompany || '').trim().toLowerCase();
+
+  if (vBuyerId && buyerId && vBuyerId !== buyerId) return false;
+  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail) return false;
+  if (vCompany && buyerOrg && vCompany !== buyerOrg) return false;
+
+  return true;
 }
 
 /** Classification helper: Procucev network vendor not uploaded by the buyer. */
@@ -2305,6 +2332,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
         addedByBuyerCompany: activeBuyerAccount?.organizationName,
         buyerId: activeBuyerAccount?.id,
         buyerAccountId: activeBuyerAccount?.id,
+        buyerEmail: activeBuyerAccount?.corporateEmail,
         ...(recGstin ? { gstin: recGstin, gst: recGstin } : {}),
         ...(city ? { city } : {}),
         ...(state ? { state } : {}),

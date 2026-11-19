@@ -5615,6 +5615,100 @@ describe('app/buyer/vendor-summary.tsx', () => {
         date: new Date('2026-03-01T10:00:00.000Z').toLocaleDateString(),
       })).length).toBeGreaterThanOrEqual(1);
     });
+
+    it('hides edit and deactivate actions in table and modal for network vendors and vendors owned by another buyer', async () => {
+      const ownedVendor = {
+        id: 'v-owned',
+        name: 'Owned Supplier Pvt Ltd',
+        contactPerson: 'Owned Rep',
+        email: 'owned@supplier.test',
+        phone: '9876543210',
+        city: 'Mumbai',
+        state: 'Maharashtra',
+        source: 'buyer_uploaded',
+        buyerId: 'buyer-current',
+        buyerEmail: 'current@corp.com',
+        rating: 80,
+        active: true,
+      };
+      const networkVendor = {
+        id: 'v-network',
+        name: 'Network Supplier Global',
+        contactPerson: 'Network Rep',
+        email: 'net@global.test',
+        phone: '9876543211',
+        city: 'Delhi',
+        state: 'Delhi',
+        source: 'procucev_network',
+        isProcucevNetwork: true,
+        rating: 90,
+        active: true,
+      };
+      const foreignVendor = {
+        id: 'v-foreign',
+        name: 'Foreign Supplier LLC',
+        contactPerson: 'Foreign Rep',
+        email: 'foreign@other.test',
+        phone: '9876543212',
+        city: 'Pune',
+        state: 'Maharashtra',
+        source: 'buyer_uploaded',
+        buyerId: 'buyer-other',
+        buyerEmail: 'other@corp.com',
+        rating: 75,
+        active: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [ownedVendor, networkVendor, foreignVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: {
+          id: 'buyer-current',
+          corporateEmail: 'current@corp.com',
+          organizationName: 'Current Corp',
+        },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // In table: Only owned vendor has the disable/enable button
+      expect(screen.getByTestId('disable-vendor-v-owned')).toBeInTheDocument();
+      expect(screen.queryByTestId('disable-vendor-v-network')).not.toBeInTheDocument();
+      expect(screen.queryByTestId('disable-vendor-v-foreign')).not.toBeInTheDocument();
+
+      const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewButtons).toHaveLength(2);
+
+      // Open View Profile for foreign vendor (viewButtons[1])
+      fireEvent.click(viewButtons[1]);
+      expect(screen.getAllByText('Foreign Supplier LLC').length).toBeGreaterThanOrEqual(1);
+      expect(screen.queryByTestId('view-profile-status-toggle-button')).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Edit Profile/i })).not.toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      // Open View Profile for owned vendor (viewButtons[0])
+      fireEvent.click(viewButtons[0]);
+      expect(screen.getAllByText('Owned Supplier Pvt Ltd').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('view-profile-status-toggle-button')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Edit Profile/i })).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    });
   });
 });
 
