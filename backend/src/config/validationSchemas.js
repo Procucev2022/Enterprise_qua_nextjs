@@ -479,31 +479,99 @@ const VALIDATION_SCHEMAS = {
       enum: [
         'Buyer Credit Addition',
         'Buyer Credit Deletion',
+        'Seller Credit Addition',
+        'Seller Credit Deletion',
         'Discounts',
         'Trial Periods',
         'Offline Payments',
       ],
     },
+    approverId: {
+      type: 'string',
+      required: false,
+      maxLength: 100,
+    },
+    startDate: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    endDate: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
     amount: {
       type: 'number',
       required: false,
-      min: 1,
+      min: 0,
       max: 100000000,
       custom: (val, data) => {
-        if (data?.requestType === 'Discounts' && data?.discountPercentage) return null;
+        if (data?.requestType === 'Discounts' && (data?.discountPercentage !== undefined || val !== undefined)) return null;
         if (data?.requestType === 'Trial Periods' && data?.durationDays) return null;
+        if (data?.requestType === 'Offline Payments' && (data?.paymentAmount !== undefined || val !== undefined)) {
+          const amt = data?.paymentAmount !== undefined ? data.paymentAmount : val;
+          if (typeof amt !== 'number' || isNaN(amt) || amt <= 0) return 'Payment amount must be a positive number.';
+          return null;
+        }
         if (val === undefined || val === null || val === '') return 'Credit amount must be a positive integer.';
         if (!Number.isInteger(Number(val)) || Number(val) < 1) return 'Credit amount must be a positive integer.';
         return null;
       },
       message: 'Credit amount must be a positive integer.',
     },
+    paymentAmount: {
+      type: 'number',
+      required: false,
+      min: 0,
+      max: 100000000,
+    },
+    paymentDate: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    paymentType: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    transactionId: {
+      type: 'string',
+      required: false,
+      maxLength: 100,
+    },
+    buyerSourceMode: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    proofFileName: {
+      type: 'string',
+      required: false,
+      maxLength: 255,
+    },
+    proofFileUrl: {
+      type: 'string',
+      required: false,
+      maxLength: 5000000,
+    },
+    proofFileType: {
+      type: 'string',
+      required: false,
+      maxLength: 100,
+    },
+    proofFileSize: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
     discountPercentage: {
       type: 'number',
       required: false,
-      min: 1,
+      min: 0,
       max: 100,
-      message: 'Discount percentage must be between 1 and 100.',
+      message: 'Discount percentage must be between 0 and 100.',
     },
     durationDays: {
       type: 'number',
@@ -516,6 +584,41 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       maxLength: 100,
+    },
+    selectedMode: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    billingDuration: {
+      type: 'string',
+      required: false,
+      maxLength: 50,
+    },
+    originalPrice: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+    discountAmount: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+    remainingAmount: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+    gstAmount: {
+      type: 'number',
+      required: false,
+      min: 0,
+    },
+    finalPayableAmount: {
+      type: 'number',
+      required: false,
+      min: 0,
     },
     reason: { type: 'string', required: false, maxLength: 1000 },
     // The maker is the signed-in account (buyerAccountController), so no initiator name is

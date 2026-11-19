@@ -537,9 +537,32 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('rejects an OTP request for an unrecognised email + mobile pair', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
       await expect(
         authService.requestOtp('ghost@nowhere.test', MOBILE, 'buyer', '::1')
       ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
+    test('permits OTP request for onboarding buyer when mobile in database is a placeholder', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({
+        id: 'user-onboarding-1',
+        email: 'onboarding.buyer@example.com',
+        mobile: '9999999999',
+        role: 'buyer',
+        isActive: true,
+        isApproved: true,
+        resetPasswordRequired: true,
+      });
+
+      const res = await authService.requestOtp('onboarding.buyer@example.com', '9876543210', 'buyer', '::1');
+      expect(res.success).toBe(true);
+      expect(mailerService.sendOtpEmail).toHaveBeenCalledWith(
+        'onboarding.buyer@example.com',
+        expect.any(String),
+        expect.any(Number),
+        expect.any(Object)
+      );
     });
 
     test('returns a retryable persistence error when the sign-in account lookup fails', async () => {

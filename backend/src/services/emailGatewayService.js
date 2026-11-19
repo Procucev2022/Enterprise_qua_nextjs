@@ -313,6 +313,11 @@ function resolveVendorConfig(env = process.env) {
     ),
     allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
     allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
+    autoRegisterUnregisteredBuyers: String(
+      env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER !== undefined
+        ? env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER
+        : env.EMAIL_GATEWAY_AUTO_REGISTER || 'true'
+    ).toLowerCase() !== 'false',
     isVendorMailbox: true,
     labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
     labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
@@ -631,7 +636,7 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       !isDomainOrSenderRestricted &&
       !message?.automatedReason &&
       !isSystemOrAutomatedSender(senderAddress) &&
-      !config?.isVendorMailbox &&
+      (!config?.isVendorMailbox || config?.autoRegisterUnregisteredBuyers !== false) &&
       config?.autoRegisterUnregisteredBuyers !== false;
 
     if (!isUnregisteredSender) {
@@ -2934,7 +2939,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       `${message.subject || ''} ${message.bodyText || ''}`
     );
 
-    if (!isRegisteredBuyer && isRfqSubjectOrContent) {
+    if (!isRegisteredBuyer && isRfqSubjectOrContent && config.autoRegisterUnregisteredBuyers === false) {
       await sendAutoReply(
         message,
         AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,

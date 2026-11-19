@@ -128,9 +128,44 @@ async function processAction(req, res) {
   }
 }
 
+/**
+ * GET /api/approvals/approvers
+ */
+async function getApprovers(req, res) {
+  try {
+    const { APPROVER_CONFIG } = require('../config/constants');
+    const approvers = APPROVER_CONFIG.map((a) => ({
+      id: a.id,
+      name: a.name,
+      title: a.title || 'Management Authority',
+      email: a.email || null,
+    }));
+    return res.json({ success: true, approvers });
+  } catch (err) {
+    logger.error('Failed to retrieve approvers list', err, 'APPROVAL_CONTROLLER');
+    return res.status(500).json({ success: false, error: 'Failed to retrieve approvers list.' });
+  }
+}
+
+/**
+ * GET /api/approvals/users
+ */
+async function getUsers(req, res) {
+  try {
+    const internalTaskQueries = require('../db/internalTaskQueries');
+    const users = await internalTaskQueries.getInternalAssignees();
+    return res.json({ success: true, users });
+  } catch (err) {
+    logger.error('Failed to retrieve users list', err, 'APPROVAL_CONTROLLER');
+    return res.status(500).json({ success: false, error: 'Failed to retrieve users list.' });
+  }
+}
+
 module.exports = {
   getSummary,
   getApprovals,
+  getApprovers,
+  getUsers,
   processAction,
   extractActor,
 };

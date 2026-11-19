@@ -600,6 +600,49 @@ describe('buyerAccountController branches', () => {
           value_impact: expect.stringContaining('Ref: NEFT-883924'),
         })
       );
+
+      // 5. Discounts with full calculation breakdown and proof file
+      taskSpy.mockClear();
+      res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        user: { role: 'admin', email: STAFF_EMAIL },
+        params: { id: 'ba-del' },
+        body: {
+          requestType: 'Discounts',
+          amount: 20,
+          discountPercentage: 20,
+          selectedMode: 'Mode 2',
+          billingDuration: '6 Months',
+          originalPrice: 47994,
+          discountAmount: 9598.8,
+          remainingAmount: 38395.2,
+          gstAmount: 6911.14,
+          finalPayableAmount: 45306.34,
+          reason: 'Special loyalty concession',
+          approverName: APPROVER_NAME,
+          proofFileName: 'proof.pdf',
+          proofFileUrl: 'https://example.com/proof.pdf',
+          proofFileType: 'application/pdf',
+          proofFileSize: 1024,
+        },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(taskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          taskType: 'Discounts',
+          raw: expect.objectContaining({
+            original_price: 47994,
+            selected_mode: 'Mode 2',
+            billing_duration: '6 Months',
+            discount_percentage: 20,
+          }),
+        }),
+        expect.anything(),
+        expect.objectContaining({
+          details: expect.stringContaining('Special loyalty concession'),
+        })
+      );
     });
 
     test('answers 503 with the database message when the approval cannot be stored', async () => {

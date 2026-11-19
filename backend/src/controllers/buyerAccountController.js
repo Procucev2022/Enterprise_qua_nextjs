@@ -894,17 +894,39 @@ async function requestCreditApproval(req, res, next) {
       amount,
       reason,
       approverName,
+      approverId,
+      initiatorName,
+      initiatorId,
+      startDate,
+      endDate,
+      paymentDate,
+      paymentType,
+      transactionId,
+      buyerSourceMode,
+      paymentAmount,
+      proofFileName,
+      proofFileUrl,
+      proofFileType,
+      proofFileSize,
       idempotencyKey,
       requestType = 'Buyer Credit Addition',
       discountPercentage,
       durationDays,
       paymentReference,
+      selectedMode,
+      billingDuration,
+      originalPrice,
+      discountAmount,
+      remainingAmount,
+      gstAmount,
+      finalPayableAmount,
     } = validation.sanitizedData;
 
     // The maker is the signed-in account, not a name typed into the form.
     const makerEmail = req.user.email;
     const makerRole = req.user.role;
     const makerName = req.user.fullName || req.user.name || req.user.email;
+    const makerId = req.user.uuid || req.user.id || null;
 
     // The approver decides against the balance this request is made on. A buyer
     // with no balance on record is refused, not shown an assumed balance.
@@ -952,7 +974,7 @@ async function requestCreditApproval(req, res, next) {
     } else if (requestType === 'Discounts') {
       taskCategory = 'CREDIT_MANAGEMENT';
       taskType = 'Discounts';
-      const pct = discountPercentage || amount || 0;
+      const pct = discountPercentage !== undefined ? discountPercentage : (amount || 0);
       title = `Discount Approval Request: ${pct}% for ${buyer.organizationName}`;
       description = reason || `Requested ${pct}% discount for ${buyer.organizationName}`;
       valueImpact = `${pct}% Subscription Discount (${buyer.organizationName})`;
@@ -970,10 +992,25 @@ async function requestCreditApproval(req, res, next) {
     } else if (requestType === 'Offline Payments') {
       taskCategory = 'PAYMENT';
       taskType = 'Offline Payments';
+      effectiveAmount = paymentAmount !== undefined ? paymentAmount : numAmount;
+      const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
+      const mode = buyerSourceMode || selectedMode || 'Mode 2';
       title = `Offline Payment Verification: ₹${effectiveAmount.toLocaleString('en-IN')} for ${buyer.organizationName}`;
-      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : 'Offline'}) for ${buyer.organizationName}`;
-      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : 'Offline Payment'})`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${buyer.organizationName}`;
+      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
       quantity = 1;
+    }
+
+    const discountPct = discountPercentage !== undefined ? discountPercentage : (requestType === 'Discounts' ? (amount || 0) : undefined);
+
+    const taskAttachments = [];
+    if (proofFileName) {
+      taskAttachments.push({
+        name: proofFileName,
+        url: proofFileUrl || '',
+        size: proofFileSize || 0,
+        type: proofFileType || 'image/jpeg',
+      });
     }
 
     const task = await internalTaskQueries.createInternalTaskWithApproval(
@@ -985,8 +1022,11 @@ async function requestCreditApproval(req, res, next) {
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
+        assignedToUserId: approverId || null,
         assignedToName: approverName,
         assignedTeam: 'Management Approvers',
+        createdByName: makerName,
+        createdByUserId: makerId || null,
         creditAccountType: 'buyer',
         creditAccountId: buyer.id,
         creditAccountName: buyer.organizationName,
@@ -996,14 +1036,39 @@ async function requestCreditApproval(req, res, next) {
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
+        attachments: taskAttachments,
         raw: {
           request_type: requestType,
-          discount_percentage: discountPercentage,
+          discount_percentage: discountPct,
           duration_days: durationDays,
-          payment_reference: paymentReference,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          assigned_approver: approverName,
+          assigned_approver_id: approverId,
         },
       },
       {
+        uuid: makerId,
         fullName: makerName,
         name: makerName,
         email: makerEmail,
@@ -1024,7 +1089,23 @@ async function requestCreditApproval(req, res, next) {
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: reason || description,
+        details: requestType === 'Offline Payments'
+          ? [
+              reason,
+              `[${buyerSourceMode || selectedMode || 'Mode 2'} • ${paymentType || 'Offline'}${paymentType !== 'Cash' && (transactionId || paymentReference) ? ` • Txn ID: ${transactionId || paymentReference}` : ''}${paymentDate ? ` • Date: ${paymentDate}` : ''}${proofFileName ? ` • Proof: ${proofFileName}` : ''}]`,
+            ].filter(Boolean).join(' ')
+          : requestType === 'Trial Periods'
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${durationDays || effectiveAmount} Days | ${startDate || ''} to ${endDate || ''}]`,
+            ].filter(Boolean).join(' ')
+          : originalPrice !== undefined
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${billingDuration || '12 Months'} | Original: ₹${Number(originalPrice).toLocaleString('en-IN')}, Discount: ${discountPct}%, Discount Amount: -₹${Number(discountAmount || 0).toLocaleString('en-IN')}, Remaining: ₹${Number(remainingAmount || 0).toLocaleString('en-IN')}, GST: +₹${Number(gstAmount || 0).toLocaleString('en-IN')}, Final: ₹${Number(finalPayableAmount || 0).toLocaleString('en-IN')}]`,
+            ].filter(Boolean).join(' ')
+          : (reason || description),
+        attachments: taskAttachments,
         buyer_id: buyer.id,
         history: [
           {
@@ -1043,13 +1124,57 @@ async function requestCreditApproval(req, res, next) {
           quantity,
           available_balance: balance,
           assigned_approver: approverName,
+          assigned_approver_id: approverId,
+          initiator_name: makerName,
+          initiator_id: makerId,
           request_type: requestType,
-          discount_percentage: discountPercentage,
+          discount_percentage: discountPct,
           duration_days: durationDays,
-          payment_reference: paymentReference,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
         },
       }
     );
+
+    if (proofFileName && proofFileUrl) {
+      try {
+        const accountDocumentQueries = require('../db/accountDocumentQueries');
+        await accountDocumentQueries.createAccountDocument(
+          {
+            accountType: 'buyer',
+            accountId: buyer.id,
+            documentName: `Offline Payment Proof - ${proofFileName}`,
+            category: 'Financial Documents',
+            description: `Payment proof uploaded for Offline Payment approval (${paymentType || 'Offline'}, ₹${effectiveAmount})`,
+            fileName: proofFileName,
+            fileUrl: proofFileUrl,
+            mimeType: proofFileType || 'image/jpeg',
+            fileSize: proofFileSize || 0,
+          },
+          { name: makerName, email: makerEmail, role: makerRole, uuid: makerId }
+        );
+      } catch (docErr) {
+        logger.warn('Could not auto-register offline payment document in vault', { error: docErr?.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
 
     logger.info(`Approval request created for ${requestType}: ${task.task_number} (${valueImpact}) assigned to ${approverName}`, { buyerId: id, requestType, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 

@@ -1316,6 +1316,178 @@ export function ApprovalsDashboard() {
               </div>
             </div>
 
+            {/* Discount Price Breakdown (when applicable) */}
+            {detailsRequest.raw && (detailsRequest.raw.original_price !== undefined || detailsRequest.module === 'Discounts' || detailsRequest.request_type === 'Discounts') && (
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    Discount Price Breakdown
+                  </span>
+                  {Boolean(detailsRequest.raw.selected_mode || detailsRequest.raw.billing_duration) && (
+                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                      {String(detailsRequest.raw.selected_mode || 'Mode 1')} • {String(detailsRequest.raw.billing_duration || '12 Months')}
+                    </span>
+                  )}
+                </div>
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-800/40">
+                  <table className="w-full text-xs">
+                    <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                      <tr>
+                        <th className="px-3 py-1.5 text-left">Description</th>
+                        <th className="px-3 py-1.5 text-right">Amount</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">Original Plan Price</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          ₹{Number(detailsRequest.raw.original_price ?? 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">Discount Percentage</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          {String(detailsRequest.raw.discount_percentage ?? detailsRequest.amount ?? 0)}%
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-rose-600 dark:text-rose-400 font-medium">Discount Amount</td>
+                        <td className="px-3 py-1.5 text-right font-semibold text-rose-600 dark:text-rose-400">
+                          −₹{Number(detailsRequest.raw.discount_amount ?? 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">Remaining Amount</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          ₹{Number(detailsRequest.raw.remaining_amount ?? 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-indigo-600 dark:text-indigo-400 font-medium">GST (18%)</td>
+                        <td className="px-3 py-1.5 text-right font-semibold text-indigo-600 dark:text-indigo-400">
+                          +₹{Number(detailsRequest.raw.gst_amount ?? 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                      <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
+                        <td className="px-3 py-1.5 text-emerald-900 dark:text-emerald-100">Final Payable Amount</td>
+                        <td className="px-3 py-1.5 text-right text-emerald-700 dark:text-emerald-300 font-extrabold">
+                          ₹{Number(detailsRequest.raw.final_payable_amount ?? 0).toLocaleString('en-IN')}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {/* Offline Payment Information (when applicable) */}
+            {detailsRequest.raw && (detailsRequest.module === 'Offline Payments' || detailsRequest.request_type === 'Offline Payments' || detailsRequest.raw.payment_type !== undefined) && (
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    {strings.offlinePaymentDetailsHeading || 'Offline Payment Information'}
+                  </span>
+                  {Boolean(detailsRequest.raw.buyer_source_mode) && (
+                    <span className="text-[10px] font-bold text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800">
+                      {String(detailsRequest.raw.buyer_source_mode)}
+                    </span>
+                  )}
+                </div>
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl p-3 bg-slate-50/50 dark:bg-slate-800/40 space-y-2">
+                  <div className="grid grid-cols-2 gap-2 text-xs">
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-medium">Payment Date</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{String(detailsRequest.raw.payment_date || '—')}</span>
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-medium">Payment Type</span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">{String(detailsRequest.raw.payment_type || '—')}</span>
+                    </div>
+                    {Boolean(detailsRequest.raw.payment_type !== 'Cash' && detailsRequest.raw.transaction_id) && (
+                      <div>
+                        <span className="text-[10px] text-slate-400 block font-medium">Transaction ID</span>
+                        <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{String(detailsRequest.raw.transaction_id)}</span>
+                      </div>
+                    )}
+                    <div>
+                      <span className="text-[10px] text-slate-400 block font-medium">Payment Amount</span>
+                      <span className="font-bold text-emerald-600 dark:text-emerald-400">₹{Number(detailsRequest.raw.payment_amount ?? detailsRequest.raw.amount ?? detailsRequest.amount ?? 0).toLocaleString('en-IN')}</span>
+                    </div>
+                  </div>
+                  {Boolean(detailsRequest.raw.proof_file_name) && (
+                    <div className="pt-2 border-t border-slate-200 dark:border-slate-700">
+                      <span className="text-[10px] text-slate-400 block font-medium mb-1">Payment Proof</span>
+                      <div className="flex items-center justify-between p-2 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                        <div className="flex items-center gap-2 truncate max-w-[220px]">
+                          <FileText size={14} className="text-emerald-500 shrink-0" />
+                          <span className="font-medium text-slate-800 dark:text-slate-200 text-xs truncate" title={String(detailsRequest.raw.proof_file_name)}>
+                            {String(detailsRequest.raw.proof_file_name)}
+                          </span>
+                        </div>
+                        {Boolean(detailsRequest.raw.proof_file_url) && (
+                          <a
+                            href={String(detailsRequest.raw.proof_file_url)}
+                            target="_blank"
+                            rel="noreferrer"
+                            download={String(detailsRequest.raw.proof_file_name)}
+                            className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline"
+                          >
+                            View / Download
+                          </a>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Trial Period Details (when applicable) */}
+            {detailsRequest.raw && (detailsRequest.module === 'Trial Periods' || detailsRequest.request_type === 'Trial Periods' || detailsRequest.raw.trial_days !== undefined || detailsRequest.raw.start_date !== undefined) && (
+              <div className="space-y-1.5 text-xs">
+                <div className="flex items-center justify-between">
+                  <span className="text-[10px] text-slate-400 font-semibold uppercase tracking-wider">
+                    {strings.trialPeriodDetailsHeading || 'Trial Period Details'}
+                  </span>
+                  {Boolean(detailsRequest.raw.selected_mode) && (
+                    <span className="text-[10px] font-bold text-indigo-600 dark:text-indigo-400">
+                      {String(detailsRequest.raw.selected_mode || 'Mode 1')}
+                    </span>
+                  )}
+                </div>
+                <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/50 dark:bg-slate-800/40">
+                  <table className="w-full text-xs">
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">{strings.colTrialSelectedMode || 'Sourcing Mode'}</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          {String(detailsRequest.raw.selected_mode || 'Mode 1')}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">{strings.colTrialDays || 'Number of Trial Days'}</td>
+                        <td className="px-3 py-1.5 text-right font-bold text-emerald-600 dark:text-emerald-400">
+                          {String(detailsRequest.raw.trial_days ?? detailsRequest.raw.duration_days ?? detailsRequest.amount ?? 0)} Days
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">{strings.colTrialStartDate || 'Starting Date'}</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          {String(detailsRequest.raw.start_date || '—')}
+                        </td>
+                      </tr>
+                      <tr>
+                        <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">{strings.colTrialEndDate || 'Ending Date'}</td>
+                        <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                          {String(detailsRequest.raw.end_date || '—')}
+                        </td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Business Justification */}
             <div className="text-xs">
               <span className="text-[10px] text-slate-400 block font-semibold mb-1">
