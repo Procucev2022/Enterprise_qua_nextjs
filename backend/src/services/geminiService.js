@@ -60,6 +60,12 @@ ACCURACY IS MORE IMPORTANT THAN COMPLETENESS. DO NOT GUESS.
 - A spreadsheet may be flattened with cells separated by " | ", one row per line. A label may sit in one cell with its value in the next cell on the same line, or as a column header with values in the rows beneath it. Read both layouts.
 - If the document is an image or a scan, read the table structure and match each quantity to the row it sits on.
 
+CRITICAL QUANTITY AND UNIT EXTRACTION:
+- Extract both the purchase quantity and the unit of measure (e.g. "Nos", "Mtr", "Set", "Kg", "Units", "Pcs", "Boxes", "Bags") for every line item.
+- If quantity and unit are written together (e.g. "10 Nos", "500 Mtr", "25 Sets", "100 Pcs", "50 Kg"), separate them: put the numeric count in "quantity" and the unit in "unit".
+- If the unit is in the column header (e.g. "Qty (Nos)", "Quantity in Mtrs") or in the item description (e.g. "Gate Valve 2 inch - 10 Nos"), extract the unit into "unit".
+- If no unit is stated anywhere for an item, return null or empty for "unit". Never guess or invent a unit.
+
 EXHAUSTIVE EXTRACTION ACROSS ALL WORKSHEETS (NO ARBITRARY LIMITS):
 - Extract ALL valid procurement line items across all worksheets (indicated by "SHEET: <sheetName>") and all sections in the document.
 - Do NOT limit extraction to 10 items or provide an arbitrary sample. If the document contains 50, 100, 200, or more items, extract every single valid item.
@@ -344,6 +350,190 @@ function parseExtractionJson(text) {
   return repairTruncatedJson(candidate);
 }
 
+const CANONICAL_UNITS_MAP = {
+  nos: 'Nos',
+  no: 'Nos',
+  number: 'Nos',
+  numbers: 'Nos',
+  pcs: 'Pcs',
+  pc: 'Pcs',
+  piece: 'Pcs',
+  pieces: 'Pcs',
+  units: 'Units',
+  unit: 'Units',
+  ea: 'EA',
+  each: 'EA',
+  mtr: 'Mtr',
+  mtrs: 'Mtr',
+  meter: 'Mtr',
+  meters: 'Mtr',
+  m: 'Mtr',
+  rmt: 'Rmt',
+  rmtr: 'Rmt',
+  kg: 'Kg',
+  kgs: 'Kg',
+  kilogram: 'Kg',
+  kilograms: 'Kg',
+  gm: 'Gms',
+  gms: 'Gms',
+  gram: 'Gms',
+  grams: 'Gms',
+  ton: 'Ton',
+  tons: 'Ton',
+  mt: 'MT',
+  metricton: 'MT',
+  metrictons: 'MT',
+  ltr: 'Ltr',
+  ltrs: 'Ltr',
+  liter: 'Ltr',
+  liters: 'Ltr',
+  litres: 'Ltr',
+  l: 'Ltr',
+  set: 'Set',
+  sets: 'Set',
+  bag: 'Bags',
+  bags: 'Bags',
+  box: 'Boxes',
+  boxes: 'Boxes',
+  carton: 'Cartons',
+  cartons: 'Cartons',
+  ctn: 'Cartons',
+  ctns: 'Cartons',
+  roll: 'Rolls',
+  rolls: 'Rolls',
+  pkt: 'Pkts',
+  pkts: 'Pkts',
+  packet: 'Pkts',
+  packets: 'Pkts',
+  pack: 'Pkts',
+  packs: 'Pkts',
+  pair: 'Pairs',
+  pairs: 'Pairs',
+  pr: 'Pairs',
+  sqft: 'Sq.Ft',
+  'sq.ft': 'Sq.Ft',
+  'sq-ft': 'Sq.Ft',
+  sqm: 'Sq.M',
+  'sq.m': 'Sq.M',
+  'sq-m': 'Sq.M',
+  squaremeter: 'Sq.M',
+  squaremeters: 'Sq.M',
+  squarefoot: 'Sq.Ft',
+  squarefeet: 'Sq.Ft',
+  cum: 'Cu.M',
+  'cu.m': 'Cu.M',
+  cubicmeter: 'Cu.M',
+  cubicmeters: 'Cu.M',
+  lot: 'Lot',
+  lots: 'Lot',
+  ls: 'Lumpsum',
+  lumpsum: 'Lumpsum',
+  drum: 'Drums',
+  drums: 'Drums',
+  can: 'Cans',
+  cans: 'Cans',
+  barrel: 'Barrels',
+  barrels: 'Barrels',
+  sheet: 'Sheets',
+  sheets: 'Sheets',
+  coil: 'Coils',
+  coils: 'Coils',
+  bundle: 'Bundles',
+  bundles: 'Bundles',
+  dz: 'Dozens',
+  dozen: 'Dozens',
+  dozens: 'Dozens',
+  hours: 'Hours',
+  hr: 'Hours',
+  hrs: 'Hours',
+  days: 'Days',
+  months: 'Months',
+};
+
+const DIMENSION_EXCLUSIONS = new Set([
+  'inch', 'inches', 'in', 'mm', 'cm', 'gauge', 'thk', 'thick', 'od', 'id', 'dia', 'diameter',
+  'volt', 'volts', 'v', 'kv', 'amp', 'amps', 'a', 'hz', 'rpm', 'hp', 'kw', 'w', 'watt', 'watts', 'bar', 'psi'
+]);
+
+/**
+ * Normalizes a unit string to canonical capitalization (e.g. "nos" -> "Nos", "MTRS" -> "Mtr").
+ * Leaves non-standard but valid units trimmed, and returns null if empty or invalid.
+ */
+function normalizeUnit(candidate) {
+  if (candidate === null || candidate === undefined) return null;
+  const str = String(candidate).trim();
+  if (!str) return null;
+  // Remove wrapping parens/brackets, quotes, and trailing dots: "(Nos)" -> "Nos", "Pcs." -> "Pcs"
+  const cleaned = str.replace(/^[\(\[\{"']+|[\)\]\}"']+$/g, '').replace(/\.+$/, '').trim();
+  if (!cleaned) return null;
+  const key = cleaned.toLowerCase().replace(/[^a-z0-9.]/g, '');
+  if (DIMENSION_EXCLUSIONS.has(key)) return null;
+  if (CANONICAL_UNITS_MAP[key]) {
+    return CANONICAL_UNITS_MAP[key];
+  }
+  // If not in canonical map, but looks like a reasonable unit (1-15 letters/symbols, no sentence)
+  if (/^[a-zA-Z0-9./\-]{1,15}$/.test(cleaned) && !/^\d+$/.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+/**
+ * Extracts a unit of measure from a column header (e.g. "Qty (Nos)", "Quantity in Mtrs", "Req Qty / Set").
+ */
+function extractUnitFromHeader(headerText) {
+  if (typeof headerText !== 'string') return null;
+  const parenMatch = headerText.match(/[\(\[\/]\s*(?:in\s+)?([a-zA-Z./\s]+)[\)\]]?/i) ||
+                     headerText.match(/\bin\s+([a-zA-Z./]+)/i);
+  if (parenMatch && parenMatch[1]) {
+    const candidate = parenMatch[1].trim();
+    const normalized = normalizeUnit(candidate);
+    if (normalized) return normalized;
+  }
+  return null;
+}
+
+/**
+ * Extracts a unit of measure from a text string or cell value (e.g. "10 Nos", "500 Mtr", "25 Sets", "100 Pcs", "50 Kg").
+ */
+function extractUnitFromText(raw) {
+  if (raw === null || raw === undefined) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  // Match patterns like "10 Nos", "500 Mtr", "25 Sets", "100 Pcs", "50 Kg", "10(Nos)", "10-Nos", "Qty: 10 Nos"
+  const regex = /(?:^|[^\w./])\d+(?:\.\d+)?\s*[-/(]?\s*([a-zA-Z./]{1,15})(?:[^\w./]|$)/g;
+  let m;
+  while ((m = regex.exec(str)) !== null) {
+    if (m[1]) {
+      const candidate = m[1].replace(/[.)]+$/, '').trim();
+      const normalized = normalizeUnit(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
+/**
+ * Coerce raw string/cell into a positive quantity number.
+ * Strips common prefixes like "Qty: 10", "Approx 50", "(10)", "~100".
+ * Returns null if missing, non-numeric, or <= 0 according to existing validation rules.
+ */
+function parseValidQuantity(raw) {
+  if (raw === null || raw === undefined) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  const cleaned = str.replace(/,/g, '');
+  const stripped = cleaned
+    .replace(/^(?:qty|quantity|count|approx|total|req|order)?[\s:=~]*/i, '')
+    .replace(/^\(([0-9.]+)\)/, '$1')
+    .trim();
+  const match = stripped.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))/);
+  if (!match) return null;
+  const num = Number(match[1]);
+  if (!Number.isFinite(num) || num <= 0) return null;
+  return num;
+}
+
 /**
  * Map the model's item shape onto the raw row shape rfqIngestionService expects.
  *
@@ -360,7 +550,7 @@ function toRawLineItems(parsed) {
   return items
     .map((item) => {
       if (Array.isArray(item)) {
-        const [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, p6, p7, p8, p9] = item;
+        let [rawDesc, rawQty, rawUnit, rawSpec, rawUnitPrice, rawTotalPrice, p6, p7, p8, p9] = item;
         const itemName = typeof rawDesc === 'string' ? rawDesc.trim() : (rawDesc !== null && rawDesc !== undefined ? String(rawDesc).trim() : '');
         if (!itemName) return null;
 
@@ -391,10 +581,27 @@ function toRawLineItems(parsed) {
           }
         }
 
+        let qty = typeof rawQty === 'number' && Number.isFinite(rawQty) ? (rawQty > 0 ? rawQty : null) : parseValidQuantity(rawQty);
+        let unit = typeof rawUnit === 'string' ? rawUnit.trim() : (rawUnit !== null && rawUnit !== undefined ? String(rawUnit).trim() : '');
+
+        // Detect swapped quantity and unit positions: e.g. ["Item", "Nos", 10, ...]
+        if (qty === null && unit) {
+          const swappedQty = parseValidQuantity(unit);
+          if (swappedQty !== null) {
+            qty = swappedQty;
+            unit = typeof rawQty === 'string' ? rawQty.trim() : '';
+          }
+        }
+
+        if (!unit) {
+          const extracted = extractUnitFromText(rawQty) || extractUnitFromText(itemName) || extractUnitFromText(rawSpec) || '';
+          unit = normalizeUnit(extracted) || extracted;
+        }
+
         const row = {
           itemName,
-          quantity: typeof rawQty === 'number' && Number.isFinite(rawQty) ? rawQty : parseValidQuantity(rawQty),
-          unit: typeof rawUnit === 'string' ? rawUnit.trim() : '',
+          quantity: qty,
+          unit,
           technicalSpecs: typeof rawSpec === 'string' ? rawSpec.trim() : '',
           category: rawCat,
           targetDate: typeof rawDate === 'string' && rawDate.trim() ? rawDate.trim() : docDate,
@@ -409,15 +616,38 @@ function toRawLineItems(parsed) {
         return row;
       }
 
+      const rawItemDesc = item?.itemDescription || item?.itemName || item?.description || item?.product || item?.particulars || item?.item || item?.material || item?.itemDetails || '';
+      const itemName = typeof rawItemDesc === 'string' ? rawItemDesc.trim() : String(rawItemDesc || '').trim();
+      if (!itemName) return null;
+
+      const rawItemQty = item?.quantity ?? item?.qty ?? item?.Quantity ?? item?.QTY ?? item?.orderQty ?? item?.purchaseQty ?? item?.count ?? item?.reqQty ?? item?.requiredQuantity;
+      let rawItemUnit = item?.unit ?? item?.uom ?? item?.UOM ?? item?.unitOfMeasure ?? item?.unit_of_measure ?? item?.Unit ?? item?.units ?? item?.measure;
+
+      let qty = typeof rawItemQty === 'number' && Number.isFinite(rawItemQty) ? (rawItemQty > 0 ? rawItemQty : null) : parseValidQuantity(rawItemQty);
+      let unit = typeof rawItemUnit === 'string' ? rawItemUnit.trim() : (rawItemUnit !== null && rawItemUnit !== undefined ? String(rawItemUnit).trim() : '');
+
+      if (qty === null && unit) {
+        const swappedQty = parseValidQuantity(unit);
+        if (swappedQty !== null) {
+          qty = swappedQty;
+          unit = typeof rawItemQty === 'string' ? rawItemQty.trim() : '';
+        }
+      }
+
+      if (!unit) {
+        const extracted = extractUnitFromText(rawItemQty) || extractUnitFromText(itemName) || extractUnitFromText(item?.specification || item?.technicalSpecs || item?.specs) || '';
+        unit = normalizeUnit(extracted) || extracted;
+      }
+
       const row = {
-        itemName: typeof item?.itemDescription === 'string' ? item.itemDescription.trim() : (typeof item?.itemName === 'string' ? item.itemName.trim() : ''),
-        quantity: item?.quantity,
-        unit: typeof item?.unit === 'string' ? item.unit.trim() : '',
-        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : (typeof item?.technicalSpecs === 'string' ? item.technicalSpecs.trim() : ''),
+        itemName,
+        quantity: qty,
+        unit,
+        technicalSpecs: typeof item?.specification === 'string' ? item.specification.trim() : (typeof item?.technicalSpecs === 'string' ? item.technicalSpecs.trim() : (typeof item?.specs === 'string' ? item.specs.trim() : '')),
         category: typeof item?.category === 'string' ? item.category.trim() : (typeof item?.minorCategory === 'string' ? item.minorCategory.trim() : ''),
         targetDate: typeof item?.targetDate === 'string' ? item.targetDate.trim() : docDate,
-        unitPrice: normalizeAmount(item?.unitPrice),
-        totalPrice: normalizeAmount(item?.totalPrice),
+        unitPrice: normalizeAmount(item?.unitPrice ?? item?.rate ?? item?.price),
+        totalPrice: normalizeAmount(item?.totalPrice ?? item?.total ?? item?.amount),
       };
 
       if (typeof item?.minorCategory === 'string' && item.minorCategory.trim()) {
@@ -427,7 +657,7 @@ function toRawLineItems(parsed) {
         row.majorCategory = item.majorCategory.trim();
       }
 
-      if (item?.brand) row.brand = String(item.brand).trim();
+      if (item?.brand || item?.make || item?.manufacturer) row.brand = String(item.brand || item.make || item.manufacturer).trim();
       if (item?.deliveryCity || parsed?.deliveryCity) {
         row.deliveryCity = String(item?.deliveryCity || parsed.deliveryCity).trim();
       }
@@ -503,9 +733,12 @@ function matchHeaderField(headerText) {
   if (!clean || clean.length > 35) return null;
   // Exclude vendor quote dates from matching as target delivery date
   if (clean.startsWith('quoted') || clean.startsWith('vendorquoted') || clean.startsWith('supplierquoted')) return null;
-  if (/^(?:item|itemname|itemdesc|itemdescription|product|material|description|particulars|lineitem|itemdetails|materialdescription)$/.test(clean)) return 'itemDescription';
-  if (/^(?:qty|quantity|purchaseqty|orderqty|count|volume|reqqty|requiredqty|orderquantity)$/.test(clean)) return 'quantity';
-  if (/^(?:unit|uom|unitofmeasure|units|measure)$/.test(clean)) return 'unit';
+  if (/^(?:item|items|itemname|itemdesc|itemdescription|product|products|productname|material|materials|description|desc|particulars|lineitem|itemdetails|materialdescription|itemtitle|workdescription|scopeofwork)$/.test(clean)) return 'itemDescription';
+  if (
+    /^(?:qty|quantity|purchaseqty|orderqty|count|volume|reqqty|requiredqty|orderquantity|totalqty|totalquantity|orderedqty|requiredquantity|quantityrequired|qtyrequired|boqqty|indentqty|rfqqty|noofunits|numberofunits|scopeqty|quantities|qtyuom|quantityunit|noofitems|numberofitems)$/.test(clean) ||
+    /^(?:qty|quantity|orderqty|reqqty|totalqty)(?:in)?(?:nos|units|pcs|pieces|mtr|mtrs|meters|kg|kgs|sets|bags|boxes|pairs|pkts|tons|numbers)$/.test(clean)
+  ) return 'quantity';
+  if (/^(?:unit|uom|unitofmeasure|units|measure|unitofmeasurement|unitsofmeasure|unituom|uomunit|measurementunit|unitofissue|unittype|um|uomcode|unitcode|uomname|measuringunit)$/.test(clean)) return 'unit';
   if (/^(?:spec|specs|specification|specifications|techspec|techspecs|technicalspecs|technicalspecifications|technicalspecification|grade|materialgrade|standard|dimensions|size|details)$/.test(clean)) return 'specification';
   if (/^(?:unitprice|rate|unitrate|priceperunit|price|rateperunit)$/.test(clean)) return 'unitPrice';
   if (/^(?:totalprice|totalamount|total|linetotal|amount)$/.test(clean)) return 'totalPrice';
@@ -521,22 +754,6 @@ function matchHeaderField(headerText) {
   if (/^(?:category|majorcategory|minorcategory)$/.test(clean)) return 'category';
   if (/^(?:sno|slno|srno|itemno|no)$/.test(clean)) return 'sNo';
   return null;
-}
-
-/**
- * Coerce raw string/cell into a positive quantity number.
- * Returns null if missing, non-numeric, or <= 0 according to existing validation rules.
- */
-function parseValidQuantity(raw) {
-  if (raw === null || raw === undefined) return null;
-  const str = String(raw).trim();
-  if (!str) return null;
-  const cleaned = str.replace(/,/g, '');
-  const match = cleaned.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))/);
-  if (!match) return null;
-  const num = Number(match[1]);
-  if (!Number.isFinite(num) || num <= 0) return null;
-  return num;
 }
 
 /**
@@ -603,6 +820,12 @@ function extractSpreadsheetLineItems(text) {
           if (field !== 'sNo') {
             recognizedCount++;
           }
+          if (field === 'quantity') {
+            const hUnit = extractUnitFromHeader(cell);
+            if (hUnit) {
+              tempMap.set('headerQuantityUnit', hUnit);
+            }
+          }
         }
       });
 
@@ -643,6 +866,7 @@ function extractSpreadsheetLineItems(text) {
     const descIdx = headerColMap.get('itemDescription') ?? (headerColMap.get('sNo') === 0 ? 1 : 0);
     const qtyIdx = headerColMap.get('quantity') ?? (headerColMap.get('sNo') === 0 ? 2 : 1);
     const unitIdx = headerColMap.get('unit');
+    const headerQtyUnit = headerColMap.get('headerQuantityUnit') || null;
     const specIdx = headerColMap.get('specification');
     const unitPriceIdx = headerColMap.get('unitPrice');
     const totalPriceIdx = headerColMap.get('totalPrice');
@@ -694,8 +918,7 @@ function extractSpreadsheetLineItems(text) {
       }
 
       const rawUnit = unitIdx !== undefined ? cells[unitIdx] : '';
-      // A row with no stated unit keeps the unit as missing (null). It is never filled with 'Nos'.
-      const unit = rawUnit ? rawUnit.trim() : null;
+      const unit = rawUnit ? rawUnit.trim() : (extractUnitFromText(rawQty) || headerQtyUnit || extractUnitFromText(itemName) || extractUnitFromText(spec) || null);
 
       const rawCatVal = (catIdx !== undefined && cells[catIdx]) ? cells[catIdx].trim() : (sheet.sheetName || '');
       const row = {
@@ -1575,6 +1798,8 @@ async function extractLineItems(input = {}) {
           if (!tab) return item;
           return {
             ...item,
+            quantity: (typeof item.quantity === 'number' && item.quantity > 0) ? item.quantity : (tab.quantity || item.quantity),
+            unit: item.unit || tab.unit || '',
             targetDate: item.targetDate || tab.targetDate || '',
             brand: item.brand || tab.brand || '',
             deliveryLocation: item.deliveryLocation || tab.deliveryLocation || '',
@@ -2170,6 +2395,9 @@ module.exports = {
   extractSpreadsheetLineItems,
   parseValidQuantity,
   matchHeaderField,
+  normalizeUnit,
+  extractUnitFromText,
+  extractUnitFromHeader,
   clearKeyCooldowns,
   isKeyInCooldown,
   markKeyCooldown,

@@ -6711,3 +6711,33 @@ create the pr and merge in test-v3
 ```
 
 ---
+
+### Prompt 285
+
+**Timestamp**: 2026-11-19T12:10:38+05:30
+
+```text
+Fix the RFQ extraction issue where unit and quantity values are not being extracted when a buyer uploads an RFQ document.
+
+Requirements:
+1. Identify why unit and quantity fields are not being extracted.
+2. Fix the extraction logic to correctly capture unit and quantity from uploaded RFQ documents.
+3. Ensure extracted values are mapped to the correct line items.
+4. Verify that the extracted unit and quantity are displayed correctly in the RFQ details.
+5. Test with different RFQ document formats to ensure extraction works consistently.
+
+**Important:** Fix this issue completely, test and verify all related functionality, and commit this issue's changes. Only after successfully completing the commit, start the next issue.
+Implement this issue immediatly without thinking
+```
+
+---
+
+### Prompt 286
+
+**Timestamp**: 2026-11-19T12:20:57+05:30
+
+```text
+dont think direct implement
+```
+
+---
