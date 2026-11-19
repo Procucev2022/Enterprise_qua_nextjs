@@ -840,7 +840,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!initialMajor && cleanedMinors.length > 0) {
       initialMajor = getMajorForCategory(cleanedMinors[0]) || '';
     }
-    setSelectedVendorForCrud(vendor);
+    const richer =
+      mergedVendors.find((v) => (vendor.id && v.id === vendor.id) || (vendor.email && v.email === vendor.email)) ||
+      vendor;
+    const resolvedGstin = String(
+      richer.gstin ||
+      richer.gst ||
+      (richer as any).gstNumber ||
+      (richer as any).raw?.gstin ||
+      (richer as any).raw?.gstNumber ||
+      (richer as any).storeRecord?.gstin ||
+      vendor.gstin ||
+      vendor.gst ||
+      vendor.gstNumber ||
+      ''
+    ).trim().toUpperCase();
+    setSelectedVendorForCrud({
+      ...richer,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
+    });
     setFormName(vendor.name || '');
     setFormBrandName(vendor.brandName || vendor.name || '');
     setFormMajorCategory(initialMajor);
@@ -974,7 +992,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Open View Profile Modal
   const handleOpenViewModal = (vendor: any) => {
-    setSelectedVendorForCrud(vendor);
+    const richer =
+      mergedVendors.find((v) => (vendor.id && v.id === vendor.id) || (vendor.email && v.email === vendor.email)) ||
+      vendor;
+    const resolvedGstin = String(
+      richer.gstin ||
+      richer.gst ||
+      (richer as any).gstNumber ||
+      (richer as any).raw?.gstin ||
+      (richer as any).raw?.gstNumber ||
+      (richer as any).storeRecord?.gstin ||
+      vendor.gstin ||
+      vendor.gst ||
+      vendor.gstNumber ||
+      ''
+    ).trim().toUpperCase();
+    setSelectedVendorForCrud({
+      ...richer,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
+    });
     setViewModalOpen(true);
   };
 
@@ -1485,6 +1521,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       finalMajor = findMajorForMinor(currentMinors[0]) || '';
     }
 
+    const resolvedGstin = String(
+      vendor.gstin ||
+      vendor.gst ||
+      (vendor as any).gstNumber ||
+      (vendor as any).raw?.gstin ||
+      (vendor as any).raw?.gstNumber ||
+      (vendor as any).raw?.gst ||
+      (vendor as any).storeRecord?.gstin ||
+      ''
+    ).trim().toUpperCase();
+
     const hasLocChanges =
       loc.location !== (vendor.location || '') ||
       loc.city !== (vendor.city || '') ||
@@ -1493,13 +1540,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const hasCategoryChanges =
       currentMinors.length !== (vendor.minorCategories || []).length ||
       (finalMajor && finalMajor !== (vendor.majorCategory || ''));
+    const hasGstinChanges =
+      Boolean(resolvedGstin) && (vendor.gstin !== resolvedGstin || vendor.gst !== resolvedGstin);
 
-    if (!hasLocChanges && !hasCategoryChanges) {
+    if (!hasLocChanges && !hasCategoryChanges && !hasGstinChanges) {
       return vendor;
     }
 
     return {
       ...vendor,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
       ...(loc.location ? { location: loc.location } : {}),
       ...(loc.city ? { city: loc.city } : {}),
       ...(loc.state ? { state: loc.state } : {}),
@@ -1534,7 +1584,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const vCategory = rawCategory.toLowerCase();
     const vMinors = (v.minorCategories || []).join(' ').toLowerCase();
     const vLocation = (v.location || v.city || v.state || '').toLowerCase();
-    const vGstin = (v.gstin || '').toLowerCase();
+    const vGstin = (v.gstin || v.gst || v.gstNumber || '').toLowerCase();
 
     const matchesSearch =
       !q ||
@@ -2918,7 +2968,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       data-testid="edit-statutory-gstin"
                       className="block w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
                     >
-                      {statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}
+                      {statutoryText(
+                        selectedVendorForCrud.gstin ||
+                        selectedVendorForCrud.gst ||
+                        (selectedVendorForCrud as any).gstNumber ||
+                        (selectedVendorForCrud as any).raw?.gstin ||
+                        (selectedVendorForCrud as any).raw?.gstNumber ||
+                        (selectedVendorForCrud as any).storeRecord?.gstin
+                      )}
                     </span>
                   </div>
                   <div>
@@ -3176,7 +3233,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.gstLabel}</span>
-                    <strong data-testid="view-statutory-gstin">{statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}</strong>
+                    <strong data-testid="view-statutory-gstin">
+                      {statutoryText(
+                        selectedVendorForCrud.gstin ||
+                        selectedVendorForCrud.gst ||
+                        (selectedVendorForCrud as any).gstNumber ||
+                        (selectedVendorForCrud as any).raw?.gstin ||
+                        (selectedVendorForCrud as any).raw?.gstNumber ||
+                        (selectedVendorForCrud as any).storeRecord?.gstin
+                      )}
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.panLabel}</span>

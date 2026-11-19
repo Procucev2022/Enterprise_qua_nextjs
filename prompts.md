@@ -6795,3 +6795,31 @@ resume
 Improve all the tables: Truncation, compact, sorting, column selector and single field in single column and not clubbing in a single column
 ```
 ---
+
+### Prompt 297
+**Timestamp**: 2026-11-19T07:34:59+05:30
+```text
+In the Vendor directory table, view details button, though added GSTIN in prior is not reflecting here
+```
+---
+
+### Prompt 298
+**Timestamp**: 2026-11-19T09:41:38+05:30
+```text
+resume
+```
+---
+
+### Prompt 299
+**Timestamp**: 2026-11-19T09:59:44+05:30
+```text
+resume
+```
+---
+
+### Prompt 300
+**Timestamp**: 2026-11-19T10:10:55+05:30
+```text
+resume
+```
+---

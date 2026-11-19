@@ -2106,12 +2106,18 @@ export function reconcileBuyerVendorsWithUploadHistory(
     .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
     .map((val) => val.trim().toLowerCase());
 
-  const seenEmails = new Set(
-    buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-  );
-  const seenNames = new Set(
-    buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
-  );
+  const vendorsCopy = buyerVendors.map((v) => ({ ...v }));
+  const existingByEmail = new Map<string, VendorEntry>();
+  const existingByCode = new Map<string, VendorEntry>();
+  const existingByName = new Map<string, VendorEntry>();
+  for (const v of vendorsCopy) {
+    const eMail = String(v.email || '').trim().toLowerCase();
+    const eCode = String(v.vendorCode || '').trim().toLowerCase();
+    const eName = String(v.name || '').trim().toLowerCase();
+    if (eMail) existingByEmail.set(eMail, v);
+    if (eCode) existingByCode.set(eCode, v);
+    if (eName) existingByName.set(eName, v);
+  }
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
@@ -2134,15 +2140,31 @@ export function reconcileBuyerVendorsWithUploadHistory(
       }
       const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
       const rawEmail = String(rec.email || '').trim();
+      const rawCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rawName && !rawEmail) return;
 
       const emailKey = rawEmail.toLowerCase();
       const nameKey = rawName.toLowerCase();
-      if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
+      const recGstin = String(rec.gstin || rec.gstNumber || rec.gst || (rec as Record<string, unknown>).taxId || '').trim().toUpperCase();
+
+      const matchedExisting =
+        (emailKey && existingByEmail.get(emailKey)) ||
+        (rawCode && existingByCode.get(rawCode)) ||
+        (nameKey && existingByName.get(nameKey));
+
+      if (matchedExisting) {
+        if (recGstin && (!matchedExisting.gstin || !matchedExisting.gst)) {
+          matchedExisting.gstin = matchedExisting.gstin || recGstin;
+          matchedExisting.gst = matchedExisting.gst || recGstin;
+        }
+        if (rawCode && !matchedExisting.vendorCode) {
+          matchedExisting.vendorCode = String(rec.vendorCode).trim();
+        }
         return;
       }
-      if (emailKey) seenEmails.add(emailKey);
-      if (nameKey) seenNames.add(nameKey);
+      if (emailKey) existingByEmail.set(emailKey, {} as VendorEntry);
+      if (rawCode) existingByCode.set(rawCode, {} as VendorEntry);
+      if (nameKey) existingByName.set(nameKey, {} as VendorEntry);
 
       const loc = resolveVendorLocationFields({
         address: rec.address ? String(rec.address) : '',
@@ -2170,6 +2192,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
 
       extras.push({
         id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
+        vendorCode: String(rec.vendorCode || '').trim() || undefined,
         name: rawName || rawEmail,
         contactPerson: String(rec.contactPerson || ''),
         phone: String(rec.phone || ''),
@@ -2186,7 +2209,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
         addedByBuyerCompany: activeBuyerAccount?.organizationName,
         buyerId: activeBuyerAccount?.id,
         buyerAccountId: activeBuyerAccount?.id,
-        ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
+        ...(recGstin ? { gstin: recGstin, gst: recGstin } : {}),
         ...(city ? { city } : {}),
         ...(state ? { state } : {}),
         ...(loc.pincode ? { pincode: loc.pincode } : {}),
@@ -2194,7 +2217,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
     });
   });
 
-  return extras.length > 0 ? [...buyerVendors, ...extras] : [...buyerVendors];
+  return extras.length > 0 ? [...vendorsCopy, ...extras] : vendorsCopy;
 }
 
 

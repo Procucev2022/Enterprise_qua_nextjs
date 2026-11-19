@@ -1134,7 +1134,7 @@ export default function SupplierDossierDrawer({
                   <div>
                     <span className="text-slate-400">GSTIN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.gstin || seller.gstNumber || EMPTY_VALUE}
+                      {seller.gstin || seller.gstNumber || seller.gst || EMPTY_VALUE}
                     </span>
                   </div>
                   <div>

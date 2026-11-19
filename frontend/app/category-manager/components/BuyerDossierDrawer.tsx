@@ -2924,7 +2924,9 @@ export default function BuyerDossierDrawer({
               </div>
               <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.gstinLabel}</span>
-                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.gstin || EMPTY_VALUE}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedVendorForModal.gstin || selectedVendorForModal.gst || (selectedVendorForModal as any).gstNumber || EMPTY_VALUE}
+                </span>
               </div>
               <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
                 <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.panLabel}</span>

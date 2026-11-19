@@ -543,7 +543,7 @@ function mapRowToVendorMaster(row) {
     city: loc.city,
     state: loc.state,
     pincode: loc.pincode,
-    gstin: text(row.gstin),
+    gstin: text(row.gstin) || text(rawMeta.gstin) || text(rawMeta.gstNumber) || text(rawMeta.gst) || null,
     rating: numeric(row.rating),
     ...(rawMeta.isActive === false || rawMeta.disabled === true || String(rawMeta.status || '').trim().toUpperCase() === 'INACTIVE'
       ? {

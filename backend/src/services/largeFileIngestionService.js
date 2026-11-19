@@ -736,6 +736,7 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
       vendorCode,
       companyName: trimmedCompany,
       phone: resolvedPhone,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gstNumber: resolvedGstin, gst: resolvedGstin } : {}),
     });
   }
 

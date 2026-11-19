@@ -183,6 +183,7 @@ export default function VendorDetailsModal({
   const displayGstin =
     matchedVendor?.gstin ||
     matchedVendor?.gst ||
+    (matchedVendor as any)?.gstNumber ||
     null;
 
   const rawPan =

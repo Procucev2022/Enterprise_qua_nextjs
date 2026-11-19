@@ -61,15 +61,17 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         .map((m) => [m.vendorRecordId, m])
     );
 
-    const seenEmails = new Set(
-      existingVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-    );
-    const seenCodes = new Set(
-      existingVendors.map((v) => String(v.vendorCode || '').trim().toLowerCase()).filter(Boolean)
-    );
-    const seenMasterIds = new Set(
-      existingVendors.map((v) => String(v.masterRecordId || '').trim().toLowerCase()).filter(Boolean)
-    );
+    const existingByMasterId = new Map();
+    const existingByEmail = new Map();
+    const existingByCode = new Map();
+    for (const v of existingVendors) {
+      const eMid = String(v.masterRecordId || '').trim().toLowerCase();
+      const eMail = String(v.email || '').trim().toLowerCase();
+      const eCode = String(v.vendorCode || '').trim().toLowerCase();
+      if (eMid) existingByMasterId.set(eMid, v);
+      if (eMail) existingByEmail.set(eMail, v);
+      if (eCode) existingByCode.set(eCode, v);
+    }
 
     const fallbackVendors = [];
     for (const rec of masterRecords) {
@@ -77,16 +79,24 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
       const normalizedEmail = String(rec.email || '').trim().toLowerCase();
       const normalizedCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rec.companyName && !normalizedEmail) continue;
-      if (
-        (normalizedMasterId && seenMasterIds.has(normalizedMasterId)) ||
-        (normalizedEmail && seenEmails.has(normalizedEmail)) ||
-        (normalizedCode && seenCodes.has(normalizedCode))
-      ) {
+
+      const recGstin = String(rec.gstin || rec.gstNumber || rec.gst || '').trim().toUpperCase() || null;
+
+      const matchedExisting =
+        (normalizedMasterId && existingByMasterId.get(normalizedMasterId)) ||
+        (normalizedEmail && existingByEmail.get(normalizedEmail)) ||
+        (normalizedCode && existingByCode.get(normalizedCode));
+
+      if (matchedExisting) {
+        if (recGstin && (!matchedExisting.gstin || !matchedExisting.gst)) {
+          matchedExisting.gstin = matchedExisting.gstin || recGstin;
+          matchedExisting.gst = matchedExisting.gst || recGstin;
+        }
+        if (rec.vendorCode && !matchedExisting.vendorCode) {
+          matchedExisting.vendorCode = rec.vendorCode;
+        }
         continue;
       }
-      if (normalizedMasterId) seenMasterIds.add(normalizedMasterId);
-      if (normalizedEmail) seenEmails.add(normalizedEmail);
-      if (normalizedCode) seenCodes.add(normalizedCode);
 
       const mapping = mappingByRecordId.get(rec.id);
       const isRejectedMapping =
@@ -142,7 +152,8 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
         city: loc.city || null,
         state: loc.state || null,
         pincode: loc.pincode || null,
-        gstin: rec.gstin || null,
+        gstin: recGstin || null,
+        gst: recGstin || null,
         majorCategory: resolvedMajor.trim(),
         minorCategories: resolvedMinors,
         clientMappedCategories: [...resolvedMinors],

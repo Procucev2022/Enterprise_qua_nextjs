@@ -1959,9 +1959,16 @@ class StoreService {
     const resolvedMinorCategories = cleanCategories.minorCategories;
     const shouldSyncClientMapped =
       resolvedMinorCategories.length > 0 && safeVendorData.clientMappedCategories === undefined;
+    const resolvedGstin = String(
+      safeVendorData.gstin ||
+      safeVendorData.gst ||
+      safeVendorData.gstNumber ||
+      ''
+    ).trim().toUpperCase();
 
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
       ...(resolvedMajorCategory ? { majorCategory: resolvedMajorCategory } : safeVendorData.majorCategory !== undefined ? { majorCategory: '' } : {}),
       ...(safeVendorData.minorCategories !== undefined || resolvedMinorCategories.length > 0
         ? { minorCategories: resolvedMinorCategories }
@@ -2318,7 +2325,8 @@ class StoreService {
       city: resolvedLocation.city || '',
       state: resolvedLocation.state || '',
       pincode: resolvedLocation.pincode || '',
-      gstin: row.gstin || '',
+      gstin: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
+      gst: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
       products: row.products || '',
       // Not evaluated yet, so no rating or score is recorded. An unrated supplier
       // must not carry a score that nobody assessed.
@@ -11029,8 +11037,12 @@ class StoreService {
         if (recLoc.state) updatedVendor.state = recLoc.state;
         if (recLoc.pincode) updatedVendor.pincode = recLoc.pincode;
         if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
-        const rawGstin = rec.gstin || rec.gstNumber;
-        if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
+        const rawGstin = rec.gstin || rec.gstNumber || rec.gst;
+        if (rawGstin) {
+          const cleanGstin = String(rawGstin).trim().toUpperCase();
+          updatedVendor.gstin = cleanGstin;
+          updatedVendor.gst = cleanGstin;
+        }
         if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
           updatedVendor.minorCategories = minorCategories;
@@ -11065,7 +11077,8 @@ class StoreService {
         continue;
       }
 
-      const rawNewGstin = rec.gstin || rec.gstNumber;
+      const rawNewGstin = rec.gstin || rec.gstNumber || rec.gst;
+      const cleanNewGstin = rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null;
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
@@ -11073,7 +11086,8 @@ class StoreService {
         buyerEmail: buyerEmail || null,
         addedByBuyerCompany: (attributedAccount && attributedAccount.organizationName) || null,
         vendorCode: rec.vendorCode ? String(rec.vendorCode).trim() : null,
-        gstin: rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null,
+        gstin: cleanNewGstin,
+        gst: cleanNewGstin,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -11446,7 +11460,8 @@ class StoreService {
       city: loc.city || null,
       state: loc.state || null,
       pincode: loc.pincode || null,
-      gstin: vendorData.gstin || null,
+      gstin: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
+      gst: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
       vendorCode: vendorData.vendorCode || null,
       majorCategory,
       minorCategories,

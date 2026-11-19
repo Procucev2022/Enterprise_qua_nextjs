@@ -191,6 +191,11 @@ function normalizeVendorRecord(vendor) {
   if (Object.prototype.hasOwnProperty.call(vendor, 'email')) {
     normalized.email = normalizeVendorEmail(vendor.email);
   }
+  const resolvedGstin = String(normalized.gstin || normalized.gst || normalized.gstNumber || '').trim().toUpperCase();
+  if (resolvedGstin) {
+    normalized.gstin = resolvedGstin;
+    normalized.gst = resolvedGstin;
+  }
   return normalized;
 }
 
@@ -199,6 +204,11 @@ function parseVendorRaw(value) {
   if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
     delete vendor.tempPassword;
     clearDummyPanFields(vendor);
+    const resolvedGstin = String(vendor.gstin || vendor.gst || vendor.gstNumber || '').trim().toUpperCase();
+    if (resolvedGstin) {
+      vendor.gstin = resolvedGstin;
+      vendor.gst = resolvedGstin;
+    }
   }
   return vendor;
 }
@@ -1502,6 +1512,14 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
     const rawParsed = typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw ? { ...row.raw } : {});
     const parsedVendor = parseVendorRaw(row.raw) || {};
     const comp = row.company_name || rawParsed.companyName || 'Vendor Company';
+    const resolvedGstin = String(
+      rawParsed.gstin ||
+      rawParsed.gst ||
+      rawParsed.gstNumber ||
+      parsedVendor.gstin ||
+      parsedVendor.gst ||
+      ''
+    ).trim().toUpperCase();
     return {
       ...parsedVendor,
       ...rawParsed,
@@ -1514,7 +1532,8 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
       status: row.status || rawParsed.status || 'ACTIVE',
       source: rawParsed.source || 'buyer_uploaded',
       pan: rawParsed.pan || '',
-      gstin: rawParsed.gstin || '',
+      gstin: resolvedGstin,
+      ...(resolvedGstin ? { gst: resolvedGstin } : {}),
       created_at: row.created_at || rawParsed.created_at,
       createdAt: row.created_at || rawParsed.createdAt,
       updated_at: row.updated_at || rawParsed.updated_at,

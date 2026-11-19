@@ -257,7 +257,7 @@ function splitBuyerLockedFields(body) {
 // resolved server-side from the authenticated buyer's own account below.
 const VENDOR_BUYER_CREATE_FIELDS = [
   'name', 'brandName', 'email', 'phone', 'contactPerson', 'contactDesignation',
-  'gstin', 'gst', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
+  'gstin', 'gst', 'gstNumber', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
   'country', 'pincode', 'majorCategory', 'minorCategories', 'products',
 ];
 
@@ -933,6 +933,11 @@ async function createVendor(req, res, next) {
       body = clearDummyPanFields(pickVendorBuyerCreateFields(body));
     } else {
       return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
+    }
+    const resolvedCreateGstin = String(body.gstin || body.gst || body.gstNumber || '').trim().toUpperCase();
+    if (resolvedCreateGstin) {
+      body.gstin = resolvedCreateGstin;
+      body.gst = resolvedCreateGstin;
     }
     const cleanVendorName = String(body.name || '').trim();
     const cleanCategories = resolveValidVendorCategories(body);
@@ -1718,7 +1723,8 @@ async function empanelFallbackVendorForEvaluation({
       city: candidate.city || null,
       state: candidate.state || null,
       pincode: candidate.pincode || null,
-      gstin: candidate.gstin || null,
+      gstin: String(candidate.gstin || candidate.gstNumber || candidate.gst || '').trim().toUpperCase() || null,
+      gst: String(candidate.gstin || candidate.gstNumber || candidate.gst || '').trim().toUpperCase() || null,
       vendorCode: candidate.vendorCode || null,
       majorCategory: cleanCategories.majorCategory || '',
       minorCategories: cleanCategories.minorCategories,
@@ -1794,12 +1800,26 @@ async function resolveFallbackVendorRecord({
         })
         : { majorCategory: '', minorCategories: [], hasCategory: false };
       const payloadCategories = resolveValidVendorCategories({ ...bodyData, ...(updates || {}) });
+      const resolvedMasterGstin = String(
+        masterRec.gstin ||
+        masterRec.gstNumber ||
+        masterRec.gst ||
+        bodyData.gstin ||
+        bodyData.gst ||
+        bodyData.gstNumber ||
+        updates?.gstin ||
+        updates?.gst ||
+        updates?.gstNumber ||
+        ''
+      ).trim().toUpperCase() || null;
       const effectiveCandidate = {
         ...masterRec,
         ...(updates || {}),
         masterRecordId: masterRec.id,
         name: updates?.name || masterRec.companyName,
         email: candidateEmail || null,
+        gstin: resolvedMasterGstin,
+        gst: resolvedMasterGstin,
         majorCategory: payloadCategories.majorCategory || mappingCategories.majorCategory || '',
         minorCategories:
           payloadCategories.minorCategories.length > 0
@@ -1835,7 +1855,8 @@ async function resolveFallbackVendorRecord({
       city: updates?.city || bodyData.city || null,
       state: updates?.state || bodyData.state || null,
       pincode: updates?.pincode || bodyData.pincode || null,
-      gstin: updates?.gstin || bodyData.gstin || null,
+      gstin: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+      gst: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
       vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
       majorCategory: updates?.majorCategory ?? bodyData.majorCategory,
       minorCategories: updates?.minorCategories ?? bodyData.minorCategories,
