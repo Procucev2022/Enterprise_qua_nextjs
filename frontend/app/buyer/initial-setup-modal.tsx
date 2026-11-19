@@ -2035,7 +2035,15 @@ export default function InitialSetupModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+    <div
+      data-testid="initial-setup-modal-backdrop"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          void handleCloseModal();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in"
+    >
       <div className="glass-panel w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl p-6 sm:p-8 bg-white dark:bg-gray-900 border-2 border-indigo-500/30 dark:border-indigo-500/40 shadow-2xl space-y-6 animate-scale-up">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-gray-800 pb-5">

@@ -507,11 +507,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         onChange={(e) => handleVendorPhoneChange(e.target.value)}
         aria-invalid={Boolean(phoneFieldError)}
         aria-describedby={phoneFieldError ? `${id}-error` : undefined}
-        className={`w-full text-xs p-2 rounded-lg border bg-white dark:bg-gray-900 ${
-          phoneFieldError
-            ? 'border-rose-400 dark:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30'
-            : 'border-slate-200 dark:border-gray-700'
-        }`}
+        className={`w-full text-xs p-2 rounded-lg border bg-white dark:bg-gray-900 ${phoneFieldError
+          ? 'border-rose-400 dark:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30'
+          : 'border-slate-200 dark:border-gray-700'
+          }`}
       />
       {phoneFieldError && (
         <p id={`${id}-error`} className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">
@@ -1284,6 +1283,39 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorForCrud(null);
   };
 
+  const closeAddModal = () => setAddModalOpen(false);
+  const closeEditModal = () => {
+    setEditModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeViewModal = () => {
+    setViewModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeCategoryModal = () => {
+    setCategoryModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeStatusModal = () => {
+    setStatusModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeBulkStatusModal = () => setBulkStatusModalOpen(false);
+  const closeRevisionModal = () => setSelectedVendorForRevision(null);
+  const closeUploadHistoryModal = () => {
+    setShowUploadHistoryModal(false);
+    setSelectedHistoryBatch(null);
+    setBatchSearchQuery('');
+  };
+
+  const handleBackdropClick =
+    (onClose: () => void, blocked = false) =>
+    (e: React.MouseEvent<HTMLDivElement>) => {
+      if (!blocked && e.target === e.currentTarget) {
+        onClose();
+      }
+    };
+
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
     if (!targetVendor || isRequestingEvaluation) return;
@@ -1620,11 +1652,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           <div className="space-y-1">
             <div className="flex items-center gap-1.5 flex-wrap">
               <span
-                className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${
-                  isPlaceholderVendorCategory(vendor.majorCategory)
-                    ? 'text-amber-600 dark:text-amber-400 italic'
-                    : 'text-slate-500 dark:text-gray-400'
-                }`}
+                className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
+                  ? 'text-amber-600 dark:text-amber-400 italic'
+                  : 'text-slate-500 dark:text-gray-400'
+                  }`}
                 title={
                   isPlaceholderVendorCategory(vendor.majorCategory)
                     ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
@@ -1794,11 +1825,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         ? `edit-category-vendor-${vendor.id}`
                         : `add-category-vendor-${vendor.id}`
                     }
-                    className={`inline-flex items-center gap-1 text-[10px] font-bold rounded-md px-1.5 py-0.5 transition-colors ${
-                      normalizedRowMinors.length === 0
-                        ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100'
-                        : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50'
-                    }`}
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold rounded-md px-1.5 py-0.5 transition-colors ${normalizedRowMinors.length === 0
+                      ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                      : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50'
+                      }`}
                   >
                     <Tag size={10} />
                     {normalizedRowMinors.length > 0
@@ -1859,8 +1889,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           ) : (
             <span
               className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
-                  ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                  : getStatusStyle(vendor.status || '')
+                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
+                : getStatusStyle(vendor.status || '')
                 }`}
             >
               {currentMode === 'mode_1' && !isUploaded
@@ -2250,7 +2280,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ADD VENDOR MODAL */}
       {/* ========================================================================= */}
       {addModalOpen && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="add-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeAddModal, isSubmittingAdd)}
+        >
           <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -2267,7 +2301,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <button
                 type="button"
                 data-testid="close-add-vendor-modal"
-                onClick={() => setAddModalOpen(false)}
+                onClick={closeAddModal}
                 disabled={isSubmittingAdd}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
               >
@@ -2476,7 +2510,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* EDIT VENDOR MODAL */}
       {/* ========================================================================= */}
       {editModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="edit-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeEditModal, isSubmittingEdit)}
+        >
           <div className="modal-content max-w-2xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -2495,10 +2533,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setEditModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeEditModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
               >
                 <X size={20} />
@@ -2786,7 +2821,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* VIEW VENDOR DETAILS / PROFILE MODAL */}
       {/* ========================================================================= */}
       {viewModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="view-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeViewModal)}
+        >
           <div className="modal-content max-w-2xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -2810,10 +2849,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setViewModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeViewModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
               >
                 <X size={20} />
@@ -2855,11 +2891,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
                   <div
-                    className={`font-bold text-[10.5px] mt-0.5 truncate ${
-                      isVendorInactive(selectedVendorForCrud)
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : 'text-emerald-600 dark:text-emerald-400'
-                    }`}
+                    className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                      }`}
                   >
                     {isVendorInactive(selectedVendorForCrud)
                       ? UI_STRINGS.vendorStatusControl.inactiveBadge
@@ -3093,7 +3128,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ASSIGN / UPDATE VENDOR CATEGORY MODAL */}
       {/* ========================================================================= */}
       {categoryModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="vendor-category-modal-backdrop"
+          onClick={handleBackdropClick(closeCategoryModal, isSavingCategories)}
+        >
           <div
             data-testid="vendor-category-modal"
             className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col"
@@ -3118,10 +3157,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 type="button"
                 data-testid="close-vendor-category-modal"
                 disabled={isSavingCategories}
-                onClick={() => {
-                  setCategoryModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeCategoryModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
               >
                 <X size={20} />
@@ -3214,15 +3250,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* SINGLE VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
       {/* ========================================================================= */}
       {statusModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]" data-testid="single-vendor-status-modal">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="single-vendor-status-modal"
+          onClick={handleBackdropClick(closeStatusModal, isUpdatingSingleStatus)}
+        >
           <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col">
             <div className="flex items-start gap-3 pb-3 border-b border-slate-200 dark:border-gray-800">
               <div
-                className={`p-3 rounded-full shrink-0 ${
-                  targetStatusIsActive
-                    ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
-                    : 'bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
-                }`}
+                className={`p-3 rounded-full shrink-0 ${targetStatusIsActive
+                  ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
+                  }`}
               >
                 {targetStatusIsActive ? <Power size={22} /> : <PowerOff size={22} />}
               </div>
@@ -3247,11 +3286,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </div>
 
             <div
-              className={`my-4 p-3 rounded-xl border text-[11px] space-y-1 ${
-                targetStatusIsActive
-                  ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40 text-emerald-900 dark:text-emerald-300'
-                  : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-300'
-              }`}
+              className={`my-4 p-3 rounded-xl border text-[11px] space-y-1 ${targetStatusIsActive
+                ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40 text-emerald-900 dark:text-emerald-300'
+                : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-300'
+                }`}
             >
               <p className="font-bold">
                 {targetStatusIsActive
@@ -3282,11 +3320,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 data-testid="confirm-vendor-status-button"
                 onClick={handleConfirmSingleStatusChange}
                 disabled={isUpdatingSingleStatus}
-                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${
-                  targetStatusIsActive
-                    ? 'bg-emerald-600 hover:bg-emerald-700'
-                    : 'bg-amber-600 hover:bg-amber-700'
-                }`}
+                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${targetStatusIsActive
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
               >
                 {isUpdatingSingleStatus ? (
                   <>
@@ -3317,7 +3354,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           : selectedVendorIds;
         const targetCount = modalTargetIds.length;
         return (
-        <div className="modal-overlay !z-[1100]" data-testid="bulk-vendor-status-modal">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="bulk-vendor-status-modal"
+          onClick={handleBackdropClick(closeBulkStatusModal, isUpdatingBulkStatus)}
+        >
           <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
             <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-3">
@@ -3326,163 +3367,159 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     bulkTargetIsActive
                       ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
                       : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/60'
-                  }`}
-                >
-                  {bulkTargetIsActive ? <Power size={22} /> : <PowerOff size={22} />}
+                      }`}
+                  >
+                    {bulkTargetIsActive ? <Power size={22} /> : <PowerOff size={22} />}
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      {formatString(
+                        bulkTargetIsActive
+                          ? UI_STRINGS.vendorStatusControl.bulkEnableModalTitle
+                          : UI_STRINGS.vendorStatusControl.bulkDisableModalTitle,
+                        {
+                          count: targetCount,
+                          plural: targetCount === 1 ? '' : 's',
+                        }
+                      )}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                      {UI_STRINGS.vendorStatusControl.bulkModalSubtitle}
+                    </p>
+                  </div>
                 </div>
+                <button
+                  type="button"
+                  data-testid="close-bulk-status-modal"
+                  onClick={() => setBulkStatusModalOpen(false)}
+                  disabled={isUpdatingBulkStatus}
+                  className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${bulkTargetIsActive
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-900 dark:text-emerald-300'
+                  : 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-300'
+                  }`}
+              >
+                <AlertCircle
+                  size={16}
+                  className={`shrink-0 mt-0.5 ${bulkTargetIsActive
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                    }`}
+                />
                 <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    {formatString(
-                      bulkTargetIsActive
-                        ? UI_STRINGS.vendorStatusControl.bulkEnableModalTitle
-                        : UI_STRINGS.vendorStatusControl.bulkDisableModalTitle,
-                      {
-                        count: targetCount,
-                        plural: targetCount === 1 ? '' : 's',
-                      }
-                    )}
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    {UI_STRINGS.vendorStatusControl.bulkModalSubtitle}
+                  <p className="font-semibold">
+                    {bulkTargetIsActive
+                      ? UI_STRINGS.vendorStatusControl.bulkEnableBannerTitle
+                      : UI_STRINGS.vendorStatusControl.bulkDisableBannerTitle}
+                  </p>
+                  <p className="text-[11px] mt-0.5 opacity-90">
+                    {bulkTargetIsActive
+                      ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
+                      : UI_STRINGS.vendorStatusControl.bulkDisableBannerText}
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                data-testid="close-bulk-status-modal"
-                onClick={() => setBulkStatusModalOpen(false)}
-                disabled={isUpdatingBulkStatus}
-                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
-              >
-                <X size={18} />
-              </button>
-            </div>
 
-            <div
-              className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${
-                bulkTargetIsActive
-                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-900 dark:text-emerald-300'
-                  : 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-300'
-              }`}
-            >
-              <AlertCircle
-                size={16}
-                className={`shrink-0 mt-0.5 ${
-                  bulkTargetIsActive
-                    ? 'text-emerald-600 dark:text-emerald-400'
-                    : 'text-amber-600 dark:text-amber-400'
-                }`}
-              />
-              <div>
-                <p className="font-semibold">
-                  {bulkTargetIsActive
-                    ? UI_STRINGS.vendorStatusControl.bulkEnableBannerTitle
-                    : UI_STRINGS.vendorStatusControl.bulkDisableBannerTitle}
-                </p>
-                <p className="text-[11px] mt-0.5 opacity-90">
-                  {bulkTargetIsActive
-                    ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
-                    : UI_STRINGS.vendorStatusControl.bulkDisableBannerText}
-                </p>
-              </div>
-            </div>
-
-            {/* List Preview of Selected Vendors */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
-                <span>
-                  {formatString(UI_STRINGS.vendorStatusControl.bulkSelectedListHeading, { count: targetCount })}
-                </span>
-                <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
-              </div>
-              <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
-                {modalTargetIds.map((id) => {
-                  const vendor =
-                    mergedVendors.find((v) => v.id === id) ||
-                    buyerFilteredVendors.find((v) => v.id === id) ||
-                    buyerVendors.find((v) => v.id === id);
-                  return (
-                    <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                          {vendor ? vendor.name : id}
+              {/* List Preview of Selected Vendors */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
+                  <span>
+                    {formatString(UI_STRINGS.vendorStatusControl.bulkSelectedListHeading, { count: targetCount })}
+                  </span>
+                  <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
+                </div>
+                <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
+                  {modalTargetIds.map((id) => {
+                    const vendor =
+                      mergedVendors.find((v) => v.id === id) ||
+                      buyerFilteredVendors.find((v) => v.id === id) ||
+                      buyerVendors.find((v) => v.id === id);
+                    return (
+                      <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            {vendor ? vendor.name : id}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
+                            <span>{id}</span>
+                            {vendor?.majorCategory && (
+                              <>
+                                <span>•</span>
+                                <span>{vendor.majorCategory}</span>
+                              </>
+                            )}
+                            {vendor?.email && (
+                              <>
+                                <span>•</span>
+                                <span>{vendor.email}</span>
+                              </>
+                            )}
+                          </div>
                         </div>
-                        <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
-                          <span>{id}</span>
-                          {vendor?.majorCategory && (
-                            <>
-                              <span>•</span>
-                              <span>{vendor.majorCategory}</span>
-                            </>
-                          )}
-                          {vendor?.email && (
-                            <>
-                              <span>•</span>
-                              <span>{vendor.email}</span>
-                            </>
-                          )}
-                        </div>
+                        <span
+                          className={`badge text-[9px] font-bold shrink-0 ${bulkTargetIsActive ? 'badge-emerald' : 'badge-amber'
+                            }`}
+                        >
+                          {bulkTargetIsActive
+                            ? UI_STRINGS.vendorStatusControl.confirmEnableButton
+                            : UI_STRINGS.vendorStatusControl.confirmDisableButton}
+                        </span>
                       </div>
-                      <span
-                        className={`badge text-[9px] font-bold shrink-0 ${
-                          bulkTargetIsActive ? 'badge-emerald' : 'badge-amber'
-                        }`}
-                      >
-                        {bulkTargetIsActive
-                          ? UI_STRINGS.vendorStatusControl.confirmEnableButton
-                          : UI_STRINGS.vendorStatusControl.confirmDisableButton}
-                      </span>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
+                </div>
               </div>
-            </div>
 
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
-              <button
-                type="button"
-                onClick={() => setBulkStatusModalOpen(false)}
-                disabled={isUpdatingBulkStatus}
-                className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="confirm-bulk-status-button"
-                onClick={handleBulkStatusConfirm}
-                disabled={isUpdatingBulkStatus}
-                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${
-                  bulkTargetIsActive
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setBulkStatusModalOpen(false)}
+                  disabled={isUpdatingBulkStatus}
+                  className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="confirm-bulk-status-button"
+                  onClick={handleBulkStatusConfirm}
+                  disabled={isUpdatingBulkStatus}
+                  className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${bulkTargetIsActive
                     ? 'bg-emerald-600 hover:bg-emerald-700'
                     : 'bg-amber-600 hover:bg-amber-700'
-                }`}
-              >
-                {isUpdatingBulkStatus ? (
-                  <>
-                    <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
-                  </>
-                ) : bulkTargetIsActive ? (
-                  <>
-                    <Power size={13} />{' '}
-                    {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmEnableButton, {
-                      count: targetCount,
-                      plural: targetCount === 1 ? '' : 's',
-                    })}
-                  </>
-                ) : (
-                  <>
-                    <PowerOff size={13} />{' '}
-                    {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmDisableButton, {
-                      count: targetCount,
-                      plural: targetCount === 1 ? '' : 's',
-                    })}
-                  </>
-                )}
-              </button>
+                    }`}
+                >
+                  {isUpdatingBulkStatus ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
+                    </>
+                  ) : bulkTargetIsActive ? (
+                    <>
+                      <Power size={13} />{' '}
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmEnableButton, {
+                        count: targetCount,
+                        plural: targetCount === 1 ? '' : 's',
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      <PowerOff size={13} />{' '}
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmDisableButton, {
+                        count: targetCount,
+                        plural: targetCount === 1 ? '' : 's',
+                      })}
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
         );
       })()}
 
@@ -3518,7 +3555,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           const buyerCompany = activeBuyerAccount?.organizationName || '—';
 
           return (
-            <div className="modal-overlay !z-[1100]">
+            <div
+              className="modal-overlay !z-[1100]"
+              data-testid="revision-modal-backdrop"
+              onClick={handleBackdropClick(closeRevisionModal, isSubmittingRevision)}
+            >
               <div className="modal-content max-w-xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-300 dark:border-amber-500/40 animate-fade-in max-h-[92vh] flex flex-col">
                 {/* Modal Header */}
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -3537,7 +3578,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                   <button
                     type="button"
-                    onClick={() => setSelectedVendorForRevision(null)}
+                    onClick={closeRevisionModal}
                     className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
                   >
                     <X size={20} />
@@ -3786,7 +3827,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* VENDOR TEMPLATE UPLOAD HISTORY MODAL */}
       {/* ========================================================================= */}
       {showUploadHistoryModal && (
-        <div className="modal-overlay !z-[1100] animate-fade-in">
+        <div
+          className="modal-overlay !z-[1100] animate-fade-in"
+          data-testid="upload-history-modal-backdrop"
+          onClick={handleBackdropClick(closeUploadHistoryModal)}
+        >
           <div
             data-testid="upload-history-modal"
             className="modal-content max-w-5xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[92vh] flex flex-col space-y-4"
@@ -3829,11 +3874,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowUploadHistoryModal(false);
-                    setSelectedHistoryBatch(null);
-                    setBatchSearchQuery('');
-                  }}
+                  onClick={closeUploadHistoryModal}
                   className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
                   title="Close upload history"
                 >

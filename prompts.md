@@ -6739,3 +6739,10 @@ The notification bell icon always showing 9+ when loggedin and showing 2 when cl
 In the vendor history tab in the vendor directory page remove the text "View previous vendor template batches, inspect uploaded supplier records, and re-download template data."
 ```
 ---
+
+### Prompt 289
+**Timestamp**: 2026-11-19T06:35:38+05:30
+```text
+If we close outside of the popup window should close the window
+```
+---

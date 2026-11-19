@@ -5193,5 +5193,39 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     const { container } = render(<InitialSetupModal />);
     expect(container).toBeEmptyDOMElement();
   });
+
+  it('closes Buyer Initial Setup popup when clicking outside on the backdrop, while inside clicks keep it open', async () => {
+    const mockSetOpen = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetOpen,
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn(),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: true,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: true },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: true },
+      buyerVendors: [],
+      showToast: jest.fn(),
+    });
+
+    render(<InitialSetupModal />);
+
+    const backdrop = screen.getByTestId('initial-setup-modal-backdrop');
+    const heading = within(backdrop).getByRole('heading', { level: 2 });
+
+    // Clicking inside modal content must not close it
+    fireEvent.click(heading);
+    expect(mockSetOpen).not.toHaveBeenCalled();
+
+    // Clicking directly on the backdrop overlay closes the popup
+    await act(async () => {
+      fireEvent.click(backdrop);
+    });
+    expect(mockSetOpen).toHaveBeenCalledWith(false);
+  });
 });
 
