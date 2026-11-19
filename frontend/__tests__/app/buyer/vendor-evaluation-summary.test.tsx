@@ -1,5 +1,5 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import VendorEvaluationSummary, {
   isBuyerUploaded,
   isProcucevVendor,
@@ -202,21 +202,31 @@ describe('isBuyerUploaded and isProcucevVendor', () => {
 });
 
 describe('buyer evaluation summary: full evaluation record', () => {
-  it('shows the record\'s own identity, contact, score and status', () => {
+  it('shows the simplified summary card with vendor name, evaluation status and vendor score only', () => {
     mockStore();
     const onBack = jest.fn();
     render(<VendorEvaluationSummary evaluationRecord={buildRecord()} onBack={onBack} />);
 
-    expect(screen.getAllByText('Alpha Pumps Ltd.').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('VN-100')).not.toBeInTheDocument();
-    expect(screen.getByText('94%')).toBeInTheDocument();
-    expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
-    expect(screen.getByText('Asha Rao')).toBeInTheDocument();
-    expect(screen.getByText('asha@alpha.test')).toBeInTheDocument();
-    expect(screen.getByText('+91 90000 00001')).toBeInTheDocument();
-    expect(screen.getByText(/2026-02-28/)).toBeInTheDocument();
-    expect(screen.getByText('Full Qualification Approved')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(summaryTable).toBeInTheDocument();
+
+    // Contains only vendor name, evaluation status, and vendor score
+    expect(within(summaryTable).getByText('Alpha Pumps Ltd.')).toBeInTheDocument();
+    expect(within(summaryTable).getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
+    expect(within(summaryTable).getByText('94%')).toBeInTheDocument();
+
+    // Table header columns
+    expect(within(summaryTable).getByText(SUMMARY.colVendorName)).toBeInTheDocument();
+    expect(within(summaryTable).getByText(SUMMARY.colEvaluationStatus)).toBeInTheDocument();
+    expect(within(summaryTable).getByText(SUMMARY.colVendorScore)).toBeInTheDocument();
+
+    // Removed unnecessary details
+    expect(within(summaryTable).queryByText('Asha Rao')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('asha@alpha.test')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('+91 90000 00001')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText(/2026-02-28/)).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('Full Qualification Approved')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('VN-100')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: SUMMARY.backAction }));
     expect(onBack).toHaveBeenCalledTimes(1);
@@ -255,7 +265,6 @@ describe('buyer evaluation summary: full evaluation record', () => {
     expect(screen.queryByText('Compliance_Doc_13.pdf')).not.toBeInTheDocument();
     const rest = documents.length - VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT;
     expect(screen.getByText(formatString(SUMMARY.docMoreCount, { count: rest }))).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.attachmentsSummaryTotal, { verified: 7, total: 14 }))).toBeInTheDocument();
     expect(screen.getByText(formatString(SUMMARY.documentsHeading, { count: 14 }))).toBeInTheDocument();
     expect(screen.getByText(formatString(SUMMARY.documentsBadgeVerified, { verified: 7, total: 14 }))).toBeInTheDocument();
     expect(screen.getAllByText(SUMMARY.docStatusVerified).length).toBeGreaterThanOrEqual(1);
@@ -376,7 +385,7 @@ describe('buyer evaluation summary: criteria matrix', () => {
 });
 
 describe('buyer evaluation summary: values not on record', () => {
-  it('shows not recorded for missing contact, email, phone and category, and leaves out the submitted line', () => {
+  it('omits contact, email, phone and category from the summary card and leaves out the submitted line', () => {
     mockStore();
     const record = buildRecord({
       vendorId: '',
@@ -388,19 +397,21 @@ describe('buyer evaluation summary: values not on record', () => {
     });
     render(<VendorEvaluationSummary evaluationRecord={record} />);
 
-    expect(screen.getAllByText(NOT_RECORDED).length).toBeGreaterThanOrEqual(5);
-    expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(within(summaryTable).queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
     for (const invented of ['Authorized Representative', 'Enterprise Supplier', 'General Industrial', 'N/A', 'v-001', '2026-03-01']) {
       expect(screen.queryByText(invented)).not.toBeInTheDocument();
     }
   });
 
-  it('shows not recorded for contact fields the record leaves blank', () => {
+  it('omits contact fields from the summary card even when provided on the record', () => {
     mockStore();
-    render(<VendorEvaluationSummary evaluationRecord={buildRecord({ contactPerson: '', email: '' })} />);
+    render(<VendorEvaluationSummary evaluationRecord={buildRecord({ contactPerson: 'Jane Doe', email: 'jane@example.com', phone: '+91 99999 88888' })} />);
 
-    expect(screen.getAllByText(NOT_RECORDED).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('+91 90000 00001')).toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(within(summaryTable).queryByText('Jane Doe')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('jane@example.com')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('+91 99999 88888')).not.toBeInTheDocument();
   });
 
   it('reads a numeric score sent as text and treats other text as not evaluated', () => {
@@ -409,7 +420,6 @@ describe('buyer evaluation summary: values not on record', () => {
       <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: '88' as unknown as number })} />
     );
     expect(screen.getByText('88%')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
     unmount();
 
     for (const score of ['abc', '   ', null]) {
@@ -417,13 +427,11 @@ describe('buyer evaluation summary: values not on record', () => {
         <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: score as unknown as number })} />
       );
       expect(screen.getByText(NOT_APPLICABLE)).toBeInTheDocument();
-      // The gate status still reads not evaluated, because the overall score is missing.
-      expect(screen.getByText(NOT_EVALUATED)).toBeInTheDocument();
       view.unmount();
     }
   });
 
-  it('shows the gate as locked below the threshold, with the status the record holds', () => {
+  it('shows the evaluation status and score accurately when below the threshold', () => {
     mockStore();
     render(
       <VendorEvaluationSummary
@@ -432,7 +440,6 @@ describe('buyer evaluation summary: values not on record', () => {
     );
 
     expect(screen.getByText('CONDITIONAL / UNDER REVIEW')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateLocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
     expect(screen.getByText('72%')).toBeInTheDocument();
   });
 
@@ -464,7 +471,7 @@ describe('buyer evaluation summary: values not on record', () => {
     mockStore();
     render(<VendorEvaluationSummary evaluationRecord={buildRecord({ documents: [] })} />);
 
-    expect(screen.getAllByText(SUMMARY.documentsEmptyTitle)).toHaveLength(3);
+    expect(screen.getAllByText(SUMMARY.documentsEmptyTitle)).toHaveLength(2);
     expect(screen.getByText(SUMMARY.documentsEmptyBody)).toBeInTheDocument();
   });
 
@@ -756,20 +763,14 @@ describe('buyer evaluation summary: vendor code, overall score and submitted lin
     expect(screen.queryByText('94%')).not.toBeInTheDocument();
   });
 
-  it('leaves out the submitted line when the record holds no submission date', () => {
+  it('omits the submitted line from the summary card regardless of submission date', () => {
     mockStore();
-    for (const submissionDate of ['', '   ']) {
+    for (const submissionDate of ['', '   ', '2026-02-28']) {
       const view = render(<VendorEvaluationSummary evaluationRecord={buildRecord({ submissionDate })} />);
       expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-02-28')).not.toBeInTheDocument();
       view.unmount();
     }
-  });
-
-  it('shows the submitted line with the recorded submission date', () => {
-    mockStore();
-    render(<VendorEvaluationSummary evaluationRecord={buildRecord()} />);
-
-    expect(screen.getByText(`${SUMMARY.submittedLabel} 2026-02-28`)).toBeInTheDocument();
   });
 });
 

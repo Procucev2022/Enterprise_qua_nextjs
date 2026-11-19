@@ -1248,7 +1248,12 @@ describe('Indian address location extraction helpers', () => {
 
     expect(BUYER_VENDOR_DIRECTORY_COLUMNS.length).toBeGreaterThan(10);
     expect(BUYER_RFQ_SUMMARY_COLUMNS.length).toBeGreaterThan(8);
-    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.length).toBeGreaterThan(8);
+    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.length).toBe(3);
+    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.map((c: { key: string }) => c.key)).toEqual([
+      'vendorName',
+      'status',
+      'overallScore',
+    ]);
     expect(BUYER_ACCOUNTS_TABLE_COLUMNS.length).toBeGreaterThan(10);
     expect(CM_ALL_RFQS_TABLE_COLUMNS.length).toBeGreaterThan(10);
 

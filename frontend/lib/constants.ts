@@ -2930,16 +2930,8 @@ export const BUYER_RFQ_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
 
 export const BUYER_EVALUATION_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
   { key: 'vendorName', label: 'Vendor Name', visible: true, required: true },
-  { key: 'category', label: 'Division', visible: true },
-  { key: 'contactPerson', label: 'Contact Person', visible: true },
-  { key: 'email', label: 'Email', visible: true },
-  { key: 'phone', label: 'Phone', visible: true },
-  { key: 'submissionDate', label: 'Submitted', visible: true },
-  { key: 'status', label: 'Evaluation Status', visible: true },
-  { key: 'overallScore', label: 'Overall Score', visible: true },
-  { key: 'gateStatus', label: 'Qualification Gate', visible: true },
-  { key: 'categoryScores', label: 'Category Scores', visible: true },
-  { key: 'reviewStatus', label: 'Review Status', visible: true },
+  { key: 'status', label: 'Evaluation Status', visible: true, required: true },
+  { key: 'overallScore', label: 'Vendor Score', visible: true, required: true },
 ];
 
 export const BUYER_ACCOUNTS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [

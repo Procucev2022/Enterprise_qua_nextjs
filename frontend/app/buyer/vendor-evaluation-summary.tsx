@@ -44,16 +44,12 @@ import {
   Clock,
   FileCheck,
   FileText,
-  Mail,
   Paperclip,
-  Phone,
   Search,
   Settings,
   ShieldCheck,
   Sparkles,
-  Tag,
   UploadCloud,
-  Zap,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -500,11 +496,6 @@ export default function VendorEvaluationSummary({
   const verifiedDocumentCount = documents.filter((d) => d.verified || d.status === 'Verified').length;
   const visibleDocuments = documents.slice(0, VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT);
   const overallScore = summary.overallScore;
-  const gateText = overallScore === null
-    ? NOT_EVALUATED
-    : overallScore >= VENDOR_EVALUATION_GATE_SCORE
-    ? formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE })
-    : formatString(SUMMARY.gateLocked, { score: VENDOR_EVALUATION_GATE_SCORE });
 
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
@@ -708,50 +699,15 @@ export default function VendorEvaluationSummary({
         />
 
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse min-w-[1200px]" data-testid="vendor-evaluation-summary-table">
+          <table className="w-full text-left text-xs border-collapse" data-testid="vendor-evaluation-summary-table">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
                 <th
                   onClick={createColumnSortClickHandler('vendorName', setEvalTableSort)}
                   aria-sort={getTableAriaSort(evalTableSort, 'vendorName')}
-                  className={getTableColumnClass(evalColumns, 'vendorName', 'py-2 px-2.5 min-w-[170px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                  className={getTableColumnClass(evalColumns, 'vendorName', 'py-2 px-2.5 min-w-[200px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
-                  <span className="inline-flex items-center gap-1">{SUMMARY.colVendorDetails} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'vendorName')}</span></span>
-                </th>
-                <th
-                  onClick={createColumnSortClickHandler('category', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'category')}
-                  className={getTableColumnClass(evalColumns, 'category', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'category')}</span></span>
-                </th>
-                <th
-                  onClick={createColumnSortClickHandler('contactPerson', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'contactPerson')}
-                  className={getTableColumnClass(evalColumns, 'contactPerson', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'contactPerson')}</span></span>
-                </th>
-                <th
-                  onClick={createColumnSortClickHandler('email', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'email')}
-                  className={getTableColumnClass(evalColumns, 'email', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'email')}</span></span>
-                </th>
-                <th
-                  onClick={createColumnSortClickHandler('phone', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'phone')}
-                  className={getTableColumnClass(evalColumns, 'phone', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'phone')}</span></span>
-                </th>
-                <th
-                  onClick={createColumnSortClickHandler('submissionDate', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'submissionDate')}
-                  className={getTableColumnClass(evalColumns, 'submissionDate', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center gap-1">Submitted <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'submissionDate')}</span></span>
+                  <span className="inline-flex items-center gap-1">{SUMMARY.colVendorName} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'vendorName')}</span></span>
                 </th>
                 <th
                   onClick={createColumnSortClickHandler('status', setEvalTableSort)}
@@ -765,23 +721,14 @@ export default function VendorEvaluationSummary({
                   aria-sort={getTableAriaSort(evalTableSort, 'overallScore')}
                   className={getTableColumnClass(evalColumns, 'overallScore', 'py-2 px-2.5 text-center min-w-[120px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
-                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colOverallScore} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'overallScore')}</span></span>
+                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colVendorScore} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'overallScore')}</span></span>
                 </th>
-                <th
-                  onClick={createColumnSortClickHandler('gateStatus', setEvalTableSort)}
-                  aria-sort={getTableAriaSort(evalTableSort, 'gateStatus')}
-                  className={getTableColumnClass(evalColumns, 'gateStatus', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                >
-                  <span className="inline-flex items-center justify-center gap-1">Qualification Gate <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'gateStatus')}</span></span>
-                </th>
-                <th className={getTableColumnClass(evalColumns, 'categoryScores', 'py-2 px-2.5 min-w-[220px] whitespace-nowrap')}>{SUMMARY.colCategoryScores}</th>
-                <th className={getTableColumnClass(evalColumns, 'reviewStatus', 'py-2 px-2.5 min-w-[180px] whitespace-nowrap')}>{SUMMARY.colReviewStatus}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
               <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-middle">
                 {/* 1. Vendor Name */}
-                <td className={getTableColumnClass(evalColumns, 'vendorName', 'py-2 px-2.5 align-middle')}>
+                <td className={getTableColumnClass(evalColumns, 'vendorName', 'py-2.5 px-2.5 align-middle')}>
                   <div className="text-xs sm:text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
                     <CompanyHoverTooltip
                       name={summary.vendorName ?? ''}
@@ -797,111 +744,20 @@ export default function VendorEvaluationSummary({
                   </div>
                 </td>
 
-                {/* 2. Division */}
-                <td className={getTableColumnClass(evalColumns, 'category', 'py-2 px-2.5 align-middle whitespace-nowrap')}>
-                  <span className="text-slate-600 dark:text-gray-400 font-medium inline-flex items-center gap-1 text-[11px] truncate max-w-[150px]" title={summary.category ?? NOT_RECORDED}>
-                    <Tag size={11} /> {summary.category ?? NOT_RECORDED}
-                  </span>
-                </td>
-
-                {/* 3. Contact Person */}
-                <td className={getTableColumnClass(evalColumns, 'contactPerson', 'py-2 px-2.5 align-middle text-[11px] text-slate-500 dark:text-gray-400 whitespace-nowrap')}>
-                  <div className="inline-flex items-center gap-1 truncate max-w-[150px]" title={summary.contactPerson ?? NOT_RECORDED}>
-                    <Building2 size={11} /> {SUMMARY.contactLabel}{' '}
-                    <strong className="text-slate-700 dark:text-gray-200">{summary.contactPerson ?? NOT_RECORDED}</strong>
-                  </div>
-                </td>
-
-                {/* 4. Email */}
-                <td className={getTableColumnClass(evalColumns, 'email', 'py-2 px-2.5 align-middle text-[11px] text-slate-500 dark:text-gray-400 whitespace-nowrap')}>
-                  <span className="inline-flex items-center gap-1 truncate max-w-[180px]" title={summary.email ?? NOT_RECORDED}>
-                    <Mail size={11} /> {summary.email ?? NOT_RECORDED}
-                  </span>
-                </td>
-
-                {/* 5. Phone */}
-                <td className={getTableColumnClass(evalColumns, 'phone', 'py-2 px-2.5 align-middle text-[11px] text-slate-500 dark:text-gray-400 whitespace-nowrap')}>
-                  <span className="inline-flex items-center gap-1 truncate max-w-[140px]" title={summary.phone ?? NOT_RECORDED}>
-                    <Phone size={11} /> {summary.phone ?? NOT_RECORDED}
-                  </span>
-                </td>
-
-                {/* 6. Submission Date */}
-                <td className={getTableColumnClass(evalColumns, 'submissionDate', 'py-2 px-2.5 align-middle text-[10px] text-slate-400 dark:text-gray-500 whitespace-nowrap')}>
-                  {summary.submissionDate !== null && (
-                    <div className="inline-flex items-center gap-1">
-                      <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate}
-                    </div>
-                  )}
-                </td>
-
-                {/* 7. Evaluation Status */}
-                <td className={getTableColumnClass(evalColumns, 'status', 'py-2 px-2.5 text-center align-middle whitespace-nowrap')}>
+                {/* 2. Evaluation Status */}
+                <td className={getTableColumnClass(evalColumns, 'status', 'py-2.5 px-2.5 text-center align-middle whitespace-nowrap')}>
                   <div className="inline-block">
                     {renderStatusBadge(summary.status)}
                   </div>
                 </td>
 
-                {/* 8. Overall Score */}
-                <td className={getTableColumnClass(evalColumns, 'overallScore', 'py-2 px-2.5 text-center align-middle space-y-0.5 whitespace-nowrap')}>
+                {/* 3. Vendor Score */}
+                <td className={getTableColumnClass(evalColumns, 'overallScore', 'py-2.5 px-2.5 text-center align-middle space-y-0.5 whitespace-nowrap')}>
                   <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 tracking-wider">
                     {SUMMARY.scoreLabel}
                   </div>
                   <div className="text-xl sm:text-2xl font-black mono text-emerald-600 dark:text-emerald-400">
                     {overallScore === null ? NOT_APPLICABLE : `${overallScore}%`}
-                  </div>
-                </td>
-
-                {/* 9. Qualification Gate */}
-                <td className={getTableColumnClass(evalColumns, 'gateStatus', 'py-2 px-2.5 text-center align-middle whitespace-nowrap')}>
-                  <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
-                    {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>
-                  </div>
-                </td>
-
-                {/* 10. Category Scores Preview */}
-                <td className={getTableColumnClass(evalColumns, 'categoryScores', 'py-2 px-2.5 align-middle')}>
-                  <div className="grid grid-cols-2 gap-1 text-[10px]">
-                    {VENDOR_EVALUATION_PILLARS.map((p) => {
-                      const viewPillar = summary.pillars.find((pi) => pi.pillarId === p.id);
-                      const weighted = viewPillar?.weightedScore;
-                      return (
-                        <div key={p.id} className="p-1 rounded bg-slate-50 dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 flex items-center justify-between gap-1">
-                          <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">
-                            <span className={`inline-block w-3.5 h-3.5 rounded text-[8px] font-bold text-center leading-3.5 mr-1 ${p.accent.badge}`}>{p.id}</span>
-                            {p.name.split(' ')[0]}
-                          </span>
-                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
-                            {weighted !== null && weighted !== undefined ? `${weighted}/${p.weight}` : '—'}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </td>
-
-                {/* 11. Review Status */}
-                <td className={getTableColumnClass(evalColumns, 'reviewStatus', 'py-2 px-2.5 space-y-1.5 align-middle')}>
-                  <div className="p-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px] space-y-0.5">
-                    <div className="flex items-center gap-1 font-bold text-emerald-800 dark:text-emerald-300">
-                      <Zap size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0 animate-pulse" />
-                      <span>{SUMMARY.executionLabel}</span>
-                    </div>
-                    <div className="text-slate-700 dark:text-gray-300 font-medium text-[10px]">
-                      {summary.systemAction ?? NOT_RECORDED}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 text-[10px]">
-                    {documents.length === 0 ? (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
-                        <Clock size={10} /> {SUMMARY.documentsEmptyTitle}
-                      </span>
-                    ) : (
-                      <span className="badge badge-emerald font-mono text-[10px]">
-                        {formatString(SUMMARY.attachmentsSummaryTotal, { verified: verifiedDocumentCount, total: documents.length })}
-                      </span>
-                    )}
                   </div>
                 </td>
               </tr>

@@ -6837,3 +6837,24 @@ When clicked on vendor inactive is giving the vendor code. please remove th vend
 In the evaluation summary page, the searched in the dropdown to select other vendor, it is showing RFQs, PO summaries also. Please remove them
 ```
 ---
+
+### Prompt 301
+**Timestamp**: 2026-11-19T09:14:33+05:30
+```text
+When clicked on vendor inactive is giving the vendor code. please remove th vendor code.
+```
+---
+
+### Prompt 302
+**Timestamp**: 2026-11-19T09:15:51+05:30
+```text
+In the evaluation summary page, the searched in the dropdown to select other vendor, it is showing RFQs, PO summaries also. Please remove them
+```
+---
+
+### Prompt 303
+**Timestamp**: 2026-11-19T09:17:01+05:30
+```text
+Vendor Evaluation Summary Card/Section. remove all unnecessary details like contact details, division, category scores etc and make it simple with just vendor name, Evaluation status, and Vendor Score
+```
+---
