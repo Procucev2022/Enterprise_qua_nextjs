@@ -1415,6 +1415,81 @@ describe('app/buyer/buyer-profile.tsx', () => {
     );
     expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled();
   });
+
+  it('ignores mismatched activeBuyerAccount when currentUserSession belongs to another email, and hydrates registeredAddress for matching session', async () => {
+    // 1. Mismatched session email should NOT bleed another buyer's GSTIN/address into the form
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      categoryTaxonomy: [],
+      currentUserSession: { email: 'veera@example.com' },
+      activeBuyerAccount: {
+        id: 'other-buyer',
+        corporateEmail: 'other@example.com',
+        gstin: '29OTHER0000A1Z5',
+        registeredAddress: 'Wrong Street 99',
+      },
+    });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...PROFILE,
+        contactEmail: 'veera@example.com',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      },
+    });
+
+    const { unmount } = render(<BuyerProfilePage />);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('veera@example.com')).toBeInTheDocument();
+    });
+    expect(screen.queryByDisplayValue('29OTHER0000A1Z5')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Wrong Street 99')).not.toBeInTheDocument();
+    unmount();
+
+    // 2. Matching session email hydrates registeredAddress and GSTIN/derived PAN
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      categoryTaxonomy: [],
+      currentUserSession: { email: 'veera@example.com' },
+      activeBuyerAccount: {
+        id: 'veera-buyer',
+        corporateEmail: 'veera@example.com',
+        gstin: '27AAACK3921P1Z9',
+        registeredAddress: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      },
+    });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...PROFILE,
+        contactEmail: 'veera@example.com',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      },
+    });
+
+    render(<BuyerProfilePage />);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('302 Sharada, AECS Layout')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
+    });
+  });
 });
 
 

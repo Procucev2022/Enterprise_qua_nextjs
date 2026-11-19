@@ -1503,6 +1503,292 @@ describe('Buyer profile queries (Neon PostgreSQL)', () => {
         dbPool.pool = originalPool;
       }
     });
+
+    test('findProfileByUserId retries on D1 missing column using PRAGMA schema columns', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      const d1Binding = {
+        prepare: jest.fn((sql) => ({
+          _sql: sql,
+          _params: [],
+          all: jest.fn(async () => ({ results: [] })),
+          bind: (...params) => ({ _sql: sql, _params: params, all: jest.fn(async () => ({ results: [] })) }),
+        })),
+        batch: jest.fn(async (stmts) =>
+          stmts.map((s) => {
+            if (/PRAGMA table_info\(organization\)/i.test(s._sql)) {
+              return {
+                results: [
+                  { name: 'uuid' },
+                  { name: 'organization_name' },
+                  { name: 'gstin' },
+                  { name: 'pan' },
+                  { name: 'address1' },
+                  { name: 'city' },
+                  { name: 'state' },
+                  { name: 'zip_code' },
+                  { name: 'country' },
+                  { name: 'email' },
+                  { name: 'contact_person' },
+                ],
+              };
+            }
+            return {
+              results: [
+                { name: 'uuid' },
+                { name: 'org_uuid' },
+                { name: 'username' },
+                { name: 'email' },
+                { name: 'first_name' },
+                { name: 'last_name' },
+                { name: 'phone' },
+                { name: 'is_active' },
+                { name: 'created_ts' },
+              ],
+            };
+          })
+        ),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        const rowsSpy = jest.spyOn(dbPool, 'rows')
+          .mockRejectedValueOnce(new Error('D1_ERROR: no such column: o.pincode'))
+          .mockResolvedValueOnce([
+            {
+              user_uuid: 'u-d1-retry',
+              org_uuid: 'org-d1-retry',
+              organization_name: 'Veera Solutions Pvt Ltd',
+              username: 'veera@example.com',
+              gstin: '27AAACK3921P1Z9',
+              pan: 'AAACK3921P',
+              address1: '302 Sharada, AECS Layout',
+              city: 'Bengaluru',
+              state: 'Karnataka',
+              zip_code: '560037',
+              country: 'India',
+            },
+          ])
+          .mockResolvedValueOnce([]);
+
+        const res = await buyerProfileQueries.findProfileByUserId('u-d1-retry');
+        expect(res.found).toBe(true);
+        expect(res.profile.gstNumber).toBe('27AAACK3921P1Z9');
+        expect(res.profile.street).toBe('302 Sharada, AECS Layout');
+        expect(res.profile.pincode).toBe('560037');
+        expect(rowsSpy.mock.calls[1][0]).toContain('null as pincode');
+        expect(rowsSpy.mock.calls[1][0]).toContain('null as brand_name');
+        expect(rowsSpy.mock.calls[1][0]).toContain('null as full_name');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
+    });
+
+    test('findProfileByIdentifier Pass 2 retries without u.email and optional order columns on legacy D1 schema', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      dbPool.pool = null;
+
+      const d1Binding = {
+        prepare: jest.fn((sql) => ({
+          _sql: sql,
+          _params: [],
+          all: jest.fn(async () => ({ results: [] })),
+          bind: (...params) => ({ _sql: sql, _params: params, all: jest.fn(async () => ({ results: [] })) }),
+        })),
+        batch: jest.fn(async (stmts) =>
+          stmts.map((s) => {
+            if (/PRAGMA table_info\(organization\)/i.test(s._sql)) {
+              return {
+                results: [
+                  { name: 'uuid' },
+                  { name: 'organization_name' },
+                  { name: 'email' },
+                ],
+              };
+            }
+            return {
+              results: [
+                { name: 'uuid' },
+                { name: 'org_uuid' },
+                { name: 'username' },
+              ],
+            };
+          })
+        ),
+      };
+      globalThis.__CF_ENV__ = { DB: d1Binding };
+
+      try {
+        const rowsSpy = jest.spyOn(dbPool, 'rows')
+          .mockResolvedValueOnce([])
+          .mockRejectedValueOnce(new Error('SQLITE_ERROR: table organization has no column named pincode'))
+          .mockResolvedValueOnce([
+            {
+              user_uuid: 'u-pass2-legacy',
+              org_uuid: 'org-pass2-legacy',
+              organization_name: 'Legacy Org',
+              email: 'legacy@example.com',
+            },
+          ])
+          .mockResolvedValueOnce([]);
+
+        const res = await buyerProfileQueries.findProfileByIdentifier({ email: 'legacy@example.com' });
+        expect(res.found).toBe(true);
+        expect(res.profile.companyName).toBe('Legacy Org');
+        expect(rowsSpy.mock.calls[2][0]).toContain('o.email = $1 COLLATE NOCASE');
+        expect(rowsSpy.mock.calls[2][0]).not.toContain('u.email =');
+        expect(rowsSpy.mock.calls[2][0]).not.toContain('order by');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+      }
+    });
+
+    test('runProfileSelect rethrows when D1 schema introspection is unavailable or yields empty schema', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      const originalFetch = global.fetch;
+      const savedEnv = {
+        CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+        CLOUDFLARE_D1_DATABASE_ID: process.env.CLOUDFLARE_D1_DATABASE_ID,
+        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
+      };
+      dbPool.pool = null;
+      globalThis.__CF_ENV__ = undefined;
+      delete process.env.CLOUDFLARE_ACCOUNT_ID;
+      delete process.env.CLOUDFLARE_D1_DATABASE_ID;
+      delete process.env.CLOUDFLARE_API_TOKEN;
+      d1Bridge.resetD1HttpClientCache();
+
+      try {
+        // No D1 binding and no HTTP client -> rethrows immediately
+        jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('no such column: o.pincode'));
+        await expect(buyerProfileQueries.findProfileByUserId('u-no-client')).rejects.toThrow('no such column: o.pincode');
+
+        // Empty org PRAGMA via D1 HTTP client -> inspectD1TableColumns returns null -> rethrows
+        process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-test';
+        process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-test';
+        process.env.CLOUDFLARE_API_TOKEN = 'tok-test';
+        d1Bridge.resetD1HttpClientCache();
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true, result: [{ results: [] }, { results: [] }] }),
+        });
+        jest.spyOn(dbPool, 'rows').mockRejectedValueOnce(new Error('no such column: o.pincode'));
+        await expect(buyerProfileQueries.findProfileByUserId('u-empty-pragma')).rejects.toThrow('no such column: o.pincode');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+        global.fetch = originalFetch;
+        Object.entries(savedEnv).forEach(([k, v]) => {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        });
+        d1Bridge.resetD1HttpClientCache();
+      }
+    });
+
+    test('updateProfile on D1 HTTP single-statement path retries on missing column and handles aliasColumn when both exist', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      const originalPool = dbPool.pool;
+      const originalFetch = global.fetch;
+      const savedEnv = {
+        CLOUDFLARE_ACCOUNT_ID: process.env.CLOUDFLARE_ACCOUNT_ID,
+        CLOUDFLARE_D1_DATABASE_ID: process.env.CLOUDFLARE_D1_DATABASE_ID,
+        CLOUDFLARE_API_TOKEN: process.env.CLOUDFLARE_API_TOKEN,
+      };
+      dbPool.pool = null;
+      globalThis.__CF_ENV__ = undefined;
+      process.env.CLOUDFLARE_ACCOUNT_ID = 'acct-test';
+      process.env.CLOUDFLARE_D1_DATABASE_ID = 'db-test';
+      process.env.CLOUDFLARE_API_TOKEN = 'tok-test';
+      d1Bridge.resetD1HttpClientCache();
+
+      const mockHttpPragma = (orgRows, userRows = [{ name: 'uuid' }]) => {
+        global.fetch = jest.fn().mockResolvedValueOnce({
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({ success: true, result: [{ results: orgRows }, { results: userRows }] }),
+        });
+      };
+
+      try {
+        // 1. Single-statement HTTP retry succeeds when pincode is missing in schema
+        const querySpy = jest.spyOn(dbPool, 'query')
+          .mockResolvedValueOnce({ rows: [{ uuid: 'org-http-1' }] })
+          .mockRejectedValueOnce(new Error('SQLITE_ERROR: table organization has no column named pincode'))
+          .mockResolvedValueOnce({ rowCount: 1 });
+        mockHttpPragma([{ name: 'uuid' }, { name: 'zip_code' }, { name: 'gstin' }, { name: 'last_modified_ts' }]);
+
+        const ok = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-http-1',
+          userId: 'u-http-1',
+          patch: { pincode: '560037', gstNumber: '27AAACK3921P1Z9' },
+          actor: 'http@example.com',
+        });
+        expect(ok.updated).toBe(true);
+        expect(querySpy.mock.calls[2][0]).toContain('zip_code = $2');
+        expect(querySpy.mock.calls[2][0]).not.toContain('pincode =');
+
+        // 2. HTTP single-statement retry with both zip_code and pincode present (brand_name missing) exercises aliasColumn
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'org-http-2' }] })
+          .mockRejectedValueOnce(new Error('no such column: brand_name'))
+          .mockResolvedValueOnce({ rowCount: 1 });
+        mockHttpPragma([{ name: 'uuid' }, { name: 'zip_code' }, { name: 'pincode' }, { name: 'last_modified_ts' }]);
+        const okAlias = await buyerProfileQueries.updateProfile({
+          organizationId: 'org-http-2',
+          userId: 'u-http-2',
+          patch: { pincode: '560037', brandName: 'Veera' },
+          actor: 'http2@example.com',
+        });
+        expect(okAlias.updated).toBe(true);
+        expect(querySpy.mock.calls[5][0]).toContain('zip_code = $1');
+        expect(querySpy.mock.calls[5][0]).toContain('pincode = $2');
+
+        // 3. Non-missing-column error on HTTP single-statement rethrows immediately
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'org-http-3' }] })
+          .mockRejectedValueOnce(new Error('SQLITE_CONSTRAINT'));
+        await expect(buyerProfileQueries.updateProfile({
+          organizationId: 'org-http-3',
+          patch: { city: 'Pune' },
+        })).rejects.toThrow('SQLITE_CONSTRAINT');
+
+        // 4. Missing-column error with empty PRAGMA or empty aligned statements rethrows
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'org-http-5' }] })
+          .mockRejectedValueOnce(new Error('no such column: pincode'));
+        mockHttpPragma([]);
+        await expect(buyerProfileQueries.updateProfile({
+          organizationId: 'org-http-5',
+          patch: { pincode: '560037' },
+        })).rejects.toThrow('no such column: pincode');
+
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'org-http-6' }] })
+          .mockRejectedValueOnce(new Error('no such column: mystery'));
+        mockHttpPragma([{ name: 'uuid' }, { name: 'last_modified_ts' }]);
+        await expect(buyerProfileQueries.updateProfile({
+          organizationId: 'org-http-6',
+          patch: { pincode: '560037' },
+        })).rejects.toThrow('no such column: mystery');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+        dbPool.pool = originalPool;
+        global.fetch = originalFetch;
+        Object.entries(savedEnv).forEach(([k, v]) => {
+          if (v === undefined) delete process.env[k];
+          else process.env[k] = v;
+        });
+        d1Bridge.resetD1HttpClientCache();
+      }
+    });
   });
 });
 

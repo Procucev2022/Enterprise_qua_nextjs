@@ -6711,3 +6711,17 @@ create the pr and merge in test-v3
 ```
 
 ---
+
+### Prompt 285
+**Timestamp**: 2026-11-18T16:56:00+05:30
+```text
+GSTIN & Address: The GST number and registered address entered during buyer registration are still not being fetched and displayed in the Buyer Profile. Please fix the registration-to-profile data mapping.
+```
+---
+
+### Prompt 286
+**Timestamp**: 2026-11-19T06:33:57+05:30
+```text
+resume
+```
+---

@@ -1047,9 +1047,25 @@ class StoreService {
     }
 
     if (existing) {
-      if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
+      if (
+        profile &&
+        (
+          !existing.gstin ||
+          !existing.pan ||
+          !existing.street ||
+          !existing.city ||
+          !existing.state ||
+          !existing.pincode ||
+          !existing.mobileNumber ||
+          (profile.organizationId && !existing.organizationId)
+        )
+      ) {
+        const resolvedOrgId = profile.organizationId || existing.organizationId || user.orgId || null;
         const enriched = {
           ...existing,
+          ...(resolvedOrgId !== undefined && (resolvedOrgId !== null || existing.organizationId !== undefined)
+            ? { organizationId: resolvedOrgId }
+            : {}),
           organizationName: profile.companyName || existing.organizationName,
           brandName: profile.brandName || existing.brandName,
           organizationType: profile.organizationType || existing.organizationType,
@@ -1069,6 +1085,7 @@ class StoreService {
           categories: profile.categories || existing.categories,
         };
         const hasNewFieldData =
+          (profile.organizationId && enriched.organizationId !== existing.organizationId) ||
           enriched.organizationName !== existing.organizationName ||
           enriched.brandName !== existing.brandName ||
           enriched.organizationType !== existing.organizationType ||
@@ -1372,12 +1389,21 @@ class StoreService {
           ? domainQueries.getBuyerAccountSnapshotByEmailFromDB
           : domainQueries.getBuyerAccountSnapshotByIdFromDB;
         let snapshot = await snapshotReader(idOrEmail);
+        if (!snapshot && !String(idOrEmail || '').includes('@') && updates && updates.corporateEmail) {
+          snapshot = await domainQueries.getBuyerAccountSnapshotByEmailFromDB(updates.corporateEmail);
+        }
         if (!snapshot) return null;
 
+        const canonicalId = snapshot.id || snapshot.account?.id;
         for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
+          const { id: requestedId, ...restUpdates } = updates || {};
           updated = {
             ...snapshot.account,
-            ...updates,
+            ...restUpdates,
+            ...(canonicalId ? { id: canonicalId } : {}),
+            ...(requestedId && requestedId !== canonicalId && !snapshot.account?.userId && !restUpdates.userId
+              ? { userId: requestedId }
+              : {}),
             syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
           };
           savedAccount = await domainQueries.updateBuyerAccountIfUnchangedInDB(snapshot, updated);
@@ -1389,9 +1415,14 @@ class StoreService {
       } else {
         const previous = idx >= 0 ? this.buyerAccounts[idx] : null;
         if (!previous) return null;
+        const { id: requestedId, ...restUpdates } = updates || {};
         updated = {
           ...previous,
-          ...updates,
+          ...restUpdates,
+          id: previous.id,
+          ...(requestedId && requestedId !== previous.id && !previous.userId && !restUpdates.userId
+            ? { userId: requestedId }
+            : {}),
           syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
         };
         savedAccount = updated;

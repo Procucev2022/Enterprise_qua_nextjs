@@ -34,6 +34,24 @@ function hasD1() {
   return Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
 }
 
+function isMissingD1ColumnError(err) {
+  return /no such column:|has no column named/i.test(String(err?.message || ''));
+}
+
+async function inspectD1OrganizationColumns(db = null) {
+  const client = db || d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient();
+  if (!client) return null;
+  const results = await d1Bridge.batchD1(client, [
+    { text: 'PRAGMA table_info(organization)', params: [] },
+  ]);
+  const cols = new Set(
+    (results?.[0]?.rows || [])
+      .map((row) => String(row?.name || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  return cols.size > 0 ? cols : null;
+}
+
 async function runAtomicD1AccountBatch(operation, statements) {
   const d1 = d1Bridge.getD1Binding();
   if (!d1) {
@@ -402,28 +420,28 @@ async function insertBuyerAccount({
   // between this read and the batch when another registration is in flight.
   if (hasD1()) {
     const orgLookup = await pool.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
+      'select uuid from organization where organization_name = $1 COLLATE NOCASE and org_type_uuid = $2 order by created_ts, uuid limit 1',
       [orgName, orgTypeUuid],
       { d1: true }
     );
     const organizationReusedBeforeWrite = orgLookup.rows.length > 0;
-    const statements = [];
-    let organizationInsertIndex = -1;
+    const candidateOrganizationUuid = crypto.randomUUID();
+    const userUuid = crypto.randomUUID();
 
-    if (!organizationReusedBeforeWrite) {
-      const candidateOrganizationUuid = crypto.randomUUID();
-      organizationInsertIndex = statements.length;
-      statements.push({
-        text: `insert into organization
-                 (uuid, organization_name, contact_person, email, organization_phonenumber,
-                  address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
-                  created_ts, last_modified_ts)
-               select $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                      strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
-                where not exists (select 1 from organization where organization_name = $2 and org_type_uuid = $14)
-                  and not exists (select 1 from "user" where lower(username) = lower($4))
-               returning uuid`,
-        params: [
+    const buildD1Statements = (orgCols = null) => {
+      const includePincode = !orgCols || orgCols.has('pincode');
+      const statements = [];
+      let organizationInsertIndex = -1;
+
+      if (!organizationReusedBeforeWrite) {
+        organizationInsertIndex = statements.length;
+        const insertCols = [
+          'uuid', 'organization_name', 'contact_person', 'email', 'organization_phonenumber',
+          'address1', 'city', 'state', 'zip_code',
+          ...(includePincode ? ['pincode'] : []),
+          'country', 'gstin', 'pan', 'org_type_uuid', 'created_ts', 'last_modified_ts',
+        ];
+        const insertParams = [
           candidateOrganizationUuid,
           orgName,
           displayName,
@@ -433,78 +451,117 @@ async function insertBuyerAccount({
           addressCity,
           addressState,
           addressPincode,
-          addressPincode,
+          ...(includePincode ? [addressPincode] : []),
           addressCountry,
           taxGstin,
           taxPan,
           orgTypeUuid,
-        ],
-      });
-    } else if (streetAddress || addressCity || addressState || addressPincode || taxGstin || taxPan) {
+        ];
+        const valueRefs = insertParams.map((_, idx) => `$${idx + 1}`).join(', ');
+        const orgTypeParamRef = `$${insertParams.length}`;
+        statements.push({
+          text: `insert into organization
+                   (${insertCols.join(', ')})
+                 select ${valueRefs},
+                        strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                  where not exists (select 1 from organization where organization_name = $2 COLLATE NOCASE and org_type_uuid = ${orgTypeParamRef})
+                    and not exists (select 1 from "user" where lower(username) = lower($4))
+                 returning uuid`,
+          params: insertParams,
+        });
+      } else if (streetAddress || addressCity || addressState || addressPincode || taxGstin || taxPan) {
+        const updateClauses = [
+          "address1 = case when coalesce($1, '') <> '' then $1 else address1 end",
+          "city = case when coalesce($2, '') <> '' then $2 else city end",
+          "state = case when coalesce($3, '') <> '' then $3 else state end",
+          "zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end",
+          ...(includePincode ? ["pincode = case when coalesce($5, '') <> '' then $5 else pincode end"] : []),
+          `country = case when coalesce($${includePincode ? 6 : 5}, '') <> '' then $${includePincode ? 6 : 5} else country end`,
+          `gstin = case when coalesce($${includePincode ? 7 : 6}, '') <> '' then $${includePincode ? 7 : 6} else gstin end`,
+          `pan = case when coalesce($${includePincode ? 8 : 7}, '') <> '' then $${includePincode ? 8 : 7} else pan end`,
+          `contact_person = case when coalesce($${includePincode ? 9 : 8}, '') <> '' then $${includePincode ? 9 : 8} else contact_person end`,
+          `email = case when coalesce(email, '') = '' and coalesce($${includePincode ? 11 : 10}, '') <> '' then $${includePincode ? 11 : 10} else email end`,
+          `organization_phonenumber = case when coalesce(organization_phonenumber, '') = '' and coalesce($${includePincode ? 12 : 11}, '') <> '' then $${includePincode ? 12 : 11} else organization_phonenumber end`,
+          "last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')",
+        ];
+        const whereUuidRef = `$${includePincode ? 10 : 9}`;
+        const notExistsEmailRef = `$${includePincode ? 11 : 10}`;
+        statements.push({
+          text: `update organization
+              set ${updateClauses.join(',\n                  ')}
+            where uuid = ${whereUuidRef}
+              and not exists (select 1 from "user" where lower(username) = lower(${notExistsEmailRef}))`,
+          params: [
+            streetAddress,
+            addressCity,
+            addressState,
+            addressPincode,
+            ...(includePincode ? [addressPincode] : []),
+            addressCountry,
+            taxGstin,
+            taxPan,
+            displayName,
+            orgLookup.rows[0].uuid,
+            normalizedEmail,
+            normalizedPhone,
+          ],
+        });
+      }
+
+      const userInsertIndex = statements.length;
       statements.push({
-        text: `update organization
-            set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
-                city = case when coalesce($2, '') <> '' then $2 else city end,
-                state = case when coalesce($3, '') <> '' then $3 else state end,
-                zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
-                pincode = case when coalesce($5, '') <> '' then $5 else pincode end,
-                country = case when coalesce($6, '') <> '' then $6 else country end,
-                gstin = case when coalesce($7, '') <> '' then $7 else gstin end,
-                pan = case when coalesce($8, '') <> '' then $8 else pan end,
-                contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
-                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
-          where uuid = $10
-            and not exists (select 1 from "user" where lower(username) = lower($11))`,
+        text: `insert into "user"
+                 (uuid, username, email, password, full_name, first_name, phone,
+                  organization_name, org_uuid, role_uuid,
+                  is_active, is_approved, self_client, reset_password,
+                  verification_status, created_ts, last_modified_ts)
+               select $1, $2, $3, $4, $5, $6, $7, $8,
+                      (select uuid from organization
+                        where organization_name = $8 COLLATE NOCASE and org_type_uuid = $12
+                        order by created_ts, uuid limit 1),
+                      $9, 1, 1, 0, $10, $11,
+                      strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                where exists (select 1 from organization where organization_name = $8 COLLATE NOCASE and org_type_uuid = $12)
+                  and not exists (select 1 from "user" where lower(username) = lower($2))
+               returning uuid, org_uuid`,
         params: [
-          streetAddress,
-          addressCity,
-          addressState,
-          addressPincode,
-          addressPincode,
-          addressCountry,
-          taxGstin,
-          taxPan,
-          displayName,
-          orgLookup.rows[0].uuid,
+          userUuid,
           normalizedEmail,
+          normalizedEmail,
+          password,
+          displayName,
+          displayName,
+          normalizedPhone,
+          orgName,
+          roleUuid,
+          resetPasswordRequired ? 1 : 0,
+          verificationStatus,
+          orgTypeUuid,
         ],
       });
+
+      return { statements, organizationInsertIndex, userInsertIndex };
+    };
+
+    let { statements, organizationInsertIndex, userInsertIndex } = buildD1Statements(null);
+    let results;
+    try {
+      results = await runAtomicD1AccountBatch('insertBuyerAccount', statements);
+    } catch (err) {
+      if (!isMissingD1ColumnError(err)) throw err;
+      const orgCols = await inspectD1OrganizationColumns();
+      if (!orgCols) throw err;
+      const rebuilt = buildD1Statements(orgCols);
+      if (rebuilt.statements.map((s) => s.text).join('\n') === statements.map((s) => s.text).join('\n')) {
+        throw err;
+      }
+      logger.warn('Retrying atomic D1 buyer account creation using verified schema columns', {
+        operation: 'insertBuyerAccount',
+        error: err.message,
+      }, 'IDENTITY_QUERIES');
+      ({ statements, organizationInsertIndex, userInsertIndex } = rebuilt);
+      results = await runAtomicD1AccountBatch('insertBuyerAccount', statements);
     }
-
-    const userUuid = crypto.randomUUID();
-    const userInsertIndex = statements.length;
-    statements.push({
-      text: `insert into "user"
-               (uuid, username, email, password, full_name, first_name, phone,
-                organization_name, org_uuid, role_uuid,
-                is_active, is_approved, self_client, reset_password,
-                verification_status, created_ts, last_modified_ts)
-             select $1, $2, $3, $4, $5, $6, $7, $8,
-                    (select uuid from organization
-                      where organization_name = $8 and org_type_uuid = $12
-                      order by created_ts, uuid limit 1),
-                    $9, 1, 1, 0, $10, $11,
-                    strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
-              where exists (select 1 from organization where organization_name = $8 and org_type_uuid = $12)
-                and not exists (select 1 from "user" where lower(username) = lower($2))
-             returning uuid, org_uuid`,
-      params: [
-        userUuid,
-        normalizedEmail,
-        normalizedEmail,
-        password,
-        displayName,
-        displayName,
-        normalizedPhone,
-        orgName,
-        roleUuid,
-        resetPasswordRequired ? 1 : 0,
-        verificationStatus,
-        orgTypeUuid,
-      ],
-    });
-
-    const results = await runAtomicD1AccountBatch('insertBuyerAccount', statements);
     const createdRow = results[userInsertIndex]?.rows?.[0];
     if (!createdRow) {
       const concurrentlyCreatedUser =
@@ -541,7 +598,7 @@ async function insertBuyerAccount({
 
   return pool.withTransaction(async (client) => {
     const orgLookup = await client.query(
-      'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
+      'select uuid from organization where (organization_name = $1 or lower(trim(organization_name)) = lower(trim($1))) and org_type_uuid = $2 order by (case when organization_name = $1 then 0 else 1 end), created_ts, uuid limit 1',
       [orgName, orgTypeUuid]
     );
 
@@ -553,11 +610,11 @@ async function insertBuyerAccount({
       await client.query(
         `insert into organization
            (uuid, organization_name, email, organization_phonenumber, contact_person,
-            address1, city, state, zip_code, country, gstin, pan,
+            address1, city, state, zip_code, pincode, country, gstin, pan,
             org_type_uuid, client_status_uuid, self_client, source_type, company_id,
             gmt_name, bfs_name, is_india, upgrade_days, rfq_credits, rfq_used_count,
             quote_submitted, created_by, created_ts, last_modified_by, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, true, $15, $16, $17, $18, true, 0, 0, 0, 0, $19, now(), $20, now())`,
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true, $16, $17, $18, $19, true, 0, 0, 0, 0, $20, now(), $21, now())`,
         [
           orgUuid,
           orgName,
@@ -567,6 +624,7 @@ async function insertBuyerAccount({
           streetAddress,
           addressCity,
           addressState,
+          addressPincode,
           addressPincode,
           addressCountry,
           taxGstin,
@@ -588,10 +646,13 @@ async function insertBuyerAccount({
                 city = case when coalesce($2, '') <> '' then $2 else city end,
                 state = case when coalesce($3, '') <> '' then $3 else state end,
                 zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                pincode = case when coalesce($4, '') <> '' then $4 else pincode end,
                 country = case when coalesce($5, '') <> '' then $5 else country end,
                 gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
                 pan = case when coalesce($7, '') <> '' then $7 else pan end,
                 contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
+                email = case when coalesce(email, '') = '' and coalesce($11, '') <> '' then $11 else email end,
+                organization_phonenumber = case when coalesce(organization_phonenumber, '') = '' and coalesce($12, '') <> '' then $12 else organization_phonenumber end,
                 last_modified_by = $9,
                 last_modified_ts = now()
           where uuid = $10`,
@@ -606,6 +667,8 @@ async function insertBuyerAccount({
           displayName,
           createdBy,
           orgUuid,
+          normalizedEmail,
+          normalizedPhone,
         ]
       );
     }
@@ -1284,51 +1347,27 @@ async function ensureBuyerOrganization({
   if (!orgTypeUuid) return null;
 
   const existingOrg = await pool.query(
-    'select uuid from organization where organization_name = $1 and org_type_uuid = $2 order by created_ts, uuid limit 1',
+    'select uuid from organization where (organization_name = $1 or lower(trim(organization_name)) = lower(trim($1))) and org_type_uuid = $2 order by (case when organization_name = $1 then 0 else 1 end), created_ts, uuid limit 1',
     [orgName, orgTypeUuid],
-    { d1: true }
+    {
+      d1: true,
+      d1Text: 'select uuid from organization where organization_name = $1 COLLATE NOCASE and org_type_uuid = $2 order by created_ts, uuid limit 1',
+    }
   );
   let orgUuid = existingOrg.rows[0]?.uuid || null;
 
   if (!orgUuid) {
     orgUuid = crypto.randomUUID();
     const statusUuid = await resolveMasterUuid('master_status', 'status', IDENTITY_MASTER_DATA.BUYER_STATUS);
-    await pool.query(
-      `insert into organization
-         (uuid, organization_name, contact_person, email, organization_phonenumber,
-          address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
-          client_status_uuid, self_client, source_type, company_id,
-          created_by, created_ts, last_modified_by, last_modified_ts)
-       values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true, $16, $17, $18, now(), $18, now())`,
-      [
-        orgUuid,
-        orgName,
-        displayName,
-        normalizedEmail,
-        normalizedPhone,
-        streetAddress,
-        addressCity,
-        addressState,
-        addressPincode,
-        addressPincode,
-        addressCountry,
-        taxGstin,
-        taxPan,
-        orgTypeUuid,
-        statusUuid || null,
-        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
-        buildCompanyId(orgName),
-        actorEmail,
-      ],
-      {
-        d1: true,
-        d1Text: `insert into organization
+    try {
+      await pool.query(
+        `insert into organization
            (uuid, organization_name, contact_person, email, organization_phonenumber,
             address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
-            created_ts, last_modified_ts)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
-                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
-        d1Params: [
+            client_status_uuid, self_client, source_type, company_id,
+            created_by, created_ts, last_modified_by, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, true, $16, $17, $18, now(), $18, now())`,
+        [
           orgUuid,
           orgName,
           displayName,
@@ -1343,42 +1382,116 @@ async function ensureBuyerOrganization({
           taxGstin,
           taxPan,
           orgTypeUuid,
+          statusUuid || null,
+          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          buildCompanyId(orgName),
+          actorEmail,
         ],
-      }
-    );
+        {
+          d1: true,
+          d1Text: `insert into organization
+             (uuid, organization_name, contact_person, email, organization_phonenumber,
+              address1, city, state, zip_code, pincode, country, gstin, pan, org_type_uuid,
+              created_ts, last_modified_ts)
+           values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14,
+                   strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+          d1Params: [
+            orgUuid,
+            orgName,
+            displayName,
+            normalizedEmail,
+            normalizedPhone,
+            streetAddress,
+            addressCity,
+            addressState,
+            addressPincode,
+            addressPincode,
+            addressCountry,
+            taxGstin,
+            taxPan,
+            orgTypeUuid,
+          ],
+        }
+      );
+    } catch (err) {
+      if (!hasD1() || !isMissingD1ColumnError(err)) throw err;
+      await pool.query(
+        `insert into organization
+           (uuid, organization_name, contact_person, email, organization_phonenumber,
+            address1, city, state, zip_code, country, gstin, pan, org_type_uuid,
+            created_ts, last_modified_ts)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13,
+                 strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now'))`,
+        [
+          orgUuid,
+          orgName,
+          displayName,
+          normalizedEmail,
+          normalizedPhone,
+          streetAddress,
+          addressCity,
+          addressState,
+          addressPincode,
+          addressCountry,
+          taxGstin,
+          taxPan,
+          orgTypeUuid,
+        ],
+        { d1: true }
+      );
+    }
   } else {
-    await pool.query(
-      `update organization
-          set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
-              city = case when coalesce($2, '') <> '' then $2 else city end,
-              state = case when coalesce($3, '') <> '' then $3 else state end,
-              zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
-              pincode = case when coalesce($4, '') <> '' then $4 else pincode end,
-              country = case when coalesce($5, '') <> '' then $5 else country end,
-              gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
-              pan = case when coalesce($7, '') <> '' then $7 else pan end,
-              contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
-              last_modified_by = $9,
-              last_modified_ts = now()
-        where uuid = $10`,
-      [streetAddress, addressCity, addressState, addressPincode, addressCountry, taxGstin, taxPan, displayName, actorEmail, orgUuid],
-      {
-        d1: true,
-        d1Text: `update organization
+    try {
+      await pool.query(
+        `update organization
             set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
                 city = case when coalesce($2, '') <> '' then $2 else city end,
                 state = case when coalesce($3, '') <> '' then $3 else state end,
                 zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
-                pincode = case when coalesce($5, '') <> '' then $5 else pincode end,
-                country = case when coalesce($6, '') <> '' then $6 else country end,
-                gstin = case when coalesce($7, '') <> '' then $7 else gstin end,
-                pan = case when coalesce($8, '') <> '' then $8 else pan end,
-                contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
-                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+                pincode = case when coalesce($4, '') <> '' then $4 else pincode end,
+                country = case when coalesce($5, '') <> '' then $5 else country end,
+                gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
+                pan = case when coalesce($7, '') <> '' then $7 else pan end,
+                contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
+                last_modified_by = $9,
+                last_modified_ts = now()
           where uuid = $10`,
-        d1Params: [streetAddress, addressCity, addressState, addressPincode, addressPincode, addressCountry, taxGstin, taxPan, displayName, orgUuid],
-      }
-    );
+        [streetAddress, addressCity, addressState, addressPincode, addressCountry, taxGstin, taxPan, displayName, actorEmail, orgUuid],
+        {
+          d1: true,
+          d1Text: `update organization
+              set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+                  city = case when coalesce($2, '') <> '' then $2 else city end,
+                  state = case when coalesce($3, '') <> '' then $3 else state end,
+                  zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                  pincode = case when coalesce($5, '') <> '' then $5 else pincode end,
+                  country = case when coalesce($6, '') <> '' then $6 else country end,
+                  gstin = case when coalesce($7, '') <> '' then $7 else gstin end,
+                  pan = case when coalesce($8, '') <> '' then $8 else pan end,
+                  contact_person = case when coalesce($9, '') <> '' then $9 else contact_person end,
+                  last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+            where uuid = $10`,
+          d1Params: [streetAddress, addressCity, addressState, addressPincode, addressPincode, addressCountry, taxGstin, taxPan, displayName, orgUuid],
+        }
+      );
+    } catch (err) {
+      if (!hasD1() || !isMissingD1ColumnError(err)) throw err;
+      await pool.query(
+        `update organization
+            set address1 = case when coalesce($1, '') <> '' then $1 else address1 end,
+                city = case when coalesce($2, '') <> '' then $2 else city end,
+                state = case when coalesce($3, '') <> '' then $3 else state end,
+                zip_code = case when coalesce($4, '') <> '' then $4 else zip_code end,
+                country = case when coalesce($5, '') <> '' then $5 else country end,
+                gstin = case when coalesce($6, '') <> '' then $6 else gstin end,
+                pan = case when coalesce($7, '') <> '' then $7 else pan end,
+                contact_person = case when coalesce($8, '') <> '' then $8 else contact_person end,
+                last_modified_ts = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+          where uuid = $9`,
+        [streetAddress, addressCity, addressState, addressPincode, addressCountry, taxGstin, taxPan, displayName, orgUuid],
+        { d1: true }
+      );
+    }
   }
 
   await pool.query(

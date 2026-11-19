@@ -1343,8 +1343,16 @@ describe('LoginPage', () => {
       fireEvent.click(screen.getByRole('button', { name: /Verify & Activate Account/i }));
 
       await waitFor(() => {
-        expect(authClient.register).toHaveBeenCalled();
-        expect(addBuyerAccount).toHaveBeenCalled();
+        expect(authClient.register).toHaveBeenCalledWith(expect.objectContaining({
+          streetAddress: expect.any(String),
+          registeredAddress: expect.any(String),
+          gstNumber: expect.any(String),
+          panNumber: expect.any(String),
+        }));
+        expect(addBuyerAccount).toHaveBeenCalledWith(expect.objectContaining({
+          streetAddress: expect.any(String),
+          registeredAddress: expect.any(String),
+        }));
         expect(setIsLoggedIn).toHaveBeenCalledWith(true);
       });
     });

@@ -2190,6 +2190,8 @@ export interface StandardRFQEmailPayload {
 
 export interface BuyerAccount {
   id: string;
+  userId?: string;
+  organizationId?: string | null;
   organizationName: string;
   brandName?: string;
   corporateEmail: string;
@@ -2214,8 +2216,10 @@ export interface BuyerAccount {
   verificationStatus?: string;
   primaryPlantLocation: string;
   street?: string;
+  streetAddress?: string;
   address1?: string;
   address?: string;
+  registeredAddress?: string;
   city?: string;
   state?: string;
   pincode?: string;
@@ -2605,6 +2609,7 @@ export interface RegisterPayload {
   role?: UserRole;
   orgName?: string;
   street?: string;
+  streetAddress?: string;
   address?: string;
   registeredAddress?: string;
   city?: string;
@@ -2612,7 +2617,9 @@ export interface RegisterPayload {
   pincode?: string;
   country?: string;
   gstin?: string;
+  gstNumber?: string;
   pan?: string;
+  panNumber?: string;
   emailOtp?: string;
   mobileOtp?: string;
   code?: string;

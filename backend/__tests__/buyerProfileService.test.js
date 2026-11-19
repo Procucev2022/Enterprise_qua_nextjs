@@ -1185,5 +1185,107 @@ describe('Buyer profile service', () => {
         categories: [{ major: 'IT', minor: 'Laptop' }],
       });
     });
+
+    test('getProfile resolves buyer mirror by organizationId/DB fallback, hydrates streetAddress/registeredAddress, and reverse-backfills canonical org fields onto the mirror', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const pool = require('../src/db/pool');
+
+      // 1. Mirror found via storeService.getBuyerAccounts() matching organizationId with streetAddress
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-mem-1',
+          gstNumber: null,
+          panNumber: null,
+          street: null,
+          city: null,
+          state: null,
+          pincode: null,
+          country: '',
+          brandName: null,
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([
+        {
+          id: 'ba-mem-1',
+          organizationId: 'org-mem-1',
+          streetAddress: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          zipCode: '560037',
+          gstNumber: '27aaack3921p1z9',
+          panNumber: 'aaack3921p',
+          brandName: 'Veera Brand',
+          country: 'India',
+        },
+      ]);
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({ updated: true });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({ id: 'ba-mem-1' });
+
+      const hydrated = await buyerProfileService.getProfile({ sub: 'u-mem-1', email: 'veera@example.com' });
+      expect(hydrated.street).toBe('302 Sharada, AECS Layout');
+      expect(hydrated.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(hydrated.pincode).toBe('560037');
+      expect(hydrated.brandName).toBe('Veera Brand');
+
+      // 2. Mirror found via domainQueries.getBuyerAccountByIdFromDB(organizationId) and reverse-backfilled from canonical profile
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-canonical-1',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          country: 'India',
+          brandName: 'Veera Brand',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'ba-stale-1', corporateEmail: 'veera@example.com' });
+      const backfillSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({ id: 'ba-stale-1' });
+
+      const canonical = await buyerProfileService.getProfile({ sub: 'u-canonical-1', email: 'veera@example.com' });
+      expect(canonical.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(backfillSpy).toHaveBeenCalledWith('ba-stale-1', expect.objectContaining({
+        organizationId: 'org-canonical-1',
+        gstin: '27AAACK3921P1Z9',
+        pan: 'AAACK3921P',
+        street: '302 Sharada, AECS Layout',
+        streetAddress: '302 Sharada, AECS Layout',
+        registeredAddress: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+        brandName: 'Veera Brand',
+      }));
+
+      // 3. Reverse-backfill error is swallowed gracefully
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-canonical-2',
+          gstNumber: '27AAACK3921P1Z9',
+          street: 'Plot 9',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({ id: 'ba-err-1' });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValueOnce(new Error('mirror write failed'));
+
+      const safe = await buyerProfileService.getProfile({ sub: 'u-canonical-2', email: 'veera2@example.com' });
+      expect(safe.gstNumber).toBe('27AAACK3921P1Z9');
+    });
   });
 });

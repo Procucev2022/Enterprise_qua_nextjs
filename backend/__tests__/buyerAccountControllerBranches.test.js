@@ -1223,4 +1223,121 @@ describe('buyerAccountController branches', () => {
       }));
     });
   });
+
+  describe('createBuyerAccount self-registration mirror sync & 409 recovery', () => {
+    test('merges into legacy-ID mirror on self-registration sync, falls back to email, and syncs registeredAddress + derived PAN to organization', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        id: 'buyer-acc-legacy-99',
+        corporateEmail: 'veera@example.com',
+        organizationId: null,
+      });
+      const updateSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id: 'buyer-acc-legacy-99',
+          userId: 'u-veera-1',
+          organizationId: 'org-veera-1',
+          corporateEmail: 'veera@example.com',
+          organizationName: 'Veera Solutions Pvt Ltd',
+          registeredAddress: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          zipCode: '560037',
+          gstNumber: '27AAACK3921P1Z9',
+        });
+      const orgSyncSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({ updated: true });
+      const res = mockRes();
+
+      await buyerAccountController.createBuyerAccount({
+        user: { role: 'buyer', sub: 'u-veera-1', orgId: 'org-veera-1', email: 'veera@example.com' },
+        body: {
+          organizationName: 'Veera Solutions Pvt Ltd',
+          corporateEmail: 'veera@example.com',
+          registeredAddress: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          zipCode: '560037',
+          gstNumber: '27AAACK3921P1Z9',
+        },
+      }, res, jest.fn());
+
+      expect(updateSpy).toHaveBeenNthCalledWith(1, 'buyer-acc-legacy-99', expect.objectContaining({
+        userId: 'u-veera-1',
+        organizationId: 'org-veera-1',
+      }));
+      expect(updateSpy).toHaveBeenNthCalledWith(2, 'veera@example.com', expect.objectContaining({
+        userId: 'u-veera-1',
+        organizationId: 'org-veera-1',
+      }));
+      expect(orgSyncSpy).toHaveBeenCalledWith(expect.objectContaining({
+        organizationId: 'org-veera-1',
+        userId: 'u-veera-1',
+        patch: expect.objectContaining({
+          street: '302 Sharada, AECS Layout',
+          pincode: '560037',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+        }),
+      }));
+      expect(res.status).toHaveBeenCalledWith(201);
+    });
+
+    test('recovers from 409 BUYER_EMAIL_CONFLICT race during self-registration sync and forwards errors when recovery cannot update', async () => {
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      const conflictErr = new Error('A buyer account with the email race@example.com already exists.');
+      conflictErr.statusCode = 409;
+      jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(conflictErr);
+
+      // 1. 409 recovery succeeds and logs warning if canonical org sync fails
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({
+        id: 'buyer-race-1',
+        userId: 'u-race-1',
+        organizationId: 'org-race-1',
+        corporateEmail: 'race@example.com',
+        organizationName: 'Race Corp',
+        streetAddress: 'Plot 55',
+        gstin: '27AAACK3921P1Z9',
+      });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValueOnce(new Error('D1 transient'));
+      const resOk = mockRes();
+      await buyerAccountController.createBuyerAccount({
+        user: { role: 'buyer', sub: 'u-race-1', orgId: 'org-race-1', email: 'race@example.com' },
+        body: {
+          organizationName: 'Race Corp',
+          corporateEmail: 'race@example.com',
+          streetAddress: 'Plot 55',
+          gstin: '27AAACK3921P1Z9',
+        },
+      }, resOk, jest.fn());
+      expect(resOk.status).toHaveBeenCalledWith(201);
+
+      // 2. 409 recovery rejects paid subscriptionPlan
+      const resBadPlan = mockRes();
+      await buyerAccountController.createBuyerAccount({
+        user: { role: 'buyer', sub: 'u-race-1', orgId: 'org-race-1', email: 'race@example.com' },
+        body: {
+          organizationName: 'Race Corp',
+          corporateEmail: 'race@example.com',
+          subscriptionPlan: 'version_2',
+        },
+      }, resBadPlan, jest.fn());
+      expect(resBadPlan.status).toHaveBeenCalledWith(400);
+
+      // 3. 409 recovery rethrows if updateBuyerAccountDurably returns null
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce(null);
+      const next = jest.fn();
+      await buyerAccountController.createBuyerAccount({
+        user: { role: 'buyer', sub: 'u-race-1', orgId: 'org-race-1', email: 'race@example.com' },
+        body: {
+          organizationName: 'Race Corp',
+          corporateEmail: 'race@example.com',
+        },
+      }, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(conflictErr);
+    });
+  });
 });
