@@ -718,6 +718,10 @@ async function getCreditHistory(req, res, next) {
     if (!buyer && req.user.role === 'buyer') {
       buyer = await storeService.getBuyerAccountByEmail(req.user.email);
     }
+    if (!buyer && pool.hasStorage()) {
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -749,9 +753,13 @@ async function getCreditHistory(req, res, next) {
       if (type.includes('Adjustment') || type.includes('Refund')) {
         adjustedCredits += added;
       }
-      if (consumed > 0) {
+      if (consumed > 0 || type.includes('Consumed') || type.includes('RFQ_CREATE')) {
         totalConsumed += consumed;
       }
+    }
+
+    if (totalAllocated === 0 && remainingFree !== null) {
+      totalAllocated = remainingFree + totalConsumed;
     }
 
     const summary = {
@@ -814,7 +822,12 @@ async function addCredit(req, res, next) {
     // The guard above guarantees an authenticated caller, so the actor is the session.
     const actorEmail = req.user.email;
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1206,7 +1219,12 @@ async function updateSupportedCategories(req, res, next) {
       return res.status(400).json({ success: false, error: 'categories must be an array of strings.' });
     }
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1239,7 +1257,12 @@ async function getBuyerCommunications(req, res, next) {
     const { id } = req.params;
     const paymentDuesQueries = require('../db/paymentDuesQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1275,7 +1298,12 @@ async function recordBuyerCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }

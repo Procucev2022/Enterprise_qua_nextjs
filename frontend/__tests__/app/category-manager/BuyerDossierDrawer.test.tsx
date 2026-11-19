@@ -504,26 +504,20 @@ describe('BuyerDossierDrawer', () => {
     const removeBtn = badgeContainer?.querySelector('button');
     if (removeBtn) fireEvent.click(removeBtn);
 
-    // Toggle a category on then off using taxonomy buttons (line 1368)
-    const defaultCatBtn = await screen.findByText('+ Capital Equipment');
-    fireEvent.click(defaultCatBtn); // selects it
-    const selectedBadge = screen.getByText('✓ Capital Equipment');
-    fireEvent.click(selectedBadge); // deselects it
+    // Test category search input with < 3 chars shows hint
+    const searchInput = screen.getByPlaceholderText(/Search category/i);
+    fireEvent.change(searchInput, { target: { value: 'ca' } });
+    expect(screen.getByText(/Type at least 3 characters to search/i)).toBeInTheDocument();
 
-    // Add standard category
-    const itCatBtn = screen.getByText('+ IT & Telecom');
-    fireEvent.click(itCatBtn);
+    // Test category search input with >= 3 chars shows matching suggestions
+    fireEvent.change(searchInput, { target: { value: 'Pump' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).toBeNull();
 
-    // Add custom category - test empty and duplicate branches (line 124)
-    const customInput = screen.getByPlaceholderText(/Type custom division/i);
     const addCustomBtn = screen.getByRole('button', { name: /Add Category/i });
-    fireEvent.change(customInput, { target: { value: '   ' } });
-    fireEvent.click(addCustomBtn);
-    fireEvent.change(customInput, { target: { value: 'General Procurement' } });
     fireEvent.click(addCustomBtn);
 
-    // Add unique custom category
-    fireEvent.change(customInput, { target: { value: 'Packaging & Logistics' } });
+    // Add another category
+    fireEvent.change(searchInput, { target: { value: 'Packaging & Logistics' } });
     fireEvent.click(addCustomBtn);
 
     const saveBtn = screen.getByText('Save Categories');
@@ -532,7 +526,7 @@ describe('BuyerDossierDrawer', () => {
     await waitFor(() => {
       expect(buyerProfileClient.updateBuyerCategories).toHaveBeenCalledWith(
         'buyer-acc-1789811073812-ux3',
-        expect.arrayContaining(['General Procurement', 'Spares', 'IT & Telecom', 'Packaging & Logistics'])
+        expect.arrayContaining(['General Procurement', 'Spares', 'Pumps & Accessories', 'Packaging & Logistics'])
       );
     });
   });

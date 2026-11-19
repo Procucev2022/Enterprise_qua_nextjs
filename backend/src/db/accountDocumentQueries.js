@@ -262,13 +262,15 @@ async function listAccountDocuments(filters = {}) {
   if (!accountType || !accountId) {
     throw coded(ACCOUNT_DOCUMENT_ERRORS.ACCOUNT_REQUIRED, 'VALIDATION_FAILED', 400);
   }
-  if (!pool.hasStorage()) throw persistenceUnavailable('list', null);
-
   const normType = String(accountType).toLowerCase();
   const normId = String(accountId);
   const isAsc = String(sortOrder).toLowerCase() === 'asc';
 
-  let persistedDocs;
+  if (!pool.hasStorage()) {
+    throw persistenceUnavailable('list');
+  }
+
+  let persistedDocs = [];
   try {
     const orderClause = isAsc ? 'ASC' : 'DESC';
     const queryText = `
@@ -277,7 +279,7 @@ async function listAccountDocuments(filters = {}) {
       WHERE account_type = $1 AND account_id = $2 AND is_active = 1
       ORDER BY created_at ${orderClause}
     `;
-    const result = await pool.query(queryText, [normType, normId]);
+    const result = await pool.query(queryText, [normType, normId], { d1: true });
     persistedDocs = (result?.rows || []).map(mapRow);
   } catch (err) {
     throw persistenceUnavailable('list', err);
@@ -391,7 +393,8 @@ async function createAccountDocument(payload = {}, actor = {}) {
         isActive ? 1 : 0,
         now,
         now,
-      ]
+      ],
+      { d1: true }
     );
   } catch (err) {
     throw persistenceUnavailable('create', err);
@@ -422,7 +425,8 @@ async function deleteAccountDocument(id, accountType, accountId) {
        SET is_active = 0, updated_at = now()
        WHERE id = $1 AND account_type = $2 AND account_id = $3
        RETURNING id`,
-      [id, normType, normId]
+      [id, normType, normId],
+      { d1: true }
     );
     return Boolean(result?.rows?.length);
   } catch (err) {

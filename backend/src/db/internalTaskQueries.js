@@ -1311,13 +1311,13 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
   }
 
   if (buyerAccount && storeService.updateBuyerAccount) {
-    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts') {
+    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
       storeService.updateBuyerAccount(accountId, {
         discountPercentage: discountPct,
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
-    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods') {
+    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
       const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
       storeService.updateBuyerAccount(accountId, {
         subscriptionTier: 'Free_trial',
@@ -1325,6 +1325,29 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
       }, { persist: false });
     } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
       storeService.updateBuyerAccount(accountId, {
+        offlinePaymentStatus: 'VERIFIED',
+        lastPaymentStatus: 'VERIFIED',
+      }, { persist: false });
+    }
+  } else if (vendorAccount && storeService.updateVendor) {
+    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
+      const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
+      storeService.updateVendor(accountId, {
+        discountPercentage: discountPct,
+        subscriptionDiscount: `${discountPct}%`,
+        discountMode: task.raw?.selected_mode || task.raw?.seller_source_mode,
+      }, { persist: false });
+    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
+      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      storeService.updateVendor(accountId, {
+        trialPeriodDays: days,
+        trialTier: task.raw?.selected_mode || task.raw?.seller_source_mode || 'Connect Model',
+        isTrialActive: true,
+        trialStartDate: task.raw?.start_date,
+        trialEndDate: task.raw?.end_date,
+      }, { persist: false });
+    } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
+      storeService.updateVendor(accountId, {
         offlinePaymentStatus: 'VERIFIED',
         lastPaymentStatus: 'VERIFIED',
       }, { persist: false });
@@ -1555,6 +1578,29 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       freeRfqDownloadCredits: updatedVendorInfo.updatedBal,
       credits: updatedVendorInfo.updatedBal,
     }, { persist: false });
+  } else if ((accountType === 'SELLER' || accountType === 'VENDOR') && storeService.updateVendor) {
+    if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
+      const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
+      storeService.updateVendor(accountId, {
+        discountPercentage: discountPct,
+        subscriptionDiscount: `${discountPct}%`,
+        discountMode: task.raw?.selected_mode || task.raw?.seller_source_mode,
+      }, { persist: false });
+    } else if (task.task_type === 'Trial Periods' || task.task_type === 'Trial Period' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
+      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      storeService.updateVendor(accountId, {
+        trialPeriodDays: days,
+        trialTier: task.raw?.selected_mode || task.raw?.seller_source_mode || 'Connect Model',
+        isTrialActive: true,
+        trialStartDate: task.raw?.start_date,
+        trialEndDate: task.raw?.end_date,
+      }, { persist: false });
+    } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
+      storeService.updateVendor(accountId, {
+        offlinePaymentStatus: 'VERIFIED',
+        lastPaymentStatus: 'VERIFIED',
+      }, { persist: false });
+    }
   }
 
   return getInternalTaskById(task.id);
@@ -1878,18 +1924,6 @@ async function getInternalAssignees() {
       project: null,
     });
   });
-  if (assignees.size === 0 && Array.isArray(DEFAULT_INTERNAL_ASSIGNEES)) {
-    DEFAULT_INTERNAL_ASSIGNEES.forEach((name) => {
-      const id = `usr_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
-      assignees.set(name.toLowerCase(), {
-        id,
-        name,
-        role: 'Internal Staff',
-        email: `${String(name).toLowerCase().replace(/\s+/g, '.')}@procucev.com`,
-        project: null,
-      });
-    });
-  }
   return Array.from(assignees.values());
 }
 

@@ -6974,3 +6974,38 @@ please raise the pr and merge in test-v3 it is still running for 12 hr please do
 Please check the logs, & fix all errors if any is still pending to be fixed.
 ```
 ---
+
+
+### Prompt 319
+
+**Timestamp**: 2026-11-19T19:57:58+05:30
+
+```text
+remove the icon of all the feilds in buyer 360 roaster like profile , rfq , credit and all....
+rechange the names to Total spend , Total RFQ .
+Remove the major category all enter 3 characters and popup appear of minor catgory only already there in buyer portal reuse the functionality
+credits are showing error identify the root cause and fix it
+documnets also showing error identify the root cause and fix it
+```
+
+---
+
+### Prompt 320
+
+**Timestamp**: 2026-11-19T21:22:36+05:30
+
+```text
+All done?
+```
+
+---
+
+### Prompt 321
+
+**Timestamp**: 2026-11-19T22:44:53+05:30
+
+```text
+create the pr and merge in test-v3 pass all the coverages and gemini pr check
+```
+
+---

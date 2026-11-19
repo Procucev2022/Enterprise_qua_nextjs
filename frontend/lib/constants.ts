@@ -2713,9 +2713,12 @@ export type BuyerSourcingModeOption = (typeof BUYER_SOURCING_MODES)[number];
 export const SELLER_PROFILE_REQUEST_TYPES = [
   'Seller Credit Addition',
   'Seller Credit Deletion',
+  'Discount',
+  'Trial Period',
+  'Offline Payments',
 ] as const;
 
-export type SellerProfileRequestType = (typeof SELLER_PROFILE_REQUEST_TYPES)[number];
+export type SellerProfileRequestType = (typeof SELLER_PROFILE_REQUEST_TYPES)[number] | 'Discounts' | 'Trial Periods';
 
 export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
 
@@ -2757,6 +2760,21 @@ export const TRIAL_PERIOD_SOURCING_MODES = [
 ] as const;
 
 export type TrialPeriodSourcingModeLabel = (typeof TRIAL_PERIOD_SOURCING_MODES)[number]['label'];
+
+export const SELLER_DISCOUNT_MODES = [
+  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)' },
+  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)' },
+] as const;
+
+export type SellerDiscountModeId = (typeof SELLER_DISCOUNT_MODES)[number]['id'];
+export type SellerDiscountModeLabel = (typeof SELLER_DISCOUNT_MODES)[number]['label'];
+
+export const SELLER_TRIAL_PERIOD_MODES = [
+  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)' },
+  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)' },
+] as const;
+
+export type SellerTrialPeriodModeLabel = (typeof SELLER_TRIAL_PERIOD_MODES)[number]['label'];
 
 export function calculateTrialDaysFromDates(startDateStr: string, endDateStr: string): number {
   if (!startDateStr || !endDateStr) return 0;
@@ -2811,18 +2829,24 @@ export function calculateDiscountBreakdown(
 }
 
 export function getStandardDiscountPlanPrice(
-  pricingConfig: { buyer?: Record<string, Record<string, { baseDurationPrice?: number }>> } | null | undefined,
-  planId: 'version_1' | 'version_2' | 'version_3' | string,
+  pricingConfig: { buyer?: Record<string, Record<string, { baseDurationPrice?: number }>>; seller?: Record<string, Record<string, { baseDurationPrice?: number }>> } | null | undefined,
+  planId: 'version_1' | 'version_2' | 'version_3' | 'connect' | 'select' | string,
   durationId: '6_months' | '12_months' | string
 ): number {
-  const fromConfig = pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
-  if (typeof fromConfig === 'number' && Number.isFinite(fromConfig) && fromConfig > 0) {
-    return fromConfig;
+  const fromBuyerConfig = pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
+  if (typeof fromBuyerConfig === 'number' && Number.isFinite(fromBuyerConfig) && fromBuyerConfig > 0) {
+    return fromBuyerConfig;
+  }
+  const fromSellerConfig = pricingConfig?.seller?.[planId]?.[durationId]?.baseDurationPrice;
+  if (typeof fromSellerConfig === 'number' && Number.isFinite(fromSellerConfig) && fromSellerConfig > 0) {
+    return fromSellerConfig;
   }
   const FALLBACK_PRICES: Record<string, Record<string, number>> = {
     version_1: { '6_months': 32994, '12_months': 59988 },
     version_2: { '6_months': 47994, '12_months': 89988 },
     version_3: { '6_months': 62994, '12_months': 119988 },
+    connect: { '6_months': 3999, '12_months': 7499 },
+    select: { '6_months': 7999, '12_months': 14999 },
   };
   return FALLBACK_PRICES[planId]?.[durationId] ?? 0;
 }

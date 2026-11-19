@@ -482,7 +482,9 @@ const VALIDATION_SCHEMAS = {
         'Seller Credit Addition',
         'Seller Credit Deletion',
         'Discounts',
+        'Discount',
         'Trial Periods',
+        'Trial Period',
         'Offline Payments',
       ],
     },
@@ -507,8 +509,8 @@ const VALIDATION_SCHEMAS = {
       min: 0,
       max: 100000000,
       custom: (val, data) => {
-        if (data?.requestType === 'Discounts' && (data?.discountPercentage !== undefined || val !== undefined)) return null;
-        if (data?.requestType === 'Trial Periods' && data?.durationDays) return null;
+        if ((data?.requestType === 'Discounts' || data?.requestType === 'Discount') && (data?.discountPercentage !== undefined || val !== undefined)) return null;
+        if ((data?.requestType === 'Trial Periods' || data?.requestType === 'Trial Period') && data?.durationDays) return null;
         if (data?.requestType === 'Offline Payments' && (data?.paymentAmount !== undefined || val !== undefined)) {
           const amt = data?.paymentAmount !== undefined ? data.paymentAmount : val;
           if (typeof amt !== 'number' || isNaN(amt) || amt <= 0) return 'Payment amount must be a positive number.';

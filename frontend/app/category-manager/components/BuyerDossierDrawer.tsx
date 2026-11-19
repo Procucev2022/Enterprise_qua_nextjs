@@ -93,7 +93,7 @@ import {
   fetchBuyerUploadedVendors,
 } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getAllUniqueMinorCategories, findMajorForMinor, setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval, type RequestBuyerCreditApprovalPayload } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
@@ -238,6 +238,7 @@ export default function BuyerDossierDrawer({
       .then((result) => {
         if (!isSubscribed) return;
         if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setCategoryTaxonomy(result.data);
           setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
           setMajorCategoryError(null);
         } else {
@@ -360,7 +361,18 @@ export default function BuyerDossierDrawer({
   const [currentCategories, setCurrentCategories] = useState<string[]>(buyer.supportedMajorCategories || []);
   const [selectedCategoriesDraft, setSelectedCategoriesDraft] = useState<string[]>(currentCategories);
   const [newCategoryInput, setNewCategoryInput] = useState<string>('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState<boolean>(false);
   const [isSubmittingCategories, setIsSubmittingCategories] = useState<boolean>(false);
+
+  const allAvailableMinorCategories = useMemo(() => {
+    return getAllUniqueMinorCategories();
+  }, []);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = newCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [newCategoryInput, allAvailableMinorCategories]);
 
   useEffect(() => {
     setCurrentCategories(buyer.supportedMajorCategories || []);
@@ -373,12 +385,21 @@ export default function BuyerDossierDrawer({
     );
   };
 
-  const handleAddNewCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = newCategoryInput.trim();
+  const handleAddCategoryTag = (cat: string) => {
+    const clean = cat.trim();
     if (clean && !selectedCategoriesDraft.includes(clean)) {
       setSelectedCategoriesDraft((prev) => [...prev, clean]);
-      setNewCategoryInput('');
+    }
+    setNewCategoryInput('');
+    setShowCategorySuggestions(false);
+  };
+
+  const handleAddNewCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+      handleAddCategoryTag(filteredCategorySuggestions[0]);
+    } else if (newCategoryInput.trim()) {
+      handleAddCategoryTag(newCategoryInput.trim());
     }
   };
 
@@ -1370,31 +1391,27 @@ export default function BuyerDossierDrawer({
         {/* 8. Final Buyer Profile Navigation Tabs in exact required order */}
         <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
           {[
-            { id: 'profile', label: strings.profileTab, icon: Building2 },
-            { id: 'rfqs', label: `${strings.rfqsTab} (${buyerRfqs.length})`, icon: Layers },
-            { id: 'credits', label: strings.creditTab, icon: CreditCard },
-            { id: 'communications', label: `${strings.communicationsTab} (${communications.length})`, icon: MessageSquare },
-            { id: 'payments', label: `${strings.paymentsTab} (${payments.length})`, icon: Receipt },
-            { id: 'documents', label: `${strings.documentsTab} (${docCount})`, icon: FileText },
-            { id: 'uploaded-vendors', label: `${strings.uploadedVendorsTab} (${uploadedVendors.length})`, icon: Users },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setDossierTab(tab.id as any)}
-                className={`flex items-center gap-1.5 px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                  dossierTab === tab.id
-                    ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
+            { id: 'profile', label: strings.profileTab },
+            { id: 'rfqs', label: `${strings.rfqsTab} (${buyerRfqs.length})` },
+            { id: 'credits', label: strings.creditTab },
+            { id: 'communications', label: `${strings.communicationsTab} (${communications.length})` },
+            { id: 'payments', label: `${strings.paymentsTab} (${payments.length})` },
+            { id: 'documents', label: `${strings.documentsTab} (${docCount})` },
+            { id: 'uploaded-vendors', label: `${strings.uploadedVendorsTab} (${uploadedVendors.length})` },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setDossierTab(tab.id as any)}
+              className={`px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                dossierTab === tab.id
+                  ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              <span>{tab.label}</span>
+            </button>
+          ))}
         </div>
 
         {/* Dossier Content Body */}
@@ -1405,13 +1422,13 @@ export default function BuyerDossierDrawer({
               {/* Snapshot Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
-                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total Sourced Spend</p>
+                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{strings.totalSpendLabel || 'Total spend'}</p>
                   <p className="text-xl font-bold text-indigo-700 dark:text-indigo-300 mt-0.5">
                     {buyer.totalSpend ? String(buyer.totalSpend).replace(/\$/g, '₹') : EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total RFQs Sourced</p>
+                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{strings.totalRfqLabel || 'Total RFQ'}</p>
                   <p className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">
                     {buyer.totalRFQsCreated || buyerRfqs.length}
                   </p>
@@ -3460,51 +3477,121 @@ export default function BuyerDossierDrawer({
               </button>
             </div>
 
-            {/* Standard Category Selection Badges */}
-            <div className="space-y-2">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-                Standard Taxonomy Categories
-              </span>
-              {majorCategoryError && majorCategoryOptions.length === 0 && (
-                <p role="alert" className="text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
-              )}
-              <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
-                {majorCategoryOptions.map((cat) => {
-                  const isSelected = selectedCategoriesDraft.includes(cat);
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => handleToggleCategory(cat)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition border cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-600 text-white border-indigo-600'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {isSelected ? `✓ ${cat}` : `+ ${cat}`}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {majorCategoryError && (
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/50">
+                {majorCategoryError}
+              </p>
+            )}
 
-            {/* Add Custom Category Input */}
-            <form onSubmit={handleAddNewCategory} className="flex items-center gap-2 pt-2">
-              <input
-                type="text"
-                value={newCategoryInput}
-                onChange={(e) => setNewCategoryInput(e.target.value)}
-                placeholder="Type custom division..."
-                className="flex-1 px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
-              />
-              <button
-                type="submit"
-                className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer"
-              >
-                {strings.addCustomCategory}
-              </button>
-            </form>
+            {/* Minor Category Autocomplete Search (>= 3 chars) */}
+            <div className="space-y-2 relative">
+              <label htmlFor="buyer-dossier-category-search-input" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                {UI_STRINGS.vendorCategorySelect.categoryLabel}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="buyer-dossier-category-search-input"
+                    type="text"
+                    value={newCategoryInput}
+                    onChange={(e) => {
+                      setNewCategoryInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (newCategoryInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (newCategoryInput.trim()) {
+                          handleAddCategoryTag(newCategoryInput.trim());
+                        }
+                      } else if (e.key === 'Escape') {
+                        setShowCategorySuggestions(false);
+                      }
+                    }}
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  />
+                  {newCategoryInput && (
+                    <button
+                      type="button"
+                      aria-label="Clear category input"
+                      onClick={() => {
+                        setNewCategoryInput('');
+                        setShowCategorySuggestions(false);
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                      handleAddCategoryTag(filteredCategorySuggestions[0]);
+                    } else if (newCategoryInput.trim()) {
+                      handleAddCategoryTag(newCategoryInput.trim());
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer shrink-0"
+                >
+                  {strings.addCustomCategory}
+                </button>
+              </div>
+
+              {newCategoryInput.trim().length > 0 && newCategoryInput.trim().length < 3 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                  {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                </p>
+              )}
+
+              {showCategorySuggestions && newCategoryInput.trim().length >= 3 && (
+                <div
+                  role="listbox"
+                  aria-label={UI_STRINGS.vendorCategorySelect.matchingCategories}
+                  className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                >
+                  <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                    <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                    <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                  </div>
+                  {filteredCategorySuggestions.length > 0 ? (
+                    filteredCategorySuggestions.map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        role="option"
+                        aria-selected={selectedCategoriesDraft.includes(category)}
+                        onClick={() => handleAddCategoryTag(category)}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors cursor-pointer"
+                      >
+                        <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                        <span className="text-[10px] text-slate-400 italic">{findMajorForMinor(category)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-3 text-center">
+                      <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleAddCategoryTag(newCategoryInput.trim())}
+                        className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      >
+                        {UI_STRINGS.vendorCategorySelect.addCustomTag}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Currently Selected Summary */}
             <div className="pt-2">

@@ -74,10 +74,24 @@ async function findBuyerSafe(id, user) {
   let buyer = (storeService.getBuyerAccounts ? storeService.getBuyerAccounts() : []).find((b) => b.id === id);
   if (!buyer && pool.hasStorage()) {
     try {
-      const res = await pool.query('SELECT id, is_active, raw FROM buyer_accounts WHERE id = $1', [id]);
+      const res = await pool.query(
+        'SELECT id, is_active, raw FROM buyer_accounts WHERE id = $1',
+        [id],
+        { d1: true }
+      );
       if (res?.rows?.[0]) {
         const row = res.rows[0];
-        buyer = { id: row.id, ...(typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw || {})) };
+        let raw = {};
+        if (typeof row.raw === 'string') {
+          try {
+            raw = JSON.parse(row.raw);
+          } catch {
+            raw = {};
+          }
+        } else if (typeof row.raw === 'object' && row.raw !== null) {
+          raw = row.raw;
+        }
+        buyer = { id: row.id, isActive: row.is_active === 1 || row.is_active === true, ...raw };
       }
     } catch (err) {
       // A failed lookup must not be reported as "buyer not found".

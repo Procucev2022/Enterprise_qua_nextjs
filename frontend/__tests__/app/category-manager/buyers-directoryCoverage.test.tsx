@@ -332,7 +332,7 @@ describe('BuyersDirectory sourced spend', () => {
 
     openDossier(organizationName);
 
-    expect(valueBelow('Total Sourced Spend')).toBe(expectedSpend);
+    expect(valueBelow('Total spend')).toBe(expectedSpend);
   });
 
   test('counts every matched RFQ for the buyer even when only some carry a value', () => {
@@ -358,8 +358,8 @@ describe('BuyersDirectory dossier when the buyer leaves the store', () => {
     rerender(<BuyersDirectory />);
 
     expect(screen.getByRole('heading', { name: 'Vanishing Co' })).toBeInTheDocument();
-    expect(valueBelow('Total RFQs Sourced')).toBe(expectedRfqCount);
-    expect(valueBelow('Total Sourced Spend')).toBe(expectedSpend);
+    expect(valueBelow('Total RFQ')).toBe(expectedRfqCount);
+    expect(valueBelow('Total spend')).toBe(expectedSpend);
     openTab(/^RFQs \(0\)$/);
     expect(screen.getByText('No RFQs created by this buyer yet.')).toBeInTheDocument();
   });
