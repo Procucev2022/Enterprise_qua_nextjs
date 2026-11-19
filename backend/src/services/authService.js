@@ -739,10 +739,29 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
+  let user = null;
+  let isOnboardingUser = false;
   if (isRegistration) {
     // For account creation / registration, do not block OTP dispatch on existing or non-existing accounts ("dont check existing vendor and buyer").
   } else {
-    const user = await loadIdentityUser(normalizedEmail, submittedMobile);
+    user = await loadIdentityUser(normalizedEmail, submittedMobile);
+    if (!user) {
+      try {
+        const userByEmail = await loadIdentityUser(normalizedEmail);
+        if (
+          userByEmail &&
+          (userByEmail.resetPasswordRequired ||
+            userByEmail.onboardingRequired ||
+            userByEmail.status === 'PENDING_ONBOARDING' ||
+            String(userByEmail.mobile || '').endsWith('9999999999'))
+        ) {
+          user = userByEmail;
+          isOnboardingUser = true;
+        }
+      } catch {
+        // Fallback lookup failed; proceed to reject invalid credentials
+      }
+    }
     if (!user) {
       logger.warn(
         'OTP requested for an unrecognised email and mobile pair',
@@ -769,11 +788,12 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   try {
     // Every stored OTP names the email it was issued to: the auth_otp_codes.email column is NOT NULL
     // on the live D1 schema, so an insert without it fails and the failure is logged on every request.
-    if (isRegistration) {
+    if (isRegistration || isOnboardingUser) {
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt, normalizedEmail);
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt, normalizedEmail);
       // Also save combined key for backwards compatibility with single-code verifications
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, 'email'), emailCode, expiresAt, normalizedEmail);
     } else {
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     }

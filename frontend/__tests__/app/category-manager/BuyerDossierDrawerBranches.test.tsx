@@ -48,6 +48,25 @@ jest.mock('@/lib/internalTaskClient', () => ({
   }),
 }));
 
+jest.mock('@/lib/approvalClient', () => ({
+  fetchApprovalUsers: jest.fn().mockResolvedValue({
+    users: [
+      { id: 'usr-govardhan', name: 'Govardhan', email: 'govardhan@procucev.com' },
+      { id: 'usr-krishna', name: 'Krishna', email: 'krishna@procucev.com' },
+      { id: 'session-user-1', name: 'Session Initiator', email: 'initiator@example.com' },
+      { id: 'usr-buyer-001', name: 'Test Buyer', email: 'test.buyer@example.com' },
+    ],
+  }),
+  fetchApprovalApprovers: jest.fn().mockResolvedValue({
+    approvers: [
+      { id: 'appr-srinu', name: 'Srinu Sir', title: 'VP Sourcing' },
+      { id: 'appr-rao', name: 'Rao Sir', title: 'Director' },
+      { id: 'appr-sudheer', name: 'Sudheer Sir', title: 'Head of Procurement' },
+      { id: 'appr-test', name: 'Test Approver', title: 'Approver' },
+    ],
+  }),
+}));
+
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockResolvedValue([
     {
@@ -247,6 +266,10 @@ describe('BuyerDossierDrawer branch coverage', () => {
       success: true,
       summary: paymentSummaryFixture,
       payments: [],
+    });
+    (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      data: [],
     });
   });
 
@@ -726,6 +749,302 @@ describe('BuyerDossierDrawer branch coverage', () => {
 
       expect(screen.getByText('Channel / Method:')).toBeInTheDocument();
       expect(screen.queryByText('Download Invoice')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('offline payment workflow branches', () => {
+    it('exercises offline payments modal open, switching payment types, transaction ID visibility and Cash mode clearing', async () => {
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+
+      expect(screen.getByText('Request Offline Payment Approval')).toBeInTheDocument();
+      expect(screen.getByDisplayValue(mockBuyer.organizationName)).toBeInTheDocument();
+
+      const typeSelect = document.getElementById('offline-payment-type-select') as HTMLSelectElement;
+      expect(typeSelect).toBeInTheDocument();
+      expect(typeSelect.value).toBe('NEFT / RTGS');
+
+      // NEFT / RTGS requires transaction ID
+      let txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      expect(txInput).toBeInTheDocument();
+      fireEvent.change(txInput, { target: { value: 'NEFT-12345678' } });
+      expect(txInput.value).toBe('NEFT-12345678');
+
+      // Switch to Cheque
+      fireEvent.change(typeSelect, { target: { value: 'Cheque' } });
+      expect(typeSelect.value).toBe('Cheque');
+      txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      expect(txInput).toBeInTheDocument();
+      fireEvent.change(txInput, { target: { value: 'CHQ-555666' } });
+
+      // Switch to UPI
+      fireEvent.change(typeSelect, { target: { value: 'UPI' } });
+      expect(typeSelect.value).toBe('UPI');
+      txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      expect(txInput).toBeInTheDocument();
+      fireEvent.change(txInput, { target: { value: 'UPI-9876543210@okaxis' } });
+
+      // Switch to Cash - Transaction ID is hidden and cleared
+      fireEvent.change(typeSelect, { target: { value: 'Cash' } });
+      expect(typeSelect.value).toBe('Cash');
+      expect(document.getElementById('offline-transaction-id')).toBeNull();
+
+      // Switch back to NEFT / RTGS - Transaction ID reappears empty
+      fireEvent.change(typeSelect, { target: { value: 'NEFT / RTGS' } });
+      txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      expect(txInput).toBeInTheDocument();
+      expect(txInput.value).toBe('');
+
+      // Test sourcing mode change
+      const modeSelect = document.getElementById('offline-sourcing-mode-select') as HTMLSelectElement;
+      expect(modeSelect).toBeInTheDocument();
+      fireEvent.change(modeSelect, { target: { value: 'Mode 3' } });
+      expect(modeSelect.value).toBe('Mode 3');
+
+      // Test cancel button closes modal
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByText('Request Offline Payment Approval')).toBeNull();
+    });
+
+    it('handles payment proof file upload (valid image, invalid extension, oversized, and remove)', async () => {
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+
+      const fileInput = screen.getByTestId('offline-proof-file-input') as HTMLInputElement;
+
+      // 1. Invalid file format (e.g. PDF or EXE)
+      const invalidFile = new File(['dummy content'], 'report.pdf', { type: 'application/pdf' });
+      fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+      expect(screen.getByText('Please upload an image file in JPG, JPEG, or PNG format.')).toBeInTheDocument();
+
+      // 2. Oversized file (> 10MB)
+      const hugeFile = new File([new ArrayBuffer(11 * 1024 * 1024)], 'huge.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [hugeFile] } });
+      expect(screen.getByText('Payment proof file must be smaller than 10MB.')).toBeInTheDocument();
+
+      // 3. Valid JPG file
+      const validFile = new File(['valid-image-bytes'], 'receipt.jpg', { type: 'image/jpeg' });
+      fireEvent.change(fileInput, { target: { files: [validFile] } });
+      expect(await screen.findByText('receipt.jpg')).toBeInTheDocument();
+
+      // 4. Remove file
+      const removeBtn = screen.getByRole('button', { name: 'Remove' });
+      fireEvent.click(removeBtn);
+      expect(screen.queryByText('receipt.jpg')).toBeNull();
+
+      // 5. Replace file button click
+      const validPng = new File(['png-bytes'], 'payment_proof.png', { type: 'image/png' });
+      fireEvent.change(fileInput, { target: { files: [validPng] } });
+      expect(await screen.findByText('payment_proof.png')).toBeInTheDocument();
+      const replaceBtn = screen.getByRole('button', { name: 'Replace File' });
+      fireEvent.click(replaceBtn);
+    });
+
+    it('validates mandatory fields and handles submission errors and success for Offline Payments', async () => {
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+
+      const amountInput = document.getElementById('offline-payment-amount') as HTMLInputElement;
+      const typeSelect = document.getElementById('offline-payment-type-select') as HTMLSelectElement;
+      const initiatorInput = document.getElementById('offline-initiator-select') as HTMLInputElement;
+      const approverInput = document.getElementById('offline-approver-select') as HTMLInputElement;
+      const remarksTextarea = screen.getByPlaceholderText(/Reason \/ remarks for offline payment/i);
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+      const form = submitBtn.closest('form') as HTMLFormElement;
+
+      // Fill valid amount
+      fireEvent.change(amountInput, { target: { value: '45000' } });
+
+      // Missing transaction ID for NEFT / RTGS
+      fireEvent.submit(form);
+      expect(screen.getByText(/Transaction ID is mandatory for NEFT \/ RTGS/i)).toBeInTheDocument();
+
+      // Select Cash payment type (no transaction id required)
+      fireEvent.change(typeSelect, { target: { value: 'Cash' } });
+      fireEvent.change(initiatorInput, { target: { value: 'Test Assignee' } });
+      fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
+      fireEvent.change(remarksTextarea, { target: { value: 'Direct cash deposit at counter' } });
+
+      // Mock API error response
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Cash receipt verification required',
+      });
+      fireEvent.submit(form);
+      await waitFor(() => {
+        expect(screen.getByText('Cash receipt verification required')).toBeInTheDocument();
+      });
+
+      // Mock network exception
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network drop'));
+      fireEvent.submit(form);
+      await waitFor(() => {
+        expect(screen.getByText('Failed to submit offline payment approval request.')).toBeInTheDocument();
+      });
+
+      // Successful Cash submission
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        message: 'Offline payment submitted successfully for cash approval.',
+      });
+      fireEvent.submit(form);
+      await waitFor(() => {
+        expect(screen.getByText('Offline payment submitted successfully for cash approval.')).toBeInTheDocument();
+      });
+      expect(screen.queryByText('Request Offline Payment Approval')).toBeNull();
+    });
+  });
+
+  describe('buyer uploaded vendors tab branches', () => {
+    const sampleUploadedVendors = [
+      {
+        id: 'uv-1',
+        name: 'Apex Industrial Spares',
+        companyName: 'Apex Spares Pvt Ltd',
+        contactPerson: 'Arun Verma',
+        email: 'arun@apex.com',
+        phone: '+919876543210',
+        createdAt: '2026-10-15T10:00:00.000Z',
+        status: 'ACTIVE',
+        location: 'Pune, Maharashtra',
+        gstin: '27AAAAA0000A1Z5',
+        pan: 'AAAAA0000A',
+        category: 'Spares',
+        source: 'PO Dump Upload',
+      },
+      {
+        id: 'uv-2',
+        name: 'Zenith Fasteners',
+        companyName: 'Zenith Fasteners Ltd',
+        contactPerson: 'Prakash Rao',
+        email: 'prakash@zenith.com',
+        phone: '+919876543211',
+        createdAt: '2026-10-18T10:00:00.000Z',
+        status: 'INACTIVE',
+      },
+    ];
+
+    it('renders uploaded vendors table, filters by search & status, opens modal and closes it', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: sampleUploadedVendors,
+      });
+
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="uploaded-vendors" />);
+
+      expect(await screen.findByText('Apex Industrial Spares')).toBeInTheDocument();
+      expect(screen.getByText('Zenith Fasteners')).toBeInTheDocument();
+
+      // Search filter
+      const searchInput = screen.getByPlaceholderText(/Search uploaded vendors/i);
+      fireEvent.change(searchInput, { target: { value: 'Apex' } });
+      expect(screen.getByText('Apex Industrial Spares')).toBeInTheDocument();
+      expect(screen.queryByText('Zenith Fasteners')).toBeNull();
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Status filter
+      const statusSelect = screen.getByRole('combobox', { name: 'Filter by vendor status' });
+      fireEvent.change(statusSelect, { target: { value: 'ACTIVE' } });
+      expect(screen.getByText('Apex Industrial Spares')).toBeInTheDocument();
+      expect(screen.queryByText('Zenith Fasteners')).toBeNull();
+      fireEvent.change(statusSelect, { target: { value: 'ALL' } });
+
+      // Click View Details on first vendor
+      const viewDetailsBtns = screen.getAllByRole('button', { name: /View Details/i });
+      fireEvent.click(viewDetailsBtns[0]);
+
+      expect(screen.getByText('Vendor Profile Details')).toBeInTheDocument();
+      expect(screen.getByText('Pune, Maharashtra')).toBeInTheDocument();
+      expect(screen.getByText('27AAAAA0000A1Z5')).toBeInTheDocument();
+
+      // Close modal
+      const closeBtn = screen.getAllByRole('button', { name: 'Close' })[0];
+      fireEvent.click(closeBtn);
+      expect(screen.queryByText('Vendor Profile Details')).toBeNull();
+    });
+
+    it('displays error message and handles retry when fetching uploaded vendors fails', async () => {
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Database connection failed while loading vendors',
+      });
+
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="uploaded-vendors" />);
+
+      expect(await screen.findByText('Database connection failed while loading vendors')).toBeInTheDocument();
+
+      // Click Retry
+      (buyerProfileClient.fetchBuyerUploadedVendors as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: sampleUploadedVendors,
+      });
+      const retryBtns = screen.getAllByRole('button', { name: 'Retry' });
+      fireEvent.click(retryBtns[retryBtns.length - 1]);
+
+      expect(await screen.findByText('Apex Industrial Spares')).toBeInTheDocument();
+    });
+  });
+
+  describe('offline payment validation error branches', () => {
+    it('validates missing payment date, missing transaction ID, missing initiator and missing approver', async () => {
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+
+      const dateInput = document.getElementById('offline-payment-date') as HTMLInputElement;
+      const typeSelect = document.getElementById('offline-payment-type-select') as HTMLSelectElement;
+      const txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      const amountInput = document.getElementById('offline-payment-amount') as HTMLInputElement;
+      const initiatorSelect = document.getElementById('offline-initiator-select') as HTMLSelectElement;
+      const approverSelect = document.getElementById('offline-approver-select') as HTMLSelectElement;
+      const form = amountInput.closest('form') as HTMLFormElement;
+
+      // 1. Missing date
+      fireEvent.change(dateInput, { target: { value: '' } });
+      fireEvent.submit(form);
+      expect(screen.getByText('Payment date is mandatory.')).toBeInTheDocument();
+      fireEvent.change(dateInput, { target: { value: '2026-11-19' } });
+
+      // 2. Missing transaction ID for NEFT / RTGS
+      fireEvent.change(amountInput, { target: { value: '15000' } });
+      fireEvent.change(txInput, { target: { value: '' } });
+      fireEvent.submit(form);
+      expect(screen.getByText(/Transaction ID is mandatory for NEFT \/ RTGS\./i)).toBeInTheDocument();
+      fireEvent.change(txInput, { target: { value: 'TXN-998877' } });
+
+      // 3. Amount <= 0
+      fireEvent.change(amountInput, { target: { value: '0' } });
+      fireEvent.submit(form);
+      expect(screen.getByText('Please enter a valid payment amount greater than 0.')).toBeInTheDocument();
+      fireEvent.change(amountInput, { target: { value: '25000' } });
+
+      // 4. Missing initiator
+      fireEvent.change(initiatorSelect, { target: { value: '' } });
+      fireEvent.submit(form);
+      expect(screen.getByText('Initiated by user is mandatory.')).toBeInTheDocument();
+      fireEvent.change(initiatorSelect, { target: { value: 'usr-krishna' } });
+
+      // 5. Missing approver
+      fireEvent.change(approverSelect, { target: { value: '' } });
+      fireEvent.submit(form);
+      expect(screen.getByText('Assigned approver is mandatory.')).toBeInTheDocument();
+      fireEvent.change(approverSelect, { target: { value: 'appr-srinu' } });
+
+      // 6. API error without error message
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
+        success: false,
+      });
+      fireEvent.submit(form);
+      await waitFor(() => {
+        expect(screen.getByText('Failed to submit offline payment approval request.')).toBeInTheDocument();
+      });
     });
   });
 });

@@ -8,7 +8,7 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
-const { IDENTITY_ROLE_MAP } = require('../config/constants');
+const { IDENTITY_ROLE_MAP, DEFAULT_INTERNAL_ASSIGNEES } = require('../config/constants');
 
 const INTERNAL_TASK_ERRORS = Object.freeze({
   ACTOR_REQUIRED: 'A signed-in user is required for this task action.',
@@ -544,8 +544,8 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
   const assignedToUserId = data.assignedToUserId || null;
   const assignedToName = data.assignedToName || '';
   const assignedTeam = data.assignedTeam || '';
-  const createdByUserId = resolvedActor.uuid;
-  const createdByName = resolvedActor.name;
+  const createdByUserId = data.createdByUserId || resolvedActor.uuid;
+  const createdByName = data.createdByName || resolvedActor.name;
   const dueDate = data.dueDate || null;
   const dueTime = data.dueTime || data.due_time || null;
   const relatedEntityType = (data.relatedEntityType || 'GENERAL').toUpperCase();
@@ -1878,6 +1878,18 @@ async function getInternalAssignees() {
       project: null,
     });
   });
+  if (assignees.size === 0 && Array.isArray(DEFAULT_INTERNAL_ASSIGNEES)) {
+    DEFAULT_INTERNAL_ASSIGNEES.forEach((name) => {
+      const id = `usr_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '_')}`;
+      assignees.set(name.toLowerCase(), {
+        id,
+        name,
+        role: 'Internal Staff',
+        email: `${String(name).toLowerCase().replace(/\s+/g, '.')}@procucev.com`,
+        project: null,
+      });
+    });
+  }
   return Array.from(assignees.values());
 }
 

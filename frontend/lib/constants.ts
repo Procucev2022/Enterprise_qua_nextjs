@@ -2630,6 +2630,7 @@ export type AccountDocumentFilterType = (typeof ACCOUNT_DOCUMENT_TYPES)[number];
 
 export const CREDIT_APPROVAL_APPROVERS = [
   'Srinu Sir',
+  'Rao Sir',
   'Sudheer Sir',
 ] as const;
 
@@ -2639,6 +2640,12 @@ export const APPROVER_CONFIG = [
     name: 'Srinu Sir',
     email: 'srinivas.mukku@procucev.com',
     title: 'Director / Management Authority',
+  },
+  {
+    id: 'rao_sir',
+    name: 'Rao Sir',
+    email: 'rao@procucev.com',
+    title: 'Management Authority',
   },
   {
     id: 'sudheer_sir',
@@ -2657,6 +2664,30 @@ export const CREDIT_APPROVAL_INITIATORS = [
 ] as const;
 
 export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
+
+export const OFFLINE_PAYMENT_TYPES = [
+  'NEFT / RTGS',
+  'Cheque',
+  'UPI',
+  'Cash',
+] as const;
+
+export type OfflinePaymentType = (typeof OFFLINE_PAYMENT_TYPES)[number];
+
+export const BUYER_SOURCING_MODES = [
+  'Mode 1',
+  'Mode 2',
+  'Mode 3',
+] as const;
+
+export type BuyerSourcingModeOption = (typeof BUYER_SOURCING_MODES)[number];
+
+export const SELLER_PROFILE_REQUEST_TYPES = [
+  'Seller Credit Addition',
+  'Seller Credit Deletion',
+] as const;
+
+export type SellerProfileRequestType = (typeof SELLER_PROFILE_REQUEST_TYPES)[number];
 
 export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
 
@@ -2681,6 +2712,92 @@ export const BUYER_PROFILE_REQUEST_TYPES = [
 ] as const;
 
 export type BuyerProfileRequestType = (typeof BUYER_PROFILE_REQUEST_TYPES)[number];
+
+export const DISCOUNT_SOURCING_MODES = [
+  { id: 'version_1', label: 'Mode 1', title: 'Mode 1', description: 'Private Preferred Vendor Network (Silver Plan)' },
+  { id: 'version_2', label: 'Mode 2', title: 'Mode 2', description: 'AI Hybrid Sourcing & Network Pool (Gold Plan)' },
+  { id: 'version_3', label: 'Mode 3', title: 'Mode 3', description: 'Autonomous Category Desk & AI Discovery (Diamond Plan)' },
+] as const;
+
+export type DiscountSourcingModeId = (typeof DISCOUNT_SOURCING_MODES)[number]['id'];
+export type DiscountSourcingModeLabel = (typeof DISCOUNT_SOURCING_MODES)[number]['label'];
+
+export const TRIAL_PERIOD_SOURCING_MODES = [
+  { id: 'mode_1', label: 'Mode 1', title: 'Mode 1', description: 'Private Preferred Vendor Network (Silver Plan)' },
+  { id: 'mode_2', label: 'Mode 2', title: 'Mode 2', description: 'AI Hybrid Sourcing & Network Pool (Gold Plan)' },
+  { id: 'mode_3', label: 'Mode 3', title: 'Mode 3', description: 'Autonomous Category Desk & AI Discovery (Diamond Plan)' },
+] as const;
+
+export type TrialPeriodSourcingModeLabel = (typeof TRIAL_PERIOD_SOURCING_MODES)[number]['label'];
+
+export function calculateTrialDaysFromDates(startDateStr: string, endDateStr: string): number {
+  if (!startDateStr || !endDateStr) return 0;
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  const diffTime = end.getTime() - start.getTime();
+  if (diffTime < 0) return -1;
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+}
+
+export const DISCOUNT_BILLING_DURATIONS = [
+  { id: '6_months', label: '6 Months', months: 6 },
+  { id: '12_months', label: '12 Months', months: 12 },
+] as const;
+
+export type DiscountBillingDurationId = (typeof DISCOUNT_BILLING_DURATIONS)[number]['id'];
+export type DiscountBillingDurationLabel = (typeof DISCOUNT_BILLING_DURATIONS)[number]['label'];
+
+export interface DiscountCalculationBreakdown {
+  originalPlanPrice: number;
+  discountPercentage: number;
+  discountAmount: number;
+  remainingAmount: number;
+  gstAmount: number;
+  finalPayableAmount: number;
+}
+
+export function calculateDiscountBreakdown(
+  originalPlanPrice: number,
+  discountPercentage: number,
+  gstRate: number = 0.18
+): DiscountCalculationBreakdown {
+  const safeOriginal = Number.isFinite(originalPlanPrice) && originalPlanPrice >= 0 ? originalPlanPrice : 0;
+  const safeDiscount = Number.isFinite(discountPercentage) && discountPercentage >= 0 && discountPercentage <= 100
+    ? discountPercentage
+    : 0;
+
+  const discountAmount = Math.round(((safeOriginal * safeDiscount) / 100) * 100) / 100;
+  const remainingAmount = Math.round((safeOriginal - discountAmount) * 100) / 100;
+  const gstAmount = Math.round((remainingAmount * (gstRate || 0.18)) * 100) / 100;
+  const finalPayableAmount = Math.round((remainingAmount + gstAmount) * 100) / 100;
+
+  return {
+    originalPlanPrice: safeOriginal,
+    discountPercentage: safeDiscount,
+    discountAmount,
+    remainingAmount,
+    gstAmount,
+    finalPayableAmount,
+  };
+}
+
+export function getStandardDiscountPlanPrice(
+  pricingConfig: { buyer?: Record<string, Record<string, { baseDurationPrice?: number }>> } | null | undefined,
+  planId: 'version_1' | 'version_2' | 'version_3' | string,
+  durationId: '6_months' | '12_months' | string
+): number {
+  const fromConfig = pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
+  if (typeof fromConfig === 'number' && Number.isFinite(fromConfig) && fromConfig > 0) {
+    return fromConfig;
+  }
+  const FALLBACK_PRICES: Record<string, Record<string, number>> = {
+    version_1: { '6_months': 32994, '12_months': 59988 },
+    version_2: { '6_months': 47994, '12_months': 89988 },
+    version_3: { '6_months': 62994, '12_months': 119988 },
+  };
+  return FALLBACK_PRICES[planId]?.[durationId] ?? 0;
+}
 
 export const DEFAULT_APPROVAL_COLUMNS: Array<{
   key:

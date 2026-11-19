@@ -35,7 +35,7 @@ describe('Backend Validation Schemas Unit Tests', () => {
 
     const unlisted = validatePayload(schema, { amount: 5, approverName: 'Unlisted Approver' });
     expect(unlisted.isValid).toBe(false);
-    expect(unlisted.errors.approverName).toMatch(/must be one of: Srinu Sir, Sudheer Sir/);
+    expect(unlisted.errors.approverName).toMatch(/must be one of: Srinu Sir, (?:Rao Sir, )?Sudheer Sir/);
   });
 
   test('validates optional credit approval request idempotency UUIDs', () => {

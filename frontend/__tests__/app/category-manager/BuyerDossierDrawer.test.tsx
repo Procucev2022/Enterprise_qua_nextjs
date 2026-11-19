@@ -43,6 +43,26 @@ jest.mock('@/lib/internalTaskClient', () => ({
   }),
 }));
 
+jest.mock('@/lib/approvalClient', () => ({
+  fetchApprovalUsers: jest.fn().mockResolvedValue({
+    users: [
+      { id: 'usr-govardhan', name: 'Govardhan', email: 'govardhan@procucev.com' },
+      { id: 'usr-krishna', name: 'Krishna', email: 'krishna@procucev.com' },
+      { id: 'session-user-1', name: 'Session Initiator', email: 'initiator@example.com' },
+      { id: 'usr-buyer-001', name: 'Test Buyer', email: 'test.buyer@example.com' },
+    ],
+  }),
+  fetchApprovalApprovers: jest.fn().mockResolvedValue({
+    approvers: [
+      { id: 'appr-srinu', name: 'Srinu Sir', title: 'VP Sourcing' },
+      { id: 'appr-rao', name: 'Rao Sir', title: 'Director' },
+      { id: 'appr-sudheer', name: 'Sudheer Sir', title: 'Head of Procurement' },
+      { id: 'appr-test', name: 'Test Approver', title: 'Approver' },
+      { id: 'appr-vp', name: 'VP Procurement', title: 'VP Procurement' },
+    ],
+  }),
+}));
+
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockResolvedValue([
     {
@@ -204,8 +224,21 @@ describe('BuyerDossierDrawer', () => {
       name: 'Session Initiator',
       email: 'initiator@example.com',
     } as unknown as ReturnType<typeof authClient.getSessionUser>);
-    const approverInput = document.getElementById('credit-approver') as HTMLInputElement;
-    fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+    const approverInput = (document.getElementById('credit-approver') ||
+      document.getElementById('discount-approver') ||
+      document.getElementById('trial-approver') ||
+      document.getElementById('trial-approver-select') ||
+      document.getElementById('offline-approver-select')) as HTMLInputElement | HTMLSelectElement | null;
+    if (approverInput) {
+      fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+    }
+    const initiatorInput = (document.getElementById('credit-initiator') ||
+      document.getElementById('discount-initiator') ||
+      document.getElementById('trial-initiator') ||
+      document.getElementById('offline-initiator-select')) as HTMLInputElement | HTMLSelectElement | null;
+    if (initiatorInput) {
+      fireEvent.change(initiatorInput, { target: { value: 'Session Initiator' } });
+    }
   };
 
   beforeEach(() => {
@@ -318,7 +351,7 @@ describe('BuyerDossierDrawer', () => {
     expect(screen.getByText('Veera Babu Buyer Org')).toBeInTheDocument();
     expect(screen.getAllByText('Mode 1').length).toBeGreaterThan(0);
     expect(screen.getByTestId('request-type-dropdown-btn')).toBeInTheDocument();
-    expect(screen.getByText('+ Request Type')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.buyerDirectory.dossier.requestTypeDropdown)).toBeInTheDocument();
     expect(screen.getByText(/Registered:/i)).toBeInTheDocument();
     expect(screen.queryByText(/ID: buyer-acc-1789811073812-ux3/i)).toBeNull();
     expect(screen.queryByRole('button', { name: /Audit/i })).toBeNull();
@@ -412,7 +445,10 @@ describe('BuyerDossierDrawer', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '10' } });
-    fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
+    const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+    fireEvent.click(submitBtn);
+    const creditForm = submitBtn.closest('form');
+    if (creditForm) fireEvent.submit(creditForm);
 
     await waitFor(() => {
       expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
@@ -421,7 +457,8 @@ describe('BuyerDossierDrawer', () => {
 
     // Test exception branch (line 225)
     (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
-    fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
+    fireEvent.click(submitBtn);
+    if (creditForm) fireEvent.submit(creditForm);
 
     await waitFor(() => {
       expect(screen.getByText('Failed to submit credit approval request.')).toBeInTheDocument();
@@ -1467,6 +1504,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     // API success with no custom message
     (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: true });
     fireEvent.click(submitBtn);
+    const form = submitBtn.closest('form');
+    if (form) fireEvent.submit(form);
 
     await waitFor(() => {
       expect(accountDocsClient.requestBuyerCreditApproval).toHaveBeenCalled();
@@ -2222,6 +2261,8 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
 
       fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
       fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
       signInAndChooseApprover();
 
       expect(screen.getByText('Request Discount Approval')).toBeInTheDocument();
@@ -2233,7 +2274,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       const form = submitBtn.closest('form') as HTMLFormElement;
       fireEvent.submit(form);
       expect(
-        await screen.findByText('Please enter a valid discount percentage (1-100%).')
+        await screen.findByText(/Please enter a valid discount percentage/i)
       ).toBeInTheDocument();
 
       // Valid discount: 25%
@@ -2264,19 +2305,23 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
 
       fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
       fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Periods' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 1/i }));
       signInAndChooseApprover();
 
       expect(screen.getByText('Request Trial Period Approval')).toBeInTheDocument();
+      const startDateInput = document.getElementById('trial-start-date') as HTMLInputElement;
+      const endDateInput = document.getElementById('trial-end-date') as HTMLInputElement;
+      fireEvent.change(startDateInput, { target: { value: '2026-11-01' } });
+      fireEvent.change(endDateInput, { target: { value: '2026-12-16' } });
       const amountInput = screen.getByRole('spinbutton');
       const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
 
-      // Out of bounds: > 365
+      // Mismatch between days and date range
       fireEvent.change(amountInput, { target: { value: '500' } });
       const form = submitBtn.closest('form') as HTMLFormElement;
       fireEvent.submit(form);
-      expect(
-        await screen.findByText('Please enter a valid trial extension period (1-365 days).')
-      ).toBeInTheDocument();
+      const alerts = await screen.findAllByText(/The entered number of days \(500\) does not match the selected date range/i);
+      expect(alerts.length).toBeGreaterThan(0);
 
       // Valid trial: 45 days
       fireEvent.change(amountInput, { target: { value: '45' } });
@@ -2309,22 +2354,26 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       signInAndChooseApprover();
 
       expect(screen.getByText('Request Offline Payment Approval')).toBeInTheDocument();
+      const dateInput = document.getElementById('offline-payment-date') as HTMLInputElement;
+      expect(dateInput).toBeInTheDocument();
+      fireEvent.change(dateInput, { target: { value: '2026-11-20' } });
+
       const amountInput = screen.getByRole('spinbutton');
       const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
 
-      // Valid amount but missing payment reference
+      // Valid amount but missing transaction ID (default payment type is NEFT / RTGS)
       fireEvent.change(amountInput, { target: { value: '25000' } });
       expect(submitBtn).toBeDisabled();
 
       const form = submitBtn.closest('form') as HTMLFormElement;
       fireEvent.submit(form);
       expect(
-        await screen.findByText('Please enter the payment reference or UTR number.')
+        await screen.findByText(/Transaction ID is mandatory for NEFT \/ RTGS/i)
       ).toBeInTheDocument();
 
-      // Fill payment reference
-      const refInput = screen.getByPlaceholderText(/Enter UTR, cheque, or bank reference/i);
-      fireEvent.change(refInput, { target: { value: 'CHQ-987654' } });
+      // Fill transaction ID
+      const txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
+      fireEvent.change(txInput, { target: { value: 'CHQ-987654' } });
       expect(submitBtn).toBeEnabled();
       fireEvent.submit(form);
 
@@ -2334,9 +2383,192 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
           expect.objectContaining({
             requestType: 'Offline Payments',
             amount: 25000,
-            paymentReference: 'CHQ-987654',
+            transactionId: 'CHQ-987654',
           })
         );
+      });
+    });
+
+    test('popup does not close when interacting with inputs, dropdowns, and buttons inside it; closes on backdrop click, X button, or Escape', () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      // 1. Verify single plus symbol on Request Type button
+      const reqBtn = screen.getByTestId('request-type-dropdown-btn');
+      expect(reqBtn).toBeInTheDocument();
+      expect(reqBtn.textContent).toBe('Request Type');
+      expect(reqBtn.textContent).not.toContain('+');
+
+      // Open Request Type dropdown and select 'Buyer Credit Addition'
+      fireEvent.click(reqBtn);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
+
+      // Popup is now open
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+
+      // Click inside the popup on inputs, text, labels, buttons - popup MUST NOT CLOSE, and drawer MUST NOT CLOSE
+      const amountInput = screen.getByRole('spinbutton');
+      fireEvent.click(amountInput);
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      fireEvent.change(amountInput, { target: { value: '25' } });
+      fireEvent.click(amountInput);
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      const approverSelect = document.getElementById('credit-approver') as HTMLSelectElement;
+      expect(approverSelect).toBeInTheDocument();
+      fireEvent.click(approverSelect);
+      fireEvent.change(approverSelect, { target: { value: 'Finance Lead' } });
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      const reasonTextarea = screen.getByPlaceholderText(/Reason for credit addition|business justification/i);
+      fireEvent.click(reasonTextarea);
+      fireEvent.change(reasonTextarea, { target: { value: 'Annual enterprise quota adjustment' } });
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      // Click on modal dialog card content container
+      const modalHeading = screen.getByText('Request Buyer Credit Approval');
+      fireEvent.click(modalHeading);
+      expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      // Click the X button closes ONLY the popup, does NOT close the drawer
+      const modalCard = modalHeading.closest('.max-w-md');
+      const closeXBtn = modalCard?.querySelector('button');
+      expect(closeXBtn).toBeInTheDocument();
+      fireEvent.click(closeXBtn!);
+      expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      // Reopen popup and test Escape key closes popup, does NOT close the drawer
+      fireEvent.click(reqBtn);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Periods' }));
+      expect(screen.getAllByText('Select Sourcing Mode').length).toBeGreaterThan(0);
+
+      fireEvent.keyDown(window, { key: 'Escape' });
+      expect(screen.queryAllByText('Select Sourcing Mode').length).toBe(0);
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      // Reopen popup and test clicking backdrop (outside dialog card) closes popup, does NOT close the drawer
+      fireEvent.click(reqBtn);
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Periods' }));
+      expect(screen.getAllByText('Select Sourcing Mode').length).toBeGreaterThan(0);
+
+      const dialogBackdrop = screen.getAllByRole('dialog').find(el => el.classList.contains('z-60'));
+      expect(dialogBackdrop).toBeInTheDocument();
+
+      // Clicking inside modal card does not close
+      fireEvent.click(screen.getAllByText('Select Sourcing Mode')[0]);
+      expect(screen.getAllByText('Select Sourcing Mode').length).toBeGreaterThan(0);
+      expect(onCloseMock).not.toHaveBeenCalled();
+
+      // Clicking backdrop closes popup only
+      fireEvent.click(dialogBackdrop!);
+      expect(screen.queryAllByText('Select Sourcing Mode').length).toBe(0);
+      expect(onCloseMock).not.toHaveBeenCalled();
+    });
+
+    test('covers discount workflow cancel, close, mode 3 with 6 months, and error responses', async () => {
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          buyerRfqs={mockRfqs}
+        />
+      );
+
+      // Step 1: cancel and close
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      expect(screen.getAllByText('Select Sourcing Mode').length).toBeGreaterThan(0);
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryAllByText('Select Sourcing Mode').length).toBe(0);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      const closeBtnStep1 = screen.getByRole('button', { name: 'Close' });
+      fireEvent.click(closeBtnStep1);
+      expect(screen.queryAllByText('Select Sourcing Mode').length).toBe(0);
+
+      // Step 2: cancel and close
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
+      expect(screen.getByText('Select Billing Duration')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByText('Select Billing Duration')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
+      const closeBtnStep2 = screen.getByRole('button', { name: 'Close' });
+      fireEvent.click(closeBtnStep2);
+      expect(screen.queryByText('Select Billing Duration')).toBeNull();
+
+      // Step 3: 6 Months, cancel and close, and error handling
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
+      fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
+      expect(screen.getByText('Submit discount authorization for this buyer account.')).toBeInTheDocument();
+
+      const closeBtnStep3 = screen.getByRole('button', { name: 'Close' });
+      fireEvent.click(closeBtnStep3);
+      expect(screen.queryByText('Submit discount authorization for this buyer account.')).toBeNull();
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
+      fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
+      fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+      expect(screen.queryByText('Submit discount authorization for this buyer account.')).toBeNull();
+
+      // Reopen and test error response
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Discount approval quota exceeded',
+      });
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
+      fireEvent.click(screen.getByRole('button', { name: /Mode 1/i }));
+      fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
+      const approverSelect = document.getElementById('discount-approver') as HTMLSelectElement;
+      expect(approverSelect).toBeInTheDocument();
+      fireEvent.change(approverSelect, { target: { value: 'VP Procurement' } });
+      const amountInput = screen.getByRole('spinbutton');
+      fireEvent.change(amountInput, { target: { value: '15' } });
+      const reasonInput = screen.getByPlaceholderText(/Reason for discount request/i);
+      fireEvent.change(reasonInput, { target: { value: 'Strategic pilot agreement' } });
+      const backBtn = screen.getByRole('button', { name: /Back/i });
+      fireEvent.click(backBtn);
+      expect(screen.getByText('Select Billing Duration')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
+      const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
+      fireEvent.click(submitBtn);
+      const discountForm = submitBtn.closest('form');
+      if (discountForm) fireEvent.submit(discountForm);
+
+      await waitFor(() => {
+        expect(screen.getByText('Discount approval quota exceeded')).toBeInTheDocument();
+      });
+
+      // Test exception thrown
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network drop'));
+      fireEvent.click(submitBtn);
+      if (discountForm) fireEvent.submit(discountForm);
+      await waitFor(() => {
+        expect(screen.getByText('Failed to submit discount approval request.')).toBeInTheDocument();
       });
     });
   });

@@ -809,6 +809,13 @@ export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
   reason: { maxLength: 1000 },
 } as const;
 
+/** Offline Payment Proof Upload validation schema */
+export const OFFLINE_PAYMENT_UPLOAD_SCHEMA = {
+  maxFileSize: 10 * 1024 * 1024, // 10MB
+  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/jpg'],
+  allowedExtensions: ['.jpg', '.jpeg', '.png'],
+} as const;
+
 /** Request Vendor Evaluation validation schema */
 export const REQUEST_VENDOR_EVALUATION_SCHEMA = {
   notes: { maxLength: 1000 },
