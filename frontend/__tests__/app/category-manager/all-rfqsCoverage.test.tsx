@@ -25,15 +25,16 @@ const S2 = UI_STRINGS.inviteVendors;
 const COL = {
   rfqNumber: 0,
   title: 1,
-  buyer: 2,
-  status: 3,
-  quotes: 4,
-  invitedVendors: 5,
-  vendors: 6,
-  budget: 7,
-  created: 8,
-  latestQuote: 9,
-  actions: 10,
+  category: 2,
+  buyer: 3,
+  status: 4,
+  quotes: 5,
+  invitedVendors: 6,
+  vendors: 7,
+  budget: 8,
+  created: 9,
+  latestQuote: 10,
+  actions: 11,
 } as const;
 
 // Literals the component hard-codes rather than reading from UI_STRINGS.
@@ -255,7 +256,7 @@ describe('AllRFQsConsole rows with missing fields', () => {
     });
     await renderLoaded([sparse]);
 
-    const categoryPlaceholder = within(cellOf(sparse, COL.title)).getByText(EM_DASH);
+    const categoryPlaceholder = within(cellOf(sparse, COL.category)).getByText(EM_DASH);
     expect(categoryPlaceholder).not.toHaveAttribute('title');
     expect(cellOf(sparse, COL.buyer)).toHaveTextContent(S.buyerUnknown);
     expect(cellOf(sparse, COL.quotes)).toHaveTextContent('0');
@@ -276,7 +277,7 @@ describe('AllRFQsConsole rows with missing fields', () => {
     await renderLoaded([populated]);
 
     expect(cellOf(populated, COL.rfqNumber)).toHaveTextContent(populated.rfqNumber);
-    expect(within(cellOf(populated, COL.title)).getByText('Fasteners')).toHaveAttribute('title', 'Fasteners');
+    expect(within(cellOf(populated, COL.category)).getByText('Fasteners')).toHaveAttribute('title', 'Fasteners');
     expect(cellOf(populated, COL.created)).toHaveTextContent(new Date('2026-09-15T08:30:00.000Z').toLocaleDateString());
     expect(cellOf(populated, COL.budget)).toHaveTextContent(formatCurrency(250000));
   });
@@ -868,7 +869,7 @@ describe('AllRFQsConsole invite vendors flow', () => {
     expect(refreshedRow.queryByText(PENDING_BADGE)).not.toBeInTheDocument();
     expect(refreshedRow.getByText('Invited (1)')).toBeInTheDocument();
     expect(refreshedRow.getByRole('button', { name: 'Gamma Industrial' })).toBeInTheDocument();
-    expect(cellOf(updated, COL.title)).toHaveTextContent('Fasteners');
+    expect(cellOf(updated, COL.category)).toHaveTextContent('Fasteners');
     expect(cellOf(untouchedRfq, COL.title)).toHaveTextContent('Untouched RFQ');
     expect(cellOf(untouchedRfq, COL.vendors)).toHaveTextContent(S.colVendorsNone);
   });

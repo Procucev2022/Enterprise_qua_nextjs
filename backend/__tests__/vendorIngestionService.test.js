@@ -61,6 +61,7 @@ beforeEach(() => {
   queries.summarizeEmailLogs.mockResolvedValue({ sent: 0, failed: 0 });
   queries.countPoLineItems.mockResolvedValue({ total: 2, inHorizon: 1, outsideHorizon: 1 });
   queries.findVendorMasterRecords.mockResolvedValue([{ id: MAPPING.vendorRecordId, ...VENDOR_ROW, contactPerson: 'Supplier Contact', phone: '+919900000000', address: 'Mumbai' }]);
+  queries.findExistingPoLineItemsByOrganization.mockResolvedValue([]);
   queries.countVendorMasterRecords.mockResolvedValue(1);
   queries.bulkUpsertVendorMasterRecords.mockResolvedValue([{ id: MAPPING.vendorRecordId }]);
   queries.findCategoryMappingByVendorRecord.mockResolvedValue({ ...MAPPING });
@@ -197,7 +198,11 @@ describe('vendor ingestion session lifecycle', () => {
     await service.getResumeState(USER, SESSION.id);
     expect(queries.findSession).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     queries.findLatestSession.mockResolvedValue(null);
-    expect(await service.getResumeState(USER)).toEqual({ session: null, categoryMaster: CATEGORY_MASTER });
+    expect(await service.getResumeState(USER)).toEqual({
+      session: null,
+      categoryMaster: CATEGORY_MASTER,
+      existingPoRecords: [],
+    });
   });
 });
 
@@ -271,6 +276,70 @@ describe('vendor and purchase order uploads', () => {
     });
     expect(result).toMatchObject({ validRows: 3, invalidRows: 0 });
     expect(queries.bulkInsertPoLineItems.mock.calls[0][2][0]).toMatchObject({ inHorizon: true });
+  });
+
+  test('skips intra-file and previously uploaded duplicate PO rows in confirmPoDump and rejects all-duplicate uploads without wiping existing rows', async () => {
+    queries.findExistingPoLineItemsByOrganization.mockResolvedValueOnce([
+      {
+        poNumber: 'PO-001',
+        poDate: '2026-06-01',
+        vendorCode: 'V-001',
+        itemDescription: 'Industrial pump',
+        specification: 'Centrifugal, 5 HP',
+        quantity: 2,
+        spend: 2000,
+      },
+    ]);
+
+    await expect(
+      service.confirmPoDump(USER, SESSION.id, {
+        rows: [PO_ROW],
+        replaceExisting: true,
+        fileName: 'duplicate-pos.xlsx',
+      })
+    ).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining('duplicate'),
+      details: {
+        duplicateRows: [
+          expect.objectContaining({
+            status: 'duplicate_skipped',
+            matchedAgainst: 'EXISTING_PO',
+            poNumber: 'PO-001',
+          }),
+        ],
+      },
+    });
+    expect(queries.deletePoLineItems).not.toHaveBeenCalled();
+    expect(queries.bulkInsertPoLineItems).not.toHaveBeenCalled();
+
+    // Mixed upload: 1 existing duplicate + 1 intra-file duplicate + 1 brand-new PO line
+    queries.findExistingPoLineItemsByOrganization.mockResolvedValueOnce([
+      {
+        vendorName: 'Valve Corp',
+        itemDescription: 'Ball valve DN50',
+        specification: 'SS316',
+      },
+    ]);
+    const mixed = await service.confirmPoDump(USER, SESSION.id, {
+      rows: [
+        { vendorName: 'Valve Corp', itemDescription: 'Ball valve DN50', specification: 'SS316' },
+        { vendorName: 'Pump Supplier', itemDescription: 'Gear Pump', specification: '10 HP' },
+        { vendorName: 'Pump Supplier', itemDescription: 'Gear Pump', specification: '10 HP' },
+      ],
+      replaceExisting: false,
+      fileName: 'mixed-pos.xlsx',
+    });
+    expect(mixed).toMatchObject({
+      totalRows: 3,
+      validRows: 1,
+      invalidRows: 0,
+      duplicateRows: 2,
+    });
+    expect(mixed.rejected).toHaveLength(2);
+    expect(mixed.rejected.map((r) => r.matchedAgainst)).toEqual(['EXISTING_PO', 'FILE']);
+    expect(queries.bulkInsertPoLineItems).toHaveBeenCalledTimes(1);
+    expect(queries.bulkInsertPoLineItems.mock.calls[0][2]).toHaveLength(1);
   });
 });
 

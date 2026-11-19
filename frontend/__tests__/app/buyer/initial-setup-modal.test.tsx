@@ -1761,6 +1761,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       />
     );
     expect(screen.getAllByText('Processing...').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.queryByText(/Backend processing continues if you close this window or navigate away/i)
+    ).not.toBeInTheDocument();
 
     rerender(
       <IngestionProgressCard
@@ -5159,10 +5162,25 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         }
         return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
       });
+      const wsPo2 = XLSX.utils.json_to_sheet([
+        {
+          'Vendor/Supplier Name': 'Reconcile Alpha',
+          'Item Description': 'Pressure Gauges',
+          Specifications: '0-10 bar',
+        },
+      ]);
+      const wbPo2 = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbPo2, wsPo2, 'PO');
+      const poBuf2 = XLSX.write(wbPo2, { type: 'array', bookType: 'xlsx' });
+      const poFile2: any = new File([poBuf2], 'po-partial.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile2.__buffer = poBuf2;
+
       const poInputs2 = container.querySelectorAll('input[type="file"]');
       const poInput2 = poInputs2[poInputs2.length - 1] as HTMLInputElement;
       await act(async () => {
-        fireEvent.change(poInput2, { target: { files: [poFile] } });
+        fireEvent.change(poInput2, { target: { files: [poFile2] } });
         await new Promise((r) => setTimeout(r, 60));
       });
       expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
@@ -5192,6 +5210,486 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
 
     const { container } = render(<InitialSetupModal />);
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it('closes Buyer Initial Setup popup when clicking outside on the backdrop, while inside clicks keep it open', async () => {
+    const mockSetOpen = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetOpen,
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn(),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: true,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: true },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: true },
+      buyerVendors: [],
+      showToast: jest.fn(),
+    });
+
+    render(<InitialSetupModal />);
+
+    const backdrop = screen.getByTestId('initial-setup-modal-backdrop');
+    const heading = within(backdrop).getByRole('heading', { level: 2 });
+
+    // Clicking inside modal content must not close it
+    fireEvent.click(heading);
+    expect(mockSetOpen).not.toHaveBeenCalled();
+
+    // Clicking directly on the backdrop overlay closes the popup
+    await act(async () => {
+      fireEvent.click(backdrop);
+    });
+    expect(mockSetOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('rejects re-uploaded duplicate PO data, shows duplicate PO table, supports CSV download & dismiss, and skips intra-file PO duplicates', async () => {
+    const mockShowToast = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn().mockResolvedValue(undefined),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: false,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: false },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: false },
+      buyerVendors: [],
+      showToast: mockShowToast,
+    });
+
+    let poStartJobCalls = 0;
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/vendor-ingestion/session') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: {
+                session: { id: 'sess-po-dedupe', horizonType: 'LAST_2_YEARS', poRowCount: 1, poFileName: 'prev.xlsx' },
+                existingPoRecords: [
+                  {
+                    poNumber: 'PO-900',
+                    poDate: '2025-05-01',
+                    vendorName: 'Previously Uploaded Supplier',
+                    itemDescription: 'Stainless Bolts M10',
+                    specification: 'SS304',
+                    quantity: 50,
+                    spend: 5000,
+                  },
+                ],
+              },
+            }),
+        });
+      }
+      if (url.includes('/start-job')) {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+        if (parsedBody.jobType === 'PO_DUMP') {
+          poStartJobCalls += 1;
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: `job-po-${poStartJobCalls}`,
+                    jobType: 'PO_DUMP',
+                    fileName: parsedBody.fileName,
+                    status: 'COMPLETED',
+                    totalRecords: parsedBody.rows.length,
+                    processedRecords: parsedBody.rows.length,
+                    importedRecords: parsedBody.rows.length,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-vm-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'vendors.xlsx',
+                  status: 'COMPLETED',
+                  totalRecords: 1,
+                  processedRecords: 1,
+                  importedRecords: 1,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+    }) as unknown as typeof fetch;
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:po-dup-dl');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 40));
+      });
+
+      // Step 2: upload valid vendor
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const wsV = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-900', 'Company Name': 'Previously Uploaded Supplier', Email: 'prev@sup.in', Phone: '9876543210' },
+      ]);
+      const wbV = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+      const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+      const vFile = Object.assign(new File([vBuf], 'vendors.xlsx'), { __buffer: vBuf });
+      const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Step 3: upload a PO file containing ONLY the already-uploaded PO record from session history
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const makePoFile = (name: string, rows: Record<string, unknown>[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'PO');
+        const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        return Object.assign(new File([buf], name), { __buffer: buf });
+      };
+
+      const dupOnlyFile = makePoFile('same-po-again.xlsx', [
+        {
+          'PO Number': 'po-900',
+          'PO Date': '01/05/2025',
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Stainless Bolts M10',
+          Specifications: 'SS304',
+          Quantity: 50,
+          'Total Spend': 5000,
+        },
+      ]);
+
+      const getPoInput = () => {
+        const inputs = container.querySelectorAll('input[type="file"]');
+        return inputs[inputs.length - 1] as HTMLInputElement;
+      };
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [dupOnlyFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      // All-duplicate PO upload must NOT call /start-job and must show duplicates banner + amber card + error banner
+      expect(poStartJobCalls).toBe(0);
+      const dupBanner = screen.getByTestId('skipped-duplicate-pos-banner');
+      expect(dupBanner).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+          count: 1,
+          rowWord: UI_STRINGS.vendorPoIngestion.poDump.duplicateRowSingular,
+        })
+      );
+      expect(dupBanner).toHaveTextContent('Previously Uploaded Supplier');
+      expect(dupBanner).toHaveTextContent('Stainless Bolts M10');
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'same-po-again.xlsx',
+        })
+      );
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, { count: 1 })
+      );
+
+      // Download duplicate POs CSV and dismiss duplicate list
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.poDump.downloadDuplicatesCsv }));
+      expect(clickSpy).toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.poDump.dismissDuplicatesAction }));
+      expect(screen.queryByTestId('skipped-duplicate-pos-banner')).not.toBeInTheDocument();
+
+      // Upload a mixed PO file (1 brand-new PO + 1 intra-file duplicate of it)
+      const mixedPoFile = makePoFile('mixed-po.xlsx', [
+        {
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Industrial Valve DN40',
+          Specifications: 'Cast Iron',
+        },
+        {
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Industrial Valve DN40',
+          Specifications: 'Cast Iron',
+        },
+      ]);
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [mixedPoFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(poStartJobCalls).toBe(1);
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Industrial Valve DN40');
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSummaryInline, { count: 1 })
+      );
+
+      // Immediately re-uploading the same mixed-po.xlsx again must now reject ALL 2 rows as duplicates
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [mixedPoFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(poStartJobCalls).toBe(1);
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+          count: 2,
+          rowWord: UI_STRINGS.vendorPoIngestion.poDump.duplicateRowPlural,
+        })
+      );
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, { count: 2 })
+      );
+    } finally {
+      global.fetch = origFetch;
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('surfaces server-rejected duplicate PO records returned from /start-job and live PO job polling', async () => {
+    const mockShowToast = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn().mockResolvedValue(undefined),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: false,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: false },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: false },
+      buyerVendors: [],
+      showToast: mockShowToast,
+    });
+
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/vendor-ingestion/session') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: { session: { id: 'sess-po-server-dup', horizonType: 'LAST_2_YEARS' }, existingPoRecords: [] },
+            }),
+        });
+      }
+      if (url.includes('/start-job')) {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+        if (parsedBody.jobType === 'PO_DUMP') {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-po-server-dup',
+                    jobType: 'PO_DUMP',
+                    fileName: parsedBody.fileName,
+                    status: 'COMPLETED',
+                    totalRecords: 0,
+                    processedRecords: 0,
+                    importedRecords: 0,
+                    skippedRecords: 1,
+                    failedRecords: 0,
+                    errorDetails: [
+                      {
+                        rowNumber: 2,
+                        vendorName: 'Server Existing Vendor',
+                        itemDescription: 'Hydraulic Hose',
+                        specification: '300 bar',
+                        status: 'duplicate_skipped',
+                        matchedAgainst: 'EXISTING_PO',
+                        reason: 'Duplicate PO record (Server Existing Vendor — Hydraulic Hose) — already uploaded previously',
+                      },
+                    ],
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-vm-srv',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'vendors.xlsx',
+                  status: 'COMPLETED',
+                  totalRecords: 1,
+                  processedRecords: 1,
+                  importedRecords: 1,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-po-csv-poll',
+                  jobType: 'PO_DUMP',
+                  fileName: 'dup-stream.csv',
+                  status: 'PROCESSING',
+                  totalRecords: 1,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/job-po-csv-poll')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-po-csv-poll',
+                  jobType: 'PO_DUMP',
+                  fileName: 'dup-stream.csv',
+                  status: 'COMPLETED',
+                  totalRecords: 0,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 1,
+                  failedRecords: 0,
+                  errorDetails: [
+                    {
+                      rowNumber: 0,
+                      vendorName: 'Stream Existing Vendor',
+                      itemDescription: 'Copper Gasket',
+                      status: 'duplicate_skipped',
+                      matchedAgainst: 'EXISTING_PO',
+                      reason: 'Duplicate PO record (Stream Existing Vendor — Copper Gasket) — already uploaded previously',
+                    },
+                  ],
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+    }) as unknown as typeof fetch;
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 40));
+      });
+
+      // Step 2: upload valid vendor
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const wsV = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-901', 'Company Name': 'Server Existing Vendor', Email: 'srv@sup.in', Phone: '9876543211' },
+      ]);
+      const wbV = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+      const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+      const vFile = Object.assign(new File([vBuf], 'vendors.xlsx'), { __buffer: vBuf });
+      await act(async () => {
+        fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+          target: { files: [vFile] },
+        });
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Step 3: upload Excel PO file that server rejects as all duplicates
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const wsPo = XLSX.utils.json_to_sheet([
+        {
+          'Vendor/Supplier Name': 'Server Existing Vendor',
+          'Item Description': 'Hydraulic Hose',
+          Specifications: '300 bar',
+        },
+      ]);
+      const wbPo = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbPo, wsPo, 'PO');
+      const poBuf = XLSX.write(wbPo, { type: 'array', bookType: 'xlsx' });
+      const poFile = Object.assign(new File([poBuf], 'server-dup.xlsx'), { __buffer: poBuf });
+      const getPoInput = () => {
+        const inputs = container.querySelectorAll('input[type="file"]');
+        return inputs[inputs.length - 1] as HTMLInputElement;
+      };
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [poFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Hydraulic Hose');
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'server-dup.xlsx',
+        })
+      );
+
+      // Now upload CSV PO file and let live polling resolve with server-detected all-duplicate PO
+      const csvText = 'Vendor/Supplier Name,Item Description,Specifications\nStream Existing Vendor,Copper Gasket,2mm\n';
+      const csvBuf = new TextEncoder().encode(csvText).buffer;
+      const csvFile = Object.assign(new File([csvText], 'dup-stream.csv', { type: 'text/csv' }), {
+        __buffer: csvBuf,
+      });
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [csvFile] } });
+      });
+
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Copper Gasket');
+        },
+        { timeout: 5000 }
+      );
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'dup-stream.csv',
+        })
+      );
+    } finally {
+      global.fetch = origFetch;
+    }
   });
 });
 

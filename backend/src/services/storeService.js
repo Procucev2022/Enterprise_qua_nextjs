@@ -965,24 +965,27 @@ class StoreService {
    * other in-process paths that still iterate `this.buyerAccounts` directly
    * (e.g. `getBuyerAccounts()`) stay consistent with what was just read.
    */
-  async getBuyerAccountByEmail(email) {
+  async getBuyerAccountByEmail(email, { fresh = false } = {}) {
     if (!email) return null;
     const target = email.toLowerCase();
 
     if (pool.hasStorage()) {
       try {
-        const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
-        if (fresh) {
-          const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
+        const freshAccount = await domainQueries.getBuyerAccountByEmailFromDB(
+          email,
+          ...(fresh ? [{ fresh: true }] : [])
+        );
+        if (freshAccount) {
+          const idx = this.buyerAccounts.findIndex((a) => a.id === freshAccount.id);
           if (idx === -1) {
-            this.buyerAccounts.unshift(fresh);
+            this.buyerAccounts.unshift(freshAccount);
           } else {
-            this.buyerAccounts[idx] = fresh;
+            this.buyerAccounts[idx] = freshAccount;
           }
-          if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
-            this.activeBuyerAccount = fresh;
+          if (this.activeBuyerAccount && this.activeBuyerAccount.id === freshAccount.id) {
+            this.activeBuyerAccount = freshAccount;
           }
-          return fresh;
+          return freshAccount;
         }
         return null;
       } catch (error) {
@@ -1047,9 +1050,25 @@ class StoreService {
     }
 
     if (existing) {
-      if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
+      if (
+        profile &&
+        (
+          !existing.gstin ||
+          !existing.pan ||
+          !existing.street ||
+          !existing.city ||
+          !existing.state ||
+          !existing.pincode ||
+          !existing.mobileNumber ||
+          (profile.organizationId && !existing.organizationId)
+        )
+      ) {
+        const resolvedOrgId = profile.organizationId || existing.organizationId || user.orgId || null;
         const enriched = {
           ...existing,
+          ...(resolvedOrgId !== undefined && (resolvedOrgId !== null || existing.organizationId !== undefined)
+            ? { organizationId: resolvedOrgId }
+            : {}),
           organizationName: profile.companyName || existing.organizationName,
           brandName: profile.brandName || existing.brandName,
           organizationType: profile.organizationType || existing.organizationType,
@@ -1069,6 +1088,7 @@ class StoreService {
           categories: profile.categories || existing.categories,
         };
         const hasNewFieldData =
+          (profile.organizationId && enriched.organizationId !== existing.organizationId) ||
           enriched.organizationName !== existing.organizationName ||
           enriched.brandName !== existing.brandName ||
           enriched.organizationType !== existing.organizationType ||
@@ -1372,12 +1392,21 @@ class StoreService {
           ? domainQueries.getBuyerAccountSnapshotByEmailFromDB
           : domainQueries.getBuyerAccountSnapshotByIdFromDB;
         let snapshot = await snapshotReader(idOrEmail);
+        if (!snapshot && !String(idOrEmail || '').includes('@') && updates && updates.corporateEmail) {
+          snapshot = await domainQueries.getBuyerAccountSnapshotByEmailFromDB(updates.corporateEmail);
+        }
         if (!snapshot) return null;
 
+        const canonicalId = snapshot.id || snapshot.account?.id;
         for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
+          const { id: requestedId, ...restUpdates } = updates || {};
           updated = {
             ...snapshot.account,
-            ...updates,
+            ...restUpdates,
+            ...(canonicalId ? { id: canonicalId } : {}),
+            ...(requestedId && requestedId !== canonicalId && !snapshot.account?.userId && !restUpdates.userId
+              ? { userId: requestedId }
+              : {}),
             syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
           };
           savedAccount = await domainQueries.updateBuyerAccountIfUnchangedInDB(snapshot, updated);
@@ -1389,9 +1418,14 @@ class StoreService {
       } else {
         const previous = idx >= 0 ? this.buyerAccounts[idx] : null;
         if (!previous) return null;
+        const { id: requestedId, ...restUpdates } = updates || {};
         updated = {
           ...previous,
-          ...updates,
+          ...restUpdates,
+          id: previous.id,
+          ...(requestedId && requestedId !== previous.id && !previous.userId && !restUpdates.userId
+            ? { userId: requestedId }
+            : {}),
           syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
         };
         savedAccount = updated;
@@ -1925,9 +1959,16 @@ class StoreService {
     const resolvedMinorCategories = cleanCategories.minorCategories;
     const shouldSyncClientMapped =
       resolvedMinorCategories.length > 0 && safeVendorData.clientMappedCategories === undefined;
+    const resolvedGstin = String(
+      safeVendorData.gstin ||
+      safeVendorData.gst ||
+      safeVendorData.gstNumber ||
+      ''
+    ).trim().toUpperCase();
 
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
       ...(resolvedMajorCategory ? { majorCategory: resolvedMajorCategory } : safeVendorData.majorCategory !== undefined ? { majorCategory: '' } : {}),
       ...(safeVendorData.minorCategories !== undefined || resolvedMinorCategories.length > 0
         ? { minorCategories: resolvedMinorCategories }
@@ -2284,7 +2325,8 @@ class StoreService {
       city: resolvedLocation.city || '',
       state: resolvedLocation.state || '',
       pincode: resolvedLocation.pincode || '',
-      gstin: row.gstin || '',
+      gstin: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
+      gst: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
       products: row.products || '',
       // Not evaluated yet, so no rating or score is recorded. An unrated supplier
       // must not carry a score that nobody assessed.
@@ -2297,6 +2339,8 @@ class StoreService {
       // attribution the single-add createVendor path already applies.
       source: row.source || 'excel',
       ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+      ...(row.buyerAccountId || row.buyerId ? { buyerAccountId: row.buyerAccountId || row.buyerId } : {}),
+      ...(row.buyerEmail ? { buyerEmail: row.buyerEmail } : {}),
       ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
       status: 'REGISTERED / NOT EVALUATED',
       evaluated: false,
@@ -6792,10 +6836,10 @@ class StoreService {
     return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
   }
 
-  /** Direct per-recipient notification query on unhydrated isolates; uses in-memory store once hydrated. */
+  /** Direct per-recipient notification query whenever persistent storage is configured; uses in-memory store only when storage is absent. */
   async getNotificationsSummaryForDurably(recipientType, recipientId, limit = 50) {
     if (!recipientType || !recipientId) return { data: [], unreadCount: 0 };
-    if (pool.hasStorage() && !this.isHydratedFromDB && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
+    if (pool.hasStorage() && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
       return domainQueries.getNotificationsForRecipientFromDB(recipientType, recipientId, limit);
     }
     return {
@@ -6883,7 +6927,6 @@ class StoreService {
     const notification = this.notifications.find(
       (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
     );
-    if (!notification && this.isHydratedFromDB) return null;
 
     try {
       const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
@@ -9516,7 +9559,26 @@ class StoreService {
       meta: meta || {},
     });
     this.notifications.unshift(notification);
-    this._persistNotification(notification);
+    if (!buyerAccount && String(emailOrId).includes('@') && pool.hasStorage()) {
+      this._background(
+        (async () => {
+          const resolved = await this.getBuyerAccountByEmail(emailOrId).catch(() => null);
+          if (resolved && resolved.id) {
+            notification.recipientId = resolved.id;
+          }
+          return eventOutboxService.persistWithOutboxFallback({
+            eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
+            idempotencyKey: notification.id,
+            payload: notification,
+            operation: 'persist-notification',
+            write: () => domainQueries.insertNotificationInDB(notification),
+          });
+        })(),
+        'Failed to persist notification or schedule its retry'
+      );
+    } else {
+      this._persistNotification(notification);
+    }
     return notification;
   }
 
@@ -10975,8 +11037,12 @@ class StoreService {
         if (recLoc.state) updatedVendor.state = recLoc.state;
         if (recLoc.pincode) updatedVendor.pincode = recLoc.pincode;
         if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
-        const rawGstin = rec.gstin || rec.gstNumber;
-        if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
+        const rawGstin = rec.gstin || rec.gstNumber || rec.gst;
+        if (rawGstin) {
+          const cleanGstin = String(rawGstin).trim().toUpperCase();
+          updatedVendor.gstin = cleanGstin;
+          updatedVendor.gst = cleanGstin;
+        }
         if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
           updatedVendor.minorCategories = minorCategories;
@@ -11011,7 +11077,8 @@ class StoreService {
         continue;
       }
 
-      const rawNewGstin = rec.gstin || rec.gstNumber;
+      const rawNewGstin = rec.gstin || rec.gstNumber || rec.gst;
+      const cleanNewGstin = rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null;
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
@@ -11019,7 +11086,8 @@ class StoreService {
         buyerEmail: buyerEmail || null,
         addedByBuyerCompany: (attributedAccount && attributedAccount.organizationName) || null,
         vendorCode: rec.vendorCode ? String(rec.vendorCode).trim() : null,
-        gstin: rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null,
+        gstin: cleanNewGstin,
+        gst: cleanNewGstin,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -11392,7 +11460,8 @@ class StoreService {
       city: loc.city || null,
       state: loc.state || null,
       pincode: loc.pincode || null,
-      gstin: vendorData.gstin || null,
+      gstin: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
+      gst: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
       vendorCode: vendorData.vendorCode || null,
       majorCategory,
       minorCategories,

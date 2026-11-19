@@ -56,11 +56,15 @@ import {
  * never names an organisation and a buyer can only ever reach their own record.
  */
 export default function BuyerProfilePage() {
-  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy, refreshActiveBuyerAccount } = useApp();
+  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy, refreshActiveBuyerAccount, currentUserSession } = useApp();
   const activeBuyerAccountRef = useRef(activeBuyerAccount);
+  const currentSessionEmailRef = useRef(currentUserSession?.email || '');
   useEffect(() => {
     activeBuyerAccountRef.current = activeBuyerAccount;
   }, [activeBuyerAccount]);
+  useEffect(() => {
+    currentSessionEmailRef.current = currentUserSession?.email || '';
+  }, [currentUserSession?.email]);
 
   // Unlimited major and minor procurement category selections supported.
 
@@ -249,7 +253,13 @@ export default function BuyerProfilePage() {
     }
 
     const profile = profileResult.data;
-    const activeAcc = activeBuyerAccountRef.current;
+    const rawActiveAcc = activeBuyerAccountRef.current;
+    const sessionEmail = String(currentSessionEmailRef.current || '').trim().toLowerCase();
+    const rawAccEmail = String(rawActiveAcc?.corporateEmail || '').trim().toLowerCase();
+    const activeAcc =
+      rawActiveAcc && (!sessionEmail || !rawAccEmail || sessionEmail === rawAccEmail)
+        ? rawActiveAcc
+        : null;
     const parsedPlant = parsePrimaryPlantLocation(activeAcc?.primaryPlantLocation);
     const resolvedCity = profile.city || activeAcc?.city || parsedPlant.city || '';
     const resolvedState = profile.state || activeAcc?.state || parsedPlant.state || '';
@@ -259,8 +269,10 @@ export default function BuyerProfilePage() {
     const resolvedStreet =
       profile.street ||
       activeAcc?.street ||
+      activeAcc?.streetAddress ||
       activeAcc?.address1 ||
       activeAcc?.address ||
+      activeAcc?.registeredAddress ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
     const resolvedGst = (profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '').toUpperCase();
     const resolvedPan =
@@ -316,6 +328,9 @@ export default function BuyerProfilePage() {
   // Backfill any empty form fields if activeBuyerAccount loads or carries onboarding data
   useEffect(() => {
     if (!activeBuyerAccount) return;
+    const expectedEmail = String(currentUserSession?.email || '').trim().toLowerCase();
+    const accountEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
+    if (expectedEmail && accountEmail && expectedEmail !== accountEmail) return;
     if (!companyName && activeBuyerAccount.organizationName) setCompanyName(activeBuyerAccount.organizationName);
     if (!brandName && (activeBuyerAccount.brandName || activeBuyerAccount.organizationName)) {
       setBrandName(activeBuyerAccount.brandName || activeBuyerAccount.organizationName);
@@ -345,8 +360,10 @@ export default function BuyerProfilePage() {
     if (!street) {
       const fallbackStreet =
         activeBuyerAccount.street ||
+        activeBuyerAccount.streetAddress ||
         activeBuyerAccount.address1 ||
         activeBuyerAccount.address ||
+        activeBuyerAccount.registeredAddress ||
         (resolvedCity && resolvedState
           ? `${resolvedCity}, ${resolvedState}`
           : resolvedCity || '');
@@ -355,7 +372,7 @@ export default function BuyerProfilePage() {
     if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);
     if (!contactPhone && activeBuyerAccount.mobileNumber) setContactPhone(activeBuyerAccount.mobileNumber);
     if (!contactEmail && activeBuyerAccount.corporateEmail) setContactEmail(activeBuyerAccount.corporateEmail);
-  }, [activeBuyerAccount, companyName, brandName, city, state, pincode, country, gstNumber, panNumber, street, contactName, contactPhone, contactEmail]);
+  }, [activeBuyerAccount, currentUserSession?.email, companyName, brandName, city, state, pincode, country, gstNumber, panNumber, street, contactName, contactPhone, contactEmail]);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());

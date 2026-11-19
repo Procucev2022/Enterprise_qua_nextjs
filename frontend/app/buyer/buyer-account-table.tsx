@@ -4,7 +4,22 @@ import React, { useState } from 'react';
 import { useApp } from '@/lib/store';
 import { BuyerAccount, SourcingMode } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import { SOURCING_MODES, formatCurrency } from '@/lib/constants';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
+import {
+  BUYER_ACCOUNTS_TABLE_COLUMNS,
+  SOURCING_MODES,
+  createBackdropClickHandler,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  formatCurrency,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
+  sortTableRows,
+  type TableColumnOption,
+  type TableSortState,
+} from '@/lib/constants';
 import {
   Building2,
   Plus,
@@ -21,6 +36,7 @@ import {
   Save,
   Link2,
   Check,
+  Settings,
 } from 'lucide-react';
 
 export default function BuyerAccountTable() {
@@ -67,6 +83,11 @@ export default function BuyerAccountTable() {
   const [freeRfqs, setFreeRfqs] = useState('');
   const [accountSource, setAccountSource] = useState<BuyerAccount['accountSource'] | ''>('');
   const [selectedMajors, setSelectedMajors] = useState<string[]>([]);
+  const [accountTableSort, setAccountTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [accountColumns, setAccountColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_ACCOUNTS_TABLE_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showAccountColumnSettings, setShowAccountColumnSettings] = useState(false);
 
   const resetForm = () => {
     setOrgName('');
@@ -429,35 +450,161 @@ export default function BuyerAccountTable() {
               <Globe size={11} /> Web ({buyerAccounts.filter((b) => b.accountSource === 'web_registration').length})
             </button>
           </div>
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowAccountColumnSettings, true)}
+            data-testid="buyer-accounts-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold shrink-0"
+          >
+            <Settings size={12} />
+            <span>Column Settings</span>
+          </button>
         </div>
       </div>
+
+      <ColumnSettingsPopup
+        isOpen={showAccountColumnSettings}
+        onClose={createBooleanSetterHandler(setShowAccountColumnSettings, false)}
+        columns={accountColumns}
+        onSave={setAccountColumns}
+        onReset={createColumnResetHandler(BUYER_ACCOUNTS_TABLE_COLUMNS, setAccountColumns)}
+        title="Column Settings"
+      />
 
       {/* ── Main Data Table ── */}
       <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
         <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse min-w-[1050px]">
+          <table className="w-full text-left text-xs border-collapse min-w-[1400px]">
             <thead>
               <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
-                <th className="py-3.5 px-4">Organization &amp; Source</th>
-                <th className="py-3.5 px-4">Corporate Contact</th>
-                <th className="py-3.5 px-4">Tax Identity (GST / PAN)</th>
-                <th className="py-3.5 px-4">Sourcing Plan &amp; Mode</th>
-                <th className="py-3.5 px-4">Plant Hub &amp; Categories</th>
-                <th className="py-3.5 px-4">Record Status</th>
-                <th className="py-3.5 px-4 text-right">Actions</th>
+                <th
+                  onClick={createColumnSortClickHandler('organizationName', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'organizationName')}
+                  className={getTableColumnClass(accountColumns, 'organizationName', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Organization <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'organizationName')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('brandName', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'brandName')}
+                  className={getTableColumnClass(accountColumns, 'brandName', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Brand <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'brandName')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('accountSource', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'accountSource')}
+                  className={getTableColumnClass(accountColumns, 'accountSource', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'accountSource')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('contactPerson', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'contactPerson')}
+                  className={getTableColumnClass(accountColumns, 'contactPerson', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'contactPerson')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('corporateEmail', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'corporateEmail')}
+                  className={getTableColumnClass(accountColumns, 'corporateEmail', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Corporate Email <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'corporateEmail')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('mobileNumber', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'mobileNumber')}
+                  className={getTableColumnClass(accountColumns, 'mobileNumber', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Mobile <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'mobileNumber')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('gstin', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'gstin')}
+                  className={getTableColumnClass(accountColumns, 'gstin', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">GSTIN <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'gstin')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('panNumber', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'panNumber')}
+                  className={getTableColumnClass(accountColumns, 'panNumber', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">PAN <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'panNumber')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('sourcingMode', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'sourcingMode')}
+                  className={getTableColumnClass(accountColumns, 'sourcingMode', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Sourcing Mode <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'sourcingMode')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('subscriptionPlan', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'subscriptionPlan')}
+                  className={getTableColumnClass(accountColumns, 'subscriptionPlan', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Plan <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'subscriptionPlan')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('primaryPlantLocation', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'primaryPlantLocation')}
+                  className={getTableColumnClass(accountColumns, 'primaryPlantLocation', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Plant Location <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'primaryPlantLocation')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('industrySector', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'industrySector')}
+                  className={getTableColumnClass(accountColumns, 'industrySector', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Industry <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'industrySector')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('supportedMajorCategories', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'supportedMajorCategories')}
+                  className={getTableColumnClass(accountColumns, 'supportedMajorCategories', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Divisions <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'supportedMajorCategories')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('status', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'status')}
+                  className={getTableColumnClass(accountColumns, 'status', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Record Status <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'status')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('totalRFQsCreated', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'totalRFQsCreated')}
+                  className={getTableColumnClass(accountColumns, 'totalRFQsCreated', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Total RFQs <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'totalRFQsCreated')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('totalSpend', setAccountTableSort)}
+                  aria-sort={getTableAriaSort(accountTableSort, 'totalSpend')}
+                  className={getTableColumnClass(accountColumns, 'totalSpend', 'py-2 px-3 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">Total Spend <span aria-hidden="true">{getSortIndicatorSymbol(accountTableSort, 'totalSpend')}</span></span>
+                </th>
+                <th className={getTableColumnClass(accountColumns, 'actions', 'py-2 px-3 text-right whitespace-nowrap')}>Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
               {filteredAccounts.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400">
+                  <td colSpan={17} className="py-12 text-center text-slate-400">
                     <Building2 size={32} className="mx-auto text-slate-300 dark:text-gray-600 mb-2" />
                     <p className="font-bold text-sm">No buyer accounts matching your query.</p>
                     <p className="text-xs mt-1">Try resetting the search filter or click &quot;Add Existing Public Buyer&quot;.</p>
                   </td>
                 </tr>
               ) : (
-                filteredAccounts.map((buyer) => {
+                sortTableRows(filteredAccounts, accountTableSort).map((buyer) => {
                   const isActiveSession = activeBuyerAccount?.id === buyer.id;
                   const modeObj = SOURCING_MODES.find((m) => m.id === buyer.sourcingMode);
 
@@ -469,118 +616,135 @@ export default function BuyerAccountTable() {
                       }`}
                     >
                       {/* Col 1: Organization */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-bold text-slate-900 dark:text-white text-xs">{buyer.organizationName}</span>
-                            {isActiveSession && (
-                              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-600 text-white">
-                                Active Session
-                              </span>
-                            )}
-                          </div>
-                          {buyer.brandName && (
-                            <div className="text-[11px] text-slate-500 dark:text-gray-400">{buyer.brandName}</div>
-                          )}
-                          <div className="flex items-center gap-1.5 pt-0.5">
-                            {getSourceBadge(buyer.accountSource)}
-                            <span className="text-[9px] mono text-slate-400">{buyer.id}</span>
-                          </div>
-                        </div>
-                      </td>
-
-                      {/* Col 2: Corporate Contact */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-0.5">
-                          <div className="font-semibold text-slate-800 dark:text-gray-200">{buyer.contactPerson}</div>
-                          {buyer.contactDesignation && (
-                            <div className="text-[10px] text-slate-400">{buyer.contactDesignation}</div>
-                          )}
-                          <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono">{buyer.corporateEmail}</div>
-                          <div className="text-[10px] text-slate-500 font-mono">{buyer.mobileNumber}</div>
-                        </div>
-                      </td>
-
-                      {/* Col 3: Tax Identity */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-1 text-[11px]">
-                          <div>
-                            <span className="text-[10px] text-slate-400 font-semibold block">GSTIN</span>
-                            <span className="mono font-bold text-slate-700 dark:text-gray-300">{buyer.gstin}</span>
-                          </div>
-                          {buyer.panNumber && (
-                            <div>
-                              <span className="text-[10px] text-slate-400 font-semibold block">PAN</span>
-                              <span className="mono text-slate-600 dark:text-gray-400">{buyer.panNumber}</span>
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Col 4: Sourcing Mode & Plan */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-1">
-                          <span
-                            className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide inline-block"
-                            style={{
-                              backgroundColor: `${modeObj?.badgeColor}15`,
-                              color: modeObj?.badgeColor,
-                              border: `1px solid ${modeObj?.badgeColor}35`,
-                            }}
-                          >
-                            {modeObj?.code}: {modeObj?.shortLabel}
-                          </span>
-                          <div className="text-[10px] text-slate-500 dark:text-gray-400 capitalize">
-                            Plan: <strong className="text-slate-700 dark:text-gray-300">{buyer.subscriptionPlan.replace('_', ' ')}</strong>
-                          </div>
-                          {buyer.subscriptionPlan === 'free_trial' && (
-                            <div className="text-[9px] text-amber-700 dark:text-amber-300 font-semibold">
-                              {buyer.remainingFreeRFQs} free RFQs remaining
-                            </div>
-                          )}
-                        </div>
-                      </td>
-
-                      {/* Col 5: Plant Hub & Categories */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-1 max-w-[200px]">
-                          <div className="flex items-center gap-1 text-[11px] text-slate-700 dark:text-gray-300 font-medium">
-                            <MapPin size={11} className="text-slate-400 shrink-0" />
-                            <span className="truncate" title={buyer.primaryPlantLocation}>
-                              {buyer.primaryPlantLocation || '—'}
+                      <td className={getTableColumnClass(accountColumns, 'organizationName', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900 dark:text-white text-xs truncate max-w-[180px]" title={buyer.organizationName}>{buyer.organizationName}</span>
+                          {isActiveSession && (
+                            <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-indigo-600 text-white">
+                              Active Session
                             </span>
-                          </div>
-                          <div className="text-[10px] text-slate-400">
-                            Industry: <strong className="text-slate-600 dark:text-gray-300">{buyer.industrySector || '—'}</strong>
-                          </div>
-                          <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                            {(buyer.supportedMajorCategories || []).slice(0, 2).map((cat, idx) => (
-                              <span key={idx} className="px-1.5 py-0.2 rounded text-[9px] bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300">
-                                {cat.replace('Engineering Spares - ', '')}
-                              </span>
-                            ))}
-                            {(buyer.supportedMajorCategories || []).length > 2 && (
-                              <span className="text-[9px] text-slate-400 font-bold">
-                                +{(buyer.supportedMajorCategories || []).length - 2}
-                              </span>
-                            )}
-                          </div>
+                          )}
+                          <span className="sr-only">{buyer.id}</span>
                         </div>
                       </td>
 
-                      {/* Col 6: Record Status & Spend */}
-                      <td className="py-3 px-4">
-                        <div className="space-y-1">
-                          {getStatusBadge(buyer.status)}
-                          <div className="text-[9px] text-slate-400 mono">Last saved: {buyer.syncTimestamp || '—'}</div>
-                          <div className="text-[10px] text-slate-600 dark:text-gray-400">
-                            {buyer.totalRFQsCreated} RFQs • <strong className="text-emerald-600 dark:text-emerald-400">{buyer.totalSpend}</strong>
+                      {/* Col 2: Brand */}
+                      <td className={getTableColumnClass(accountColumns, 'brandName', 'py-2 px-3 align-middle whitespace-nowrap text-[11px] text-slate-500 dark:text-gray-400')}>
+                        {buyer.brandName && (
+                          <span className="truncate block max-w-[140px]" title={buyer.brandName}>{buyer.brandName}</span>
+                        )}
+                      </td>
+
+                      {/* Col 3: Source */}
+                      <td className={getTableColumnClass(accountColumns, 'accountSource', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        {getSourceBadge(buyer.accountSource)}
+                      </td>
+
+                      {/* Col 4: Contact Person */}
+                      <td className={getTableColumnClass(accountColumns, 'contactPerson', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="font-semibold text-slate-800 dark:text-gray-200 truncate max-w-[140px]" title={buyer.contactPerson}>{buyer.contactPerson}</div>
+                        {buyer.contactDesignation && (
+                          <span className="sr-only">{buyer.contactDesignation}</span>
+                        )}
+                      </td>
+
+                      {/* Col 5: Corporate Email */}
+                      <td className={getTableColumnClass(accountColumns, 'corporateEmail', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-mono truncate max-w-[170px]" title={buyer.corporateEmail}>{buyer.corporateEmail}</div>
+                      </td>
+
+                      {/* Col 6: Mobile */}
+                      <td className={getTableColumnClass(accountColumns, 'mobileNumber', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="text-[10px] text-slate-500 font-mono">{buyer.mobileNumber}</div>
+                      </td>
+
+                      {/* Col 7: GSTIN */}
+                      <td className={getTableColumnClass(accountColumns, 'gstin', 'py-2 px-3 align-middle whitespace-nowrap text-[11px]')}>
+                        <span className="mono font-bold text-slate-700 dark:text-gray-300">{buyer.gstin}</span>
+                      </td>
+
+                      {/* Col 8: PAN */}
+                      <td className={getTableColumnClass(accountColumns, 'panNumber', 'py-2 px-3 align-middle whitespace-nowrap text-[11px]')}>
+                        {buyer.panNumber && (
+                          <span className="mono text-slate-600 dark:text-gray-400">{buyer.panNumber}</span>
+                        )}
+                      </td>
+
+                      {/* Col 9: Sourcing Mode */}
+                      <td className={getTableColumnClass(accountColumns, 'sourcingMode', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <span
+                          className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide inline-block"
+                          style={{
+                            backgroundColor: `${modeObj?.badgeColor}15`,
+                            color: modeObj?.badgeColor,
+                            border: `1px solid ${modeObj?.badgeColor}35`,
+                          }}
+                        >
+                          {modeObj?.code}: {modeObj?.shortLabel}
+                        </span>
+                      </td>
+
+                      {/* Col 10: Plan */}
+                      <td className={getTableColumnClass(accountColumns, 'subscriptionPlan', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="text-[10px] text-slate-500 dark:text-gray-400 capitalize">
+                          Plan: <strong className="text-slate-700 dark:text-gray-300">{buyer.subscriptionPlan.replace('_', ' ')}</strong>
+                        </div>
+                        {buyer.subscriptionPlan === 'free_trial' && (
+                          <div className="text-[9px] text-amber-700 dark:text-amber-300 font-semibold">
+                            {buyer.remainingFreeRFQs} free RFQs remaining
                           </div>
+                        )}
+                      </td>
+
+                      {/* Col 11: Plant Location */}
+                      <td className={getTableColumnClass(accountColumns, 'primaryPlantLocation', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        <div className="flex items-center gap-1 text-[11px] text-slate-700 dark:text-gray-300 font-medium max-w-[160px]">
+                          <MapPin size={11} className="text-slate-400 shrink-0" />
+                          <span className="truncate" title={buyer.primaryPlantLocation}>
+                            {buyer.primaryPlantLocation || '—'}
+                          </span>
                         </div>
                       </td>
 
-                      {/* Col 7: Actions */}
-                      <td className="py-3 px-4 text-right">
+                      {/* Col 12: Industry */}
+                      <td className={getTableColumnClass(accountColumns, 'industrySector', 'py-2 px-3 align-middle whitespace-nowrap text-[10px] text-slate-400')}>
+                        Industry: <strong className="text-slate-600 dark:text-gray-300">{buyer.industrySector || '—'}</strong>
+                      </td>
+
+                      {/* Col 13: Divisions */}
+                      <td className={getTableColumnClass(accountColumns, 'supportedMajorCategories', 'py-2 px-3 align-middle')}>
+                        <div className="flex items-center gap-1 flex-wrap max-w-[180px]">
+                          {(buyer.supportedMajorCategories || []).slice(0, 2).map((cat, idx) => (
+                            <span key={idx} className="px-1.5 py-0.2 rounded text-[9px] bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 truncate max-w-[100px]" title={cat}>
+                              {cat.replace('Engineering Spares - ', '')}
+                            </span>
+                          ))}
+                          {(buyer.supportedMajorCategories || []).length > 2 && (
+                            <span className="text-[9px] text-slate-400 font-bold">
+                              +{(buyer.supportedMajorCategories || []).length - 2}
+                            </span>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Col 14: Record Status */}
+                      <td className={getTableColumnClass(accountColumns, 'status', 'py-2 px-3 align-middle whitespace-nowrap')}>
+                        {getStatusBadge(buyer.status)}
+                        <span className="sr-only">Last saved: {buyer.syncTimestamp || '—'}</span>
+                      </td>
+
+                      {/* Col 15: Total RFQs */}
+                      <td className={getTableColumnClass(accountColumns, 'totalRFQsCreated', 'py-2 px-3 align-middle whitespace-nowrap text-[10px] text-slate-600 dark:text-gray-400')}>
+                        {buyer.totalRFQsCreated} RFQs
+                      </td>
+
+                      {/* Col 16: Total Spend */}
+                      <td className={getTableColumnClass(accountColumns, 'totalSpend', 'py-2 px-3 align-middle whitespace-nowrap text-[10px]')}>
+                        <strong className="text-emerald-600 dark:text-emerald-400">{buyer.totalSpend}</strong>
+                      </td>
+
+                      {/* Col 17: Actions */}
+                      <td className={getTableColumnClass(accountColumns, 'actions', 'py-2 px-3 text-right align-middle whitespace-nowrap')}>
                         <div className="flex items-center justify-end gap-1.5">
                           {!isActiveSession ? (
                             <button
@@ -626,7 +790,10 @@ export default function BuyerAccountTable() {
       {/* MODAL 1: ADD EXISTING PUBLIC BUYER ACCOUNT */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {addModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          onClick={createBackdropClickHandler(setAddModalOpen, false)}
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
           <div className="w-full max-w-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-scale-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
               <div className="flex items-center gap-2">
@@ -916,7 +1083,10 @@ export default function BuyerAccountTable() {
       {/* MODAL 2: EDIT BUYER ACCOUNT SPECIFICATIONS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {editModalOpen && (
-        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+        <div
+          onClick={createBackdropClickHandler(setEditModalOpen, false)}
+          className="fixed inset-0 bg-slate-950/70 backdrop-blur-sm z-50 flex items-center justify-center p-4"
+        >
           <div className="w-full max-w-2xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-3xl p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto animate-scale-in">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
               <div className="flex items-center gap-2">

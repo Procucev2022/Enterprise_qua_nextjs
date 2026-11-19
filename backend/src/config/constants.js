@@ -3153,6 +3153,10 @@ const VENDOR_INGESTION_MESSAGES = {
   DUPLICATE_COMPANY_PHONE_EXISTING: 'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
   DUPLICATE_COMPANY_PHONE_FILE: 'Duplicate company & phone ({company} / {phone}) — already present in uploaded file (row {firstRow})',
   DUPLICATE_EMAIL_BATCH_SKIPPED: 'Skipped duplicate email in uploaded batch: {value}',
+  DUPLICATE_PO_EXISTING: 'Duplicate PO record ({summary}) — already uploaded previously',
+  DUPLICATE_PO_FILE: 'Duplicate PO record ({summary}) — already present in uploaded file (row {firstRow})',
+  PO_DUMP_ALL_DUPLICATES:
+    'All {count} PO line item(s) match previously uploaded or earlier duplicate PO records and were skipped.',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };

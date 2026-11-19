@@ -491,6 +491,7 @@ function createVendorDedupeState() {
     existingEmails: new Set(),
     existingGstins: new Set(),
     existingCodes: new Set(),
+    existingNumericCodes: new Set(),
     existingCompanyPhones: new Set(),
     fileEmails: new Map(),
     fileGstins: new Map(),
@@ -511,7 +512,11 @@ function seedExistingVendorsIntoDedupeState(state, existingVendors = []) {
     if (gstinKey) state.existingGstins.add(gstinKey);
 
     const codeKey = normalizeDedupeCode(existing.vendorCode);
-    if (codeKey && !/^\d+$/.test(codeKey)) state.existingCodes.add(codeKey);
+    if (codeKey) {
+      state.usedSequentialCodes.add(codeKey);
+      if (!/^\d+$/.test(codeKey)) state.existingCodes.add(codeKey);
+      else state.existingNumericCodes.add(codeKey);
+    }
 
     const companyPhoneKey = normalizeDedupeCompanyPhone(existing.companyName || existing.name, existing.phone);
     if (companyPhoneKey) state.existingCompanyPhones.add(companyPhoneKey);
@@ -528,6 +533,14 @@ async function loadExistingVendorDedupeState(session, organizationId) {
       session.createdByEmail || null
     );
     seedExistingVendorsIntoDedupeState(state, existingVendors);
+    let existingMasterRecords =
+      typeof queries.findOrganizationVendorMasterRecords === 'function'
+        ? await queries.findOrganizationVendorMasterRecords(organizationId, 500)
+        : [];
+    if ((!Array.isArray(existingMasterRecords) || existingMasterRecords.length === 0) && session.id && typeof queries.findVendorMasterRecords === 'function') {
+      existingMasterRecords = await queries.findVendorMasterRecords(session.id, organizationId, 500);
+    }
+    seedExistingVendorsIntoDedupeState(state, existingMasterRecords);
   } catch (err) {
     logger.warn(
       'Failed to pre-load existing buyer vendors for duplicate check; continuing with intra-file dedupe',
@@ -639,7 +652,10 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
   // Track existing vendor codes to prevent collisions and generate sequential codes
   for (const row of batch) {
     if (row.vendorCode && String(row.vendorCode).trim()) {
-      activeDedupeState.usedSequentialCodes.add(String(row.vendorCode).trim().toLowerCase());
+      const cleanCode = String(row.vendorCode).trim().toLowerCase();
+      if (!/^\d+$/.test(cleanCode) || !activeDedupeState.existingNumericCodes?.has(cleanCode)) {
+        activeDedupeState.usedSequentialCodes.add(cleanCode);
+      }
     }
   }
 
@@ -707,13 +723,20 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
       continue;
     }
 
-    const vendorCode = explicitVendorCode || getNextSequentialCode();
+    const isCollidingAutoNumericCode =
+      Boolean(explicitVendorCode) &&
+      /^\d+$/.test(explicitVendorCode) &&
+      Boolean(activeDedupeState.existingNumericCodes?.has(explicitVendorCode.toLowerCase()));
+    const vendorCode = (!explicitVendorCode || isCollidingAutoNumericCode)
+      ? getNextSequentialCode()
+      : explicitVendorCode;
 
     valid.push({
       ...row,
       vendorCode,
       companyName: trimmedCompany,
       phone: resolvedPhone,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gstNumber: resolvedGstin, gst: resolvedGstin } : {}),
     });
   }
 
@@ -740,16 +763,128 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
 }
 
 /**
+ * Normalize text fields for PO line-item deduplication.
+ */
+function normalizePoDedupeText(raw) {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizePoDedupeNumber(raw) {
+  if (raw === null || raw === undefined || raw === '') return '';
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  return String(Math.round(num * 100) / 100);
+}
+
+/**
+ * Canonical fingerprint for a PO line item so re-uploaded PO files (3-column
+ * template or full ERP PO dump) detect exact duplicates reliably without false
+ * positives across distinct line items on the same PO.
+ */
+function buildPoLineDedupeKey(row) {
+  if (!row || typeof row !== 'object') return '';
+  const poNumberKey = normalizePoNumber(row.poNumber || row.po_number);
+  const poDateKey = normalizePoDate(row.poDate || row.po_date || row.date) || '';
+  const rawVendorName = normalizePoDedupeText(
+    row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.supplier || row.companyName
+  );
+  const rawVendorCode = normalizePoDedupeText(row.vendorCode || row.vendor_code || row.supplierCode || row.vendorId);
+  const vendorKey =
+    rawVendorName && (!rawVendorCode || rawVendorName !== `vendor ${rawVendorCode}`)
+      ? rawVendorName
+      : rawVendorCode || rawVendorName;
+  const itemKey = normalizePoDedupeText(
+    row.itemDescription ||
+      row.itemName ||
+      row.item_description ||
+      row.shortText ||
+      row.short_text ||
+      row.materialDescription ||
+      row.material_description ||
+      row.description
+  );
+  if (!vendorKey && !itemKey) return '';
+  const specKey = normalizePoDedupeText(row.specification || row.specs);
+  const qtyKey = normalizePoDedupeNumber(row.quantity);
+  const spendKey = normalizePoDedupeNumber(row.spend ?? row.totalSpend);
+  return [poNumberKey, poDateKey, vendorKey, itemKey, specKey, qtyKey, spendKey].join('|');
+}
+
+function formatPoDuplicateSummary({ poNumber, vendorName, vendorCode, itemDescription }) {
+  const vendorLabel = String(vendorName || vendorCode || '').trim() || 'Unknown Vendor';
+  const itemLabel = String(itemDescription || '').trim() || 'PO Line';
+  const base = `${vendorLabel} — ${itemLabel}`;
+  return poNumber ? `${poNumber} / ${base}` : base;
+}
+
+function createPoDedupeState() {
+  return {
+    existingKeys: new Set(),
+    fileKeys: new Map(),
+  };
+}
+
+function seedExistingPoRecordsIntoDedupeState(state, existingRecords = []) {
+  for (const existing of existingRecords) {
+    const key = buildPoLineDedupeKey(existing);
+    if (key) state.existingKeys.add(key);
+  }
+}
+
+async function loadExistingPoDedupeState(organizationId) {
+  const state = createPoDedupeState();
+  if (!organizationId || typeof queries.findExistingPoLineItemsByOrganization !== 'function') return state;
+  try {
+    const existing = await queries.findExistingPoLineItemsByOrganization(organizationId);
+    seedExistingPoRecordsIntoDedupeState(state, Array.isArray(existing) ? existing : []);
+  } catch (err) {
+    logger.warn(
+      'Failed to pre-load existing organization PO records for duplicate check; continuing with intra-file dedupe',
+      { organizationId, error: err.message },
+      LOG_CATEGORY
+    );
+  }
+  return state;
+}
+
+function checkAndRegisterPoDedupe(state, row, rowNumber) {
+  const key = buildPoLineDedupeKey(row);
+  if (!key) return null;
+  const summary = formatPoDuplicateSummary(row);
+  if (state.existingKeys.has(key)) {
+    return {
+      matchedAgainst: 'EXISTING_PO',
+      reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_PO_EXISTING, { summary }),
+    };
+  }
+  const firstRow = state.fileKeys.get(key);
+  if (firstRow !== undefined) {
+    return {
+      matchedAgainst: 'FILE',
+      reason: formatIngestionMessage(VENDOR_INGESTION_MESSAGES.DUPLICATE_PO_FILE, { summary, firstRow }),
+    };
+  }
+  state.fileKeys.set(key, rowNumber);
+  return null;
+}
+
+/**
  * Process a batch of PO Dump records into the database
  */
-async function processPoDumpBatch(sessionId, organizationId, batch, session) {
+async function processPoDumpBatch(sessionId, organizationId, batch, session, dedupeState = null, options = null) {
+  const activeDedupeState = dedupeState || createPoDedupeState();
   const valid = [];
   const invalid = [];
+  const duplicateSkipped = [];
 
   // Required (only two): Vendor/Supplier Name (or Vendor Code) and
   // Item Description/Short Text/Material Description. Specifications and all
   // other PO columns are optional.
-  for (const row of batch) {
+  for (let idx = 0; idx < batch.length; idx++) {
+    const row = batch[idx];
     const vendorName = String(
       row.vendorName || row.vendorIdentifier || row.vendor_name || row.supplierName || row.supplier || row.companyName || ''
     ).trim();
@@ -772,13 +907,14 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
       continue;
     }
 
+    const poNumber = normalizePoNumber(row.poNumber || row.po_number) || null;
     const poDate = normalizePoDate(row.poDate || row.date);
     // Quantity and spend are never invented: a row that does not give them keeps them null.
     const quantity = Number(row.quantity) > 0 ? Number(row.quantity) : null;
     const spend = [row.spend, row.totalSpend].map(Number).find((value) => value > 0) ?? null;
 
     const candidate = {
-      poNumber: row.poNumber,
+      poNumber: poNumber || undefined,
       poDate,
       itemDescription,
       specification,
@@ -793,6 +929,29 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
       continue;
     }
 
+    const rowNumber = Number(row.sourceRowNumber) > 0 ? Number(row.sourceRowNumber) + 1 : idx + 2;
+    const duplicateMatch = checkAndRegisterPoDedupe(
+      activeDedupeState,
+      { poNumber, poDate, vendorName, vendorCode, itemDescription, specification, quantity, spend },
+      rowNumber
+    );
+    if (duplicateMatch) {
+      duplicateSkipped.push({
+        rowNumber,
+        poNumber: poNumber || undefined,
+        poDate: poDate || undefined,
+        vendorName: vendorName || vendorCode,
+        itemDescription,
+        specification: specification || undefined,
+        quantity: quantity ?? undefined,
+        spend: spend ?? undefined,
+        status: 'duplicate_skipped',
+        matchedAgainst: duplicateMatch.matchedAgainst,
+        reason: duplicateMatch.reason,
+      });
+      continue;
+    }
+
     // Stamp inHorizon. With no horizon every row is inside. A row without a PO date is
     // kept inside as well, because a dump no longer has to carry dates to be used.
     const horizonConfigured = Boolean(session && session.horizonStart && session.horizonEnd);
@@ -800,6 +959,7 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
 
     valid.push({
       ...row,
+      poNumber,
       poDate: poDate || null,
       vendorName: vendorName || `Vendor ${vendorCode}`,
       itemDescription,
@@ -812,10 +972,13 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
   }
 
   let imported = 0;
-  let skipped = invalid.length;
+  let skipped = invalid.length + duplicateSkipped.length;
 
   if (valid.length > 0) {
     try {
+      if (options && typeof options.beforeFirstInsert === 'function') {
+        await options.beforeFirstInsert();
+      }
       const stored = await queries.bulkInsertPoLineItems(sessionId, organizationId, valid);
       imported = typeof stored === 'number' ? stored : (Array.isArray(stored) ? stored.length : valid.length);
     } catch (err) {
@@ -825,7 +988,12 @@ async function processPoDumpBatch(sessionId, organizationId, batch, session) {
     }
   }
 
-  return { imported, skipped, failed: invalid.length, errors: invalid.slice(0, 5) };
+  return {
+    imported,
+    skipped,
+    failed: invalid.length,
+    errors: [...duplicateSkipped, ...invalid].slice(0, 50),
+  };
 }
 
 /**
@@ -847,8 +1015,7 @@ async function recordVendorMasterUpload({ jobId, sessionId, organizationId, tota
 /** Clear prior session rows & stale AI state when a replacement file begins ingesting. */
 async function prepareSessionForReplacementUpload({ sessionId, organizationId, jobType }) {
   if (jobType === 'VENDOR_MASTER') {
-    await queries.deleteVendorMasterRecords(sessionId, organizationId);
-    await queries.deleteCategoryMappingsForSession(sessionId, organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, organizationId);
     return;
   }
   await queries.deletePoLineItems(sessionId, organizationId);
@@ -858,12 +1025,14 @@ async function prepareSessionForReplacementUpload({ sessionId, organizationId, j
 /**
  * Derive reconciled progress counts and completion status so failed or empty
  * uploads are never reported as successful, and skipped duplicates do not
- * inflate Vendor Master stored/processing totals.
+ * inflate stored/processing totals for Vendor Master or PO Dump uploads.
  */
 function buildFinalUploadJobPatch({ jobType, rawTotal, imported, skipped, failed, recentErrors }) {
-  const isVendorMaster = jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER;
-  const effectiveTotal = isVendorMaster ? Math.max(0, rawTotal - skipped) : rawTotal;
-  const processedRecords = isVendorMaster ? imported + failed : imported + skipped + failed;
+  const isUpload =
+    jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER || jobType === VENDOR_INGESTION_JOB_TYPE.PO_DUMP;
+  const duplicateCount = Math.max(0, skipped - failed);
+  const effectiveTotal = isUpload ? Math.max(0, rawTotal - duplicateCount) : rawTotal;
+  const processedRecords = isUpload ? imported + failed : imported + skipped + failed;
   const errors = Array.isArray(recentErrors) ? recentErrors : [];
   const firstFailure = errors.find((entry) => entry && entry.status !== 'duplicate_skipped');
   const firstReason = firstFailure?.reason || firstFailure?.message || '';
@@ -911,7 +1080,15 @@ function buildFinalUploadJobPatch({ jobType, rawTotal, imported, skipped, failed
 /**
  * Persist finalized session counts and advance the session step only when rows were actually stored.
  */
-async function finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType }) {
+async function finalizeSessionAfterUpload({
+  session,
+  sessionId,
+  organizationId,
+  fileName,
+  jobId,
+  jobType,
+  importedRecords = 0,
+}) {
   if (jobType === 'VENDOR_MASTER') {
     const totalStored = await queries.countVendorMasterRecords(sessionId, organizationId);
     if (totalStored > 0) {
@@ -930,6 +1107,9 @@ async function finalizeSessionAfterUpload({ session, sessionId, organizationId, 
   }
 
   const counts = await queries.countPoLineItems(sessionId, organizationId);
+  if (importedRecords <= 0 && counts.total > 0) {
+    return;
+  }
   await queries.updateSession(sessionId, organizationId, {
     poFileName: fileName,
     poRowCount: counts.total,
@@ -970,6 +1150,16 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
     const vendorDedupeState = jobType === 'VENDOR_MASTER'
       ? await loadExistingVendorDedupeState(session, organizationId)
       : null;
+    const poDedupeState = jobType === 'PO_DUMP'
+      ? await loadExistingPoDedupeState(organizationId)
+      : null;
+    let poSessionPrepared = false;
+    const ensurePoSessionPrepared = async () => {
+      if (!poSessionPrepared) {
+        poSessionPrepared = true;
+        await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
+      }
+    };
 
     try {
       // One R2 read for the whole upload — see this file's top comment for why
@@ -992,7 +1182,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       const allLines = text.split(/\r\n|\r|\n/);
 
       totalLines = Math.max(0, allLines.filter((line) => line.trim().length > 0).length - 1); // Exclude header line
-      if (totalLines > 0) {
+      if (totalLines > 0 && jobType === 'VENDOR_MASTER') {
         await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
       }
 
@@ -1029,7 +1219,7 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
         }
 
         const values = parseCsvLine(line, delimiter);
-        const record = mapRowValues(values, headerMap, jobType, processedRecords);
+        const record = mapRowValues(values, headerMap, jobType, processedRecords + currentBatch.length);
         currentBatch.push(record);
 
         if (currentBatch.length >= batchSize) {
@@ -1037,7 +1227,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
           if (jobType === 'VENDOR_MASTER') {
             result = await processVendorMasterBatch(sessionId, organizationId, currentBatch, vendorDedupeState);
           } else {
-            result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session);
+            result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session, poDedupeState, {
+              beforeFirstInsert: ensurePoSessionPrepared,
+            });
           }
 
           processedRecords += currentBatch.length;
@@ -1050,9 +1242,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
 
           currentBatch = [];
 
-          // Update progress in database (excluding skipped duplicates from VENDOR_MASTER processed count)
+          // Update progress in database (excluding skipped duplicates from processed count)
           await queries.updateIngestionJobProgress(jobId, organizationId, {
-            processedRecords: jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER ? importedRecords + failedRecords : processedRecords,
+            processedRecords: importedRecords + failedRecords,
             importedRecords,
             skippedRecords,
             failedRecords,
@@ -1076,7 +1268,9 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
         if (jobType === 'VENDOR_MASTER') {
           result = await processVendorMasterBatch(sessionId, organizationId, currentBatch, vendorDedupeState);
         } else {
-          result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session);
+          result = await processPoDumpBatch(sessionId, organizationId, currentBatch, session, poDedupeState, {
+            beforeFirstInsert: ensurePoSessionPrepared,
+          });
         }
 
         processedRecords += currentBatch.length;
@@ -1089,7 +1283,15 @@ async function streamProcessCsvFile({ jobId, sessionId, organizationId, r2Key, f
       }
 
       // Finalize session counts and state
-      await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
+      await finalizeSessionAfterUpload({
+        session,
+        sessionId,
+        organizationId,
+        fileName,
+        jobId,
+        jobType,
+        importedRecords,
+      });
 
       // Mark job with reconciled outcome (COMPLETED, PARTIAL_FAILURE, or FAILED)
       const finalPatch = buildFinalUploadJobPatch({
@@ -1141,12 +1343,22 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
     let skippedRecords = 0;
     let failedRecords = 0;
     const recentErrors = [];
-    if (rows.length > 0) {
+    if (rows.length > 0 && jobType === 'VENDOR_MASTER') {
       await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
     }
     const vendorDedupeState = jobType === 'VENDOR_MASTER'
       ? await loadExistingVendorDedupeState(session, organizationId)
       : null;
+    const poDedupeState = jobType === 'PO_DUMP'
+      ? await loadExistingPoDedupeState(organizationId)
+      : null;
+    let poSessionPrepared = false;
+    const ensurePoSessionPrepared = async () => {
+      if (!poSessionPrepared) {
+        poSessionPrepared = true;
+        await prepareSessionForReplacementUpload({ sessionId, organizationId, jobType });
+      }
+    };
     for (let i = 0; i < rows.length; i += batchSize) {
       if (activeCancellations.has(jobId) || activeCancellations.has(sessionId)) {
         logger.info(`Array ingestion job ${jobId} cancelled by user`, {}, LOG_CATEGORY);
@@ -1158,12 +1370,17 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
         return;
       }
 
-      const chunk = rows.slice(i, i + batchSize);
+      const chunk = rows.slice(i, i + batchSize).map((r, offset) => ({
+        ...r,
+        sourceRowNumber: r && r.sourceRowNumber !== undefined ? r.sourceRowNumber : i + offset + 1,
+      }));
       let result;
       if (jobType === 'VENDOR_MASTER') {
         result = await processVendorMasterBatch(sessionId, organizationId, chunk, vendorDedupeState);
       } else {
-        result = await processPoDumpBatch(sessionId, organizationId, chunk, session);
+        result = await processPoDumpBatch(sessionId, organizationId, chunk, session, poDedupeState, {
+          beforeFirstInsert: ensurePoSessionPrepared,
+        });
       }
 
       processedRecords += chunk.length;
@@ -1175,7 +1392,7 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       }
 
       await queries.updateIngestionJobProgress(jobId, organizationId, {
-        processedRecords: jobType === VENDOR_INGESTION_JOB_TYPE.VENDOR_MASTER ? importedRecords + failedRecords : processedRecords,
+        processedRecords: importedRecords + failedRecords,
         importedRecords,
         skippedRecords,
         failedRecords,
@@ -1183,7 +1400,15 @@ async function processArrayJob({ jobId, sessionId, organizationId, rows, fileNam
       });
     }
 
-    await finalizeSessionAfterUpload({ session, sessionId, organizationId, fileName, jobId, jobType });
+    await finalizeSessionAfterUpload({
+      session,
+      sessionId,
+      organizationId,
+      fileName,
+      jobId,
+      jobType,
+      importedRecords,
+    });
 
     const finalPatch = buildFinalUploadJobPatch({
       jobType,
@@ -1395,4 +1620,9 @@ module.exports = {
   activeCancellations,
   deleteFromR2,
   normalizePoDate,
+  buildPoLineDedupeKey,
+  createPoDedupeState,
+  seedExistingPoRecordsIntoDedupeState,
+  loadExistingPoDedupeState,
+  checkAndRegisterPoDedupe,
 };

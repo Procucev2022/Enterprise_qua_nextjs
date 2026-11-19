@@ -11,7 +11,7 @@ import {
   RefreshCw,
   X,
 } from 'lucide-react';
-import { formatFileSize } from '@/lib/constants';
+import { createBackdropClickHandler, formatFileSize } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { AttachmentPreviewState, RFQAttachment } from '@/lib/types';
 
@@ -56,6 +56,7 @@ export default function AttachmentPreviewModal({
       role="dialog"
       aria-modal="true"
       aria-labelledby="attachment-preview-modal-title"
+      onClick={createBackdropClickHandler(onClose)}
       className="fixed inset-0 z-[1300] flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-xs"
     >
       <div className="w-full max-w-4xl max-h-[90vh] flex flex-col bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden">

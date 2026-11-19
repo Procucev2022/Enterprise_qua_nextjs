@@ -191,6 +191,11 @@ function normalizeVendorRecord(vendor) {
   if (Object.prototype.hasOwnProperty.call(vendor, 'email')) {
     normalized.email = normalizeVendorEmail(vendor.email);
   }
+  const resolvedGstin = String(normalized.gstin || normalized.gst || normalized.gstNumber || '').trim().toUpperCase();
+  if (resolvedGstin) {
+    normalized.gstin = resolvedGstin;
+    normalized.gst = resolvedGstin;
+  }
   return normalized;
 }
 
@@ -199,6 +204,11 @@ function parseVendorRaw(value) {
   if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
     delete vendor.tempPassword;
     clearDummyPanFields(vendor);
+    const resolvedGstin = String(vendor.gstin || vendor.gst || vendor.gstNumber || '').trim().toUpperCase();
+    if (resolvedGstin) {
+      vendor.gstin = resolvedGstin;
+      vendor.gst = resolvedGstin;
+    }
   }
   return vendor;
 }
@@ -1366,9 +1376,14 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const ids = Array.from(candidateSet);
   if (ids.length === 0) return [];
 
+  const options = arguments[3];
+  const fresh =
+    options && typeof options === 'object' && options.fresh !== undefined
+      ? Boolean(options.fresh)
+      : process.env.NODE_ENV !== 'test';
   const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
   const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
-  const cached = queryCache.get(cacheKey);
+  const cached = !fresh ? queryCache.get(cacheKey) : null;
   if (cached) return cached;
 
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
@@ -1497,6 +1512,14 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
     const rawParsed = typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw ? { ...row.raw } : {});
     const parsedVendor = parseVendorRaw(row.raw) || {};
     const comp = row.company_name || rawParsed.companyName || 'Vendor Company';
+    const resolvedGstin = String(
+      rawParsed.gstin ||
+      rawParsed.gst ||
+      rawParsed.gstNumber ||
+      parsedVendor.gstin ||
+      parsedVendor.gst ||
+      ''
+    ).trim().toUpperCase();
     return {
       ...parsedVendor,
       ...rawParsed,
@@ -1509,7 +1532,8 @@ async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyer
       status: row.status || rawParsed.status || 'ACTIVE',
       source: rawParsed.source || 'buyer_uploaded',
       pan: rawParsed.pan || '',
-      gstin: rawParsed.gstin || '',
+      gstin: resolvedGstin,
+      ...(resolvedGstin ? { gst: resolvedGstin } : {}),
       created_at: row.created_at || rawParsed.created_at,
       createdAt: row.created_at || rawParsed.createdAt,
       updated_at: row.updated_at || rawParsed.updated_at,
@@ -2919,6 +2943,17 @@ async function upsertAuditLogInDB(entry) {
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
+function parseNotificationRow(row) {
+  const parsed = parseRaw(row.raw);
+  if (row.is_read === undefined || row.is_read === null) {
+    return parsed;
+  }
+  return {
+    ...parsed,
+    read: Boolean(row.is_read),
+  };
+}
+
 async function getNotificationsFromDB(recipientId = null, limit = null) {
   if (!pool.hasStorage()) return [];
   const conditions = [];
@@ -2934,14 +2969,14 @@ async function getNotificationsFromDB(recipientId = null, limit = null) {
     params.push(Math.min(Number(limit), 1000));
     limitClause = `LIMIT $${params.length}`;
   }
-  const sql = `SELECT raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
-  const d1Sql = `SELECT raw FROM notifications ${where} ORDER BY rowid DESC ${limitClause}`.trim();
+  const sql = `SELECT is_read, raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT is_read, raw FROM notifications ${where} ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
     sql,
     params,
     { d1: true, d1Text: d1Sql, useCache: true, tag: 'notifications', ttlMs: 15000 }
   );
-  return result.rows.map((row) => parseRaw(row.raw));
+  return result.rows.map(parseNotificationRow);
 }
 
 /** Indexed per-recipient notification feed and unread count without loading global tables. */
@@ -2950,14 +2985,12 @@ async function getNotificationsForRecipientFromDB(recipientType, recipientId, li
   const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
   const [listResult, countResult] = await Promise.all([
     pool.query(
-      'SELECT raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY sequence DESC LIMIT $3',
+      'SELECT is_read, raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY sequence DESC LIMIT $3',
       [recipientType, recipientId, safeLimit],
       {
         d1: true,
-        d1Text: 'SELECT raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY rowid DESC LIMIT $3',
-        useCache: true,
-        tag: 'notifications',
-        ttlMs: 15000,
+        d1Text: 'SELECT is_read, raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY rowid DESC LIMIT $3',
+        useCache: false,
       }
     ),
     pool.query(
@@ -2966,14 +2999,12 @@ async function getNotificationsForRecipientFromDB(recipientType, recipientId, li
       {
         d1: true,
         d1Text: 'SELECT CAST(COUNT(*) AS INTEGER) AS unread_count FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = 0',
-        useCache: true,
-        tag: 'notifications',
-        ttlMs: 15000,
+        useCache: false,
       }
     ),
   ]);
   return {
-    data: listResult.rows.map((row) => parseRaw(row.raw)),
+    data: listResult.rows.map(parseNotificationRow),
     unreadCount: Number(countResult.rows?.[0]?.unread_count) || 0,
   };
 }
@@ -3077,7 +3108,7 @@ async function markNotificationReadInDB(id, recipientType, recipientId) {
     }
   );
   queryCache.invalidate('notifications');
-  return result.rowCount > 0;
+  return result.rowCount > 0 || (Array.isArray(result.rows) && result.rows.length > 0);
 }
 
 async function markAllNotificationsReadInDB(recipientType, recipientId) {
@@ -3091,11 +3122,11 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
       d1: true,
       d1Text: `UPDATE notifications
        SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
-     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
+     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = 0`,
     }
   );
   queryCache.invalidate('notifications');
-  return result.rowCount;
+  return Number(result.rowCount) || 0;
 }
 
 // ── Zoho OAuth token (single-row cache) ────────────────────────────────────────

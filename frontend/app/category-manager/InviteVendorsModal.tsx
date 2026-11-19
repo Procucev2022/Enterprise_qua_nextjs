@@ -30,7 +30,7 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, isVendorActive, parseSearchTokens } from '@/lib/constants';
+import { MAX_INVITE_VENDORS, createBackdropClickHandler, getIndianStates, getCitiesForState, isVendorActive, parseSearchTokens } from '@/lib/constants';
 import type { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
@@ -818,6 +818,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   return (
     <div
+      onClick={createBackdropClickHandler(onClose, undefined, submitting)}
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-3 sm:p-5 md:p-6"
       role="dialog"
       aria-modal="true"
@@ -1307,6 +1308,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       {/* Add New Vendor Modal (Sub-modal for V0 and V2) */}
       {showAddVendorModal && (
         <div
+          onClick={createBackdropClickHandler(setShowAddVendorModal, false, creatingVendor)}
           className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"

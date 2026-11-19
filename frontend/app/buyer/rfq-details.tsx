@@ -24,6 +24,7 @@ import {
   formatIndianDateTime,
   isBuyerQuotesSealed,
   resolveQuotesUnsealIso,
+  createBackdropClickHandler,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
@@ -3991,7 +3992,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       {/* Buyer Reply Modal */}
       {replyModalInquiry && (
-        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setReplyModalInquiry, null)}
+          className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+        >
           <div className="w-full max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-4 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -4090,6 +4094,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           role="dialog"
           aria-modal="true"
           aria-labelledby="close-rfq-modal-title"
+          onClick={createBackdropClickHandler(setCloseModalOpen, false, isClosing)}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
         >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
@@ -4166,6 +4171,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           role="dialog"
           aria-modal="true"
           aria-labelledby="extend-rfq-modal-title"
+          onClick={createBackdropClickHandler(setExtendModalOpen, false, isExtending)}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
         >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">

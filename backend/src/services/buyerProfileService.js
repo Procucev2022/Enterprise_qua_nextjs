@@ -93,8 +93,10 @@ function buildFallbackProfileFromBuyerAccount({ userId, email, buyerAcc }) {
   const pincode = pickString(buyerAcc.pincode, buyerAcc.zip_code, buyerAcc.zipCode, parsedPlant.pincode);
   const street = pickString(
     buyerAcc.street,
+    buyerAcc.streetAddress,
     buyerAcc.address1,
     buyerAcc.address,
+    buyerAcc.registeredAddress,
     city && state ? `${city}, ${state}` : city
   );
   const gstNumber = pickString(buyerAcc.gstin, buyerAcc.gstNumber, buyerAcc.gst).toUpperCase();
@@ -158,13 +160,24 @@ async function getProfile(sessionUser) {
   // Hydrate missing address / statutory tax details from storeService buyer account if present
   try {
     let buyerAcc = await storeService.getBuyerAccountByEmail(email);
-    if (!buyerAcc && userId) {
+    if (!buyerAcc && (userId || profile.organizationId)) {
+      const memAccounts = typeof storeService.getBuyerAccounts === 'function' ? storeService.getBuyerAccounts() : [];
       buyerAcc =
-        (typeof storeService.getBuyerAccounts === 'function' ? storeService.getBuyerAccounts() : [])
-          .find((candidate) => candidate && candidate.id === userId) ||
-        (pool.hasStorage() && typeof domainQueries.getBuyerAccountByIdFromDB === 'function'
-          ? await domainQueries.getBuyerAccountByIdFromDB(userId).catch(() => null)
-          : null);
+        memAccounts.find((candidate) => (
+          candidate && (
+            (userId && (candidate.id === userId || candidate.userId === userId)) ||
+            (profile.organizationId && (candidate.organizationId === profile.organizationId || candidate.id === profile.organizationId)) ||
+            (email && String(candidate.corporateEmail || '').trim().toLowerCase() === email)
+          )
+        )) || null;
+    }
+    if (!buyerAcc && pool.hasStorage() && typeof domainQueries.getBuyerAccountByIdFromDB === 'function') {
+      if (userId) {
+        buyerAcc = await domainQueries.getBuyerAccountByIdFromDB(userId).catch(() => null);
+      }
+      if (!buyerAcc && profile.organizationId) {
+        buyerAcc = await domainQueries.getBuyerAccountByIdFromDB(profile.organizationId).catch(() => null);
+      }
     }
 
     let needsDbUpdate = false;
@@ -177,8 +190,10 @@ async function getProfile(sessionUser) {
       const mirrorPincode = buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode || parsedPlant.pincode || '';
       const mirrorStreet =
         buyerAcc.street ||
+        buyerAcc.streetAddress ||
         buyerAcc.address1 ||
         buyerAcc.address ||
+        buyerAcc.registeredAddress ||
         (mirrorCity && mirrorState ? `${mirrorCity}, ${mirrorState}` : mirrorCity || '');
 
       if (!profile.street && mirrorStreet) {
@@ -245,6 +260,47 @@ async function getProfile(sessionUser) {
         });
       } catch (err) {
         logger.warn('Failed to auto-heal buyer profile address in DB', { error: err.message }, LOG_CATEGORY);
+      }
+    }
+
+    if (buyerAcc && typeof storeService.updateBuyerAccountDurably === 'function') {
+      const mirrorBackfill = {};
+      const mirrorStreetExisting =
+        buyerAcc.street || buyerAcc.streetAddress || buyerAcc.address1 || buyerAcc.address || buyerAcc.registeredAddress || '';
+      const mirrorGstExisting = buyerAcc.gstin || buyerAcc.gstNumber || buyerAcc.gst || '';
+      const mirrorPanExisting = buyerAcc.pan || buyerAcc.panNumber || '';
+      const mirrorPinExisting = buyerAcc.pincode || buyerAcc.zip_code || buyerAcc.zipCode || '';
+      if (profile.organizationId && !buyerAcc.organizationId) mirrorBackfill.organizationId = profile.organizationId;
+      if (profile.gstNumber && !mirrorGstExisting) {
+        mirrorBackfill.gstin = profile.gstNumber;
+        mirrorBackfill.gstNumber = profile.gstNumber;
+      }
+      if (profile.panNumber && !mirrorPanExisting) {
+        mirrorBackfill.pan = profile.panNumber;
+        mirrorBackfill.panNumber = profile.panNumber;
+      }
+      if (profile.street && !mirrorStreetExisting) {
+        mirrorBackfill.street = profile.street;
+        mirrorBackfill.streetAddress = profile.street;
+        mirrorBackfill.address1 = profile.street;
+        mirrorBackfill.address = profile.street;
+        mirrorBackfill.registeredAddress = profile.street;
+      }
+      if (profile.city && !buyerAcc.city) mirrorBackfill.city = profile.city;
+      if (profile.state && !buyerAcc.state) mirrorBackfill.state = profile.state;
+      if (profile.pincode && !mirrorPinExisting) {
+        mirrorBackfill.pincode = profile.pincode;
+        mirrorBackfill.zip_code = profile.pincode;
+        mirrorBackfill.zipCode = profile.pincode;
+      }
+      if (profile.country && !buyerAcc.country) mirrorBackfill.country = profile.country;
+      if (profile.brandName && !buyerAcc.brandName) mirrorBackfill.brandName = profile.brandName;
+      if (Object.keys(mirrorBackfill).length > 0 && (buyerAcc.id || email)) {
+        try {
+          await storeService.updateBuyerAccountDurably(buyerAcc.id || email, mirrorBackfill);
+        } catch (mirrorErr) {
+          logger.warn('Failed to backfill buyer account mirror from profile', { error: mirrorErr.message }, LOG_CATEGORY);
+        }
       }
     }
   } catch (syncErr) {

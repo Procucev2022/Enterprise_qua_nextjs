@@ -16,6 +16,7 @@ import {
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   subscribeVendorUploadHistory,
+  createBackdropClickHandler,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -3415,7 +3416,10 @@ export default function IngestionWizard({
 
       {/* ── RFQ Dispatch Confirmation Modal ── */}
       {confirmationRfq && (
-        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setConfirmationRfq, null)}
+          className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+        >
           <div className="w-full max-w-xl p-6 sm:p-8 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-6 text-center animate-in zoom-in-95">
             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 size={36} />

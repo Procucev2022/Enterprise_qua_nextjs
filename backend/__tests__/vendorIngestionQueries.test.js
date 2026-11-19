@@ -334,6 +334,21 @@ describe('scoped reads, limits and deletion results', () => {
     }
   });
 
+  test('findOrganizationVendorMasterRecords returns org vendor master records across sessions with bounded limits and guards', async () => {
+    expect(await queries.findOrganizationVendorMasterRecords(null)).toEqual([]);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findOrganizationVendorMasterRecords(ORG)).toEqual([]);
+    for (const limit of [undefined, 0, -5, 100, 5000]) {
+      const result = await queries.findOrganizationVendorMasterRecords(ORG, limit);
+      expect(result).toHaveLength(1);
+      expect(pool.rows.mock.calls.at(-1)[1]).toEqual(
+        typeof limit === 'number' && Number.isInteger(limit) && limit > 0
+          ? [ORG, Math.min(limit, 2000)]
+          : [ORG]
+      );
+    }
+  });
+
   test.each([
     ['findVendorMasterRecord', [SESSION, ORG]], ['findCategoryMappingByVendorRecord', [SESSION, ORG, 'master']],
   ])('%s distinguishes missing rows from mapped records without broadening the organization', async (name, args) => {
@@ -357,6 +372,80 @@ describe('scoped reads, limits and deletion results', () => {
     expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('organization_id = $2'), expect.arrayContaining([SESSION, ORG]), expect.objectContaining({ d1: true }));
     pool.query.mockResolvedValue({ rows: [] });
     expect(await queries[name](SESSION, ORG)).toBe(0);
+  });
+
+  test('findExistingPoLineItemsByOrganization returns normalized org PO rows and respects guards & limit cap', async () => {
+    expect(await queries.findExistingPoLineItemsByOrganization('')).toEqual([]);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findExistingPoLineItemsByOrganization(ORG)).toEqual([]);
+
+    pool.rows.mockResolvedValueOnce([
+      {
+        id: 'poli-1',
+        session_id: SESSION,
+        po_number: 'PO-100',
+        po_date: new Date('2025-07-01T00:00:00Z'),
+        vendor_code: 'V-001',
+        vendor_name: 'Apex Supplies',
+        item_description: 'Ball Bearings',
+        specification: 'SKF 6205',
+        quantity: '10',
+        uom: 'Nos',
+        spend: '25000',
+        department: 'Maintenance',
+      },
+      {
+        id: 'poli-2',
+        session_id: SESSION,
+        po_number: null,
+        po_date: null,
+        vendor_code: null,
+        vendor_name: 'Beta Corp',
+        item_description: 'Hex Bolts',
+        specification: null,
+        quantity: null,
+        uom: null,
+        spend: null,
+        department: null,
+      },
+    ]);
+
+    const rows = await queries.findExistingPoLineItemsByOrganization(ORG, 99999);
+    expect(pool.rows).toHaveBeenCalledWith(
+      expect.stringContaining('from po_line_items'),
+      [ORG, 10000],
+      { d1: true }
+    );
+    expect(rows).toEqual([
+      {
+        id: 'poli-1',
+        sessionId: SESSION,
+        poNumber: 'PO-100',
+        poDate: '2025-07-01',
+        vendorCode: 'V-001',
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Ball Bearings',
+        specification: 'SKF 6205',
+        quantity: 10,
+        uom: 'Nos',
+        spend: 25000,
+        department: 'Maintenance',
+      },
+      {
+        id: 'poli-2',
+        sessionId: SESSION,
+        poNumber: null,
+        poDate: null,
+        vendorCode: null,
+        vendorName: 'Beta Corp',
+        itemDescription: 'Hex Bolts',
+        specification: null,
+        quantity: null,
+        uom: null,
+        spend: null,
+        department: null,
+      },
+    ]);
   });
 
   test('deleteVendorMasterRecordsByIdsOrEmails removes matching vendor master records and cascades category mappings', async () => {

@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { createBackdropClickHandler } from '@/lib/constants';
 import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -1436,7 +1437,10 @@ export default function VendorProfilePage() {
 
       {/* Category View Modal */}
       {viewCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+        <div
+          onClick={createBackdropClickHandler(setViewCategory, null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+        >
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
               <div className="flex items-center gap-2">

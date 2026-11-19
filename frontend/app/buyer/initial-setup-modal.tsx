@@ -11,15 +11,19 @@ import {
   PERIOD_BY_VENDOR_INGESTION_HORIZON,
   VENDOR_INGESTION_HORIZON_BY_PERIOD,
   VENDOR_MAPPING_PAGE_SIZE,
+  collectExistingBuyerVendorCodes,
   isPlaceholderVendorCategory,
   normalizeVendorCategoryList,
 } from '@/lib/constants';
 import { autoCategorizeItem, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import type {
+  ExistingPoDedupeCandidate,
   HistoricalPurchaseVendorRecord,
   IngestionJobState,
   IngestionSummary,
+  PoDuplicatePartitionCandidate,
   PurchaseOrderLineItemRecord,
+  SkippedDuplicatePoRecord,
   SkippedDuplicateVendorRecord,
   VendorCategoryMapping,
   VendorDedupeSummary,
@@ -29,7 +33,10 @@ import type {
 } from '@/lib/types';
 import {
   extractSkippedDuplicatesFromJob,
+  extractSkippedDuplicatePosFromJob,
+  partitionDuplicatePoRows,
   partitionDuplicateVendorMasterRows,
+  downloadSkippedDuplicatePosCsv,
   downloadSkippedDuplicatesCsv,
   reconcileVendorJobProgress,
 } from '@/lib/vendorUploadClient';
@@ -93,7 +100,7 @@ function buildStartJobStateFromResponse(params: {
         jobType,
         fileName,
         status: 'FAILED',
-        ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+        uploadedRecords: rawTotal,
         totalRecords: uniqueCount,
         processedRecords: 0,
         importedRecords: 0,
@@ -114,12 +121,12 @@ function buildStartJobStateFromResponse(params: {
   const serverStatus = j?.status || 'COMPLETED';
   const status: IngestionJobState['status'] =
     serverStatus === 'FAILED' ||
-    (failedRecords > 0 && importedRecords === 0) ||
-    (totalRecords > 0 && processedRecords === 0 && serverStatus === 'COMPLETED')
+      (failedRecords > 0 && importedRecords === 0) ||
+      (totalRecords > 0 && processedRecords === 0 && serverStatus === 'COMPLETED')
       ? 'FAILED'
       : failedRecords > 0
-      ? 'PARTIAL_FAILURE'
-      : serverStatus;
+        ? 'PARTIAL_FAILURE'
+        : serverStatus;
 
   return {
     jobState: {
@@ -127,7 +134,7 @@ function buildStartJobStateFromResponse(params: {
       jobType,
       fileName,
       status,
-      ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+      uploadedRecords: rawTotal,
       totalRecords,
       processedRecords,
       importedRecords,
@@ -157,16 +164,18 @@ export function IngestionProgressCard({
   const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
 
   const isVendorMaster = job.jobType === 'VENDOR_MASTER';
+  const isPoDump = job.jobType === 'PO_DUMP';
+  const isUploadJob = isVendorMaster || isPoDump;
   const isAiCategory = job.jobType === 'AI_CATEGORY';
   const uploadedTotal =
     typeof job.uploadedRecords === 'number' && job.uploadedRecords > 0
       ? job.uploadedRecords
-      : isVendorMaster && skipped > 0
-      ? total + skipped
-      : total || processed;
+      : isUploadJob && skipped > 0
+        ? total + skipped
+        : total || processed;
 
   const isAllDuplicates =
-    isVendorMaster &&
+    isUploadJob &&
     total === 0 &&
     imported === 0 &&
     skipped > 0 &&
@@ -190,10 +199,10 @@ export function IngestionProgressCard({
     isTotalFailure && processed === 0
       ? 0
       : total > 0
-      ? Math.min(100, Math.round((processed / total) * 100))
-      : isAllDuplicates || isPureCompleted || processed > 0
-      ? 100
-      : 0;
+        ? Math.min(100, Math.round((processed / total) * 100))
+        : isAllDuplicates || isPureCompleted || processed > 0
+          ? 100
+          : 0;
 
   const firstFailureDetail = Array.isArray(job.errorDetails)
     ? job.errorDetails.find((entry) => entry && entry.status !== 'duplicate_skipped' && entry.reason)
@@ -263,23 +272,22 @@ export function IngestionProgressCard({
       <div className="space-y-1.5">
         <div className="w-full h-3.5 bg-slate-800/80 rounded-full overflow-hidden border border-slate-700/60 p-0.5 shadow-inner">
           <div
-            className={`h-full rounded-full transition-all duration-300 shadow-sm ${
-              isTotalFailure
-                ? 'bg-rose-500'
-                : isPartialFailure || isAllDuplicates
+            className={`h-full rounded-full transition-all duration-300 shadow-sm ${isTotalFailure
+              ? 'bg-rose-500'
+              : isPartialFailure || isAllDuplicates
                 ? 'bg-amber-500'
                 : isPureCompleted
-                ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
-                : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400'
-            }`}
+                  ? 'bg-gradient-to-r from-emerald-500 to-teal-400'
+                  : 'bg-gradient-to-r from-indigo-500 via-purple-500 to-emerald-400'
+              }`}
             style={{ width: `${Math.max(2, Math.min(100, percentage))}%` }}
           />
         </div>
       </div>
 
       {/* Metrics Breakdown Grid */}
-      <div className={`grid grid-cols-2 ${isVendorMaster && skipped > 0 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center text-xs`}>
-        {isVendorMaster && skipped > 0 && (
+      <div className={`grid grid-cols-2 ${isUploadJob && skipped > 0 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center text-xs`}>
+        {isUploadJob && skipped > 0 && (
           <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
             <span className="text-[10px] uppercase font-bold text-slate-400 block">{vmStrings.jobUploadedStat}</span>
             <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(uploadedTotal)}</span>
@@ -287,7 +295,7 @@ export function IngestionProgressCard({
         )}
         <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
           <span className="text-[10px] uppercase font-bold text-slate-400 block">
-            {isVendorMaster ? 'Stored Total' : 'Total'}
+            {isUploadJob ? 'Stored Total' : 'Total'}
           </span>
           <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(total || processed)}</span>
         </div>
@@ -303,7 +311,7 @@ export function IngestionProgressCard({
         </div>
         <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800/60">
           <span className="text-[10px] uppercase font-bold text-amber-300 block">
-            {isVendorMaster ? vmStrings.jobDuplicatesRemovedStat : isAiCategory ? 'Self-Map' : 'Skipped'}
+            {isUploadJob ? vmStrings.jobDuplicatesRemovedStat : isAiCategory ? 'Self-Map' : 'Skipped'}
           </span>
           <span className="font-mono font-black text-amber-200 text-sm">{formatNumber(skipped)}</span>
         </div>
@@ -316,11 +324,10 @@ export function IngestionProgressCard({
       {displayErrorMessage && (
         <div
           data-testid="ingestion-job-error-banner"
-          className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${
-            isTotalFailure
-              ? 'bg-rose-950/70 border-rose-800/70 text-rose-200'
-              : 'bg-amber-950/70 border-amber-700/70 text-amber-200'
-          }`}
+          className={`p-2.5 rounded-xl border text-xs flex items-center gap-2 ${isTotalFailure
+            ? 'bg-rose-950/70 border-rose-800/70 text-rose-200'
+            : 'bg-amber-950/70 border-amber-700/70 text-amber-200'
+            }`}
         >
           <AlertCircle size={14} className={`shrink-0 ${isTotalFailure ? 'text-rose-400' : 'text-amber-400'}`} />
           <span>{displayErrorMessage}</span>
@@ -334,19 +341,15 @@ export function IngestionProgressCard({
             {isTotalFailure
               ? vmStrings.jobStatusFailed
               : isPartialFailure
-              ? vmStrings.jobStatusPartialFailure
-              : isAllDuplicates
-              ? vmStrings.jobStatusAllDuplicates
-              : job.status === 'PROCESSING'
-              ? vmStrings.jobStatusProcessing
-              : job.status === 'COMPLETED'
-              ? vmStrings.jobStatusCompleted
-              : vmStrings.jobStatusPending}
+                ? vmStrings.jobStatusPartialFailure
+                : isAllDuplicates
+                  ? vmStrings.jobStatusAllDuplicates
+                  : job.status === 'PROCESSING'
+                    ? vmStrings.jobStatusProcessing
+                    : job.status === 'COMPLETED'
+                      ? vmStrings.jobStatusCompleted
+                      : vmStrings.jobStatusPending}
           </strong>
-        </span>
-        <span className="text-[10px] text-indigo-300/80 italic flex items-center gap-1">
-          <Sparkles size={11} className="text-indigo-400" />
-          Backend processing continues if you close this window or navigate away
         </span>
       </div>
     </div>
@@ -476,10 +479,13 @@ export default function InitialSetupModal() {
   const vendorDedupeSummaryRef = useRef<VendorDedupeSummary | null>(null);
 
   const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>([]);
+  const [existingOrgPoRecords, setExistingOrgPoRecords] = useState<ExistingPoDedupeCandidate[]>([]);
+  const [skippedDuplicatePoRows, setSkippedDuplicatePoRows] = useState<SkippedDuplicatePoRecord[]>([]);
   const [poDataUploaded, setPoDataUploaded] = useState(false);
   const [poFileName, setPoFileName] = useState<string>(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+  const poDedupeSummaryRef = useRef<VendorDedupeSummary | null>(null);
 
   const [vendorPreviewLimit, setVendorPreviewLimit] = useState<number>(50);
   const [poPreviewLimit, setPoPreviewLimit] = useState<number>(50);
@@ -497,6 +503,9 @@ export default function InitialSetupModal() {
   const isAiRunning = aiJob?.status === 'PENDING' || aiJob?.status === 'PROCESSING';
   // Historical PO dump is mandatory in Buyer vendor upload before proceeding to Step 4.
   const hasPoDump = poDataUploaded || poLineItems.length > 0;
+  const poSkippedDisplayCount = Math.max(poJob?.skippedRecords || 0, skippedDuplicatePoRows.length);
+  const isPoAllDuplicatesCard = poLineItems.length === 0 && poSkippedDisplayCount > 0;
+  const poDisplayFileName = poFileName || poJob?.fileName || 'PO_Purchase_Dump.xlsx';
 
   // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
   const isValidVendorMobile = (phone: string | undefined | null): boolean => {
@@ -717,8 +726,29 @@ export default function InitialSetupModal() {
             if (serverSkippedList.length > 0) {
               setSkippedDuplicateVendors((prev) => (prev.length > 0 ? prev : serverSkippedList));
             }
-          } else if (which === 'po') setPoJob(freshJob);
-          else setAiJob((prev) => ({ ...freshJob, fileName: freshJob.fileName || prev?.fileName || '' }));
+          } else if (which === 'po') {
+            const reconciledPo = reconcileVendorJobProgress(freshJob, poDedupeSummaryRef.current);
+            setPoJob(reconciledPo);
+            const serverSkippedPos = extractSkippedDuplicatePosFromJob(freshJob);
+            if (serverSkippedPos.length > 0) {
+              setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : serverSkippedPos));
+            }
+            if (
+              reconciledPo.status === 'COMPLETED' &&
+              reconciledPo.importedRecords === 0 &&
+              reconciledPo.skippedRecords > 0 &&
+              reconciledPo.failedRecords === 0
+            ) {
+              setPoLineItems([]);
+              setPoDataUploaded(false);
+              setPoUploadError(
+                formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+                  count: reconciledPo.skippedRecords,
+                  fileName: reconciledPo.fileName || poFileName,
+                })
+              );
+            }
+          } else setAiJob((prev) => ({ ...freshJob, fileName: freshJob.fileName || prev?.fileName || '' }));
         } catch (err) {
           logger.log('WARN', 'Could not refresh ingestion job progress', { error: err, jobType: which }, 'VENDOR_INGESTION');
         }
@@ -790,12 +820,17 @@ export default function InitialSetupModal() {
     setVendorFileName('');
     setVendorUploadError(null);
     setSkippedDuplicateVendors([]);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
 
     const initSession = async () => {
       try {
         const res = await fetch('/api/vendor-ingestion/session', { headers: authFetchHeaders() });
         if (!res.ok) return;
         const json = await res.json();
+        if (Array.isArray(json?.data?.existingPoRecords)) {
+          setExistingOrgPoRecords(json.data.existingPoRecords);
+        }
         let sess: VendorIngestionSession | null = json?.data?.session ?? null;
         if (!sess?.id) {
           const created = await fetch('/api/vendor-ingestion/session', {
@@ -921,88 +956,88 @@ export default function InitialSetupModal() {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array' });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-          if (!rawJson || rawJson.length === 0) {
-            const errMsg = 'The uploaded Vendor Master file has no readable data rows.';
-            setVendorUploadError(errMsg);
-            showToast('Empty File', errMsg, 'warning');
-            setIsParsingVendor(false);
-            setVendorJob(null);
-            return;
-          }
+        if (!rawJson || rawJson.length === 0) {
+          const errMsg = 'The uploaded Vendor Master file has no readable data rows.';
+          setVendorUploadError(errMsg);
+          showToast('Empty File', errMsg, 'warning');
+          setIsParsingVendor(false);
+          setVendorJob(null);
+          return;
+        }
 
-          const headerKeys = Object.keys(rawJson[0]);
-          const hasCompanyName = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['companyname', 'company', 'vendorname', 'vendor', 'suppliername', 'supplier', 'name', 'organization'].some(
-              (c) => clean === c || (clean.includes(c) && !clean.includes('code') && !clean.includes('mail') && !clean.includes('phone') && !clean.includes('contact'))
-            );
-          });
-          const hasEmail = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['email', 'emailid', 'emailaddress', 'mail', 'corporateemail', 'companyemail', 'vendoremail'].some((c) => clean.includes(c));
-          });
-          const hasPhone = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['phone', 'mobile', 'contactnumber', 'phonenumber', 'telephone', 'mobileno', 'contactno', 'cell', 'whatsapp'].some((c) => clean.includes(c));
-          });
-          const hasVendorCode = headerKeys.some((k) => {
-            const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
-            return ['vendorcode', 'suppliercode', 'vendorid', 'supplierid', 'vcode', 'vendorno', 'vndcode'].some((c) => clean.includes(c));
-          });
+        const headerKeys = Object.keys(rawJson[0]);
+        const hasCompanyName = headerKeys.some((k) => {
+          const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return ['companyname', 'company', 'vendorname', 'vendor', 'suppliername', 'supplier', 'name', 'organization'].some(
+            (c) => clean === c || (clean.includes(c) && !clean.includes('code') && !clean.includes('mail') && !clean.includes('phone') && !clean.includes('contact'))
+          );
+        });
+        const hasEmail = headerKeys.some((k) => {
+          const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return ['email', 'emailid', 'emailaddress', 'mail', 'corporateemail', 'companyemail', 'vendoremail'].some((c) => clean.includes(c));
+        });
+        const hasPhone = headerKeys.some((k) => {
+          const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return ['phone', 'mobile', 'contactnumber', 'phonenumber', 'telephone', 'mobileno', 'contactno', 'cell', 'whatsapp'].some((c) => clean.includes(c));
+        });
+        const hasVendorCode = headerKeys.some((k) => {
+          const clean = k.toLowerCase().replace(/[^a-z0-9]/g, '');
+          return ['vendorcode', 'suppliercode', 'vendorid', 'supplierid', 'vcode', 'vendorno', 'vndcode'].some((c) => clean.includes(c));
+        });
 
-          if (!hasCompanyName && !hasEmail && !hasPhone && !hasVendorCode) {
-            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
-            const errMsg = `Sheet headers do not match Vendor Master required fields. Expected: Company Name, Email ID, Mobile No. (Found: [${foundHeaders}]). Please download and use the official Vendor Master template.`;
-            setVendorUploadError(errMsg);
-            showToast('Invalid Sheet Headers', errMsg, 'warning');
-            setIsParsingVendor(false);
-            setVendorJob(null);
-            if (vendorFileInputRef.current) vendorFileInputRef.current.value = '';
-            return;
-          }
+        if (!hasCompanyName && !hasEmail && !hasPhone && !hasVendorCode) {
+          const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || 'None';
+          const errMsg = `Sheet headers do not match Vendor Master required fields. Expected: Company Name, Email ID, Mobile No. (Found: [${foundHeaders}]). Please download and use the official Vendor Master template.`;
+          setVendorUploadError(errMsg);
+          showToast('Invalid Sheet Headers', errMsg, 'warning');
+          setIsParsingVendor(false);
+          setVendorJob(null);
+          if (vendorFileInputRef.current) vendorFileInputRef.current.value = '';
+          return;
+        }
 
-          const vendorCodeAliases = [
-            'vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code',
-            'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no',
-            'vendor number', 'supplier number', 'vendor identifier'
-          ];
+        const vendorCodeAliases = [
+          'vendorcode', 'vendor code', 'vendor_code', 'suppliercode', 'supplier code',
+          'vendor id', 'supplier id', 'vcode', 'vnd code', 'vendorno', 'vendor no',
+          'vendor number', 'supplier number', 'vendor identifier'
+        ];
 
-          const getRowVal = (row: any, possibleKeys: string[], excludeSubstrings: string[] = []): string => {
-            const keys = Object.keys(row);
-            // Pass 1: Exact matches (after stripping non-alphanumeric)
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              const matchedKey = keys.find((k) => {
-                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                return kClean === pkClean;
-              });
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
-              }
+        const getRowVal = (row: any, possibleKeys: string[], excludeSubstrings: string[] = []): string => {
+          const keys = Object.keys(row);
+          // Pass 1: Exact matches (after stripping non-alphanumeric)
+          for (const pk of possibleKeys) {
+            const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+            const matchedKey = keys.find((k) => {
+              const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+              if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+              return kClean === pkClean;
+            });
+            if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+              return String(row[matchedKey]).trim();
             }
-            // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars)
-            for (const pk of possibleKeys) {
-              const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-              if (!pkClean || pkClean.length < 4) continue;
-              const matchedKey = keys.find((k) => {
-                const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                return kClean.includes(pkClean);
-              });
-              if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                return String(row[matchedKey]).trim();
-              }
+          }
+          // Pass 2: Fuzzy matches (only for keys with 4+ alphanumeric chars)
+          for (const pk of possibleKeys) {
+            const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+            if (!pkClean || pkClean.length < 4) continue;
+            const matchedKey = keys.find((k) => {
+              const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+              if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+              return kClean.includes(pkClean);
+            });
+            if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+              return String(row[matchedKey]).trim();
             }
-            return '';
-          };
+          }
+          return '';
+        };
 
-          // Collect all explicitly provided vendor codes to avoid overwriting or duplicate collisions
-          const explicitlyProvidedCodes = new Set<string>();
+          // Collect all explicitly provided vendor codes (including existing buyer vendors) to avoid overwriting or duplicate collisions
+          const explicitlyProvidedCodes = collectExistingBuyerVendorCodes(buyerVendors);
           rawJson.forEach((row) => {
             let code = getRowVal(row, vendorCodeAliases, ['email', 'mail', 'phone', 'contact', 'gst']);
             if (code && (code.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(code))) {
@@ -1013,205 +1048,205 @@ export default function InitialSetupModal() {
             }
           });
 
-          // Unique sequential code generator: 1, 2, 3, etc. skipping any explicitly provided codes
-          let nextSequentialVendorCode = 1;
-          const getNextUniqueSequentialVendorCode = (): string => {
-            while (explicitlyProvidedCodes.has(String(nextSequentialVendorCode).toLowerCase())) {
-              nextSequentialVendorCode++;
-            }
-            const generated = String(nextSequentialVendorCode);
-            explicitlyProvidedCodes.add(generated.toLowerCase());
+        // Unique sequential code generator: 1, 2, 3, etc. skipping any explicitly provided codes
+        let nextSequentialVendorCode = 1;
+        const getNextUniqueSequentialVendorCode = (): string => {
+          while (explicitlyProvidedCodes.has(String(nextSequentialVendorCode).toLowerCase())) {
             nextSequentialVendorCode++;
-            return generated;
-          };
+          }
+          const generated = String(nextSequentialVendorCode);
+          explicitlyProvidedCodes.add(generated.toLowerCase());
+          nextSequentialVendorCode++;
+          return generated;
+        };
 
-          const parsedCandidatePairs: VendorDuplicatePartitionCandidate[] = rawJson.map((row, idx): VendorDuplicatePartitionCandidate => {
-            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string =>
-              getRowVal(row, possibleKeys, excludeSubstrings);
+        const parsedCandidatePairs: VendorDuplicatePartitionCandidate[] = rawJson.map((row, idx): VendorDuplicatePartitionCandidate => {
+          const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string =>
+            getRowVal(row, possibleKeys, excludeSubstrings);
 
-            let rawVendorCode = getVal(
-              vendorCodeAliases,
-              ['email', 'mail', 'phone', 'contact', 'gst']
-            );
-            // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
-            if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
-              rawVendorCode = '';
+          let rawVendorCode = getVal(
+            vendorCodeAliases,
+            ['email', 'mail', 'phone', 'contact', 'gst']
+          );
+          // If the resolved vendorCode is an email address, discard it so it doesn't take email as vendor code
+          if (rawVendorCode && (rawVendorCode.includes('@') || /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(rawVendorCode))) {
+            rawVendorCode = '';
+          }
+          const explicitVendorCode = rawVendorCode.trim();
+          // If a vendor code is provided, retain and use that code.
+          // If no vendor code is provided, automatically generate sequential vendor codes: 1, 2, 3, etc.
+          const vendorCode = explicitVendorCode ? explicitVendorCode : getNextUniqueSequentialVendorCode();
+          const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']);
+          const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']);
+          const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']);
+          const rawPhone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
+          const parsedPhone = parseVendorMobile(rawPhone);
+          // Accept mobile numbers with or without +91, validate 10 digits after country code, and store with country code without duplication
+          const phone = parsedPhone.isValid && parsedPhone.nationalNumber
+            ? `+91 ${parsedPhone.nationalNumber}`
+            : rawPhone;
+          const explicitAddress = getVal(['address', 'location', 'plant location', 'street', 'office address', 'plant']);
+          const explicitCity = getVal(['city', 'town', 'district']);
+          const explicitState = getVal(['state', 'province', 'region']);
+          const explicitPincode = getVal(['pincode', 'pin code', 'pin', 'zip', 'zipcode', 'zip code', 'postal code']);
+          const resolvedLoc = resolveVendorLocationFields({
+            address: explicitAddress || explicitCity || explicitState || explicitPincode,
+            city: explicitCity,
+            state: explicitState,
+            pincode: explicitPincode,
+          });
+          const address = resolvedLoc.location;
+          const city = resolvedLoc.city;
+          const state = resolvedLoc.state;
+          const pincode = resolvedLoc.pincode;
+          const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
+          const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
+          let vendorRatingScore: number | undefined = undefined;
+          if (ratingRaw && !isNaN(Number(ratingRaw))) {
+            const num = Number(ratingRaw);
+            if (num > 0 && num <= 5) {
+              vendorRatingScore = Math.round(num * 20);
+            } else {
+              vendorRatingScore = Math.min(100, Math.max(0, Math.round(num)));
             }
-            const explicitVendorCode = rawVendorCode.trim();
-            // If a vendor code is provided, retain and use that code.
-            // If no vendor code is provided, automatically generate sequential vendor codes: 1, 2, 3, etc.
-            const vendorCode = explicitVendorCode ? explicitVendorCode : getNextUniqueSequentialVendorCode();
-            const companyName = getVal(['companyname', 'company name', 'vendor name', 'supplier name', 'supplier', 'company', 'organization', 'vendor', 'name'], ['email', 'mail', 'phone', 'contactperson', 'code']);
-            const contactPerson = getVal(['contactperson', 'contact person', 'contact person name', 'representative', 'person name', 'contact name', 'person', 'poc'], ['email', 'mail', 'phone', 'mobile']);
-            const email = getVal(['email', 'email id', 'email_id', 'emailid', 'email address', 'emailaddress', 'mail', 'corporate email', 'company email', 'vendor email']);
-            const rawPhone = getVal(['phone', 'mobile', 'contact number', 'phone number', 'telephone', 'mobile number', 'contact no', 'phone no', 'mobile no', 'cell', 'whatsapp'], ['email', 'mail', 'person', 'contactperson']);
-            const parsedPhone = parseVendorMobile(rawPhone);
-            // Accept mobile numbers with or without +91, validate 10 digits after country code, and store with country code without duplication
-            const phone = parsedPhone.isValid && parsedPhone.nationalNumber
-              ? `+91 ${parsedPhone.nationalNumber}`
-              : rawPhone;
-            const explicitAddress = getVal(['address', 'location', 'plant location', 'street', 'office address', 'plant']);
-            const explicitCity = getVal(['city', 'town', 'district']);
-            const explicitState = getVal(['state', 'province', 'region']);
-            const explicitPincode = getVal(['pincode', 'pin code', 'pin', 'zip', 'zipcode', 'zip code', 'postal code']);
-            const resolvedLoc = resolveVendorLocationFields({
-              address: explicitAddress || explicitCity || explicitState || explicitPincode,
-              city: explicitCity,
-              state: explicitState,
-              pincode: explicitPincode,
-            });
-            const address = resolvedLoc.location;
-            const city = resolvedLoc.city;
-            const state = resolvedLoc.state;
-            const pincode = resolvedLoc.pincode;
-            const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
-            const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
-            let vendorRatingScore: number | undefined = undefined;
-            if (ratingRaw && !isNaN(Number(ratingRaw))) {
-              const num = Number(ratingRaw);
-              if (num > 0 && num <= 5) {
-                vendorRatingScore = Math.round(num * 20);
-              } else {
-                vendorRatingScore = Math.min(100, Math.max(0, Math.round(num)));
-              }
-            }
-
-            return {
-              rowNumber: idx + 2,
-              explicitVendorCode,
-              vendor: {
-                id: `vm-upload-${Date.now()}-${idx}`,
-                vendorCode,
-                companyName,
-                contactPerson,
-                email,
-                phone,
-                address,
-                ...(city ? { city } : {}),
-                ...(state ? { state } : {}),
-                ...(pincode ? { pincode } : {}),
-                gstNumber,
-                vendorRatingScore,
-              },
-            };
-          }).filter((entry) => Boolean(
-            entry.vendor.companyName?.trim() ||
-            entry.vendor.email?.trim() ||
-            entry.vendor.phone?.trim() ||
-            entry.vendor.gstNumber?.trim() ||
-            entry.vendor.contactPerson?.trim()
-          ));
-
-          if (parsedCandidatePairs.length === 0) {
-            const errMsg = 'The uploaded Vendor Master file has no recognizable supplier rows. Please verify your file.';
-            setVendorUploadError(errMsg);
-            showToast('Invalid Vendor File', errMsg, 'warning');
-            setIsParsingVendor(false);
-            setVendorJob(null);
-            if (vendorFileInputRef.current) vendorFileInputRef.current.value = '';
-            return;
           }
 
-          const { uniqueRecords: parsedVendors, skippedDuplicates } = partitionDuplicateVendorMasterRows(
-            parsedCandidatePairs,
-            buyerVendors
-          );
-          const totalCandidateCount = parsedCandidatePairs.length;
-          const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+          return {
+            rowNumber: idx + 2,
+            explicitVendorCode,
+            vendor: {
+              id: `vm-upload-${Date.now()}-${idx}`,
+              vendorCode,
+              companyName,
+              contactPerson,
+              email,
+              phone,
+              address,
+              ...(city ? { city } : {}),
+              ...(state ? { state } : {}),
+              ...(pincode ? { pincode } : {}),
+              gstNumber,
+              vendorRatingScore,
+            },
+          };
+        }).filter((entry) => Boolean(
+          entry.vendor.companyName?.trim() ||
+          entry.vendor.email?.trim() ||
+          entry.vendor.phone?.trim() ||
+          entry.vendor.gstNumber?.trim() ||
+          entry.vendor.contactPerson?.trim()
+        ));
 
-          vendorDedupeSummaryRef.current = {
+        if (parsedCandidatePairs.length === 0) {
+          const errMsg = 'The uploaded Vendor Master file has no recognizable supplier rows. Please verify your file.';
+          setVendorUploadError(errMsg);
+          showToast('Invalid Vendor File', errMsg, 'warning');
+          setIsParsingVendor(false);
+          setVendorJob(null);
+          if (vendorFileInputRef.current) vendorFileInputRef.current.value = '';
+          return;
+        }
+
+        const { uniqueRecords: parsedVendors, skippedDuplicates } = partitionDuplicateVendorMasterRows(
+          parsedCandidatePairs,
+          buyerVendors
+        );
+        const totalCandidateCount = parsedCandidatePairs.length;
+        const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+
+        vendorDedupeSummaryRef.current = {
+          fileName: file.name,
+          totalCount: totalCandidateCount,
+          skippedCount: skippedDuplicates.length,
+          isExcelOnly: !isCsvOrText,
+          allSkippedClientSide: parsedVendors.length === 0 && skippedDuplicates.length > 0,
+        };
+        setSkippedDuplicateVendors(skippedDuplicates);
+
+        if (parsedVendors.length === 0 && skippedDuplicates.length > 0) {
+          const allDupErr = formatString(vmStrings.allDuplicatesError, {
+            count: skippedDuplicates.length,
             fileName: file.name,
-            totalCount: totalCandidateCount,
-            skippedCount: skippedDuplicates.length,
-            isExcelOnly: !isCsvOrText,
-            allSkippedClientSide: parsedVendors.length === 0 && skippedDuplicates.length > 0,
-          };
-          setSkippedDuplicateVendors(skippedDuplicates);
-
-          if (parsedVendors.length === 0 && skippedDuplicates.length > 0) {
-            const allDupErr = formatString(vmStrings.allDuplicatesError, {
-              count: skippedDuplicates.length,
-              fileName: file.name,
-            });
-            setStoredVendors([]);
-            setVendorMasterUploaded(false);
-            setVendorFileName(file.name);
-            setIsEditingVendorTable(false);
-            setVendorUploadError(allDupErr);
-            setVendorJob({
-              id: `job-${Date.now()}`,
-              jobType: 'VENDOR_MASTER',
-              fileName: file.name,
-              status: 'COMPLETED',
-              totalRecords: totalCandidateCount,
-              processedRecords: totalCandidateCount,
-              importedRecords: 0,
-              skippedRecords: skippedDuplicates.length,
-              failedRecords: 0,
-            });
-            try {
-              const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-              const historyEntry = {
-                id: `up-${Date.now()}`,
-                fileName: file.name,
-                timestamp: new Date().toLocaleString(),
-                total: totalCandidateCount,
-                imported: 0,
-                duplicates: skippedDuplicates.length,
-                failed: 0,
-                ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
-                ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
-                records: [],
-              };
-              const updatedHistory = [
-                historyEntry,
-                ...existingHistory.filter((x: { fileName?: string }) => x.fileName !== file.name),
-              ].slice(0, 30);
-              localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
-            } catch {}
-            showToast(
-              vmStrings.duplicatesWarningToastTitle,
-              formatString(vmStrings.allDuplicatesToastBody, {
-                skipped: skippedDuplicates.length.toLocaleString('en-IN'),
-                fileName: file.name,
-              }),
-              'warning'
-            );
-            return;
-          }
-
-          const invalidMobiles = parsedVendors.filter(
-            (v) => v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)
-          );
-          if (invalidMobiles.length > 0) {
-            const sample = invalidMobiles[0].phone;
-            const errMsg = `${invalidMobiles.length} vendor record(s) contain invalid or alphanumeric mobile numbers (e.g. "${sample}"). Mobile numbers must be numeric values with exactly 10 digits. Please click 'Edit Data' to correct them.`;
-            setVendorUploadError(errMsg);
-            showToast('Invalid Mobile Numbers', errMsg, 'warning');
-          } else {
-            setVendorUploadError(null);
-          }
-
-          setStoredVendors(parsedVendors);
-          setVendorMasterUploaded(true);
+          });
+          setStoredVendors([]);
+          setVendorMasterUploaded(false);
           setVendorFileName(file.name);
           setIsEditingVendorTable(false);
-
-          const localFallbackJob: IngestionJobState = {
+          setVendorUploadError(allDupErr);
+          setVendorJob({
             id: `job-${Date.now()}`,
             jobType: 'VENDOR_MASTER',
             fileName: file.name,
-            status: parsedVendors.length > 0 ? 'COMPLETED' : 'FAILED',
-            uploadedRecords: totalCandidateCount,
-            totalRecords: parsedVendors.length,
-            processedRecords: parsedVendors.length,
-            importedRecords: parsedVendors.length,
+            status: 'COMPLETED',
+            totalRecords: totalCandidateCount,
+            processedRecords: totalCandidateCount,
+            importedRecords: 0,
             skippedRecords: skippedDuplicates.length,
             failedRecords: 0,
-            ...(parsedVendors.length === 0
-              ? { errorMessage: UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason }
-              : {}),
-          };
+          });
+          try {
+            const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+            const historyEntry = {
+              id: `up-${Date.now()}`,
+              fileName: file.name,
+              timestamp: new Date().toLocaleString(),
+              total: totalCandidateCount,
+              imported: 0,
+              duplicates: skippedDuplicates.length,
+              failed: 0,
+              ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+              ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
+              records: [],
+            };
+            const updatedHistory = [
+              historyEntry,
+              ...existingHistory.filter((x: { fileName?: string }) => x.fileName !== file.name),
+            ].slice(0, 30);
+            localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
+          } catch {}
+          showToast(
+            vmStrings.duplicatesWarningToastTitle,
+            formatString(vmStrings.allDuplicatesToastBody, {
+              skipped: skippedDuplicates.length.toLocaleString('en-IN'),
+              fileName: file.name,
+            }),
+            'warning'
+          );
+          return;
+        }
+
+        const invalidMobiles = parsedVendors.filter(
+          (v) => v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)
+        );
+        if (invalidMobiles.length > 0) {
+          const sample = invalidMobiles[0].phone;
+          const errMsg = `${invalidMobiles.length} vendor record(s) contain invalid or alphanumeric mobile numbers (e.g. "${sample}"). Mobile numbers must be numeric values with exactly 10 digits. Please click 'Edit Data' to correct them.`;
+          setVendorUploadError(errMsg);
+          showToast('Invalid Mobile Numbers', errMsg, 'warning');
+        } else {
+          setVendorUploadError(null);
+        }
+
+        setStoredVendors(parsedVendors);
+        setVendorMasterUploaded(true);
+        setVendorFileName(file.name);
+        setIsEditingVendorTable(false);
+
+        const localFallbackJob: IngestionJobState = {
+          id: `job-${Date.now()}`,
+          jobType: 'VENDOR_MASTER',
+          fileName: file.name,
+          status: parsedVendors.length > 0 ? 'COMPLETED' : 'FAILED',
+          uploadedRecords: totalCandidateCount,
+          totalRecords: parsedVendors.length,
+          processedRecords: parsedVendors.length,
+          importedRecords: parsedVendors.length,
+          skippedRecords: skippedDuplicates.length,
+          failedRecords: 0,
+          ...(parsedVendors.length === 0
+            ? { errorMessage: UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason }
+            : {}),
+        };
 
           if (sessionId && !isCsvOrText) {
             try {
@@ -1250,74 +1285,74 @@ export default function InitialSetupModal() {
             setVendorJob(localFallbackJob);
           }
 
-          try {
-            const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-            const historyEntry = {
-              id: `up-${Date.now()}`,
+        try {
+          const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+          const historyEntry = {
+            id: `up-${Date.now()}`,
+            fileName: file.name,
+            timestamp: new Date().toLocaleString(),
+            total: totalCandidateCount,
+            imported: parsedVendors.length,
+            duplicates: skippedDuplicates.length,
+            failed: 0,
+            ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+            ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
+            records: parsedVendors.slice(0, 100).map((v) => {
+              const loc = resolveVendorLocationFields({
+                address: v.address,
+                city: v.city,
+                state: v.state,
+                pincode: v.pincode,
+              });
+              return {
+                vendorCode: v.vendorCode,
+                name: v.companyName,
+                contactPerson: v.contactPerson,
+                email: v.email,
+                phone: v.phone,
+                gstin: v.gstNumber,
+                category: '',
+                address: loc.address || v.address,
+                city: loc.city,
+                ...(loc.state ? { state: loc.state } : {}),
+                ...(loc.pincode ? { pincode: loc.pincode } : {}),
+                rating: v.vendorRatingScore,
+              };
+            }),
+          };
+          const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
+          localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
+        } catch { }
+
+        if (skippedDuplicates.length > 0) {
+          showToast(
+            vmStrings.duplicatesWarningToastTitle,
+            formatString(vmStrings.duplicatesWarningToastBody, {
+              imported: parsedVendors.length.toLocaleString('en-IN'),
+              skipped: skippedDuplicates.length.toLocaleString('en-IN'),
               fileName: file.name,
-              timestamp: new Date().toLocaleString(),
-              total: totalCandidateCount,
-              imported: parsedVendors.length,
-              duplicates: skippedDuplicates.length,
-              failed: 0,
-              ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
-              ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
-              records: parsedVendors.slice(0, 100).map((v) => {
-                const loc = resolveVendorLocationFields({
-                  address: v.address,
-                  city: v.city,
-                  state: v.state,
-                  pincode: v.pincode,
-                });
-                return {
-                  vendorCode: v.vendorCode,
-                  name: v.companyName,
-                  contactPerson: v.contactPerson,
-                  email: v.email,
-                  phone: v.phone,
-                  gstin: v.gstNumber,
-                  category: '',
-                  address: loc.address || v.address,
-                  city: loc.city,
-                  ...(loc.state ? { state: loc.state } : {}),
-                  ...(loc.pincode ? { pincode: loc.pincode } : {}),
-                  rating: v.vendorRatingScore,
-                };
-              }),
-            };
-            const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
-            localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
-          } catch {}
-
-          if (skippedDuplicates.length > 0) {
-            showToast(
-              vmStrings.duplicatesWarningToastTitle,
-              formatString(vmStrings.duplicatesWarningToastBody, {
-                imported: parsedVendors.length.toLocaleString('en-IN'),
-                skipped: skippedDuplicates.length.toLocaleString('en-IN'),
-                fileName: file.name,
-              }),
-              'warning'
-            );
-          } else {
-            showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
-          }
-        } catch (err: any) {
-          logger.log('ERROR', 'Vendor master file parsing failed', { error: err }, 'VENDOR_INGESTION');
-          showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
-          setVendorJob(null);
-        } finally {
-          setIsParsingVendor(false);
+            }),
+            'warning'
+          );
+        } else {
+          showToast('Vendor Master Uploaded', `Loaded ${parsedVendors.length.toLocaleString('en-IN')} vendors from ${file.name}.`, 'success');
         }
-      };
-
-      reader.onerror = () => {
-        showToast('File Read Error', 'Failed to read file from disk.', 'warning');
-        setIsParsingVendor(false);
+      } catch (err: any) {
+        logger.log('ERROR', 'Vendor master file parsing failed', { error: err }, 'VENDOR_INGESTION');
+        showToast('Parsing Error', `Could not parse file: ${err.message || 'Unknown format'}`, 'warning');
         setVendorJob(null);
-      };
+      } finally {
+        setIsParsingVendor(false);
+      }
+    };
 
-      reader.readAsArrayBuffer(file);
+    reader.onerror = () => {
+      showToast('File Read Error', 'Failed to read file from disk.', 'warning');
+      setIsParsingVendor(false);
+      setVendorJob(null);
+    };
+
+    reader.readAsArrayBuffer(file);
   };
 
   // Real File Upload & SheetJS/CSV Parsing for File 2: PO Purchase Dump
@@ -1330,11 +1365,13 @@ export default function InitialSetupModal() {
     }
 
     setPoFileName(file.name);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
     setIsParsingPo(true);
 
     // Set initial active job state
     setPoJob({
-      id: `job-po-${Date.now()}`,
+      id: `local-po-${Date.now()}`,
       jobType: 'PO_DUMP',
       fileName: file.name,
       status: 'PROCESSING',
@@ -1369,7 +1406,16 @@ export default function InitialSetupModal() {
           if (res.ok) {
             const json = await res.json();
             if (json?.data?.job) {
-              setPoJob(json.data.job);
+              const streamJob: IngestionJobState = json.data.job;
+              const summary = poDedupeSummaryRef.current;
+              if (summary?.fileName === file.name && summary.allSkippedClientSide && streamJob.status !== 'COMPLETED') {
+                return;
+              }
+              setPoJob(reconcileVendorJobProgress(streamJob, summary));
+              const streamSkippedPos = extractSkippedDuplicatePosFromJob(streamJob);
+              if (streamSkippedPos.length > 0) {
+                setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : streamSkippedPos));
+              }
               showToast('Ingestion Started', `Started background streaming ingestion for PO dump ${file.name}. Progress is tracked live.`, 'info');
             }
           } else {
@@ -1393,40 +1439,41 @@ export default function InitialSetupModal() {
       try {
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: 'array', cellDates: true });
-          const firstSheetName = workbook.SheetNames[0];
-          const worksheet = workbook.Sheets[firstSheetName];
-          const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
+        const firstSheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[firstSheetName];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { defval: '' });
 
-          if (!rawJson || rawJson.length === 0) {
-            const errMsg = 'The uploaded PO dump file has no readable data rows.';
-            setPoUploadError(errMsg);
-            showToast('Empty PO File', errMsg, 'warning');
-            setIsParsingPo(false);
-            setPoJob(null);
-            return;
-          }
+        if (!rawJson || rawJson.length === 0) {
+          const errMsg = 'The uploaded PO dump file has no readable data rows.';
+          setPoUploadError(errMsg);
+          showToast('Empty PO File', errMsg, 'warning');
+          setIsParsingPo(false);
+          setPoJob(null);
+          return;
+        }
 
-          const headerKeys = Object.keys(rawJson[0]);
-          // Only two columns are mandatory: Vendor/Supplier Name and Item Description/Short Text/Material Description.
-          // Specifications and other PO columns are optional.
-          const missingHeaders = findMissingPoDumpHeaders(headerKeys);
+        const headerKeys = Object.keys(rawJson[0]);
+        // Only two columns are mandatory: Vendor/Supplier Name and Item Description/Short Text/Material Description.
+        // Specifications and other PO columns are optional.
+        const missingHeaders = findMissingPoDumpHeaders(headerKeys);
 
-          if (missingHeaders.length > 0) {
-            const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || UI_STRINGS.vendorPoIngestion.poDump.noHeadersFound;
-            const errMsg = formatString(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate, {
-              columns: missingHeaders.join(', '),
-              found: foundHeaders,
-            });
-            setPoUploadError(errMsg);
-            showToast(UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle, errMsg, 'warning');
-            setIsParsingPo(false);
-            setPoJob(null);
-            if (poFileInputRef.current) poFileInputRef.current.value = '';
-            return;
-          }
+        if (missingHeaders.length > 0) {
+          const foundHeaders = headerKeys.filter(Boolean).slice(0, 6).join(', ') || UI_STRINGS.vendorPoIngestion.poDump.noHeadersFound;
+          const errMsg = formatString(UI_STRINGS.vendorPoIngestion.poDump.missingColumnsTemplate, {
+            columns: missingHeaders.join(', '),
+            found: foundHeaders,
+          });
+          setPoUploadError(errMsg);
+          showToast(UI_STRINGS.vendorPoIngestion.poDump.invalidHeadersTitle, errMsg, 'warning');
+          setIsParsingPo(false);
+          setPoJob(null);
+          if (poFileInputRef.current) poFileInputRef.current.value = '';
+          return;
+        }
 
-          const invalidPoRows: string[] = [];
-          const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
+        const invalidPoRows: string[] = [];
+        const parsedPoCandidates: PoDuplicatePartitionCandidate[] = rawJson
+          .map((row, idx): PoDuplicatePartitionCandidate => {
             const keys = Object.keys(row);
             const getRawVal = (possibleKeys: string[], excludeSubstrings: string[] = []): unknown => {
               for (const pk of possibleKeys) {
@@ -1490,11 +1537,11 @@ export default function InitialSetupModal() {
               'item',
             ]);
             const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
-            
+
             const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
             // 0 means no usable quantity. The row is rejected below rather than set to 1.
             const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
-            
+
             const unit = getVal(['unit', 'uom', 'unit of measure', 'units']);
 
             const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
@@ -1525,133 +1572,241 @@ export default function InitialSetupModal() {
             }
 
             return {
-              id: `po-upload-${Date.now()}-${idx}`,
-              poNumber,
-              poDate,
-              vendorName: vendorIdentifier,
-              vendorIdentifier,
-              itemName,
-              itemDescription: itemName,
-              specs,
-              specification: specs,
-              quantity,
-              unit,
-              uom: unit,
-              unitPrice,
-              totalSpend,
-              spend: totalSpend,
-              department: department || '',
+              rowNumber: idx + 2,
+              record: {
+                id: `po-upload-${Date.now()}-${idx}`,
+                poNumber,
+                poDate,
+                vendorName: vendorIdentifier,
+                vendorIdentifier,
+                itemName,
+                itemDescription: itemName,
+                specs,
+                specification: specs,
+                quantity,
+                unit,
+                uom: unit,
+                unitPrice,
+                totalSpend,
+                spend: totalSpend,
+                department: department || '',
+              },
             };
           })
-            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
-            .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
+          .filter((entry) =>
+            Boolean(
+              entry.record.vendorIdentifier?.trim() ||
+              entry.record.vendorName?.trim() ||
+              entry.record.itemName?.trim() ||
+              entry.record.itemDescription?.trim() ||
+              entry.record.department?.trim()
+            )
+          );
 
-          // Any incomplete row rejects the whole file, so no partial PO dump is stored.
-          if (invalidPoRows.length > 0) {
-            const errMsg = `Nothing was imported. Fix these rows and upload the PO dump again: ${invalidPoRows.join('; ')}.`;
-            setPoUploadError(errMsg);
-            showToast('Invalid PO File', errMsg, 'warning');
-            setIsParsingPo(false);
-            setPoJob(null);
-            if (poFileInputRef.current) poFileInputRef.current.value = '';
-            return;
-          }
+        // Any incomplete row rejects the whole file, so no partial PO dump is stored.
+        if (invalidPoRows.length > 0) {
+          const errMsg = `Nothing was imported. Fix these rows and upload the PO dump again: ${invalidPoRows.join('; ')}.`;
+          setPoUploadError(errMsg);
+          showToast('Invalid PO File', errMsg, 'warning');
+          setIsParsingPo(false);
+          setPoJob(null);
+          if (poFileInputRef.current) poFileInputRef.current.value = '';
+          return;
+        }
 
-          if (parsedPOs.length === 0) {
-            const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
-            setPoUploadError(errMsg);
-            showToast('Invalid PO File', errMsg, 'warning');
-            setIsParsingPo(false);
-            setPoJob(null);
-            if (poFileInputRef.current) poFileInputRef.current.value = '';
-            return;
-          }
+        if (parsedPoCandidates.length === 0) {
+          const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
+          setPoUploadError(errMsg);
+          showToast('Invalid PO File', errMsg, 'warning');
+          setIsParsingPo(false);
+          setPoJob(null);
+          if (poFileInputRef.current) poFileInputRef.current.value = '';
+          return;
+        }
 
-          setPoUploadError(null);
-          setPoLineItems(parsedPOs);
-          setPoDataUploaded(true);
-          // A new dump replaces the PO history that an earlier AI result was built from.
+        const { uniqueRecords: uniquePoRows, skippedDuplicates: skippedPoDuplicates } = partitionDuplicatePoRows(
+          parsedPoCandidates,
+          existingOrgPoRecords
+        );
+        const parsedPOs = [...uniquePoRows].sort(
+          (a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime()
+        );
+        const totalPoCandidateCount = parsedPoCandidates.length;
+        const poStrings = UI_STRINGS.vendorPoIngestion.poDump;
+
+        poDedupeSummaryRef.current = {
+          fileName: file.name,
+          totalCount: totalPoCandidateCount,
+          skippedCount: skippedPoDuplicates.length,
+          isExcelOnly: !isCsvOrText,
+          allSkippedClientSide: parsedPOs.length === 0 && skippedPoDuplicates.length > 0,
+        };
+        setSkippedDuplicatePoRows(skippedPoDuplicates);
+
+        if (parsedPOs.length === 0 && skippedPoDuplicates.length > 0) {
+          const allDupErr = formatString(poStrings.allDuplicatesError, {
+            count: skippedPoDuplicates.length,
+            fileName: file.name,
+          });
+          logger.log(
+            'WARN',
+            'Rejected PO dump upload because all records were duplicates',
+            { fileName: file.name, skippedCount: skippedPoDuplicates.length },
+            'PURCHASE_ORDER_INGESTION'
+          );
+          setPoLineItems([]);
+          setPoDataUploaded(false);
+          setPoFileName(file.name);
           setApiJoinedVendors(null);
           setAiJob(null);
+          setPoUploadError(allDupErr);
+          setPoJob({
+            id: `job-po-${Date.now()}`,
+            jobType: 'PO_DUMP',
+            fileName: file.name,
+            status: 'COMPLETED',
+            uploadedRecords: totalPoCandidateCount,
+            totalRecords: 0,
+            processedRecords: 0,
+            importedRecords: 0,
+            skippedRecords: skippedPoDuplicates.length,
+            failedRecords: 0,
+          });
+          showToast(
+            poStrings.duplicatesWarningToastTitle,
+            formatString(poStrings.allDuplicatesToastBody, {
+              skipped: skippedPoDuplicates.length.toLocaleString('en-IN'),
+              fileName: file.name,
+            }),
+            'warning'
+          );
+          return;
+        }
 
-          if (sessionId && !isCsvOrText) {
-            try {
-              const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
-                method: 'POST',
-                headers: authFetchHeaders(),
-                body: JSON.stringify({
-                  rows: parsedPOs,
-                  fileName: file.name,
-                  jobType: 'PO_DUMP',
-                }),
-              });
-              const jobJson = await jobRes.json().catch(() => ({}));
-              const { jobState, failureMessage } = buildStartJobStateFromResponse({
-                jobType: 'PO_DUMP',
+        setPoUploadError(null);
+        setPoLineItems(parsedPOs);
+        setPoDataUploaded(true);
+        // A new dump replaces the PO history that an earlier AI result was built from.
+        setApiJoinedVendors(null);
+        setAiJob(null);
+
+        const localPoFallbackJob: IngestionJobState = {
+          id: `local-po-${Date.now()}`,
+          jobType: 'PO_DUMP',
+          fileName: file.name,
+          status: 'COMPLETED',
+          uploadedRecords: totalPoCandidateCount,
+          totalRecords: parsedPOs.length,
+          processedRecords: parsedPOs.length,
+          importedRecords: parsedPOs.length,
+          skippedRecords: skippedPoDuplicates.length,
+          failedRecords: 0,
+        };
+
+        let effectiveSkippedCount = skippedPoDuplicates.length;
+        if (sessionId && !isCsvOrText) {
+          try {
+            const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
+              method: 'POST',
+              headers: authFetchHeaders(),
+              body: JSON.stringify({
+                rows: parsedPOs,
                 fileName: file.name,
-                rawTotal: parsedPOs.length,
-                uniqueCount: parsedPOs.length,
-                skippedDuplicates: 0,
-                ok: jobRes.ok,
-                payload: jobJson,
-              });
-              setPoJob(jobState);
-              if (failureMessage) {
-                showToast(
-                  UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed,
-                  failureMessage,
-                  'warning'
-                );
-              }
-            } catch (e) {
-              logger.log('WARN', 'Purchase order background job could not start; local parsing fallback will be used', { error: e }, 'PURCHASE_ORDER_INGESTION');
-              setPoJob({
-                id: `job-po-${Date.now()}`,
                 jobType: 'PO_DUMP',
-                fileName: file.name,
-                status: 'COMPLETED',
-                totalRecords: parsedPOs.length,
-                processedRecords: parsedPOs.length,
-                importedRecords: parsedPOs.length,
-                skippedRecords: 0,
-                failedRecords: 0,
-              });
-            }
-          } else {
-            setPoJob({
-              id: `job-po-${Date.now()}`,
+              }),
+            });
+            const jobJson = await jobRes.json().catch(() => ({}));
+            const { jobState, failureMessage } = buildStartJobStateFromResponse({
               jobType: 'PO_DUMP',
               fileName: file.name,
-              status: 'COMPLETED',
-              totalRecords: parsedPOs.length,
-              processedRecords: parsedPOs.length,
-              importedRecords: parsedPOs.length,
-              skippedRecords: 0,
-              failedRecords: 0,
+              rawTotal: totalPoCandidateCount,
+              uniqueCount: parsedPOs.length,
+              skippedDuplicates: skippedPoDuplicates.length,
+              ok: jobRes.ok,
+              payload: jobJson,
             });
+            setPoJob(jobState);
+            const serverSkippedPos = extractSkippedDuplicatePosFromJob(jobState);
+            if (serverSkippedPos.length > 0) {
+              setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : serverSkippedPos));
+            }
+            effectiveSkippedCount = Math.max(jobState.skippedRecords || 0, skippedPoDuplicates.length);
+            if (
+              jobState.status === 'COMPLETED' &&
+              jobState.importedRecords === 0 &&
+              jobState.skippedRecords > 0 &&
+              jobState.failedRecords === 0
+            ) {
+              const serverAllDupErr = formatString(poStrings.allDuplicatesError, {
+                count: jobState.skippedRecords,
+                fileName: file.name,
+              });
+              setPoLineItems([]);
+              setPoDataUploaded(false);
+              setPoUploadError(serverAllDupErr);
+              showToast(
+                poStrings.duplicatesWarningToastTitle,
+                formatString(poStrings.allDuplicatesToastBody, {
+                  skipped: jobState.skippedRecords.toLocaleString('en-IN'),
+                  fileName: file.name,
+                }),
+                'warning'
+              );
+              return;
+            }
+            if (failureMessage) {
+              showToast(
+                UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed,
+                failureMessage,
+                'warning'
+              );
+            }
+          } catch (e) {
+            logger.log('WARN', 'Purchase order background job could not start; local parsing fallback will be used', { error: e }, 'PURCHASE_ORDER_INGESTION');
+            setPoJob(localPoFallbackJob);
           }
-
-          showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
-        } catch (err: any) {
-          logger.log('ERROR', 'Purchase order dump parsing failed', { error: err }, 'PURCHASE_ORDER_INGESTION');
-          const errMsg = `Could not parse PO file: ${err.message || 'Unknown format'}`;
-          setPoUploadError(errMsg);
-          showToast('Parsing Error', errMsg, 'warning');
-          setPoJob(null);
-        } finally {
-          setIsParsingPo(false);
+        } else {
+          setPoJob((prev) =>
+            isCsvOrText && sessionId && prev && !prev.id.startsWith('local-po-') ? prev : localPoFallbackJob
+          );
         }
-      };
 
-      reader.onerror = () => {
-        const errMsg = 'Failed to read file from disk.';
+        setExistingOrgPoRecords((prev) => [...prev, ...parsedPOs]);
+
+        if (effectiveSkippedCount > 0) {
+          showToast(
+            poStrings.duplicatesWarningToastTitle,
+            formatString(poStrings.duplicatesWarningToastBody, {
+              imported: parsedPOs.length.toLocaleString('en-IN'),
+              skipped: effectiveSkippedCount.toLocaleString('en-IN'),
+              fileName: file.name,
+            }),
+            'warning'
+          );
+        } else {
+          showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
+        }
+      } catch (err: any) {
+        logger.log('ERROR', 'Purchase order dump parsing failed', { error: err }, 'PURCHASE_ORDER_INGESTION');
+        const errMsg = `Could not parse PO file: ${err.message || 'Unknown format'}`;
         setPoUploadError(errMsg);
-        showToast('File Read Error', errMsg, 'warning');
-        setIsParsingPo(false);
+        showToast('Parsing Error', errMsg, 'warning');
         setPoJob(null);
-      };
+      } finally {
+        setIsParsingPo(false);
+        if (poFileInputRef.current) poFileInputRef.current.value = '';
+      }
+    };
 
-      reader.readAsArrayBuffer(file);
+    reader.onerror = () => {
+      const errMsg = 'Failed to read file from disk.';
+      setPoUploadError(errMsg);
+      showToast('File Read Error', errMsg, 'warning');
+      setIsParsingPo(false);
+      setPoJob(null);
+    };
+
+    reader.readAsArrayBuffer(file);
   };
 
   const clearVendorMasterData = () => {
@@ -1672,6 +1827,8 @@ export default function InitialSetupModal() {
   /** Clear the PO dump held in the browser, and any AI result or job built from it. */
   const clearPoDumpState = (period: '1_year' | '2_years' | '3_years') => {
     setPoLineItems([]);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
     setApiJoinedVendors(null);
     setAiJob(null);
     setPoJob(null);
@@ -1711,6 +1868,7 @@ export default function InitialSetupModal() {
       const json = await res.json();
       if (json?.poDataCleared) {
         clearPoDumpState(period);
+        setExistingOrgPoRecords([]);
         showToast('PO Dump Cleared', UI_STRINGS.vendorPoIngestion.horizon.changeWarning, 'info');
       }
     } catch (err) {
@@ -1794,11 +1952,11 @@ export default function InitialSetupModal() {
       setVendorJob((job) =>
         job
           ? {
-              ...job,
-              totalRecords: updated.length,
-              processedRecords: updated.length,
-              importedRecords: updated.length,
-            }
+            ...job,
+            totalRecords: updated.length,
+            processedRecords: updated.length,
+            importedRecords: updated.length,
+          }
           : job
       );
       return updated;
@@ -2035,7 +2193,15 @@ export default function InitialSetupModal() {
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in">
+    <div
+      data-testid="initial-setup-modal-backdrop"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) {
+          void handleCloseModal();
+        }
+      }}
+      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-md animate-fade-in"
+    >
       <div className="glass-panel w-full max-w-4xl max-h-[92vh] overflow-y-auto rounded-3xl p-6 sm:p-8 bg-white dark:bg-gray-900 border-2 border-indigo-500/30 dark:border-indigo-500/40 shadow-2xl space-y-6 animate-scale-up">
         {/* Header */}
         <div className="flex items-start justify-between gap-4 border-b border-slate-100 dark:border-gray-800 pb-5">
@@ -2080,13 +2246,12 @@ export default function InitialSetupModal() {
               key={s.num}
               type="button"
               onClick={() => navigateToStep(s.num as any)}
-              className={`p-2 rounded-xl border transition-all ${
-                step === s.num
-                  ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20'
-                  : step > s.num
+              className={`p-2 rounded-xl border transition-all ${step === s.num
+                ? 'bg-indigo-600 text-white border-indigo-600 shadow-md shadow-indigo-600/20'
+                : step > s.num
                   ? 'bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300 border-emerald-200'
                   : 'bg-slate-50 dark:bg-gray-800/60 text-slate-400 dark:text-gray-500 border-slate-200 dark:border-gray-800'
-              }`}
+                }`}
             >
               {s.label}
             </button>
@@ -2128,20 +2293,18 @@ export default function InitialSetupModal() {
                   onClick={() => {
                     void choosePeriod(opt.id);
                   }}
-                  className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between space-y-3 ${
-                    selectedPeriod === opt.id
-                      ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-md'
-                      : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 bg-slate-50/50 dark:bg-gray-850/40'
-                  }`}
+                  className={`p-4 rounded-2xl border-2 transition-all cursor-pointer flex flex-col justify-between space-y-3 ${selectedPeriod === opt.id
+                    ? 'border-indigo-600 bg-indigo-50/60 dark:bg-indigo-950/40 ring-2 ring-indigo-500/20 shadow-md'
+                    : 'border-slate-200 dark:border-gray-800 hover:border-slate-300 dark:hover:border-gray-700 bg-slate-50/50 dark:bg-gray-850/40'
+                    }`}
                 >
                   <div className="space-y-1.5">
                     <div className="flex items-center justify-between">
                       <span
-                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
-                          selectedPeriod === opt.id
-                            ? 'bg-indigo-600 text-white'
-                            : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300'
-                        }`}
+                        className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${selectedPeriod === opt.id
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-slate-200 dark:bg-gray-800 text-slate-700 dark:text-gray-300'
+                          }`}
                       >
                         {opt.badge}
                       </span>
@@ -2357,19 +2520,17 @@ export default function InitialSetupModal() {
             {storedVendors.length > 0 || vendorJob?.status === 'COMPLETED' ? (
               <div
                 data-testid="vendor-master-uploaded-card"
-                className={`p-5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in ${
-                  storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
-                    ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-400/60 dark:border-amber-600/40'
-                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500/40 dark:border-emerald-500/30'
-                }`}
+                className={`p-5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in ${storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
+                  ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-400/60 dark:border-amber-600/40'
+                  : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500/40 dark:border-emerald-500/30'
+                  }`}
               >
                 <div className="flex items-center gap-3.5">
                   <div
-                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 shadow-sm ${
-                      storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
-                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
-                        : 'bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-                    }`}
+                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 shadow-sm ${storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
+                      ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                      : 'bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                      }`}
                   >
                     {storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0 ? (
                       <AlertTriangle size={24} />
@@ -2380,16 +2541,15 @@ export default function InitialSetupModal() {
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
                       <span
-                        className={`text-xs font-black uppercase tracking-wider ${
-                          storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
-                            ? 'text-amber-900 dark:text-amber-300'
-                            : 'text-emerald-800 dark:text-emerald-300'
-                        }`}
+                        className={`text-xs font-black uppercase tracking-wider ${storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
+                          ? 'text-amber-900 dark:text-amber-300'
+                          : 'text-emerald-800 dark:text-emerald-300'
+                          }`}
                       >
                         {storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
                           ? formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.allDuplicatesBannerTitle, {
-                              count: vendorJob?.skippedRecords || skippedDuplicateVendors.length,
-                            })
+                            count: vendorJob?.skippedRecords || skippedDuplicateVendors.length,
+                          })
                           : 'Vendor Master Uploaded Successfully'}
                       </span>
                       {storedVendors.length > 0 && (
@@ -2402,23 +2562,21 @@ export default function InitialSetupModal() {
                       {vendorFileName || vendorJob?.fileName || '—'}
                     </p>
                     <p
-                      className={`text-[11px] font-medium ${
-                        storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
-                          ? 'text-amber-800/90 dark:text-amber-300/90'
-                          : 'text-emerald-800/80 dark:text-emerald-300/80'
-                      }`}
+                      className={`text-[11px] font-medium ${storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
+                        ? 'text-amber-800/90 dark:text-amber-300/90'
+                        : 'text-emerald-800/80 dark:text-emerald-300/80'
+                        }`}
                     >
                       {storedVendors.length === 0 && (vendorJob?.skippedRecords || skippedDuplicateVendors.length) > 0
                         ? formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.allDuplicatesBannerHint, {
-                            fileName: vendorFileName || vendorJob?.fileName || '—',
+                          fileName: vendorFileName || vendorJob?.fileName || '—',
+                        })
+                        : `${(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} suppliers parsed and loaded into vendor master${Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length) > 0
+                          ? formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSummaryInline, {
+                            count: Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length),
                           })
-                        : `${(vendorJob?.importedRecords || storedVendors.length).toLocaleString('en-IN')} suppliers parsed and loaded into vendor master${
-                            Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length) > 0
-                              ? formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSummaryInline, {
-                                  count: Math.max(vendorJob?.skippedRecords || 0, skippedDuplicateVendors.length),
-                                })
-                              : ''
-                          }`}
+                          : ''
+                        }`}
                     </p>
                   </div>
                 </div>
@@ -2459,11 +2617,10 @@ export default function InitialSetupModal() {
                   const file = e.dataTransfer.files?.[0];
                   if (file) handleVendorFileUpload(file);
                 }}
-                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
-                  isDraggingVendor
-                    ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-                    : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
-                }`}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${isDraggingVendor
+                  ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+                  : 'border-indigo-300 dark:border-indigo-500/50 hover:border-indigo-600 bg-indigo-50/40 dark:bg-indigo-950/20 hover:bg-indigo-50/80'
+                  }`}
               >
                 <div className="w-10 h-10 rounded-xl bg-indigo-100 dark:bg-indigo-600/20 flex items-center justify-center mx-auto text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
                   <UploadCloud size={20} />
@@ -2563,11 +2720,10 @@ export default function InitialSetupModal() {
                           return (
                             <tr
                               key={v.id}
-                              className={`transition-colors ${
-                                hasErrors
-                                  ? 'bg-rose-50/50 dark:bg-rose-950/20'
-                                  : 'hover:bg-indigo-50/30 dark:hover:bg-gray-800/50'
-                              } group`}
+                              className={`transition-colors ${hasErrors
+                                ? 'bg-rose-50/50 dark:bg-rose-950/20'
+                                : 'hover:bg-indigo-50/30 dark:hover:bg-gray-800/50'
+                                } group`}
                             >
                               <td className="p-1.5 align-top">
                                 <input
@@ -2584,11 +2740,10 @@ export default function InitialSetupModal() {
                                   value={v.companyName || ''}
                                   onChange={(e) => handleUpdateVendorField(v.id, 'companyName', e.target.value)}
                                   placeholder="Company name"
-                                  className={`w-full font-bold text-xs px-1.5 py-1 rounded focus:outline-none transition-all ${
-                                    isNameInvalid
-                                      ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
-                                      : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-900 dark:text-white focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
-                                  }`}
+                                  className={`w-full font-bold text-xs px-1.5 py-1 rounded focus:outline-none transition-all ${isNameInvalid
+                                    ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
+                                    : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-900 dark:text-white focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
+                                    }`}
                                 />
                                 {isNameInvalid && (
                                   <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Required</span>
@@ -2609,11 +2764,10 @@ export default function InitialSetupModal() {
                                   value={v.email || ''}
                                   onChange={(e) => handleUpdateVendorField(v.id, 'email', e.target.value)}
                                   placeholder="email@domain.com"
-                                  className={`w-full font-mono text-[10px] font-semibold px-1.5 py-1 rounded focus:outline-none transition-all ${
-                                    isEmailInvalid
-                                      ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
-                                      : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
-                                  }`}
+                                  className={`w-full font-mono text-[10px] font-semibold px-1.5 py-1 rounded focus:outline-none transition-all ${isEmailInvalid
+                                    ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
+                                    : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-indigo-600 dark:text-indigo-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
+                                    }`}
                                 />
                                 {isEmailInvalid && (
                                   <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">
@@ -2633,11 +2787,10 @@ export default function InitialSetupModal() {
                                     }
                                   }}
                                   placeholder="+91 Phone"
-                                  className={`w-full text-[10px] px-1.5 py-1 rounded focus:outline-none transition-all ${
-                                    isPhoneInvalid
-                                      ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
-                                      : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
-                                  }`}
+                                  className={`w-full text-[10px] px-1.5 py-1 rounded focus:outline-none transition-all ${isPhoneInvalid
+                                    ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
+                                    : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-500 dark:text-gray-400 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
+                                    }`}
                                 />
                                 {isPhoneInvalid && (
                                   <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">Must be 10 numeric digits</span>
@@ -2725,11 +2878,10 @@ export default function InitialSetupModal() {
                           return (
                             <tr
                               key={v.id}
-                              className={`transition-colors ${
-                                hasErrors
-                                  ? 'bg-rose-50/70 dark:bg-rose-950/30 border-l-4 border-l-rose-500'
-                                  : 'hover:bg-slate-50 dark:hover:bg-gray-800/40'
-                              }`}
+                              className={`transition-colors ${hasErrors
+                                ? 'bg-rose-50/70 dark:bg-rose-950/30 border-l-4 border-l-rose-500'
+                                : 'hover:bg-slate-50 dark:hover:bg-gray-800/40'
+                                }`}
                             >
                               <td className="p-2.5 font-mono text-[10px] text-slate-500 max-w-[100px] truncate" title={v.vendorCode || '1'}>
                                 {v.vendorCode || '1'}
@@ -2996,30 +3148,154 @@ export default function InitialSetupModal() {
               />
             )}
 
+            {/* Skipped Duplicate PO Records Warning Banner & Table */}
+            {skippedDuplicatePoRows.length > 0 && (
+              <div
+                data-testid="skipped-duplicate-pos-banner"
+                className="p-4 rounded-2xl bg-amber-50/90 dark:bg-amber-950/35 border-2 border-amber-300 dark:border-amber-700/70 space-y-3 shadow-xs animate-fade-in"
+              >
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <AlertTriangle className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" size={18} />
+                    <div className="min-w-0">
+                      <p className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                        {formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+                          count: skippedDuplicatePoRows.length,
+                          rowWord:
+                            skippedDuplicatePoRows.length === 1
+                              ? UI_STRINGS.vendorPoIngestion.poDump.duplicateRowSingular
+                              : UI_STRINGS.vendorPoIngestion.poDump.duplicateRowPlural,
+                        })}
+                      </p>
+                      <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 mt-0.5">
+                        {UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerHint}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => downloadSkippedDuplicatePosCsv(skippedDuplicatePoRows)}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold flex items-center gap-1 border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-900 text-amber-900 dark:text-amber-200"
+                    >
+                      <Download size={12} /> {UI_STRINGS.vendorPoIngestion.poDump.downloadDuplicatesCsv}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkippedDuplicatePoRows([])}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300"
+                    >
+                      {UI_STRINGS.vendorPoIngestion.poDump.dismissDuplicatesAction}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-56 overflow-auto rounded-xl border border-amber-200/80 dark:border-amber-800/60 bg-white/90 dark:bg-gray-900/80">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead className="sticky top-0 bg-amber-100/80 dark:bg-amber-950/90 text-amber-900 dark:text-amber-200 uppercase text-[10px] font-bold">
+                      <tr>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnRow}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnPoNumber}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnVendor}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnItem}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnSpecs}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnReason}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100 dark:divide-amber-900/40">
+                      {skippedDuplicatePoRows.map((dup, idx) => (
+                        <tr
+                          key={`po-dup-row-${dup.rowNumber}-${dup.poNumber || dup.vendorName}-${idx}`}
+                          className="hover:bg-amber-50/50 dark:hover:bg-amber-950/20"
+                        >
+                          <td className="px-3 py-2 font-mono font-bold text-amber-800 dark:text-amber-300 whitespace-nowrap">
+                            {dup.rowNumber > 0 ? `#${dup.rowNumber}` : '—'}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {dup.poNumber || '—'}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100">
+                            {dup.vendorName}
+                          </td>
+                          <td className="px-3 py-2 text-slate-800 dark:text-slate-200">
+                            {dup.itemDescription}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-400">
+                            {dup.specification || '—'}
+                          </td>
+                          <td className="px-3 py-2 text-amber-800 dark:text-amber-300 font-medium">
+                            {dup.reason}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Drag & Drop PO Dump Area or Uploaded State Banner */}
-            {poLineItems.length > 0 || (poJob?.status === 'COMPLETED' && (poJob.importedRecords ?? 0) > 0) ? (
+            {poLineItems.length > 0 ||
+              (poJob?.status === 'COMPLETED' && ((poJob.importedRecords ?? 0) > 0 || poSkippedDisplayCount > 0)) ? (
               <div
                 data-testid="po-dump-uploaded-card"
-                className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-500/40 dark:border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in"
+                className={`p-5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in ${isPoAllDuplicatesCard
+                  ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-400/60 dark:border-amber-600/40'
+                  : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500/40 dark:border-emerald-500/30'
+                  }`}
               >
                 <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 shadow-sm">
-                    <CheckCircle2 size={24} />
+                  <div
+                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 shadow-sm ${isPoAllDuplicatesCard
+                      ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                      : 'bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                      }`}
+                  >
+                    {isPoAllDuplicatesCard ? (
+                      <AlertTriangle size={24} />
+                    ) : (
+                      <CheckCircle2 size={24} />
+                    )}
                   </div>
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
-                        PO Dump Uploaded Successfully
+                      <span
+                        className={`text-xs font-black uppercase tracking-wider ${isPoAllDuplicatesCard
+                          ? 'text-amber-900 dark:text-amber-300'
+                          : 'text-emerald-800 dark:text-emerald-300'
+                          }`}
+                      >
+                        {isPoAllDuplicatesCard
+                          ? formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, {
+                            count: poSkippedDisplayCount,
+                          })
+                          : 'PO Dump Uploaded Successfully'}
                       </span>
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
-                        <Check size={10} /> Active
-                      </span>
+                      {poLineItems.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
+                          <Check size={10} /> Active
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                      {poFileName || poJob?.fileName || 'PO_Purchase_Dump.xlsx'}
+                      {poDisplayFileName}
                     </p>
-                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
-                      {(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO records loaded for period ({selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'})
+                    <p
+                      className={`text-[11px] font-medium ${isPoAllDuplicatesCard
+                        ? 'text-amber-800/90 dark:text-amber-300/90'
+                        : 'text-emerald-800/80 dark:text-emerald-300/80'
+                        }`}
+                    >
+                      {isPoAllDuplicatesCard
+                        ? formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerHint, {
+                          fileName: poDisplayFileName,
+                        })
+                        : `${(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO records loaded for period (${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'})${poSkippedDisplayCount > 0
+                          ? formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSummaryInline, {
+                            count: poSkippedDisplayCount,
+                          })
+                          : ''
+                        }`}
                     </p>
                   </div>
                 </div>
@@ -3057,11 +3333,10 @@ export default function InitialSetupModal() {
                   const file = e.dataTransfer.files?.[0];
                   if (file) handlePODataFileUpload(file);
                 }}
-                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${
-                  isDraggingPo
-                    ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
-                    : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
-                }`}
+                className={`border-2 border-dashed rounded-2xl p-6 text-center transition-all cursor-pointer group ${isDraggingPo
+                  ? 'border-purple-600 bg-purple-100/70 dark:bg-purple-900/50 scale-[1.01]'
+                  : 'border-purple-300 dark:border-purple-500/50 hover:border-purple-600 bg-purple-50/40 dark:bg-purple-950/20 hover:bg-purple-50/80'
+                  }`}
               >
                 <div className="w-10 h-10 rounded-xl bg-purple-100 dark:bg-purple-600/20 flex items-center justify-center mx-auto text-purple-600 dark:text-purple-400 group-hover:scale-110 transition-transform">
                   <FileSpreadsheet size={20} />
@@ -3189,8 +3464,8 @@ export default function InitialSetupModal() {
                   {isProcessingPOJoin || isAiRunning
                     ? UI_STRINGS.vendorPoIngestion.aiCategory.runningAction
                     : (aiJob?.status === 'FAILED' || (aiJob?.failedRecords ?? 0) > 0)
-                    ? 'Retry AI Category Cross-Match'
-                    : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
+                      ? 'Retry AI Category Cross-Match'
+                      : UI_STRINGS.vendorPoIngestion.aiCategory.runAction}{' '}
                   <ArrowRight size={14} />
                 </button>
               </div>

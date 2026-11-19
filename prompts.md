@@ -6711,26 +6711,3 @@ create the pr and merge in test-v3
 ```
 
 ---
-
-### Prompt 285
-
-**Timestamp**: 2026-11-19T11:34:34+05:30
-
-``text
-@[c:\Users\navin\OneDrive\Desktop\procucev\Enterprise_qua_nextjs] Fix the RFQ Summary View Details issues:
-
-1. Remove the RFQ unique number from the summary view.
-2. Remove the raised date displayed in the top-right corner.
-3. Display the correct user name and user email ID.
-4. Fix the Requested By field, which is currently displaying a date instead of the user's name.
-5. Remove the confidence percentage from the UI.
-6. Remove the "0% Classified" text.
-7. Review and clean up the summary UI to ensure all displayed information is meaningful and accurate.
-
-Verify all changes in Dev.
-
-**Important:** Fix this issue completely, test and verify all related functionality, and commit this issue's changes. Only after successfully completing the commit, start the next issue.
-
-Implement this issue immediatly without thinking
-``n
----

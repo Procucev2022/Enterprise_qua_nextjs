@@ -1181,7 +1181,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         tasks.push(loaders.ensureRFQs());
         tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/vendor-summary')) {
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendors(true));
         tasks.push(loaders.ensureVendorEvaluations());
       } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
         tasks.push(loaders.ensureVendorEvaluations());
@@ -1704,6 +1704,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             email: v.email,
             phone: v.phone,
             location: v.address,
+            vendorCode: v.vendorCode,
+            gstin: (v as any).gstin || v.gstNumber || (v as any).gst || undefined,
+            gstNumber: v.gstNumber || (v as any).gstin || (v as any).gst || undefined,
+            city: (v as any).city,
+            state: (v as any).state,
+            pincode: (v as any).pincode,
             // Sent explicitly rather than left for the backend to infer from
             // majorCategory's sentinel string below — storeService branches
             // the onboarding email (Template A vs B) on this flag directly.
@@ -2295,10 +2301,16 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ['state', 'state'],
         ['pincode', 'pincode'],
         ['gstin', 'gstin'],
+        ['gst', 'gst'],
       ];
       for (const [sourceKey, targetKey] of hintMapping) {
         const value = matchedVendor[sourceKey];
         if (value) syntheticHints[targetKey] = value;
+      }
+      const gstinVal = matchedVendor.gstin || matchedVendor.gst || (matchedVendor as any).gstNumber;
+      if (gstinVal) {
+        syntheticHints.gstin = gstinVal;
+        syntheticHints.gst = gstinVal;
       }
     }
     return { targetVendorId, matchedVendor, syntheticHints };
@@ -2408,10 +2420,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
       const next = hasMatch
         ? prev.map((v) =>
-            v.id === vendorId || v.id === targetVendorId || v.id === savedId
-              ? { ...v, ...saved, isActive, disabled: !isActive, id: savedId }
-              : v
-          )
+          v.id === vendorId || v.id === targetVendorId || v.id === savedId
+            ? { ...v, ...saved, isActive, disabled: !isActive, id: savedId }
+            : v
+        )
         : [{ ...(matchedVendor || {}), ...saved, isActive, disabled: !isActive, id: savedId } as VendorEntry, ...prev];
       setSessionCache('vendors', next);
       return next;
@@ -2470,10 +2482,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           id: item.targetVendorId,
           ...(item.matchedVendor
             ? {
-                vendorName: item.matchedVendor.name,
-                vendorEmail: item.matchedVendor.email,
-                vendorCode: item.matchedVendor.vendorCode,
-              }
+              vendorName: item.matchedVendor.name,
+              vendorEmail: item.matchedVendor.email,
+              vendorCode: item.matchedVendor.vendorCode,
+            }
             : {}),
           ...item.syntheticHints,
         });
@@ -2563,12 +2575,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const updatedIdSet = new Set(updatedIds);
     const confirmedResolutions = hasExplicitUpdatedIds && updatedIds.length > 0
       ? unskippedResolutions.filter((item) =>
-          [idMappings[item.targetVendorId], idMappings[item.rawId], item.targetVendorId, item.rawId].some(
-            (cand) => Boolean(cand && updatedIdSet.has(cand))
-          ) ||
-          (item.matchedVendor?.email && updatedByEmail.has(item.matchedVendor.email.trim().toLowerCase())) ||
-          (item.rawId.startsWith('v-master-') && updatedByMasterId.has(item.rawId.slice('v-master-'.length)))
-        )
+        [idMappings[item.targetVendorId], idMappings[item.rawId], item.targetVendorId, item.rawId].some(
+          (cand) => Boolean(cand && updatedIdSet.has(cand))
+        ) ||
+        (item.matchedVendor?.email && updatedByEmail.has(item.matchedVendor.email.trim().toLowerCase())) ||
+        (item.rawId.startsWith('v-master-') && updatedByMasterId.has(item.rawId.slice('v-master-'.length)))
+      )
       : unskippedResolutions;
 
     const affectedIds = updatedIds.length > 0
@@ -2698,13 +2710,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
       hasPartialSkips
         ? formatString(UI_STRINGS.vendorStatusControl.bulkPartialUpdateToast, {
-            updatedCount: changedCount,
-            skippedCount: skippedSet.size,
-          })
+          updatedCount: changedCount,
+          skippedCount: skippedSet.size,
+        })
         : formatString(
-            isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
-            { count: changedCount }
-          ),
+          isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
+          { count: changedCount }
+        ),
       hasPartialSkips ? 'warning' : isActive ? 'success' : 'info'
     );
     return true;

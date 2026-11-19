@@ -64,8 +64,10 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
   const resolvedStreet = (
     profile.street ||
     legacyAccount?.street ||
+    legacyAccount?.streetAddress ||
     legacyAccount?.address1 ||
     legacyAccount?.address ||
+    legacyAccount?.registeredAddress ||
     (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '')
   );
 

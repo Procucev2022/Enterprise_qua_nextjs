@@ -184,6 +184,94 @@ function mapRowToProfile(row) {
   };
 }
 
+const PROFILE_USER_COLUMNS = [
+  { col: 'uuid', alias: 'user_uuid' },
+  { col: 'username' },
+  { col: 'email', alias: 'user_email' },
+  { col: 'full_name' },
+  { col: 'phone' },
+  { col: 'org_uuid' },
+];
+
+const PROFILE_ORG_COLUMNS = [
+  'organization_name',
+  'brand_name',
+  'refference',
+  'type',
+  'pan',
+  'gstin',
+  'cin',
+  'crn',
+  'website',
+  'annual_turnover',
+  'others',
+  'address1',
+  'city',
+  'state',
+  'zip_code',
+  'pincode',
+  'country',
+  'contact_person',
+  'contact_designation',
+  'sub_category',
+  'email',
+  'organization_phonenumber',
+];
+
+function buildD1ProfileSelect(schemaColumns = null) {
+  if (!schemaColumns) return PROFILE_SELECT;
+  const userCols = schemaColumns.user || null;
+  const orgCols = schemaColumns.organization || null;
+  const selectCols = [];
+
+  PROFILE_USER_COLUMNS.forEach(({ col, alias }) => {
+    const present = !userCols || userCols.has(col);
+    const expr = present ? `u.${col}` : 'null';
+    selectCols.push(alias ? `${expr} as ${alias}` : present ? expr : `null as ${col}`);
+  });
+
+  PROFILE_ORG_COLUMNS.forEach((col) => {
+    const present = !orgCols || orgCols.has(col);
+    selectCols.push(present ? `o.${col}` : `null as ${col}`);
+  });
+
+  return `
+  select ${selectCols.join(',\n         ')}
+    from "user" u
+    left join organization o on o.uuid = u.org_uuid
+`;
+}
+
+async function runProfileSelect(buildQuery, params, options = {}) {
+  const defaultPgSql = buildQuery(PROFILE_SELECT, null, false);
+  const defaultD1Sql = buildQuery(PROFILE_SELECT, null, true);
+  try {
+    return await pool.rows(defaultPgSql, params, {
+      ...options,
+      ...(defaultD1Sql !== defaultPgSql ? { d1Text: defaultD1Sql } : {}),
+    });
+  } catch (err) {
+    const db = getD1Binding() || getD1HttpClient();
+    if (!db || !isMissingD1ColumnError(err)) {
+      throw err;
+    }
+    const schemaColumns = await inspectD1TableColumns(db);
+    if (!schemaColumns) throw err;
+    const alignedSelect = buildD1ProfileSelect(schemaColumns);
+    const retrySql = buildQuery(alignedSelect, schemaColumns, true);
+    if (retrySql === defaultD1Sql) throw err;
+    logger.warn('Retrying D1 buyer profile read using verified schema columns', {
+      error: err.message,
+    }, 'BUYER_PROFILE_D1');
+    return pool.rows(retrySql, params, {
+      ...options,
+      d1: true,
+      d1Text: retrySql,
+      useCache: false,
+    });
+  }
+}
+
 const PROFILE_SELECT = `
   select u.uuid          as user_uuid,
          u.username,
@@ -288,12 +376,16 @@ async function findProfileByUserId(userId, options = {}) {
 
   let rows;
   try {
-    rows = await pool.rows(`${PROFILE_SELECT} where u.uuid = $1 limit 1`, [userId], {
-      d1: true,
-      useCache: true,
-      tag: 'buyer_accounts',
-      ttlMs: 60000,
-    });
+    rows = await runProfileSelect(
+      (selectClause) => `${selectClause} where u.uuid = $1 limit 1`,
+      [userId],
+      {
+        d1: true,
+        useCache: true,
+        tag: 'buyer_accounts',
+        ttlMs: 60000,
+      }
+    );
   } catch (err) {
     const cachedResult = tryOverloadCachedProfile(err, { userId }, 'read', { userId });
     if (cachedResult) return cachedResult;
@@ -342,12 +434,19 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
       userParams.push(cleanEmail);
       idx++;
     }
-    const query = `${PROFILE_SELECT} where ${userConditions.join(' or ')} limit 1`;
-    const d1Text = `${PROFILE_SELECT} where ${d1UserConditions.join(' or ')} limit 1`;
+    const buildUserQuery = (selectClause, schemaColumns, isD1) => {
+      const conditions = isD1 ? d1UserConditions : userConditions;
+      const userCols = schemaColumns?.user || null;
+      const canOrderMeta = !userCols || (userCols.has('is_active') && userCols.has('created_ts'));
+      const orderParts = [];
+      if (userId) orderParts.push('(case when u.uuid = $1 then 0 else 1 end)');
+      if (canOrderMeta) orderParts.push('u.is_active desc', 'u.created_ts desc');
+      const orderClause = orderParts.length > 0 ? ` order by ${orderParts.join(', ')}` : '';
+      return `${selectClause} where ${conditions.join(' or ')}${orderClause} limit 1`;
+    };
     try {
-      const rows = await pool.rows(query, userParams, {
+      const rows = await runProfileSelect(buildUserQuery, userParams, {
         d1: true,
-        d1Text,
         useCache: true,
         tag: 'buyer_accounts',
         ttlMs: 60000,
@@ -385,28 +484,45 @@ async function findProfileByIdentifier({ email, organizationName, organizationId
     idx++;
   }
   if (email && !organizationId && !organizationName) {
-    orgConditions.push(`lower(o.email) = lower($${idx})`);
-    d1OrgConditions.push(`o.email = $${idx} COLLATE NOCASE`);
+    orgConditions.push(`(lower(o.email) = lower($${idx}) or lower(u.email) = lower($${idx}))`);
+    d1OrgConditions.push(`(o.email = $${idx} COLLATE NOCASE or u.email = $${idx} COLLATE NOCASE)`);
     orgParams.push(email.trim());
     idx++;
   }
-  const query = `${PROFILE_SELECT} where ${orgConditions.join(' or ')} limit 1`;
-  const d1Text = `${PROFILE_SELECT} where ${d1OrgConditions.join(' or ')} limit 1`;
-  try {
-    const rows = await pool.rows(query, orgParams, {
-      d1: true,
-      d1Text,
-      useCache: true,
-      tag: 'buyer_accounts',
-      ttlMs: 60000,
-    });
-    if (rows && rows.length > 0) {
-      return hydrateFoundProfile(rows[0], { swallowAllCategoryErrors: true });
+  if (orgConditions.length > 0) {
+    const buildOrgQuery = (selectClause, schemaColumns, isD1) => {
+      const conditions = isD1 ? d1OrgConditions : orgConditions;
+      const orgCols = schemaColumns?.organization || null;
+      const userCols = schemaColumns?.user || null;
+      let resolvedConditions = conditions;
+      if (isD1 && userCols && !userCols.has('email') && email && !organizationId && !organizationName) {
+        resolvedConditions = [`o.email = $${orgParams.length} COLLATE NOCASE`];
+      }
+      const orderParts = [];
+      if (!orgCols || (orgCols.has('gstin') && orgCols.has('address1'))) {
+        orderParts.push("(case when coalesce(o.gstin, '') <> '' or coalesce(o.address1, '') <> '' then 0 else 1 end)");
+      }
+      if (!orgCols || orgCols.has('created_ts')) {
+        orderParts.push('o.created_ts desc');
+      }
+      const orderClause = orderParts.length > 0 ? ` order by ${orderParts.join(', ')}` : '';
+      return `${selectClause} where ${resolvedConditions.join(' or ')}${orderClause} limit 1`;
+    };
+    try {
+      const rows = await runProfileSelect(buildOrgQuery, orgParams, {
+        d1: true,
+        useCache: true,
+        tag: 'buyer_accounts',
+        ttlMs: 60000,
+      });
+      if (rows && rows.length > 0) {
+        return hydrateFoundProfile(rows[0], { swallowAllCategoryErrors: true });
+      }
+    } catch (err) {
+      const cachedResult = tryOverloadCachedProfile(err, { userId, email }, 'org fallback', { email, organizationId });
+      if (cachedResult) return cachedResult;
+      return { found: false, reason: 'DB_ERROR', error: err.message };
     }
-  } catch (err) {
-    const cachedResult = tryOverloadCachedProfile(err, { userId, email }, 'org fallback', { email, organizationId });
-    if (cachedResult) return cachedResult;
-    return { found: false, reason: 'DB_ERROR', error: err.message };
   }
 
   forgetProfile({ userId, email });
@@ -649,7 +765,7 @@ function buildD1ProfileMutations({ organizationId, userId, patch, categories, ac
 }
 
 function isMissingD1ColumnError(err) {
-  return /no such column:/i.test(String(err?.message || ''));
+  return /no such column:|has no column named/i.test(String(err?.message || ''));
 }
 
 async function inspectD1TableColumns(db) {
@@ -669,16 +785,6 @@ async function inspectD1TableColumns(db) {
   };
 }
 
-function createD1AtomicityError(statementCount) {
-  const error = new Error('This buyer profile change needs an atomic Workers D1 batch; the D1 HTTP adapter cannot guarantee multi-statement atomicity.');
-  logger.error('Buyer profile update rejected because the D1 HTTP adapter cannot guarantee atomicity', {
-    error,
-    operation: 'updateBuyerProfile',
-    statementCount,
-  }, 'BUYER_PROFILE_D1');
-  return error;
-}
-
 async function updateProfileInD1({ organizationId, userId, patch, categories, actor }) {
   let plan = buildD1ProfileMutations({ organizationId, userId, patch, categories, actor });
   const d1Binding = getD1Binding();
@@ -689,8 +795,28 @@ async function updateProfileInD1({ organizationId, userId, patch, categories, ac
     });
     if (existing.rows.length === 0) return { updated: false, reason: 'ORG_NOT_FOUND' };
     if (plan.statements.length === 1) {
-      await pool.query(plan.statements[0].text, plan.statements[0].params, { d1: true });
+      try {
+        await pool.query(plan.statements[0].text, plan.statements[0].params, { d1: true });
+      } catch (err) {
+        if (!isMissingD1ColumnError(err)) throw err;
+        const schemaColumns = await inspectD1TableColumns(getD1HttpClient());
+        if (!schemaColumns) throw err;
+        const alignedPlan = buildD1ProfileMutations(
+          { organizationId, userId, patch, categories, actor },
+          schemaColumns
+        );
+        if (
+          alignedPlan.statements.length === 0 ||
+          alignedPlan.statements[0].text === plan.statements[0].text
+        ) {
+          throw err;
+        }
+        plan = alignedPlan;
+        await pool.query(plan.statements[0].text, plan.statements[0].params, { d1: true });
+      }
       queryCache.invalidate('buyer_accounts');
+      queryCache.invalidate('user');
+      forgetProfile({ userId, email: actor });
       return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
     }
   }
@@ -741,6 +867,7 @@ async function updateProfileInD1({ organizationId, userId, patch, categories, ac
       durationMs,
     }, 'BUYER_PROFILE_D1');
     queryCache.invalidate('buyer_accounts');
+    queryCache.invalidate('user');
     forgetProfile({ userId, email: actor });
     return { updated: true, fieldsUpdated: plan.fieldsUpdated, categoryCount: plan.categoryCount };
   } catch (err) {
@@ -818,6 +945,7 @@ async function updateProfile({ organizationId, userId, patch, categories, actor 
     }
 
     queryCache.invalidate('buyer_accounts');
+    queryCache.invalidate('user');
     forgetProfile({ userId, email: actor });
     return { updated: true, fieldsUpdated: assignments.length, categoryCount };
   });

@@ -1,6 +1,10 @@
 import React from 'react';
-import { fireEvent, render, screen } from '@testing-library/react';
-import VendorEvaluationSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-evaluation-summary';
+import { fireEvent, render, screen, within } from '@testing-library/react';
+import VendorEvaluationSummary, {
+  isBuyerUploaded,
+  isProcucevVendor,
+  isRfqOrPoSummary,
+} from '@/app/buyer/vendor-evaluation-summary';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT, VENDOR_EVALUATION_GATE_SCORE, VENDOR_EVALUATION_PILLARS } from '@/lib/constants';
@@ -198,21 +202,31 @@ describe('isBuyerUploaded and isProcucevVendor', () => {
 });
 
 describe('buyer evaluation summary: full evaluation record', () => {
-  it('shows the record\'s own identity, contact, score and status', () => {
+  it('shows the simplified summary card with vendor name, evaluation status and vendor score only', () => {
     mockStore();
     const onBack = jest.fn();
     render(<VendorEvaluationSummary evaluationRecord={buildRecord()} onBack={onBack} />);
 
-    expect(screen.getAllByText('Alpha Pumps Ltd.').length).toBeGreaterThanOrEqual(1);
-    expect(screen.queryByText('VN-100')).not.toBeInTheDocument();
-    expect(screen.getByText('94%')).toBeInTheDocument();
-    expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
-    expect(screen.getByText('Asha Rao')).toBeInTheDocument();
-    expect(screen.getByText('asha@alpha.test')).toBeInTheDocument();
-    expect(screen.getByText('+91 90000 00001')).toBeInTheDocument();
-    expect(screen.getByText(/2026-02-28/)).toBeInTheDocument();
-    expect(screen.getByText('Full Qualification Approved')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(summaryTable).toBeInTheDocument();
+
+    // Contains only vendor name, evaluation status, and vendor score
+    expect(within(summaryTable).getByText('Alpha Pumps Ltd.')).toBeInTheDocument();
+    expect(within(summaryTable).getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
+    expect(within(summaryTable).getByText('94%')).toBeInTheDocument();
+
+    // Table header columns
+    expect(within(summaryTable).getByText(SUMMARY.colVendorName)).toBeInTheDocument();
+    expect(within(summaryTable).getByText(SUMMARY.colEvaluationStatus)).toBeInTheDocument();
+    expect(within(summaryTable).getByText(SUMMARY.colVendorScore)).toBeInTheDocument();
+
+    // Removed unnecessary details
+    expect(within(summaryTable).queryByText('Asha Rao')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('asha@alpha.test')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('+91 90000 00001')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText(/2026-02-28/)).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('Full Qualification Approved')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('VN-100')).not.toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: SUMMARY.backAction }));
     expect(onBack).toHaveBeenCalledTimes(1);
@@ -251,7 +265,6 @@ describe('buyer evaluation summary: full evaluation record', () => {
     expect(screen.queryByText('Compliance_Doc_13.pdf')).not.toBeInTheDocument();
     const rest = documents.length - VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT;
     expect(screen.getByText(formatString(SUMMARY.docMoreCount, { count: rest }))).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.attachmentsSummaryTotal, { verified: 7, total: 14 }))).toBeInTheDocument();
     expect(screen.getByText(formatString(SUMMARY.documentsHeading, { count: 14 }))).toBeInTheDocument();
     expect(screen.getByText(formatString(SUMMARY.documentsBadgeVerified, { verified: 7, total: 14 }))).toBeInTheDocument();
     expect(screen.getAllByText(SUMMARY.docStatusVerified).length).toBeGreaterThanOrEqual(1);
@@ -372,7 +385,7 @@ describe('buyer evaluation summary: criteria matrix', () => {
 });
 
 describe('buyer evaluation summary: values not on record', () => {
-  it('shows not recorded for missing contact, email, phone and category, and leaves out the submitted line', () => {
+  it('omits contact, email, phone and category from the summary card and leaves out the submitted line', () => {
     mockStore();
     const record = buildRecord({
       vendorId: '',
@@ -384,19 +397,21 @@ describe('buyer evaluation summary: values not on record', () => {
     });
     render(<VendorEvaluationSummary evaluationRecord={record} />);
 
-    expect(screen.getAllByText(NOT_RECORDED).length).toBeGreaterThanOrEqual(5);
-    expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(within(summaryTable).queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
     for (const invented of ['Authorized Representative', 'Enterprise Supplier', 'General Industrial', 'N/A', 'v-001', '2026-03-01']) {
       expect(screen.queryByText(invented)).not.toBeInTheDocument();
     }
   });
 
-  it('shows not recorded for contact fields the record leaves blank', () => {
+  it('omits contact fields from the summary card even when provided on the record', () => {
     mockStore();
-    render(<VendorEvaluationSummary evaluationRecord={buildRecord({ contactPerson: '', email: '' })} />);
+    render(<VendorEvaluationSummary evaluationRecord={buildRecord({ contactPerson: 'Jane Doe', email: 'jane@example.com', phone: '+91 99999 88888' })} />);
 
-    expect(screen.getAllByText(NOT_RECORDED).length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText('+91 90000 00001')).toBeInTheDocument();
+    const summaryTable = screen.getByTestId('vendor-evaluation-summary-table');
+    expect(within(summaryTable).queryByText('Jane Doe')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('jane@example.com')).not.toBeInTheDocument();
+    expect(within(summaryTable).queryByText('+91 99999 88888')).not.toBeInTheDocument();
   });
 
   it('reads a numeric score sent as text and treats other text as not evaluated', () => {
@@ -405,7 +420,6 @@ describe('buyer evaluation summary: values not on record', () => {
       <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: '88' as unknown as number })} />
     );
     expect(screen.getByText('88%')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
     unmount();
 
     for (const score of ['abc', '   ', null]) {
@@ -413,13 +427,11 @@ describe('buyer evaluation summary: values not on record', () => {
         <VendorEvaluationSummary evaluationRecord={buildRecord({ overallScore: score as unknown as number })} />
       );
       expect(screen.getByText(NOT_APPLICABLE)).toBeInTheDocument();
-      // The gate status still reads not evaluated, because the overall score is missing.
-      expect(screen.getByText(NOT_EVALUATED)).toBeInTheDocument();
       view.unmount();
     }
   });
 
-  it('shows the gate as locked below the threshold, with the status the record holds', () => {
+  it('shows the evaluation status and score accurately when below the threshold', () => {
     mockStore();
     render(
       <VendorEvaluationSummary
@@ -428,7 +440,6 @@ describe('buyer evaluation summary: values not on record', () => {
     );
 
     expect(screen.getByText('CONDITIONAL / UNDER REVIEW')).toBeInTheDocument();
-    expect(screen.getByText(formatString(SUMMARY.gateLocked, { score: VENDOR_EVALUATION_GATE_SCORE }))).toBeInTheDocument();
     expect(screen.getByText('72%')).toBeInTheDocument();
   });
 
@@ -460,7 +471,7 @@ describe('buyer evaluation summary: values not on record', () => {
     mockStore();
     render(<VendorEvaluationSummary evaluationRecord={buildRecord({ documents: [] })} />);
 
-    expect(screen.getAllByText(SUMMARY.documentsEmptyTitle)).toHaveLength(3);
+    expect(screen.getAllByText(SUMMARY.documentsEmptyTitle)).toHaveLength(2);
     expect(screen.getByText(SUMMARY.documentsEmptyBody)).toBeInTheDocument();
   });
 
@@ -752,20 +763,14 @@ describe('buyer evaluation summary: vendor code, overall score and submitted lin
     expect(screen.queryByText('94%')).not.toBeInTheDocument();
   });
 
-  it('leaves out the submitted line when the record holds no submission date', () => {
+  it('omits the submitted line from the summary card regardless of submission date', () => {
     mockStore();
-    for (const submissionDate of ['', '   ']) {
+    for (const submissionDate of ['', '   ', '2026-02-28']) {
       const view = render(<VendorEvaluationSummary evaluationRecord={buildRecord({ submissionDate })} />);
       expect(screen.queryByText(SUMMARY.submittedLabel, { exact: false })).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-02-28')).not.toBeInTheDocument();
       view.unmount();
     }
-  });
-
-  it('shows the submitted line with the recorded submission date', () => {
-    mockStore();
-    render(<VendorEvaluationSummary evaluationRecord={buildRecord()} />);
-
-    expect(screen.getByText(`${SUMMARY.submittedLabel} 2026-02-28`)).toBeInTheDocument();
   });
 });
 
@@ -906,5 +911,168 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     expect(screen.getByRole('button', { name: /Active Supplier Co/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inactive Historical Eval Co/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Inactive Without Eval Co/ })).not.toBeInTheDocument();
+  });
+
+  describe('RFQ and PO summary removal from supplier selection dropdown', () => {
+    it('isRfqOrPoSummary identifies RFQ, PO summary, and dump candidates while preserving genuine vendor companies', () => {
+      expect(isRfqOrPoSummary(null)).toBe(false);
+      expect(isRfqOrPoSummary(undefined)).toBe(false);
+      expect(isRfqOrPoSummary({})).toBe(false);
+
+      // Positive RFQ candidates
+      expect(isRfqOrPoSummary({ name: 'RFQ-001: Structural Steel' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ - Pipes and Fittings' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ: Precision Valves' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ #98432' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ 101' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'rfq-2024-batch' })).toBe(true);
+      expect(isRfqOrPoSummary({ category: 'RFQ Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ majorCategory: 'RFQ' })).toBe(true);
+
+      // Positive PO summary and dump candidates
+      expect(isRfqOrPoSummary({ name: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO_Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO-Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Order Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Orders Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Historical PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Purchase Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Data Batch' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO-2024-001' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO #4500' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Order' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'po-summary-local' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'po-9876' })).toBe(true);
+      expect(isRfqOrPoSummary({ category: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ majorCategory: 'Purchase Order Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ vendorName: 'PO Summary' })).toBe(true);
+
+      // Negative genuine vendors
+      expect(isRfqOrPoSummary({ id: 'v-1', name: 'Polycab India Limited' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-2', name: 'Polymer Technologies Ltd' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-3', name: 'Power Grid Corporation' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-4', name: 'Posco Steel India' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-5', name: 'Port of Nhava Sheva Logistics' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-6', name: 'Veera Solutions Pvt LTD' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-7', name: 'Alpha Pumps Ltd.' })).toBe(false);
+    });
+
+    it('strictly removes RFQs and PO summaries from the dropdown and search results while keeping genuine vendors', () => {
+      const genuineVendor1 = buildVendor({
+        id: 'v-poly-1',
+        name: 'Polycab India Limited',
+        source: 'buyer_uploaded',
+        majorCategory: 'Electrical',
+      });
+      const genuineVendor2 = buildVendor({
+        id: 'v-alpha-2',
+        name: 'Alpha Pumps Ltd.',
+        source: 'buyer_uploaded',
+        majorCategory: 'Mechanical',
+      });
+      const genuineVendor3 = buildVendor({
+        id: 'v-veera-3',
+        name: 'Veera Solutions Pvt LTD',
+        source: 'buyer_uploaded',
+        majorCategory: 'Valves',
+      });
+
+      const rfqItem1 = buildVendor({
+        id: 'rfq-item-1',
+        name: 'RFQ-2024-001: Structural Steel',
+        source: 'buyer_uploaded',
+        majorCategory: 'Steel',
+      });
+      const rfqItem2 = buildVendor({
+        id: 'v-rfq-sum',
+        name: 'RFQ Summary',
+        source: 'buyer_uploaded',
+        majorCategory: 'RFQ Summary',
+      });
+      const poSummaryItem1 = buildVendor({
+        id: 'po-sum-1',
+        name: 'PO Summary',
+        source: 'buyer_uploaded',
+        majorCategory: 'Purchase Orders',
+      });
+      const poDumpItem = buildVendor({
+        id: 'v-po-dump',
+        name: 'Historical PO Dump',
+        source: 'buyer_uploaded',
+        majorCategory: 'PO Purchase Dump',
+      });
+      const poItemNumber = buildVendor({
+        id: 'po-10023',
+        name: 'PO-10023',
+        source: 'buyer_uploaded',
+        majorCategory: 'Orders',
+      });
+
+      const rfqEvalRecord = buildRecord({
+        id: 'eval-rfq',
+        vendorId: 'rfq-foreign-1',
+        vendorName: 'RFQ #9901: Diesel Generator',
+        category: 'Electrical',
+      });
+      const poEvalRecord = buildRecord({
+        id: 'eval-po',
+        vendorId: 'po-summary-eval',
+        vendorName: 'PO_Summary',
+        category: 'PO Summary',
+      });
+
+      mockStore({
+        buyerVendors: [
+          genuineVendor1,
+          genuineVendor2,
+          genuineVendor3,
+          rfqItem1,
+          rfqItem2,
+          poSummaryItem1,
+          poDumpItem,
+          poItemNumber,
+        ],
+        vendorEvaluations: [rfqEvalRecord, poEvalRecord],
+      });
+
+      render(<VendorEvaluationSummary />);
+
+      // Open supplier dropdown picker
+      fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+
+      // Genuine vendors MUST be present
+      expect(screen.getByRole('button', { name: /Polycab India Limited/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Alpha Pumps Ltd\./ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Veera Solutions Pvt LTD/ })).toBeInTheDocument();
+
+      // RFQs and PO summaries MUST NOT be present
+      expect(screen.queryByRole('button', { name: /RFQ-2024-001/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ #9901/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO_Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Historical PO Dump/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO-10023/ })).not.toBeInTheDocument();
+
+      // Search for "PO": Genuine vendor "Polycab" matches, but PO summaries must NOT appear
+      const searchInput = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+      fireEvent.change(searchInput, { target: { value: 'PO' } });
+
+      expect(screen.getByRole('button', { name: /Polycab India Limited/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO_Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Historical PO Dump/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO-10023/ })).not.toBeInTheDocument();
+
+      // Search for "RFQ": No RFQs exist in options, shows no match
+      fireEvent.change(searchInput, { target: { value: 'RFQ' } });
+      expect(screen.queryByRole('button', { name: /RFQ-2024-001/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ Summary/ })).not.toBeInTheDocument();
+      expect(screen.getByText(formatString(SUMMARY.noSearchMatch, { query: 'RFQ' }))).toBeInTheDocument();
+    });
   });
 });

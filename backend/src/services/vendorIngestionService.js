@@ -35,6 +35,10 @@ const buyerProfileQueries = require('../db/buyerProfileQueries');
 const categorizationService = require('./vendorCategorizationService');
 const mailerService = require('./mailerService');
 const storeService = require('./storeService');
+const {
+  loadExistingPoDedupeState,
+  checkAndRegisterPoDedupe,
+} = require('./largeFileIngestionService');
 const { logger } = require('./loggerService');
 const { getWaitUntil } = require('../db/d1Bridge');
 const {
@@ -344,9 +348,10 @@ async function getResumeState(sessionUser, sessionId) {
     ? await requireSession(context, sessionId)
     : await queries.findLatestSession(context.organizationId);
   const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
+  const existingPoRecords = await queries.findExistingPoLineItemsByOrganization(context.organizationId);
 
   if (!session) {
-    return { session: null, categoryMaster };
+    return { session: null, categoryMaster, existingPoRecords: Array.isArray(existingPoRecords) ? existingPoRecords : [] };
   }
 
   const [mappingSummary, emailSummary, poCounts] = await Promise.all([
@@ -361,6 +366,7 @@ async function getResumeState(sessionUser, sessionId) {
     mappingSummary,
     emailSummary,
     poCounts,
+    existingPoRecords: Array.isArray(existingPoRecords) ? existingPoRecords : [],
     unlockedStep: unlockedStepFor(session),
   };
 }
@@ -626,18 +632,46 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
 
   // A row without a PO date cannot be placed before or after the window. It is kept
   // inside, because a dump no longer has to carry dates to be used.
-  const stamped = valid.map((row) => ({
+  const poDedupeState = await loadExistingPoDedupeState(context.organizationId);
+  const duplicateRows = [];
+  const uniqueValid = [];
+  for (const row of valid) {
+    const rowNumber = row.sourceRowNumber || 0;
+    const dupMatch = checkAndRegisterPoDedupe(poDedupeState, row, rowNumber);
+    if (dupMatch) {
+      duplicateRows.push({
+        rowNumber,
+        poNumber: row.poNumber || undefined,
+        poDate: row.poDate || undefined,
+        vendorName: row.vendorName || row.vendorCode || undefined,
+        itemDescription: row.itemDescription,
+        specification: row.specification || undefined,
+        status: 'duplicate_skipped',
+        matchedAgainst: dupMatch.matchedAgainst,
+        reason: dupMatch.reason,
+      });
+      continue;
+    }
+    uniqueValid.push(row);
+  }
+
+  const rejected = [...invalid, ...duplicateRows];
+  const stamped = uniqueValid.map((row) => ({
     ...row,
     inHorizon: !row.poDate || (row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd),
   }));
 
+  if (stamped.length === 0) {
+    const message =
+      duplicateRows.length > 0 && invalid.length === 0
+        ? formatMessage(VENDOR_INGESTION_MESSAGES.PO_DUMP_ALL_DUPLICATES, { count: duplicateRows.length })
+        : VENDOR_INGESTION_MESSAGES.PO_DUMP_EMPTY;
+    throw new VendorIngestionError(message, 422, { invalidRows: rejected, duplicateRows });
+  }
+
   if (replaceExisting) {
     await queries.deletePoLineItems(sessionId, context.organizationId);
     await queries.resetCategoryMappingsForReclassification(sessionId, context.organizationId);
-  }
-
-  if (stamped.length === 0) {
-    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.PO_DUMP_EMPTY, 422, { invalidRows: invalid });
   }
 
   await queries.bulkInsertPoLineItems(sessionId, context.organizationId, stamped);
@@ -671,12 +705,13 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
       fileName: fileName || null,
       submitted: rows.length,
       stored: stamped.length,
-      rejected: invalid.length,
+      rejected: rejected.length,
+      duplicates: duplicateRows.length,
       horizon: { startDate: session.horizonStart, endDate: session.horizonEnd },
       insidePeriod: counts.inHorizon,
       outsidePeriod: counts.outsideHorizon,
     },
-    summary: `Stored ${stamped.length} PO line item(s); ${counts.inHorizon} inside and ${counts.outsideHorizon} outside ${session.horizonStart}–${session.horizonEnd}.`,
+    summary: `Stored ${stamped.length} PO line item(s); ${counts.inHorizon} inside and ${counts.outsideHorizon} outside ${session.horizonStart}–${session.horizonEnd} (${duplicateRows.length} duplicate(s) skipped).`,
   });
 
   return {
@@ -684,10 +719,11 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     totalRows: rows.length,
     validRows: stamped.length,
     invalidRows: invalid.length,
+    duplicateRows: duplicateRows.length,
     insidePeriod: counts.inHorizon,
     outsidePeriod: counts.outsideHorizon,
     totalStored: counts.total,
-    rejected: invalid,
+    rejected,
   };
 }
 
@@ -1582,7 +1618,8 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     city: loc.city || null,
     state: loc.state || null,
     pincode: loc.pincode || null,
-    gstin: record ? record.gstin || null : null,
+    gstin: record ? (record.gstin || record.gstNumber || record.gst || null) : null,
+    gst: record ? (record.gstin || record.gstNumber || record.gst || null) : null,
     majorCategory: mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory || null,
     minorCategories: categories,
     clientMappedCategories: categories,

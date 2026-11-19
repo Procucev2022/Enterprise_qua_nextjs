@@ -1881,6 +1881,92 @@ export function isProcucevNetworkVendor(v: VendorOwnershipShape | null | undefin
   return !isBuyerUploadedVendor(v);
 }
 
+/**
+ * Regex patterns to detect RFQ identifiers, RFQ titles, and RFQ summaries.
+ * E.g., "RFQ-001", "RFQ_2024", "RFQ #1234", "RFQ: Pipes", "RFQ Summary", "RFQ 101", "RFQ"
+ */
+export const RFQ_ENTITY_PATTERN = /^rfq([-_#:\s\d]|$)/i;
+export const RFQ_SUMMARY_KEYWORD_PATTERN =
+  /\brfq\b[-_\s]*(summary|summaries|overview|details|batch|dump|feed|enquiry|quote)\b/i;
+
+/**
+ * Regex patterns to detect PO summaries, purchase order dumps, and PO references.
+ * E.g., "PO Summary", "PO_Summary", "Purchase Order Summary", "PO Purchase Dump", "Historical PO Dump",
+ * "PO Dump", "PO-10023", "PO #4500", "PO 2024", "Purchase Order", "PO"
+ */
+export const PO_SUMMARY_KEYWORD_PATTERN =
+  /\b(po|purchase\s*orders?)\b[-_\s]*(summary|summaries|dump|purchase\s*dump|data|batch|history|details|line\s*items?|feed|export)\b/i;
+export const PO_IDENTIFIER_PATTERN = /^po[-_#:\s\d]/i;
+export const PO_STANDALONE_NAME_PATTERN = /^(po|purchase\s*orders?)$/i;
+export const PO_OR_RFQ_PREFIXED_ID_PATTERN = /^(rfq|po)[-_]/i;
+
+export interface RfqOrPoSummaryCandidate {
+  id?: string | null;
+  name?: string | null;
+  vendorName?: string | null;
+  category?: string | null;
+  majorCategory?: string | null;
+}
+
+/**
+ * Returns true if an entity or dropdown option represents an RFQ, RFQ summary,
+ * Purchase Order, or PO summary/dump rather than a genuine supplier/vendor company.
+ */
+export function isRfqOrPoSummaryEntity(candidate: RfqOrPoSummaryCandidate | null | undefined): boolean {
+  if (!candidate) return false;
+
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  const name =
+    typeof candidate.name === 'string'
+      ? candidate.name.trim()
+      : typeof candidate.vendorName === 'string'
+      ? candidate.vendorName.trim()
+      : '';
+  const category =
+    typeof candidate.category === 'string'
+      ? candidate.category.trim()
+      : typeof candidate.majorCategory === 'string'
+      ? candidate.majorCategory.trim()
+      : '';
+
+  // 1. Check ID
+  if (id) {
+    if (RFQ_ENTITY_PATTERN.test(id) || PO_OR_RFQ_PREFIXED_ID_PATTERN.test(id)) {
+      return true;
+    }
+    if (PO_SUMMARY_KEYWORD_PATTERN.test(id)) {
+      return true;
+    }
+  }
+
+  // 2. Check Name / Vendor Name
+  if (name) {
+    if (
+      RFQ_ENTITY_PATTERN.test(name) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_IDENTIFIER_PATTERN.test(name) ||
+      PO_STANDALONE_NAME_PATTERN.test(name)
+    ) {
+      return true;
+    }
+  }
+
+  // 3. Check Category
+  if (category) {
+    if (
+      RFQ_ENTITY_PATTERN.test(category) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_STANDALONE_NAME_PATTERN.test(category)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** Safely reads locally saved vendor upload batches from browser storage. */
 export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[] {
   try {
@@ -2106,12 +2192,18 @@ export function reconcileBuyerVendorsWithUploadHistory(
     .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
     .map((val) => val.trim().toLowerCase());
 
-  const seenEmails = new Set(
-    buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-  );
-  const seenNames = new Set(
-    buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
-  );
+  const vendorsCopy = buyerVendors.map((v) => ({ ...v }));
+  const existingByEmail = new Map<string, VendorEntry>();
+  const existingByCode = new Map<string, VendorEntry>();
+  const existingByName = new Map<string, VendorEntry>();
+  for (const v of vendorsCopy) {
+    const eMail = String(v.email || '').trim().toLowerCase();
+    const eCode = String(v.vendorCode || '').trim().toLowerCase();
+    const eName = String(v.name || '').trim().toLowerCase();
+    if (eMail) existingByEmail.set(eMail, v);
+    if (eCode) existingByCode.set(eCode, v);
+    if (eName) existingByName.set(eName, v);
+  }
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
@@ -2134,15 +2226,41 @@ export function reconcileBuyerVendorsWithUploadHistory(
       }
       const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
       const rawEmail = String(rec.email || '').trim();
+      const rawCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rawName && !rawEmail) return;
+
+      if (
+        isRfqOrPoSummaryEntity({
+          id: rec.id ? String(rec.id) : undefined,
+          name: rawName,
+          category: String(rec.category || rec.majorCategory || ''),
+        })
+      ) {
+        return;
+      }
 
       const emailKey = rawEmail.toLowerCase();
       const nameKey = rawName.toLowerCase();
-      if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
+      const recGstin = String(rec.gstin || rec.gstNumber || rec.gst || (rec as Record<string, unknown>).taxId || '').trim().toUpperCase();
+
+      const matchedExisting =
+        (emailKey && existingByEmail.get(emailKey)) ||
+        (rawCode && existingByCode.get(rawCode)) ||
+        (nameKey && existingByName.get(nameKey));
+
+      if (matchedExisting) {
+        if (recGstin && (!matchedExisting.gstin || !matchedExisting.gst)) {
+          matchedExisting.gstin = matchedExisting.gstin || recGstin;
+          matchedExisting.gst = matchedExisting.gst || recGstin;
+        }
+        if (rawCode && !matchedExisting.vendorCode) {
+          matchedExisting.vendorCode = String(rec.vendorCode).trim();
+        }
         return;
       }
-      if (emailKey) seenEmails.add(emailKey);
-      if (nameKey) seenNames.add(nameKey);
+      if (emailKey) existingByEmail.set(emailKey, {} as VendorEntry);
+      if (rawCode) existingByCode.set(rawCode, {} as VendorEntry);
+      if (nameKey) existingByName.set(nameKey, {} as VendorEntry);
 
       const loc = resolveVendorLocationFields({
         address: rec.address ? String(rec.address) : '',
@@ -2170,6 +2288,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
 
       extras.push({
         id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
+        vendorCode: String(rec.vendorCode || '').trim() || undefined,
         name: rawName || rawEmail,
         contactPerson: String(rec.contactPerson || ''),
         phone: String(rec.phone || ''),
@@ -2186,7 +2305,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
         addedByBuyerCompany: activeBuyerAccount?.organizationName,
         buyerId: activeBuyerAccount?.id,
         buyerAccountId: activeBuyerAccount?.id,
-        ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
+        ...(recGstin ? { gstin: recGstin, gst: recGstin } : {}),
         ...(city ? { city } : {}),
         ...(state ? { state } : {}),
         ...(loc.pincode ? { pincode: loc.pincode } : {}),
@@ -2194,7 +2313,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
     });
   });
 
-  return extras.length > 0 ? [...buyerVendors, ...extras] : [...buyerVendors];
+  return extras.length > 0 ? [...vendorsCopy, ...extras] : vendorsCopy;
 }
 
 
@@ -2696,4 +2815,281 @@ export function subscribeVendorUploadHistory(
   return () => {
     window.removeEventListener('storage', handleStorage);
   };
+}
+
+/**
+ * Builds a declarative backdrop click handler that invokes `onClose` (or a React
+ * state setter with `closeValue`) only when the user clicks directly on the outer
+ * backdrop overlay rather than inside the popup content.
+ */
+export function createBackdropClickHandler<T = boolean>(
+  onClose: (() => void) | ((value: T) => void) | null | undefined,
+  closeValue?: T,
+  isBlocked = false
+): (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => void {
+  const hasCloseValue = arguments.length >= 2;
+  return (event) => {
+    if (isBlocked || typeof onClose !== 'function') return;
+    if (event.target === event.currentTarget) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+}
+
+/**
+ * Registers a document `mousedown` listener while `isOpen` is true to close
+ * a floating dropdown/popover whenever the user clicks outside `containerRef`.
+ */
+export function registerOutsideClickClose<T = boolean>(
+  isOpen: boolean,
+  containerRef: { current: HTMLElement | null },
+  onClose: (() => void) | ((value: T) => void),
+  closeValue?: T
+): (() => void) | undefined {
+  if (!isOpen || typeof document === 'undefined') return undefined;
+  const hasCloseValue = arguments.length >= 4;
+  const handleMouseDown = (event: MouseEvent) => {
+    if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+  document.addEventListener('mousedown', handleMouseDown);
+  return () => {
+    document.removeEventListener('mousedown', handleMouseDown);
+  };
+}
+
+/**
+ * Extracts normalized lowercase vendor codes from existing buyer-owned vendor records
+ * so subsequent sequential vendor code generation avoids colliding with prior uploads.
+ */
+export function collectExistingBuyerVendorCodes(
+  vendors: Array<VendorOwnershipShape & { vendorCode?: string }> | null | undefined
+): Set<string> {
+  const codes = new Set<string>();
+  if (!Array.isArray(vendors)) return codes;
+  for (const v of vendors) {
+    if (isBuyerUploadedVendor(v) && v.vendorCode && String(v.vendorCode).trim()) {
+      codes.add(String(v.vendorCode).trim().toLowerCase());
+    }
+  }
+  return codes;
+}
+
+export interface TableSortState {
+  key: string | null;
+  dir: 'asc' | 'desc';
+}
+
+export interface TableColumnOption {
+  key: string;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'name', label: 'Supplier Name', visible: true, required: true },
+  { key: 'vendorCode', label: 'Vendor Code', visible: true },
+  { key: 'majorCategory', label: 'Division', visible: true },
+  { key: 'minorCategories', label: 'Category', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'origin', label: 'Origin', visible: true },
+  { key: 'engagement', label: 'RFQ Engagement', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'email', label: 'Email', visible: true },
+  { key: 'phone', label: 'Phone', visible: true },
+  { key: 'location', label: 'Location', visible: true },
+  { key: 'score', label: 'AI Score', visible: true },
+  { key: 'rating', label: 'Rating', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const BUYER_RFQ_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'sourcingMode', label: 'Mode', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'items', label: 'Items', visible: true },
+  { key: 'quotes', label: 'Quotes', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'delivery', label: 'Target Delivery', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const BUYER_EVALUATION_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'vendorName', label: 'Vendor Name', visible: true, required: true },
+  { key: 'status', label: 'Evaluation Status', visible: true, required: true },
+  { key: 'overallScore', label: 'Vendor Score', visible: true, required: true },
+];
+
+export const BUYER_ACCOUNTS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'organizationName', label: 'Organization', visible: true, required: true },
+  { key: 'brandName', label: 'Brand', visible: true },
+  { key: 'accountSource', label: 'Source', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'corporateEmail', label: 'Corporate Email', visible: true },
+  { key: 'mobileNumber', label: 'Mobile', visible: true },
+  { key: 'gstin', label: 'GSTIN', visible: true },
+  { key: 'panNumber', label: 'PAN', visible: true },
+  { key: 'sourcingMode', label: 'Sourcing Mode', visible: true },
+  { key: 'subscriptionPlan', label: 'Plan', visible: true },
+  { key: 'primaryPlantLocation', label: 'Plant Location', visible: true },
+  { key: 'industrySector', label: 'Industry', visible: true },
+  { key: 'supportedMajorCategories', label: 'Divisions', visible: true },
+  { key: 'status', label: 'Record Status', visible: true },
+  { key: 'totalRFQsCreated', label: 'Total RFQs', visible: true },
+  { key: 'totalSpend', label: 'Total Spend', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const CM_ALL_RFQS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'buyerAccountName', label: 'Buyer', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'quotesCount', label: 'Quotes', visible: true },
+  { key: 'invitedVendors', label: 'Invited Vendors', visible: true },
+  { key: 'quotedVendors', label: 'Quoted Vendors', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'createdAt', label: 'Raised', visible: true },
+  { key: 'latestQuote', label: 'Latest Quote', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export function nextTableSortState(current: TableSortState, clickedKey: string): TableSortState {
+  if (current.key === clickedKey) {
+    return { key: clickedKey, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  }
+  return { key: clickedKey, dir: 'asc' };
+}
+
+export function createColumnSortClickHandler(
+  key: string,
+  setSort: (updater: (prev: TableSortState) => TableSortState) => void
+): () => void {
+  return () => {
+    setSort((prev) => nextTableSortState(prev, key));
+  };
+}
+
+export function createColumnResetHandler<T extends TableColumnOption>(
+  defaults: ReadonlyArray<T>,
+  setColumns: (cols: T[]) => void
+): () => void {
+  return () => {
+    setColumns(defaults.map((col) => ({ ...col })));
+  };
+}
+
+export function createBooleanSetterHandler(
+  setter: (value: boolean) => void,
+  value: boolean
+): () => void {
+  return () => {
+    setter(value);
+  };
+}
+
+export function getTableColumnClass(
+  columns: ReadonlyArray<TableColumnOption> | null | undefined,
+  key: string,
+  baseClass = ''
+): string {
+  if (Array.isArray(columns)) {
+    const found = columns.find((col) => col.key === key);
+    if (found && !found.visible) {
+      return baseClass ? `${baseClass} hidden` : 'hidden';
+    }
+  }
+  return baseClass;
+}
+
+export function getTableAriaSort(
+  sort: TableSortState | null | undefined,
+  key: string
+): 'ascending' | 'descending' | 'none' {
+  if (!sort || sort.key !== key) return 'none';
+  return sort.dir === 'asc' ? 'ascending' : 'descending';
+}
+
+export function getSortIndicatorSymbol(
+  sort: TableSortState | null | undefined,
+  key: string
+): string {
+  if (!sort || sort.key !== key) return '↕';
+  return sort.dir === 'asc' ? '↑' : '↓';
+}
+
+export function resolveSortableCellValue(
+  row: Record<string, unknown> | null | undefined,
+  key: string
+): string | number {
+  if (!row || typeof row !== 'object') return '';
+  if (key === 'items') {
+    const entities = row.extractedEntities;
+    if (Array.isArray(entities)) return entities.length;
+    const lineItems = row.lineItems;
+    if (Array.isArray(lineItems)) return lineItems.length;
+  }
+  if (key === 'quotes') {
+    return typeof row.quotesCount === 'number' ? row.quotesCount : Number(row.quotesCount) || 0;
+  }
+  if (key === 'delivery') {
+    return String(row.targetDeliveryDate || row.deadline || row.deliveryLocation || '');
+  }
+  if (key === 'minorCategories' || key === 'supportedMajorCategories') {
+    const list = row[key];
+    return Array.isArray(list) ? list.join(', ') : '';
+  }
+  if (key === 'location') {
+    return String(row.location || row.city || row.state || row.primaryPlantLocation || '');
+  }
+  if (key === 'totalSpend') {
+    const raw = String(row.totalSpend || '').replace(/[^0-9.-]/g, '');
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  const direct = row[key];
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+  if (typeof direct === 'string') {
+    const trimmed = direct.trim();
+    const numeric = Number(trimmed);
+    if (trimmed !== '' && Number.isFinite(numeric) && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+      return numeric;
+    }
+    return trimmed.toLowerCase();
+  }
+  if (Array.isArray(direct)) return direct.length;
+  return '';
+}
+
+export function sortTableRows<T>(
+  rows: ReadonlyArray<T>,
+  sort: TableSortState | null | undefined
+): T[] {
+  if (!Array.isArray(rows)) return [];
+  if (!sort || !sort.key) return [...rows];
+  const factor = sort.dir === 'asc' ? 1 : -1;
+  const key = sort.key;
+  return [...rows].sort((a, b) => {
+    const left = resolveSortableCellValue(a as unknown as Record<string, unknown>, key);
+    const right = resolveSortableCellValue(b as unknown as Record<string, unknown>, key);
+    if (typeof left === 'number' && typeof right === 'number') {
+      return (left - right) * factor;
+    }
+    return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' }) * factor;
+  });
 }

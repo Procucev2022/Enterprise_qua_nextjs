@@ -543,7 +543,7 @@ function mapRowToVendorMaster(row) {
     city: loc.city,
     state: loc.state,
     pincode: loc.pincode,
-    gstin: text(row.gstin),
+    gstin: text(row.gstin) || text(rawMeta.gstin) || text(rawMeta.gstNumber) || text(rawMeta.gst) || null,
     rating: numeric(row.rating),
     ...(rawMeta.isActive === false || rawMeta.disabled === true || String(rawMeta.status || '').trim().toUpperCase() === 'INACTIVE'
       ? {
@@ -720,6 +720,21 @@ async function findVendorMasterRecords(sessionId, organizationId, limit = null) 
   const rows = await pool.rows(
     `${VENDOR_MASTER_SELECT} where session_id = $1 and organization_id = $2
       order by source_row_number nulls last, company_name${limitClause}`,
+    params,
+    { d1: true }
+  );
+  return rows.map(mapRowToVendorMaster);
+}
+
+/** Every vendor-master row for an organisation across ingestion sessions, newest first. */
+async function findOrganizationVendorMasterRecords(organizationId, limit = null) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitClause = hasLimit ? ' limit $2' : ' limit 2000';
+  const params = hasLimit ? [organizationId, Math.min(Number(limit), 2000)] : [organizationId];
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where organization_id = $1
+      order by updated_at desc, source_row_number nulls last, company_name${limitClause}`,
     params,
     { d1: true }
   );
@@ -1049,6 +1064,39 @@ async function deletePoLineItems(sessionId, organizationId) {
     { d1: true }
   );
   return result.rowCount || 0;
+}
+
+/**
+ * Load existing PO line items previously uploaded by this organization so
+ * re-uploaded PO dumps can detect and reject duplicate PO records.
+ */
+async function findExistingPoLineItemsByOrganization(organizationId, limit = 5000) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const cap = Math.min(Math.max(counter(limit) || 5000, 1), 10000);
+  const rows = await pool.rows(
+    `select id, session_id, po_number, po_date, vendor_code, vendor_name,
+            item_description, specification, quantity, uom, spend, department
+       from po_line_items
+      where organization_id = $1
+      order by created_at desc
+      limit $2`,
+    [organizationId, cap],
+    { d1: true }
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    poNumber: row.po_number || null,
+    poDate: dateOnly(row.po_date),
+    vendorCode: row.vendor_code || null,
+    vendorName: row.vendor_name || null,
+    itemDescription: row.item_description || null,
+    specification: row.specification || null,
+    quantity: numeric(row.quantity),
+    uom: row.uom || null,
+    spend: numeric(row.spend),
+    department: row.department || null,
+  }));
 }
 
 /**
@@ -2493,6 +2541,7 @@ module.exports = {
   // vendor master
   bulkUpsertVendorMasterRecords,
   findVendorMasterRecords,
+  findOrganizationVendorMasterRecords,
   findVendorMasterRecord,
   updateVendorMasterRecordActiveStatus,
   countVendorMasterRecords,
@@ -2503,6 +2552,7 @@ module.exports = {
   bulkInsertPoLineItems,
   countPoLineItems,
   deletePoLineItems,
+  findExistingPoLineItemsByOrganization,
   matchPoLineItemsToVendors,
   findVendorPurchasingProfiles,
   findUnmatchedPoVendors,

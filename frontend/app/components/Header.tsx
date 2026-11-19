@@ -1,10 +1,10 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
+import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -104,6 +104,12 @@ export default function Header() {
   const vendorCreditsExhausted = vendorFreeCreditsRemaining != null && vendorFreeCreditsRemaining <= 0;
 
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
+  const userProfileDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => registerOutsideClickClose(userProfileDropdownOpen, userProfileDropdownRef, setUserProfileDropdownOpen, false),
+    [userProfileDropdownOpen]
+  );
 
   // Visibility of the Account & Security overlay. The forms inside it live in
   // AccountSecurityPanel, which owns its own field state.
@@ -457,7 +463,7 @@ export default function Header() {
           {/* ═══════════════════════════════════════════════════════════════ */}
           {/* SLEEK CORNER USER PROFILE BOX & PERSONA SWITCHER */}
           {/* ═══════════════════════════════════════════════════════════════ */}
-          <div className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
+          <div ref={userProfileDropdownRef} className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
             <button
               onClick={() => setUserProfileDropdownOpen(!userProfileDropdownOpen)}
               className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"

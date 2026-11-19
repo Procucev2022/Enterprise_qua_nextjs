@@ -567,5 +567,20 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     const resEmpty = mockRes();
     await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resEmpty, jest.fn());
     expect(resEmpty.data.data.vendors).toEqual([]);
+
+    // Also cover findOrganizationVendorMasterRecords returning cross-session org records when findLatestSession is null
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce(null);
+    jest.spyOn(vendorIngestionQueries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([
+      {
+        id: 'rec-org-wide-1',
+        sessionId: 'sess-prev-1',
+        vendorCode: 'VC-ORG-1',
+        companyName: 'Cross PC Org Supplier',
+        email: 'crosspc@org.test',
+      },
+    ]);
+    const resOrgWide = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resOrgWide, jest.fn());
+    expect(resOrgWide.data.data.vendors.map((v) => v.id)).toEqual(['v-master-rec-org-wide-1']);
   });
 });

@@ -19,7 +19,7 @@ const domainQueries = require('../db/domainQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const pool = require('../db/pool');
-const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const { VALIDATION_SCHEMAS, validatePayload, derivePanFromGstin } = require('../config/validationSchemas');
 
 /** A stored number, or null when the record holds no usable value. */
 function numberOrNull(value) {
@@ -228,26 +228,53 @@ async function createBuyerAccount(req, res, next) {
     }
     const normalizedEmail = String(body.corporateEmail).trim().toLowerCase();
     const sessionUserId = req.user && (req.user.sub || req.user.id);
+    const sessionOrgId = req.user && (req.user.orgId || req.user.organizationId);
     const sessionEmail = String((req.user && req.user.email) || '').trim().toLowerCase();
     const isSelfRegistrationMirrorSync = !body.id && Boolean(sessionUserId) && sessionEmail === normalizedEmail;
     const existing = isSelfRegistrationMirrorSync
       ? await storeService.getBuyerAccountByEmail(normalizedEmail)
       : null;
-    if (existing && existing.id === sessionUserId) {
+    if (existing) {
       const sanitizedUpdates = sanitizeBuyerAccountUpdates(body, res);
       if (!sanitizedUpdates) return;
       logger.info(`Merging buyer account update into existing mirror: ${body.organizationName}`, { id: existing.id, email: normalizedEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-      const merged = await storeService.updateBuyerAccountDurably(existing.id, {
+      const mergePayload = {
         ...sanitizedUpdates,
-        organizationId: sanitizedUpdates.organizationId || existing.organizationId || null,
-      });
+        userId: existing.userId || sessionUserId || undefined,
+        organizationId: sanitizedUpdates.organizationId || existing.organizationId || sessionOrgId || null,
+      };
+      const merged =
+        (existing.id ? await storeService.updateBuyerAccountDurably(existing.id, mergePayload) : null) ||
+        (await storeService.updateBuyerAccountDurably(normalizedEmail, mergePayload));
       if (merged) {
         await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
         return res.status(201).json({ success: true, data: merged });
       }
     }
     logger.info(`Creating new buyer account: ${body.organizationName}`, { organizationName: body.organizationName, email: body.corporateEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-    const created = await storeService.addBuyerAccountDurably(body);
+    const createPayload = isSelfRegistrationMirrorSync
+      ? {
+          ...body,
+          userId: body.userId || sessionUserId,
+          organizationId: body.organizationId || sessionOrgId || null,
+        }
+      : body;
+    let created;
+    try {
+      created = await storeService.addBuyerAccountDurably(createPayload);
+    } catch (createErr) {
+      if (createErr?.statusCode === 409 && isSelfRegistrationMirrorSync) {
+        const sanitizedUpdates = sanitizeBuyerAccountUpdates(createPayload, res);
+        if (!sanitizedUpdates) return;
+        const merged = await storeService.updateBuyerAccountDurably(normalizedEmail, sanitizedUpdates);
+        if (merged) {
+          await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
+          return res.status(201).json({ success: true, data: merged });
+        }
+      }
+      throw createErr;
+    }
+    await syncOrganizationFromBuyerAccount(created, sessionUserId, sessionEmail || normalizedEmail);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -288,7 +315,7 @@ async function syncOrganizationFromBuyerAccount(account, userId = null, actorEma
   if (account.brandName) patch.brandName = account.brandName;
   if (account.contactPerson) patch.contactName = account.contactPerson;
   if (account.contactDesignation) patch.contactDesignation = account.contactDesignation;
-  const street = account.street || account.address1 || account.address || '';
+  const street = account.street || account.streetAddress || account.address1 || account.address || account.registeredAddress || '';
   if (street) patch.street = street;
   if (account.city) patch.city = account.city;
   if (account.state) patch.state = account.state;
@@ -297,7 +324,7 @@ async function syncOrganizationFromBuyerAccount(account, userId = null, actorEma
   if (account.country) patch.country = account.country;
   const gstin = (account.gstin || account.gstNumber || account.gst || '').trim().toUpperCase();
   if (gstin) patch.gstNumber = gstin;
-  const pan = (account.pan || account.panNumber || '').trim().toUpperCase();
+  const pan = (account.pan || account.panNumber || '').trim().toUpperCase() || derivePanFromGstin(gstin);
   if (pan) patch.panNumber = pan;
   if (Object.keys(patch).length === 0) return;
 

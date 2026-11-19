@@ -3,16 +3,27 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
 import {
+  BUYER_EVALUATION_SUMMARY_COLUMNS,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
   VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT,
   VENDOR_EVALUATION_GATE_SCORE,
   VENDOR_EVALUATION_PILLARS,
   VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   isBuyerUploadedVendor,
   isProcucevNetworkVendor,
+  isRfqOrPoSummaryEntity,
   isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
+  type TableColumnOption,
+  type TableSortState,
 } from '@/lib/constants';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
   QuestionEvaluationItem,
@@ -33,15 +44,12 @@ import {
   Clock,
   FileCheck,
   FileText,
-  Mail,
   Paperclip,
-  Phone,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
-  Tag,
   UploadCloud,
-  Zap,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -53,6 +61,7 @@ const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 // Classification helpers shared with Buyer Vendor Directory.
 export const isBuyerUploaded = isBuyerUploadedVendor;
 export const isProcucevVendor = isProcucevNetworkVendor;
+export const isRfqOrPoSummary = isRfqOrPoSummaryEntity;
 
 /** A finite number from a number or a numeric string. Anything else counts as not on record. */
 function toScore(value: unknown): number | null {
@@ -296,7 +305,7 @@ export default function VendorEvaluationSummary({
     const optionById = new Map<string, VendorEvaluationSelectOption>();
     const matchedEvaluationRefs = new Set<VendorEvaluationRecord>();
     reconciledBuyerVendors.forEach((v) => {
-      if (!v.id) return;
+      if (!v.id || isRfqOrPoSummaryEntity(v)) return;
       const matchedEval = findEvaluation(allEvaluations, v.id, v.name, v.email);
       // Inactive buyer vendors remain accessible when viewing a historical evaluation record,
       // but unevaluated inactive suppliers stay excluded from future evaluation selection.
@@ -305,29 +314,45 @@ export default function VendorEvaluationSummary({
       optionById.set(v.id, buildSelectOption(v, toScore(matchedEval?.overallScore)));
     });
     evaluationById.forEach((e, id) => {
+      if (isRfqOrPoSummaryEntity({ id: e.vendorId || id, name: e.vendorName, category: e.category })) return;
       if (!optionById.has(id) && !matchedEvaluationRefs.has(e)) optionById.set(id, buildOptionFromRecord(e));
     });
-    return Array.from(optionById.values());
+    return Array.from(optionById.values()).filter((opt) => !isRfqOrPoSummaryEntity(opt));
   }, [reconciledBuyerVendors, vendorEvaluations, evaluationRecord]);
 
   // Buyer-uploaded suppliers when there are any. Otherwise every supplier.
   const companyOptions = useMemo(() => {
-    const buyerUploaded = allOptions.filter(
+    const validOptions = allOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    const buyerUploaded = validOptions.filter(
       (c) => c.isBuyerUploaded || (evaluationRecord ? c.id === evaluationRecord.vendorId : false)
     );
-    return buyerUploaded.length > 0 ? buyerUploaded : allOptions;
+    return buyerUploaded.length > 0 ? buyerUploaded : validOptions;
   }, [allOptions, evaluationRecord]);
 
   const initialVendorId =
-    activeRecord?.vendorId ||
+    (activeRecord?.vendorId &&
+    !isRfqOrPoSummaryEntity({
+      id: activeRecord.vendorId,
+      name: activeRecord.vendorName,
+      category: activeRecord.category,
+    })
+      ? activeRecord.vendorId
+      : '') ||
     companyOptions[0]?.id ||
-    buyerVendors?.[0]?.id ||
-    vendorEvaluations?.[0]?.vendorId ||
+    reconciledBuyerVendors.find((v) => !isRfqOrPoSummaryEntity(v))?.id ||
+    vendorEvaluations?.find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    )?.vendorId ||
     '';
   const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPillarFilter, setSelectedPillarFilter] = useState<'ALL' | VendorEvaluationPillarId>('ALL');
+  const [evalTableSort, setEvalTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [evalColumns, setEvalColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_EVALUATION_SUMMARY_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showEvalColumnSettings, setShowEvalColumnSettings] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -384,14 +409,17 @@ export default function VendorEvaluationSummary({
     if (first) return buildSummaryView(findEvaluation(vendorEvaluations, first.id, first.name, first.email), first);
 
     // 6. The first stored evaluation, when no supplier is listed.
-    const storedFirst = vendorEvaluations?.[0];
+    const storedFirst = (vendorEvaluations || []).find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    );
     return storedFirst ? buildSummaryView(storedFirst, null) : null;
   }, [evaluationRecord, selectedVendorId, vendorEvaluations, allOptions, companyOptions]);
 
   const filteredCompanyOptions = useMemo(() => {
-    if (!searchQuery.trim()) return companyOptions;
+    const validBase = companyOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    if (!searchQuery.trim()) return validBase;
     const q = searchQuery.toLowerCase();
-    return companyOptions.filter(
+    return validBase.filter(
       (c) =>
         (c.name || '').toLowerCase().includes(q) ||
         (c.category || '').toLowerCase().includes(q) ||
@@ -468,11 +496,6 @@ export default function VendorEvaluationSummary({
   const verifiedDocumentCount = documents.filter((d) => d.verified || d.status === 'Verified').length;
   const visibleDocuments = documents.slice(0, VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT);
   const overallScore = summary.overallScore;
-  const gateText = overallScore === null
-    ? NOT_EVALUATED
-    : overallScore >= VENDOR_EVALUATION_GATE_SCORE
-    ? formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE })
-    : formatString(SUMMARY.gateLocked, { score: VENDOR_EVALUATION_GATE_SCORE });
 
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
@@ -653,30 +676,60 @@ export default function VendorEvaluationSummary({
             <FileCheck size={15} className="text-indigo-600 dark:text-indigo-400" />
             {SUMMARY.tableHeading}
           </h3>
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowEvalColumnSettings, true)}
+            data-testid="evaluation-summary-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+          >
+            <Settings size={12} />
+            <span>Column Settings</span>
+          </button>
         </div>
+
+        <ColumnSettingsPopup
+          isOpen={showEvalColumnSettings}
+          onClose={createBooleanSetterHandler(setShowEvalColumnSettings, false)}
+          columns={evalColumns}
+          onSave={setEvalColumns}
+          onReset={createColumnResetHandler(BUYER_EVALUATION_SUMMARY_COLUMNS, setEvalColumns)}
+          title="Column Settings"
+        />
 
         <div className="overflow-x-auto">
           <table className="w-full text-left text-xs border-collapse" data-testid="vendor-evaluation-summary-table">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
-                <th className="py-2 px-2.5 min-w-[200px]">{SUMMARY.colVendorDetails}</th>
-                <th className="py-2 px-2.5 text-center min-w-[140px]">{SUMMARY.colEvaluationStatus}</th>
-                <th className="py-2 px-2.5 text-center min-w-[130px]">{SUMMARY.colOverallScore}</th>
-                <th className="py-2 px-2.5 min-w-[220px]">{SUMMARY.colCategoryScores}</th>
-                <th className="py-2 px-2.5 min-w-[180px]">{SUMMARY.colReviewStatus}</th>
+                <th
+                  onClick={createColumnSortClickHandler('vendorName', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'vendorName')}
+                  className={getTableColumnClass(evalColumns, 'vendorName', 'py-2 px-2.5 min-w-[200px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">{SUMMARY.colVendorName} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'vendorName')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('status', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'status')}
+                  className={getTableColumnClass(evalColumns, 'status', 'py-2 px-2.5 text-center min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colEvaluationStatus} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'status')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('overallScore', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'overallScore')}
+                  className={getTableColumnClass(evalColumns, 'overallScore', 'py-2 px-2.5 text-center min-w-[120px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colVendorScore} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'overallScore')}</span></span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
-              <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-top">
-                {/* 1. Vendor Details */}
-                <td className="py-2.5 px-2.5 space-y-1">
-                  <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                    <span className="text-slate-600 dark:text-gray-400 font-medium flex items-center gap-1 text-[11px]">
-                      <Tag size={11} /> {summary.category ?? NOT_RECORDED}
-                    </span>
-                  </div>
-
-                  <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-middle">
+                {/* 1. Vendor Name */}
+                <td className={getTableColumnClass(evalColumns, 'vendorName', 'py-2.5 px-2.5 align-middle')}>
+                  <div className="text-xs sm:text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5">
                     <CompanyHoverTooltip
                       name={summary.vendorName ?? ''}
                       type="vendor"
@@ -687,90 +740,24 @@ export default function VendorEvaluationSummary({
                         verified: summary.status === 'PREFERRED ENTERPRISE SUPPLIER',
                       }}
                     />
-                    <ShieldCheck className="text-emerald-500 shrink-0" size={16} />
-                  </div>
-
-                  <div className="space-y-0.5 text-[11px] text-slate-500 dark:text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <Building2 size={11} /> {SUMMARY.contactLabel}{' '}
-                      <strong className="text-slate-700 dark:text-gray-200">{summary.contactPerson ?? NOT_RECORDED}</strong>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="flex items-center gap-1"><Mail size={11} /> {summary.email ?? NOT_RECORDED}</span>
-                      <span>•</span>
-                      <span className="flex items-center gap-1"><Phone size={11} /> {summary.phone ?? NOT_RECORDED}</span>
-                    </div>
-                    {summary.submissionDate !== null && (
-                      <div className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-gray-500">
-                        <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate}
-                      </div>
-                    )}
+                    <ShieldCheck className="text-emerald-500 shrink-0" size={15} />
                   </div>
                 </td>
 
                 {/* 2. Evaluation Status */}
-                <td className="py-2.5 px-2.5 text-center align-middle">
+                <td className={getTableColumnClass(evalColumns, 'status', 'py-2.5 px-2.5 text-center align-middle whitespace-nowrap')}>
                   <div className="inline-block">
                     {renderStatusBadge(summary.status)}
                   </div>
                 </td>
 
-                {/* 3. Overall Score */}
-                <td className="py-2.5 px-2.5 text-center align-middle space-y-0.5">
+                {/* 3. Vendor Score */}
+                <td className={getTableColumnClass(evalColumns, 'overallScore', 'py-2.5 px-2.5 text-center align-middle space-y-0.5 whitespace-nowrap')}>
                   <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 tracking-wider">
                     {SUMMARY.scoreLabel}
                   </div>
-                  <div className="text-2xl sm:text-3xl font-black mono text-emerald-600 dark:text-emerald-400">
+                  <div className="text-xl sm:text-2xl font-black mono text-emerald-600 dark:text-emerald-400">
                     {overallScore === null ? NOT_APPLICABLE : `${overallScore}%`}
-                  </div>
-                  <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
-                    {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>
-                  </div>
-                </td>
-
-                {/* 4. Category Scores Preview */}
-                <td className="py-2.5 px-2.5 align-middle">
-                  <div className="grid grid-cols-2 gap-1 text-[10px]">
-                    {VENDOR_EVALUATION_PILLARS.map((p) => {
-                      const viewPillar = summary.pillars.find((pi) => pi.pillarId === p.id);
-                      const weighted = viewPillar?.weightedScore;
-                      return (
-                        <div key={p.id} className="p-1 rounded bg-slate-50 dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 flex items-center justify-between gap-1">
-                          <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">
-                            <span className={`inline-block w-3.5 h-3.5 rounded text-[8px] font-bold text-center leading-3.5 mr-1 ${p.accent.badge}`}>{p.id}</span>
-                            {p.name.split(' ')[0]}
-                          </span>
-                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
-                            {weighted !== null && weighted !== undefined ? `${weighted}/${p.weight}` : '—'}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </td>
-
-                {/* 5. Review Status */}
-                <td className="py-2.5 px-2.5 space-y-1.5 align-middle">
-                  <div className="p-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px] space-y-0.5">
-                    <div className="flex items-center gap-1 font-bold text-emerald-800 dark:text-emerald-300">
-                      <Zap size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0 animate-pulse" />
-                      <span>{SUMMARY.executionLabel}</span>
-                    </div>
-                    <div className="text-slate-700 dark:text-gray-300 font-medium text-[10px]">
-                      {summary.systemAction ?? NOT_RECORDED}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 text-[10px]">
-                    {documents.length === 0 ? (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
-                        <Clock size={10} /> {SUMMARY.documentsEmptyTitle}
-                      </span>
-                    ) : (
-                      <span className="badge badge-emerald font-mono text-[10px]">
-                        {formatString(SUMMARY.attachmentsSummaryTotal, { verified: verifiedDocumentCount, total: documents.length })}
-                      </span>
-                    )}
                   </div>
                 </td>
               </tr>

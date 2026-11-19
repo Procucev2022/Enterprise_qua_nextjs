@@ -1144,6 +1144,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(disableBtn);
 
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleDisableTitle)).toBeInTheDocument();
+      expect(screen.getByText(formatString(UI_STRINGS.vendorStatusControl.singleDisableDescription, { vendorName: 'Apex Supplies Ltd.' }))).toBeInTheDocument();
+      expect(screen.queryByText(/\(v-1\)/i)).not.toBeInTheDocument();
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleDisableImpactNote)).toBeInTheDocument();
 
       await act(async () => {
@@ -2559,6 +2561,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('view-profile-status-toggle-button'));
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleEnableTitle)).toBeInTheDocument();
+      expect(screen.getByText(formatString(UI_STRINGS.vendorStatusControl.singleEnableDescription, { vendorName: 'Apex Supplies Ltd.' }))).toBeInTheDocument();
+      expect(screen.queryByText(/\(v-1\)/i)).not.toBeInTheDocument();
       await act(async () => {
         fireEvent.click(screen.getByTestId('confirm-vendor-status-button'));
       });
@@ -2736,6 +2740,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
       expect(screen.getByText('Vendor Template Upload History')).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'View previous vendor template batches, inspect uploaded supplier records, and re-download template data.'
+        )
+      ).not.toBeInTheDocument();
       expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));
@@ -5367,6 +5376,244 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       await Promise.resolve();
       expect(mockFetchBuyerProfile).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('backdrop click-outside dismissal for Vendor Directory popups', () => {
+    it('closes Upload History and all Vendor Directory popup modals when clicking outside the dialog, while keeping them open on inside clicks', async () => {
+      const originalFetch = global.fetch;
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ success: true, data: [] }),
+      }) as unknown as typeof fetch;
+
+      const sampleVendor = statutoryVendor({
+        id: 'v-backdrop-1',
+        name: 'Backdrop Test Supplier',
+        email: 'backdrop@supplier.test',
+        source: 'buyer_uploaded',
+        isActive: true,
+      });
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [sampleVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: jest.fn().mockResolvedValue({ success: true }),
+        setMultipleBuyerVendorsActiveStatus: jest.fn().mockResolvedValue({ success: true }),
+        categoryTaxonomy: [
+          {
+            majorCategory: 'Mechanical',
+            minorCategories: ['Fasteners', 'Valves'],
+          },
+        ],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd' },
+      });
+
+      try {
+        render(
+          <VendorSummary
+            onViewEvaluation={mockOnViewEvaluation}
+            onNavigateToWizard={mockOnNavigateToWizard}
+          />
+        );
+
+        const assertInsideKeepsOpenAndBackdropCloses = (backdropTestId: string) => {
+          const backdrop = screen.getByTestId(backdropTestId);
+          const heading = within(backdrop).getAllByRole('heading')[0];
+          fireEvent.click(heading);
+          expect(screen.getByTestId(backdropTestId)).toBeInTheDocument();
+
+          fireEvent.click(backdrop);
+          expect(screen.queryByTestId(backdropTestId)).not.toBeInTheDocument();
+        };
+
+        // 1. Upload History popup
+        await act(async () => {
+          fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
+        });
+        expect(screen.getByTestId('upload-history-modal')).toBeInTheDocument();
+        assertInsideKeepsOpenAndBackdropCloses('upload-history-modal-backdrop');
+
+        // 2. Add Vendor popup
+        fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
+        assertInsideKeepsOpenAndBackdropCloses('add-vendor-modal-backdrop');
+
+        // 3. View Profile popup
+        fireEvent.click(screen.getByRole('button', { name: /View Profile/i }));
+        assertInsideKeepsOpenAndBackdropCloses('view-vendor-modal-backdrop');
+
+        // 4. Edit Vendor popup
+        fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+        assertInsideKeepsOpenAndBackdropCloses('edit-vendor-modal-backdrop');
+
+        // 5. Category Assign popup
+        fireEvent.click(screen.getByTestId('add-category-vendor-v-backdrop-1'));
+        assertInsideKeepsOpenAndBackdropCloses('vendor-category-modal-backdrop');
+
+        // 6. Single Vendor Status popup
+        fireEvent.click(screen.getByTestId('disable-vendor-v-backdrop-1'));
+        assertInsideKeepsOpenAndBackdropCloses('single-vendor-status-modal');
+
+        // 7. Bulk Vendor Status popup
+        fireEvent.click(screen.getByTestId('select-vendor-v-backdrop-1'));
+        fireEvent.click(screen.getByTestId('bulk-disable-vendors-button'));
+        assertInsideKeepsOpenAndBackdropCloses('bulk-vendor-status-modal');
+
+        // 8. Revise Rating popup
+        fireEvent.click(screen.getByRole('button', { name: /Revise Rating/i }));
+        assertInsideKeepsOpenAndBackdropCloses('revision-modal-backdrop');
+      } finally {
+        global.fetch = originalFetch;
+      }
+    });
+
+    it('blocks backdrop click-outside dismissal while a modal submission is in flight', async () => {
+      let resolveStatusUpdate: (value: { success: boolean }) => void = () => undefined;
+      const pendingStatusUpdate = jest.fn(
+        () =>
+          new Promise<{ success: boolean }>((resolve) => {
+            resolveStatusUpdate = resolve;
+          })
+      );
+
+      const sampleVendor = statutoryVendor({
+        id: 'v-backdrop-busy',
+        name: 'Busy Update Supplier',
+        email: 'busy@supplier.test',
+        source: 'buyer_uploaded',
+        isActive: true,
+      });
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [sampleVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: pendingStatusUpdate,
+        setMultipleBuyerVendorsActiveStatus: jest.fn().mockResolvedValue({ success: true }),
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      fireEvent.click(screen.getByTestId('disable-vendor-v-backdrop-busy'));
+      const backdrop = screen.getByTestId('single-vendor-status-modal');
+
+      // Start the in-flight status update
+      fireEvent.click(screen.getByTestId('confirm-vendor-status-button'));
+      expect(pendingStatusUpdate).toHaveBeenCalledTimes(1);
+
+      // Clicking outside on the backdrop while busy must NOT close the modal
+      fireEvent.click(backdrop);
+      expect(screen.getByTestId('single-vendor-status-modal')).toBeInTheDocument();
+
+      // Resolving the update closes the modal normally
+      await act(async () => {
+        resolveStatusUpdate({ success: true });
+      });
+      await waitFor(() => {
+        expect(screen.queryByTestId('single-vendor-status-modal')).not.toBeInTheDocument();
+      });
+    });
+  });
+
+  describe('vendor evaluation status in table and View Profile modal', () => {
+    it('shows REGISTERED / NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
+      const unevaluatedVendor = {
+        id: 'v-uneval-test',
+        name: 'Unrequested Supplier Corp',
+        contactPerson: 'Karan Mehra',
+        email: 'karan@unrequested.test',
+        phone: '+91 99887 76655',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+        source: 'buyer_manual',
+        status: 'PENDING EVALUATION', // Historical or default incoming status
+        evaluated: false,
+        evaluationRequested: false,
+      };
+
+      const requestedVendor = {
+        id: 'v-requested-test',
+        name: 'Dispatched Supplier Corp',
+        contactPerson: 'Anita Roy',
+        email: 'anita@dispatched.test',
+        phone: '+91 99887 76656',
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
+        source: 'buyer_manual',
+        status: 'PENDING EVALUATION',
+        evaluated: false,
+        evaluationRequested: true,
+        evaluationRequestedAt: '2026-03-01T10:00:00.000Z',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [unevaluatedVendor, requestedVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Testing Buyer Ltd' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // In the table, unevaluated vendor shows REGISTERED / NOT EVALUATED
+      expect(screen.getByText('REGISTERED / NOT EVALUATED')).toBeInTheDocument();
+
+      // Open View Profile modal on the unevaluated vendor
+      const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewButtons[0]);
+
+      // Inside View Profile modal: shows REGISTERED / NOT EVALUATED (1 in table, 1 in modal)
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading)).toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.notEvaluatedStatus).length).toBe(2);
+
+      // Close modal
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      // Open View Profile on the vendor that WAS requested
+      fireEvent.click(viewButtons[1]);
+      expect(screen.getAllByText('PENDING EVALUATION').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+        date: new Date('2026-03-01T10:00:00.000Z').toLocaleDateString(),
+      })).length).toBeGreaterThanOrEqual(1);
     });
   });
 });
