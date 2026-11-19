@@ -1167,6 +1167,8 @@ export const UI_STRINGS = {
 
     // Header & submission provenance
     submittedHeading: 'Submission Detail',
+    requestedByLabel: 'Requested By',
+    userEmailLabel: 'User Email',
     sourceLabel: 'Intake Source',
     sourceWebPortal: 'Web Portal Upload',
     sourceEmailGateway: 'via Email Upload',
@@ -1221,8 +1223,8 @@ export const UI_STRINGS = {
     noLineItemMatches: 'No line items match the current search and filter.',
     clearFiltersAction: 'Clear search and filter',
     manualConfidence: 'Keyed manually',
-    confidenceHigh: '{confidence}% High Confidence',
-    confidenceReview: '{confidence}% Needs Review',
+    confidenceHigh: 'High Confidence',
+    confidenceReview: 'Needs Review',
     displayingCount: 'Displaying {shown} of {total} line items',
     parsedSuccessfully: '{percent}% classified automatically',
     totalQuantityLabel: 'Total quantity',

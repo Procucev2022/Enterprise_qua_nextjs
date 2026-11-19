@@ -506,7 +506,7 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${highConfidence ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-      {formatString(highConfidence ? DETAILS.confidenceHigh : DETAILS.confidenceReview, { confidence })}
+      {highConfidence ? DETAILS.confidenceHigh : DETAILS.confidenceReview}
     </span>
   );
 }
@@ -758,6 +758,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     syncRFQRecord,
     buyerVendors,
     currentUserSession,
+    activeBuyerAccount,
     vendorUnlockedRfqIds = [],
     unlockRFQForVendor,
     refreshVendorCredits,
@@ -1804,6 +1805,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   const classifiedPercent = lineItems.length === 0 ? 0 : Math.round((autoClassified / lineItems.length) * 100);
   const totalQuantity = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
 
+  const requestedByName =
+    (activeRfq as any).buyerName ||
+    (activeRfq as any).buyerContact ||
+    (activeRfq as any).contactPerson ||
+    (activeRfq as any).requestedBy ||
+    (activeRfq as any).userName ||
+    activeBuyerAccount?.contactPerson ||
+    currentUserSession?.name ||
+    (activeRfq.raisedByEmail ? activeRfq.raisedByEmail.split('@')[0].replace(/[._-]/g, ' ') : '') ||
+    'Buyer';
+
+  const requestedByEmail =
+    (activeRfq as any).buyerEmail ||
+    activeRfq.raisedByEmail ||
+    (activeRfq as any).corporateEmail ||
+    (activeRfq as any).userEmail ||
+    activeBuyerAccount?.corporateEmail ||
+    currentUserSession?.email ||
+    '';
+
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
       case 'Closed':
@@ -1832,14 +1853,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         >
           <ArrowLeft size={14} /> {DETAILS.backAction}
         </button>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 dark:text-gray-400">
-          <span className="mono">{formatString(DETAILS.raisedOnStrip, { timestamp: formatIndianDateTime(activeRfq.createdAt) })}</span>
-          {activeRfq.updatedAt && activeRfq.updatedAt !== activeRfq.createdAt && (
-            <span className="mono">
-              {formatString(DETAILS.updatedOnStrip, { timestamp: formatIndianDateTime(activeRfq.updatedAt) })}
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Header bar */}
@@ -2042,8 +2055,19 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         <Card
           title={DETAILS.submittedHeading}
           icon={<ClipboardList size={15} className="text-indigo-600 dark:text-indigo-400" />}
-          meta={<span className="text-[10px] mono text-slate-400 dark:text-gray-500">{activeRfq.id}</span>}
         >
+          <Row label={DETAILS.requestedByLabel || 'Requested By'}>
+            <span className="font-semibold text-slate-900 dark:text-white">
+              {requestedByName}
+            </span>
+          </Row>
+          {requestedByEmail && (
+            <Row label={DETAILS.userEmailLabel || 'User Email'}>
+              <span className="mono text-indigo-600 dark:text-indigo-400">
+                {requestedByEmail}
+              </span>
+            </Row>
+          )}
           <Row label={DETAILS.sourceLabel}>
             <span className="inline-flex items-center gap-1.5">
               {activeRfq.source === 'email_gateway' || activeRfq.source === 'email_upload' ? (
@@ -2219,10 +2243,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
                     {totalQuantity}
                   </span>
-                </span>
-                <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
-                  <ShieldCheck size={12} />
-                  {formatString(DETAILS.parsedSuccessfully, { percent: classifiedPercent })}
                 </span>
               </span>
             </>

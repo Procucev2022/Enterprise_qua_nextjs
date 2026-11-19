@@ -294,37 +294,21 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(badge.getAttribute('style')).toBeNull();
     });
 
-    it('states when the RFQ was raised', () => {
+    it('does not display the raised date in the top provenance strip and renders it in the submission detail card', () => {
       renderDetails(buildRFQ());
 
       expect(
-        screen.getByText(
+        screen.queryByText(
           formatString(DETAILS.raisedOnStrip, {
             timestamp: formatIndianDateTime('2026-09-02 11:07:16'),
           })
         )
-      ).toBeInTheDocument();
+      ).not.toBeInTheDocument();
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).getByText(formatIndianDateTime('2026-09-02 11:07:16'))).toBeInTheDocument();
       // Not the raw UTC string it is stored as.
       expect(screen.queryByText(/2026-09-02 11:07:16/)).not.toBeInTheDocument();
-    });
-
-    // An unedited RFQ showing an "edited" timestamp reads as a change nobody made.
-    it('reports an edit only once the record has actually changed', () => {
-      const { unmount } = renderDetails(
-        buildRFQ({ createdAt: '2026-09-02 11:07:16', updatedAt: '2026-09-02 11:07:16' })
-      );
-
-      expect(screen.queryByText(/^Edited /)).not.toBeInTheDocument();
-      unmount();
-
-      renderDetails(buildRFQ({ updatedAt: '2026-09-06 09:15:00' }));
-      expect(
-        screen.getByText(
-          formatString(DETAILS.updatedOnStrip, {
-            timestamp: formatIndianDateTime('2026-09-06 09:15:00'),
-          })
-        )
-      ).toBeInTheDocument();
     });
 
     it('omits the mode badge when the sourcing mode is unknown', () => {
@@ -361,11 +345,19 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(card).getByText(DETAILS.sourceAiExtraction || 'AI Extraction')).toBeInTheDocument();
     });
 
-    it('shows the record id', () => {
-      renderDetails(buildRFQ({ id: 'rfq-1' }));
+    it('does not display the internal record id in the summary view card', () => {
+      renderDetails(buildRFQ({ id: 'rfq-internal-unique-123' }));
 
       const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
-      expect(within(card).getByText('rfq-1')).toBeInTheDocument();
+      expect(within(card).queryByText('rfq-internal-unique-123')).not.toBeInTheDocument();
+    });
+
+    it('displays the requested by user name and user email in the submission detail card', () => {
+      renderDetails(buildRFQ({ buyerName: 'Alice Sharma', buyerEmail: 'alice@acme.com' }));
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).getByText('Alice Sharma')).toBeInTheDocument();
+      expect(within(card).getByText('alice@acme.com')).toBeInTheDocument();
     });
 
     it('marks a blank intake source as unset when no aiSummary exists', () => {
@@ -528,14 +520,14 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(table).getByText('Flanged Gate Valve')).toBeInTheDocument();
       expect(within(table).getByText('ASTM A216 WCB body')).toBeInTheDocument();
       expect(within(table).getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
-      expect(within(table).getAllByText(formatString(DETAILS.confidenceHigh, { confidence: 95 }))).toHaveLength(2);
+      expect(within(table).getAllByText(DETAILS.confidenceHigh)).toHaveLength(2);
+      expect(within(table).queryByText(/95%/)).not.toBeInTheDocument();
     });
 
-    it('flags a low-confidence row as needing review', () => {
+    it('flags a low-confidence row as needing review without percentage', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 50 })] }));
-      expect(
-        within(lineItemTable()).getByText(formatString(DETAILS.confidenceReview, { confidence: 50 }))
-      ).toBeInTheDocument();
+      expect(within(lineItemTable()).getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(/50%/)).not.toBeInTheDocument();
     });
 
     it('numbers the rows', () => {
@@ -809,12 +801,13 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       });
     });
 
-    it('reports how much was classified automatically', () => {
+    it('does not display the classified automatically text in line items footer', () => {
       renderDetails(
         buildRFQ({ extractedEntities: [entity({ confidence: 95 }), entity({ id: 'ent-2', confidence: 40 })] })
       );
 
-      expect(screen.getByText(formatString(DETAILS.parsedSuccessfully, { percent: 50 }))).toBeInTheDocument();
+      expect(screen.queryByText(/classified automatically/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/% Classified/i)).not.toBeInTheDocument();
     });
 
     it('offers the line items as a CSV download named after the RFQ', () => {
