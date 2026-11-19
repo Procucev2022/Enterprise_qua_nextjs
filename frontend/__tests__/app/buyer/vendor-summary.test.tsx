@@ -1144,6 +1144,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(disableBtn);
 
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleDisableTitle)).toBeInTheDocument();
+      expect(screen.getByText(formatString(UI_STRINGS.vendorStatusControl.singleDisableDescription, { vendorName: 'Apex Supplies Ltd.' }))).toBeInTheDocument();
+      expect(screen.queryByText(/\(v-1\)/i)).not.toBeInTheDocument();
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleDisableImpactNote)).toBeInTheDocument();
 
       await act(async () => {
@@ -2559,6 +2561,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByTestId('view-profile-status-toggle-button'));
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.singleEnableTitle)).toBeInTheDocument();
+      expect(screen.getByText(formatString(UI_STRINGS.vendorStatusControl.singleEnableDescription, { vendorName: 'Apex Supplies Ltd.' }))).toBeInTheDocument();
+      expect(screen.queryByText(/\(v-1\)/i)).not.toBeInTheDocument();
       await act(async () => {
         fireEvent.click(screen.getByTestId('confirm-vendor-status-button'));
       });

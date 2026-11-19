@@ -6823,3 +6823,10 @@ resume
 resume
 ```
 ---
+
+### Prompt 301
+**Timestamp**: 2026-11-19T09:14:33+05:30
+```text
+When clicked on vendor inactive is giving the vendor code. please remove th vendor code.
+```
+---

@@ -3508,7 +3508,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       : UI_STRINGS.vendorStatusControl.singleDisableDescription,
                     {
                       vendorName: selectedVendorForCrud.name,
-                      vendorId: selectedVendorForCrud.id,
                     }
                   )}
                 </p>
@@ -3676,18 +3675,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             {vendor ? vendor.name : id}
                           </div>
                           <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
-                            <span>{id}</span>
                             {vendor?.majorCategory && (
-                              <>
-                                <span>•</span>
-                                <span>{vendor.majorCategory}</span>
-                              </>
+                              <span>{vendor.majorCategory}</span>
+                            )}
+                            {vendor?.majorCategory && vendor?.email && (
+                              <span>•</span>
                             )}
                             {vendor?.email && (
-                              <>
-                                <span>•</span>
-                                <span>{vendor.email}</span>
-                              </>
+                              <span>{vendor.email}</span>
                             )}
                           </div>
                         </div>
