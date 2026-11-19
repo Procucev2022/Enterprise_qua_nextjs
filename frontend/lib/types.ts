@@ -1268,6 +1268,8 @@ export interface VendorEntry {
   addedByBuyerName?: string;
   buyerId?: string;
   buyerAccountId?: string;
+  buyerEmail?: string;
+  isProcucevNetwork?: boolean;
   profileCompletionStatus?: 'pending' | 'completed';
 
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
@@ -1635,6 +1637,8 @@ export interface VendorOwnershipShape {
   buyerId?: string | null;
   buyerAccountId?: string | null;
   addedByBuyerCompany?: string | boolean | null;
+  buyerEmail?: string | null;
+  isProcucevNetwork?: boolean | null;
 }
 
 export interface IngestionFailedEmail {

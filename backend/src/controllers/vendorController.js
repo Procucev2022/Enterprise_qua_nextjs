@@ -1708,7 +1708,19 @@ async function empanelFallbackVendorForEvaluation({
   if (requireEmail && !email) return null;
   // Never overwrite or claim an existing vendor owned by another buyer. The preceding
   // getVendorByIdWithDBFallback lookup already synced any DB match into storeService.vendors.
-  if (email && storeService.getVendorById(email, 'all')) return null;
+  if (email) {
+    const existing = storeService.getVendorById(email, 'all');
+    if (existing) {
+      const isOwner = checkVendorOwnershipWithContext(user, existing, {
+        scopeSet: new Set(buyerScopeIdsFor(user, buyerAccount, resolvedOrgId).map((s) => String(s).toLowerCase())),
+        sId: String(attributedBuyerId || '').toLowerCase(),
+        uEmail: String(user?.email || '').toLowerCase(),
+        orgName: String(buyerCompany || '').toLowerCase(),
+      });
+      if (isOwner) return existing;
+      return null;
+    }
+  }
 
   const cleanCategories = resolveValidVendorCategories(candidate);
   const attributedBuyerId = buyerAccount?.id || resolvedOrgId || user?.sub || user?.id || user?.email || null;

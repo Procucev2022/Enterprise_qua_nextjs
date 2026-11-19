@@ -3918,6 +3918,8 @@ export const UI_STRINGS = {
     networkErrorMessage: 'The server could not be reached to update vendor status. Check your connection and retry.',
     inactiveVendorEvalBlocked: 'This vendor is marked inactive. Reactivate the vendor before sending a new evaluation request.',
     activeCountSummary: '{activeCount} active · {inactiveCount} inactive',
+    ownershipDenied: 'You do not have permission to modify this vendor profile.',
+    emailConflict: 'A supplier with this email address already exists in the system.',
   },
 
   vendorSummaryStats: {
