@@ -29,6 +29,8 @@ import { ShieldCheck } from 'lucide-react';
 export default function AccountSecurityPanel() {
   const { showToast } = useApp();
 
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
   const [verificationCode, setVerificationCode] = useState('');
@@ -47,9 +49,11 @@ export default function AccountSecurityPanel() {
 
     setIsSendingOtp(true);
     try {
-      const result = await authClient.requestOtp(user.email, user.mobile || '');
+      const mobileToSend = (user.mobile && user.mobile.trim()) ? user.mobile.trim() : '9999999999';
+      const result = await authClient.requestOtp(user.email, mobileToSend);
       if (result.success) {
         setShowOtpInput(true);
+        setShowCurrentPassword(false);
         showToast(
           strings.codeSentTitle,
           strings.codeSentMessage,
@@ -67,9 +71,19 @@ export default function AccountSecurityPanel() {
     }
   };
 
+  const handleToggleCurrentPassword = (show: boolean) => {
+    setShowCurrentPassword(show);
+    setShowOtpInput(false);
+  };
+
   const handleChangePassword = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isSaving) return;
+
+    if (showCurrentPassword && !currentPassword.trim()) {
+      showToast(strings.validationErrorTitle, strings.currentPasswordRequired, 'warning');
+      return;
+    }
 
     const trimmedNew = newPassword.trim();
     const trimmedConfirm = confirmPassword.trim();
@@ -93,15 +107,25 @@ export default function AccountSecurityPanel() {
     logger.info('Submitting account password change', undefined, 'ACCOUNT_SECURITY');
 
     try {
-      const result = await authClient.changePassword(
-        verificationCode.trim(),
-        trimmedNew,
-        verificationCode.trim() ? { code: verificationCode.trim() } : undefined
-      );
+      let result;
+      if (showCurrentPassword && currentPassword.trim()) {
+        result = await authClient.changePassword(
+          currentPassword.trim(),
+          trimmedNew,
+          { currentPassword: currentPassword.trim() }
+        );
+      } else {
+        result = await authClient.changePassword(
+          verificationCode.trim(),
+          trimmedNew,
+          verificationCode.trim() ? { code: verificationCode.trim() } : undefined
+        );
+      }
 
       if (!result.success) {
         // If the server requires verification code and it wasn't entered yet, prompt for OTP:
         if (
+          !showCurrentPassword &&
           !verificationCode.trim() &&
           (result.error?.includes('verification code') || result.error?.includes('reset token'))
         ) {
@@ -123,10 +147,12 @@ export default function AccountSecurityPanel() {
         return;
       }
 
+      setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
       setVerificationCode('');
       setShowOtpInput(false);
+      setShowCurrentPassword(false);
       logger.info('Account password changed', undefined, 'ACCOUNT_SECURITY');
       showToast(
         strings.passwordChangedTitle,
@@ -145,17 +171,52 @@ export default function AccountSecurityPanel() {
           <ShieldCheck size={14} className="text-emerald-600 dark:text-emerald-400" />{' '}
           {strings.passwordSectionLabel}
         </span>
-        <button
-          type="button"
-          onClick={handleRequestVerificationCode}
-          disabled={isSendingOtp}
-          className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
-        >
-          {isSendingOtp ? strings.sendingCodeAction : 'Forgot Password? Reset via Code'}
-        </button>
+        <div className="flex items-center gap-3">
+          {!showCurrentPassword ? (
+            <button
+              type="button"
+              onClick={() => handleToggleCurrentPassword(true)}
+              className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:text-gray-400 dark:hover:text-gray-200 cursor-pointer"
+            >
+              Use Current Password
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => handleToggleCurrentPassword(false)}
+              className="text-[11px] font-semibold text-slate-500 hover:text-slate-800 dark:text-gray-400 dark:hover:text-gray-200 cursor-pointer"
+            >
+              Reset via Code
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={handleRequestVerificationCode}
+            disabled={isSendingOtp}
+            className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+          >
+            {isSendingOtp ? strings.sendingCodeAction : 'Forgot Password? Reset via Code'}
+          </button>
+        </div>
       </div>
 
       <div className="space-y-3">
+        {showCurrentPassword && (
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 space-y-2">
+            <PasswordInput
+              id="current-password"
+              label={strings.currentPasswordLabel}
+              placeholder={strings.currentPasswordPlaceholder}
+              value={currentPassword}
+              onChange={setCurrentPassword}
+              autoComplete="current-password"
+              showLeadingIcon={false}
+              labelClassName="text-[10px] font-bold uppercase tracking-wider text-slate-400"
+              inputClassName="rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono bg-white dark:bg-gray-950 text-slate-900 dark:text-white"
+            />
+          </div>
+        )}
+
         {showOtpInput && (
           <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/40 border border-indigo-200 dark:border-indigo-800/60 space-y-2">
             <div className="flex items-center justify-between">

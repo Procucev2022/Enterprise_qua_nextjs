@@ -526,20 +526,22 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
   if (code) {
     const submittedCode = String(code).trim();
     const submittedMobile = String(user.mobile || '').trim();
-    const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+    const candidateKeys = [
+      buildOtpKey(normalizedEmail, submittedMobile),
+      submittedMobile ? buildOtpKey(normalizedEmail, `${submittedMobile}_email`) : null,
+      submittedMobile ? buildOtpKey(normalizedEmail, submittedMobile.replace(/\D/g, '')) : null,
+      `otp:${normalizedEmail}`,
+      buildOtpKey(normalizedEmail, '9999999999'),
+    ].filter(Boolean);
 
-    let storedOtp = await authSessionQueries.findOtp(otpKey);
-    if (!storedOtp && submittedMobile) {
-      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
-    }
-    if (!storedOtp && submittedMobile) {
-      const cleanDigits = submittedMobile.replace(/\D/g, '');
-      if (cleanDigits && cleanDigits !== submittedMobile) {
-        storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+    let storedOtp = null;
+    let matchedOtpKey = candidateKeys[0];
+    for (const key of candidateKeys) {
+      storedOtp = await authSessionQueries.findOtp(key);
+      if (storedOtp) {
+        matchedOtpKey = key;
+        break;
       }
-    }
-    if (!storedOtp) {
-      storedOtp = await authSessionQueries.findOtp(`otp:${normalizedEmail}`);
     }
 
     if (!storedOtp) {
@@ -547,8 +549,15 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
 
+    const clearOtpKeys = async () => {
+      const keys = new Set([matchedOtpKey, candidateKeys[0], `otp:${normalizedEmail}`]);
+      for (const k of keys) {
+        if (k) await authSessionQueries.deleteOtp(k);
+      }
+    };
+
     if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
-      await authSessionQueries.deleteOtp(otpKey);
+      await clearOtpKeys();
       logger.warn(`Password change verification failed, expired OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
@@ -558,13 +567,13 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
       crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(submittedCode));
 
     if (!isValidCode) {
-      await authSessionQueries.incrementOtpAttempts(otpKey);
+      await authSessionQueries.incrementOtpAttempts(matchedOtpKey);
       logger.warn(`Password change verification failed, invalid OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
 
     // Single-use: delete immediately upon successful verification so it cannot be reused!
-    await authSessionQueries.deleteOtp(otpKey);
+    await clearOtpKeys();
     verified = true;
   } else if (resetToken) {
     // 2. Verified password reset token
@@ -748,13 +757,7 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
     if (!user) {
       try {
         const userByEmail = await loadIdentityUser(normalizedEmail);
-        if (
-          userByEmail &&
-          (userByEmail.resetPasswordRequired ||
-            userByEmail.onboardingRequired ||
-            userByEmail.status === 'PENDING_ONBOARDING' ||
-            String(userByEmail.mobile || '').endsWith('9999999999'))
-        ) {
+        if (userByEmail) {
           user = userByEmail;
           isOnboardingUser = true;
         }
@@ -788,14 +791,12 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   try {
     // Every stored OTP names the email it was issued to: the auth_otp_codes.email column is NOT NULL
     // on the live D1 schema, so an insert without it fails and the failure is logged on every request.
+    await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
+    await authSessionQueries.saveOtp(`otp:${normalizedEmail}`, emailCode, expiresAt, normalizedEmail);
     if (isRegistration || isOnboardingUser) {
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt, normalizedEmail);
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt, normalizedEmail);
-      // Also save combined key for backwards compatibility with single-code verifications
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, 'email'), emailCode, expiresAt, normalizedEmail);
-    } else {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
     }
   } catch (err) {
     // Emailing a code that was never stored would guarantee the visitor's correct

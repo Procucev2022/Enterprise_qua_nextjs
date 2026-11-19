@@ -330,4 +330,51 @@ describe('AccountSecurityPanel in-flight state', () => {
       );
     });
   });
+
+  it('supports current password mode for direct authentication without OTP', async () => {
+    mount();
+    const useCurrentBtn = screen.getByRole('button', { name: /Use Current Password/i });
+    fireEvent.click(useCurrentBtn);
+
+    // Current password field is now visible
+    const currentInput = screen.getByPlaceholderText(strings.currentPasswordPlaceholder);
+    expect(currentInput).toBeInTheDocument();
+
+    // Toggle back to reset via code
+    const resetViaCodeBtn = screen.getByRole('button', { name: /^Reset via Code$/i });
+    fireEvent.click(resetViaCodeBtn);
+    expect(screen.queryByPlaceholderText(strings.currentPasswordPlaceholder)).not.toBeInTheDocument();
+
+    // Toggle back to current password mode
+    fireEvent.click(screen.getByRole('button', { name: /Use Current Password/i }));
+    const activeCurrentInput = screen.getByPlaceholderText(strings.currentPasswordPlaceholder);
+    expect(activeCurrentInput).toBeInTheDocument();
+
+    // Rejects empty current password
+    fillValid(VALID_NEW);
+    fireEvent.click(submitButton());
+    expect(mockShowToast).toHaveBeenCalledWith(
+      strings.validationErrorTitle,
+      strings.currentPasswordRequired,
+      'warning'
+    );
+    expect(changePassword).not.toHaveBeenCalled();
+
+    // Submits with current password
+    fireEvent.change(activeCurrentInput, { target: { value: 'OldSecret123!' } });
+    fireEvent.click(submitButton());
+
+    await waitFor(() => expect(changePassword).toHaveBeenCalledTimes(1));
+    expect(changePassword).toHaveBeenCalledWith('OldSecret123!', VALID_NEW, { currentPassword: 'OldSecret123!' });
+  });
+
+  it('uses placeholder phone when user mobile is missing from session during OTP request', async () => {
+    (authClient.getSessionUser as jest.Mock).mockReturnValueOnce({ email: 'vendor@procucev.com', mobile: '' });
+    mount();
+    const forgotBtn = screen.getByRole('button', { name: /Forgot Password\? Reset via Code/i });
+    fireEvent.click(forgotBtn);
+
+    await waitFor(() => expect(requestOtp).toHaveBeenCalledTimes(1));
+    expect(requestOtp).toHaveBeenCalledWith('vendor@procucev.com', '9999999999');
+  });
 });

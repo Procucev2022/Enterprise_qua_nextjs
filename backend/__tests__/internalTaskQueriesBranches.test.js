@@ -13,6 +13,7 @@ const pool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
 const storeService = require('../src/services/storeService');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const { DEFAULT_INTERNAL_ASSIGNEES } = require('../src/config/constants');
 
 const ACTOR = { uuid: 'ops-1', name: 'Ops Lead', email: 'ops@procure.test' };
 
@@ -338,7 +339,15 @@ describe('internal task reads with empty or partial results', () => {
 
     await expect(internalTaskQueries.getOverdueAndUpcomingTasks()).resolves.toEqual([]);
     await expect(internalTaskQueries.listAllInternalTasks()).resolves.toEqual([]);
-    await expect(internalTaskQueries.getInternalAssignees()).resolves.toEqual([]);
+    await expect(internalTaskQueries.getInternalAssignees()).resolves.toEqual(
+      DEFAULT_INTERNAL_ASSIGNEES.map((name) => ({
+        id: `usr_${String(name).toLowerCase().replace(/[^a-z0-9]/g, '_')}`,
+        name,
+        role: 'Internal Staff',
+        email: `${String(name).toLowerCase().replace(/\s+/g, '.')}@procucev.com`,
+        project: null,
+      }))
+    );
     await expect(internalTaskQueries.searchRelatedEntities(undefined, 'x')).resolves.toEqual([]);
     for (const type of ['RFQ', 'BUYER', 'VENDOR', 'CATEGORY', 'USER', 'PAYMENT']) {
       await expect(internalTaskQueries.searchRelatedEntities(type, 'x')).resolves.toEqual([]);
