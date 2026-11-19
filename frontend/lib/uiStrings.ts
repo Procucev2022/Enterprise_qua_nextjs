@@ -2265,6 +2265,32 @@ export const UI_STRINGS = {
         'None of the uploaded PO rows fall inside the selected period. Check the period, or the date column in your file.',
       runJoinAction: 'Run Vendor & PO Match',
       runningJoin: 'Matching PO history to your vendor master…',
+      duplicatesSkippedBannerTitle: '{count} Duplicate PO {rowWord} Skipped',
+      duplicatesSkippedBannerHint:
+        'The following duplicate PO records were detected and rejected so they will not be uploaded again:',
+      allDuplicatesBannerTitle: 'No New PO Records Imported ({count} Duplicates Skipped)',
+      allDuplicatesBannerHint:
+        'Every PO record in "{fileName}" was already uploaded previously or is duplicated within the file.',
+      allDuplicatesError:
+        'All {count} PO records in "{fileName}" are duplicates of previously uploaded or earlier rows and were not accepted.',
+      duplicatesSummaryInline: ' ({count} duplicate(s) skipped)',
+      duplicateRowSingular: 'Row',
+      duplicateRowPlural: 'Rows',
+      duplicateColumnRow: 'Row #',
+      duplicateColumnPoNumber: 'PO Number',
+      duplicateColumnVendor: 'Vendor / Supplier',
+      duplicateColumnItem: 'Item Description',
+      duplicateColumnSpecs: 'Specifications',
+      duplicateColumnReason: 'Duplicate Reason',
+      duplicateReasonExisting: 'Duplicate PO record ({summary}) — already uploaded previously',
+      duplicateReasonFile: 'Duplicate PO record ({summary}) — already present at row {firstRow} of this file',
+      duplicatesWarningToastTitle: 'Duplicate PO Data Skipped',
+      duplicatesWarningToastBody:
+        '{imported} new PO records loaded from {fileName}. {skipped} duplicate PO record(s) skipped.',
+      allDuplicatesToastBody:
+        'All {skipped} PO records in {fileName} were already uploaded or duplicated and were rejected.',
+      downloadDuplicatesCsv: 'Download Duplicate POs CSV',
+      dismissDuplicatesAction: 'Clear Duplicate List',
     },
 
     aiCategory: {

@@ -16,10 +16,13 @@ import {
 } from '@/lib/constants';
 import { autoCategorizeItem, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import type {
+  ExistingPoDedupeCandidate,
   HistoricalPurchaseVendorRecord,
   IngestionJobState,
   IngestionSummary,
+  PoDuplicatePartitionCandidate,
   PurchaseOrderLineItemRecord,
+  SkippedDuplicatePoRecord,
   SkippedDuplicateVendorRecord,
   VendorCategoryMapping,
   VendorDedupeSummary,
@@ -29,7 +32,10 @@ import type {
 } from '@/lib/types';
 import {
   extractSkippedDuplicatesFromJob,
+  extractSkippedDuplicatePosFromJob,
+  partitionDuplicatePoRows,
   partitionDuplicateVendorMasterRows,
+  downloadSkippedDuplicatePosCsv,
   downloadSkippedDuplicatesCsv,
   reconcileVendorJobProgress,
 } from '@/lib/vendorUploadClient';
@@ -93,7 +99,7 @@ function buildStartJobStateFromResponse(params: {
         jobType,
         fileName,
         status: 'FAILED',
-        ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+        uploadedRecords: rawTotal,
         totalRecords: uniqueCount,
         processedRecords: 0,
         importedRecords: 0,
@@ -127,7 +133,7 @@ function buildStartJobStateFromResponse(params: {
       jobType,
       fileName,
       status,
-      ...(jobType === 'VENDOR_MASTER' ? { uploadedRecords: rawTotal } : {}),
+      uploadedRecords: rawTotal,
       totalRecords,
       processedRecords,
       importedRecords,
@@ -157,16 +163,18 @@ export function IngestionProgressCard({
   const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
 
   const isVendorMaster = job.jobType === 'VENDOR_MASTER';
+  const isPoDump = job.jobType === 'PO_DUMP';
+  const isUploadJob = isVendorMaster || isPoDump;
   const isAiCategory = job.jobType === 'AI_CATEGORY';
   const uploadedTotal =
     typeof job.uploadedRecords === 'number' && job.uploadedRecords > 0
       ? job.uploadedRecords
-      : isVendorMaster && skipped > 0
+      : isUploadJob && skipped > 0
       ? total + skipped
       : total || processed;
 
   const isAllDuplicates =
-    isVendorMaster &&
+    isUploadJob &&
     total === 0 &&
     imported === 0 &&
     skipped > 0 &&
@@ -278,8 +286,8 @@ export function IngestionProgressCard({
       </div>
 
       {/* Metrics Breakdown Grid */}
-      <div className={`grid grid-cols-2 ${isVendorMaster && skipped > 0 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center text-xs`}>
-        {isVendorMaster && skipped > 0 && (
+      <div className={`grid grid-cols-2 ${isUploadJob && skipped > 0 ? 'sm:grid-cols-6' : 'sm:grid-cols-5'} gap-2 text-center text-xs`}>
+        {isUploadJob && skipped > 0 && (
           <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
             <span className="text-[10px] uppercase font-bold text-slate-400 block">{vmStrings.jobUploadedStat}</span>
             <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(uploadedTotal)}</span>
@@ -287,7 +295,7 @@ export function IngestionProgressCard({
         )}
         <div className="p-2.5 rounded-xl bg-slate-800/70 border border-slate-700/60">
           <span className="text-[10px] uppercase font-bold text-slate-400 block">
-            {isVendorMaster ? 'Stored Total' : 'Total'}
+            {isUploadJob ? 'Stored Total' : 'Total'}
           </span>
           <span className="font-mono font-black text-slate-100 text-sm">{formatNumber(total || processed)}</span>
         </div>
@@ -303,7 +311,7 @@ export function IngestionProgressCard({
         </div>
         <div className="p-2.5 rounded-xl bg-amber-950/60 border border-amber-800/60">
           <span className="text-[10px] uppercase font-bold text-amber-300 block">
-            {isVendorMaster ? vmStrings.jobDuplicatesRemovedStat : isAiCategory ? 'Self-Map' : 'Skipped'}
+            {isUploadJob ? vmStrings.jobDuplicatesRemovedStat : isAiCategory ? 'Self-Map' : 'Skipped'}
           </span>
           <span className="font-mono font-black text-amber-200 text-sm">{formatNumber(skipped)}</span>
         </div>
@@ -472,10 +480,13 @@ export default function InitialSetupModal() {
   const vendorDedupeSummaryRef = useRef<VendorDedupeSummary | null>(null);
 
   const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>([]);
+  const [existingOrgPoRecords, setExistingOrgPoRecords] = useState<ExistingPoDedupeCandidate[]>([]);
+  const [skippedDuplicatePoRows, setSkippedDuplicatePoRows] = useState<SkippedDuplicatePoRecord[]>([]);
   const [poDataUploaded, setPoDataUploaded] = useState(false);
   const [poFileName, setPoFileName] = useState<string>(`PO_Purchase_Dump_${selectedPeriod}.xlsx`);
   const [isDraggingPo, setIsDraggingPo] = useState<boolean>(false);
   const [isParsingPo, setIsParsingPo] = useState<boolean>(false);
+  const poDedupeSummaryRef = useRef<VendorDedupeSummary | null>(null);
 
   const [vendorPreviewLimit, setVendorPreviewLimit] = useState<number>(50);
   const [poPreviewLimit, setPoPreviewLimit] = useState<number>(50);
@@ -493,6 +504,9 @@ export default function InitialSetupModal() {
   const isAiRunning = aiJob?.status === 'PENDING' || aiJob?.status === 'PROCESSING';
   // Historical PO dump is mandatory in Buyer vendor upload before proceeding to Step 4.
   const hasPoDump = poDataUploaded || poLineItems.length > 0;
+  const poSkippedDisplayCount = Math.max(poJob?.skippedRecords || 0, skippedDuplicatePoRows.length);
+  const isPoAllDuplicatesCard = poLineItems.length === 0 && poSkippedDisplayCount > 0;
+  const poDisplayFileName = poFileName || poJob?.fileName || 'PO_Purchase_Dump.xlsx';
 
   // Validate vendor mobile number: accepts with or without +91, exactly 10 numeric digits after country code
   const isValidVendorMobile = (phone: string | undefined | null): boolean => {
@@ -713,8 +727,29 @@ export default function InitialSetupModal() {
             if (serverSkippedList.length > 0) {
               setSkippedDuplicateVendors((prev) => (prev.length > 0 ? prev : serverSkippedList));
             }
-          } else if (which === 'po') setPoJob(freshJob);
-          else setAiJob((prev) => ({ ...freshJob, fileName: freshJob.fileName || prev?.fileName || '' }));
+          } else if (which === 'po') {
+            const reconciledPo = reconcileVendorJobProgress(freshJob, poDedupeSummaryRef.current);
+            setPoJob(reconciledPo);
+            const serverSkippedPos = extractSkippedDuplicatePosFromJob(freshJob);
+            if (serverSkippedPos.length > 0) {
+              setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : serverSkippedPos));
+            }
+            if (
+              reconciledPo.status === 'COMPLETED' &&
+              reconciledPo.importedRecords === 0 &&
+              reconciledPo.skippedRecords > 0 &&
+              reconciledPo.failedRecords === 0
+            ) {
+              setPoLineItems([]);
+              setPoDataUploaded(false);
+              setPoUploadError(
+                formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+                  count: reconciledPo.skippedRecords,
+                  fileName: reconciledPo.fileName || poFileName,
+                })
+              );
+            }
+          } else setAiJob((prev) => ({ ...freshJob, fileName: freshJob.fileName || prev?.fileName || '' }));
         } catch (err) {
           logger.log('WARN', 'Could not refresh ingestion job progress', { error: err, jobType: which }, 'VENDOR_INGESTION');
         }
@@ -786,12 +821,17 @@ export default function InitialSetupModal() {
     setVendorFileName('');
     setVendorUploadError(null);
     setSkippedDuplicateVendors([]);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
 
     const initSession = async () => {
       try {
         const res = await fetch('/api/vendor-ingestion/session', { headers: authFetchHeaders() });
         if (!res.ok) return;
         const json = await res.json();
+        if (Array.isArray(json?.data?.existingPoRecords)) {
+          setExistingOrgPoRecords(json.data.existingPoRecords);
+        }
         let sess: VendorIngestionSession | null = json?.data?.session ?? null;
         if (!sess?.id) {
           const created = await fetch('/api/vendor-ingestion/session', {
@@ -1326,11 +1366,13 @@ export default function InitialSetupModal() {
     }
 
     setPoFileName(file.name);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
     setIsParsingPo(true);
 
     // Set initial active job state
     setPoJob({
-      id: `job-po-${Date.now()}`,
+      id: `local-po-${Date.now()}`,
       jobType: 'PO_DUMP',
       fileName: file.name,
       status: 'PROCESSING',
@@ -1365,7 +1407,16 @@ export default function InitialSetupModal() {
           if (res.ok) {
             const json = await res.json();
             if (json?.data?.job) {
-              setPoJob(json.data.job);
+              const streamJob: IngestionJobState = json.data.job;
+              const summary = poDedupeSummaryRef.current;
+              if (summary?.fileName === file.name && summary.allSkippedClientSide && streamJob.status !== 'COMPLETED') {
+                return;
+              }
+              setPoJob(reconcileVendorJobProgress(streamJob, summary));
+              const streamSkippedPos = extractSkippedDuplicatePosFromJob(streamJob);
+              if (streamSkippedPos.length > 0) {
+                setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : streamSkippedPos));
+              }
               showToast('Ingestion Started', `Started background streaming ingestion for PO dump ${file.name}. Progress is tracked live.`, 'info');
             }
           } else {
@@ -1422,125 +1473,136 @@ export default function InitialSetupModal() {
           }
 
           const invalidPoRows: string[] = [];
-          const parsedPOs: PurchaseOrderLineItemRecord[] = rawJson.map((row, idx) => {
-            const keys = Object.keys(row);
-            const getRawVal = (possibleKeys: string[], excludeSubstrings: string[] = []): unknown => {
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return row[matchedKey];
+          const parsedPoCandidates: PoDuplicatePartitionCandidate[] = rawJson
+            .map((row, idx): PoDuplicatePartitionCandidate => {
+              const keys = Object.keys(row);
+              const getRawVal = (possibleKeys: string[], excludeSubstrings: string[] = []): unknown => {
+                for (const pk of possibleKeys) {
+                  const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                  const matchedKey = keys.find((k) => k.toLowerCase().trim().replace(/[^a-z0-9]/g, '') === pkClean);
+                  if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                    return row[matchedKey];
+                  }
                 }
-              }
-              for (const pk of possibleKeys) {
-                const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
-                if (!pkClean || pkClean.length < 3) continue;
-                const matchedKey = keys.find((k) => {
-                  const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
-                  if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
-                  return kClean.includes(pkClean);
-                });
-                if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
-                  return row[matchedKey];
+                for (const pk of possibleKeys) {
+                  const pkClean = pk.toLowerCase().replace(/[^a-z0-9]/g, '');
+                  if (!pkClean || pkClean.length < 3) continue;
+                  const matchedKey = keys.find((k) => {
+                    const kClean = k.toLowerCase().trim().replace(/[^a-z0-9]/g, '');
+                    if (excludeSubstrings.some((ex) => kClean.includes(ex.toLowerCase().replace(/[^a-z0-9]/g, '')))) return false;
+                    return kClean.includes(pkClean);
+                  });
+                  if (matchedKey && row[matchedKey] !== undefined && row[matchedKey] !== '') {
+                    return row[matchedKey];
+                  }
                 }
+                return undefined;
+              };
+
+              const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
+                const raw = getRawVal(possibleKeys, excludeSubstrings);
+                return raw !== undefined && raw !== null ? String(raw).trim() : '';
+              };
+
+              const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
+              const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
+              const poDate = normalizePoDate(rawPoDate) || '';
+              const vendorIdentifier = getVal([
+                'vendor name',
+                'supplier name',
+                'vendor/supplier name',
+                'vendor name / code',
+                'vendor identifier',
+                'company name',
+                'vendor code',
+                'supplier code',
+                'vendor id',
+                'supplier id',
+                'vendor',
+                'supplier',
+              ]);
+              const itemName = getVal([
+                'item description',
+                'short text',
+                'material description',
+                'line item description',
+                'item name & description',
+                'item name',
+                'product description',
+                'product name',
+                'service description',
+                'line item',
+                'description',
+                'material',
+                'service',
+                'item',
+              ]);
+              const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
+
+              const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
+              // 0 means no usable quantity. The row is rejected below rather than set to 1.
+              const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
+
+              const unit = getVal(['unit', 'uom', 'unit of measure', 'units']);
+
+              const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
+              const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
+
+              const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
+              const parsedTotalSpend = totalSpendRaw && !isNaN(Number(String(totalSpendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(totalSpendRaw).replace(/[^0-9.]/g, '')) : 0;
+
+              let totalSpend = parsedTotalSpend;
+              let unitPrice = parsedUnitPrice;
+
+              if (totalSpend > 0 && unitPrice === 0 && quantity > 0) {
+                unitPrice = Math.round(totalSpend / quantity);
+              } else if (totalSpend === 0 && unitPrice > 0) {
+                totalSpend = unitPrice * quantity;
               }
-              return undefined;
-            };
+              // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
 
-            const getVal = (possibleKeys: string[], excludeSubstrings: string[] = []): string => {
-              const raw = getRawVal(possibleKeys, excludeSubstrings);
-              return raw !== undefined && raw !== null ? String(raw).trim() : '';
-            };
+              const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'function']);
 
-            const poNumber = getVal(['ponumber', 'po number', 'po #', 'po no', 'pono', 'order id', 'order number', 'order no']);
-            const rawPoDate = getRawVal(['podate', 'po date', 'date', 'order date', 'creation date']);
-            const poDate = normalizePoDate(rawPoDate) || '';
-            const vendorIdentifier = getVal([
-              'vendor name',
-              'supplier name',
-              'vendor/supplier name',
-              'vendor name / code',
-              'vendor identifier',
-              'company name',
-              'vendor code',
-              'supplier code',
-              'vendor id',
-              'supplier id',
-              'vendor',
-              'supplier',
-            ]);
-            const itemName = getVal([
-              'item description',
-              'short text',
-              'material description',
-              'line item description',
-              'item name & description',
-              'item name',
-              'product description',
-              'product name',
-              'service description',
-              'line item',
-              'description',
-              'material',
-              'service',
-              'item',
-            ]);
-            const specs = getVal(['specs', 'specification', 'technical specs', 'specifications', 'details', 'item specs', 'grade']);
-            
-            const qtyRaw = getVal(['quantity', 'qty', 'units', 'count', 'ordered qty', 'volume']);
-            // 0 means no usable quantity. The row is rejected below rather than set to 1.
-            const quantity = qtyRaw && !isNaN(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) ? Math.round(Number(String(qtyRaw).replace(/[^0-9.]/g, ''))) : 0;
-            
-            const unit = getVal(['unit', 'uom', 'unit of measure', 'units']);
+              // Rows the filter below would drop as blank are skipped here. Any other row must name every
+              // required field it lacks. Nothing is substituted for a missing value. Category is not read from the
+              // file: the AI job extracts it per supplier from the stored PO history.
+              const isBlankRow = !vendorIdentifier && !itemName && !department;
+              const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName });
+              if (!isBlankRow && missingFields.length > 0) {
+                invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
+              }
 
-            const unitPriceRaw = getVal(['unit price inr', 'unit price', 'unit rate', 'rate inr', 'rate', 'price inr', 'price', 'item price']);
-            const totalSpendRaw = getVal(['total spend inr', 'total spend (inr)', 'total spend rs', 'total spend', 'total amount inr', 'total amount (inr)', 'total amount', 'total inr', 'total (inr)', 'spend inr', 'spend', 'amount inr', 'amount', 'total value', 'po amount', 'total']);
-
-            const parsedUnitPrice = unitPriceRaw && !isNaN(Number(String(unitPriceRaw).replace(/[^0-9.]/g, ''))) ? Number(String(unitPriceRaw).replace(/[^0-9.]/g, '')) : 0;
-            const parsedTotalSpend = totalSpendRaw && !isNaN(Number(String(totalSpendRaw).replace(/[^0-9.]/g, ''))) ? Number(String(totalSpendRaw).replace(/[^0-9.]/g, '')) : 0;
-
-            let totalSpend = parsedTotalSpend;
-            let unitPrice = parsedUnitPrice;
-
-            if (totalSpend > 0 && unitPrice === 0 && quantity > 0) {
-              unitPrice = Math.round(totalSpend / quantity);
-            } else if (totalSpend === 0 && unitPrice > 0) {
-              totalSpend = unitPrice * quantity;
-            }
-            // With neither a unit price nor a spend figure, the row is rejected below. It is not priced at a guess.
-
-            const department = getVal(['department', 'dept', 'cost center', 'plant', 'division', 'function']);
-
-            // Rows the filter below would drop as blank are skipped here. Any other row must name every
-            // required field it lacks. Nothing is substituted for a missing value. Category is not read from the
-            // file: the AI job extracts it per supplier from the stored PO history.
-            const isBlankRow = !vendorIdentifier && !itemName && !department;
-            const missingFields = findMissingPoDumpFields({ vendorIdentifier, itemName });
-            if (!isBlankRow && missingFields.length > 0) {
-              invalidPoRows.push(`${formatString(UI_STRINGS.vendorPoIngestion.validation.errorRowTemplate, { row: idx + 2 })}: ${missingFields.join(', ')}`);
-            }
-
-            return {
-              id: `po-upload-${Date.now()}-${idx}`,
-              poNumber,
-              poDate,
-              vendorName: vendorIdentifier,
-              vendorIdentifier,
-              itemName,
-              itemDescription: itemName,
-              specs,
-              specification: specs,
-              quantity,
-              unit,
-              uom: unit,
-              unitPrice,
-              totalSpend,
-              spend: totalSpend,
-              department: department || '',
-            };
-          })
-            .filter((p) => Boolean(p.vendorIdentifier?.trim() || p.vendorName?.trim() || p.itemName?.trim() || p.itemDescription?.trim() || p.department?.trim()))
-            .sort((a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime());
+              return {
+                rowNumber: idx + 2,
+                record: {
+                  id: `po-upload-${Date.now()}-${idx}`,
+                  poNumber,
+                  poDate,
+                  vendorName: vendorIdentifier,
+                  vendorIdentifier,
+                  itemName,
+                  itemDescription: itemName,
+                  specs,
+                  specification: specs,
+                  quantity,
+                  unit,
+                  uom: unit,
+                  unitPrice,
+                  totalSpend,
+                  spend: totalSpend,
+                  department: department || '',
+                },
+              };
+            })
+            .filter((entry) =>
+              Boolean(
+                entry.record.vendorIdentifier?.trim() ||
+                  entry.record.vendorName?.trim() ||
+                  entry.record.itemName?.trim() ||
+                  entry.record.itemDescription?.trim() ||
+                  entry.record.department?.trim()
+              )
+            );
 
           // Any incomplete row rejects the whole file, so no partial PO dump is stored.
           if (invalidPoRows.length > 0) {
@@ -1553,13 +1615,72 @@ export default function InitialSetupModal() {
             return;
           }
 
-          if (parsedPOs.length === 0) {
+          if (parsedPoCandidates.length === 0) {
             const errMsg = 'The uploaded PO dump file contains no recognizable purchase order records. Please verify your file.';
             setPoUploadError(errMsg);
             showToast('Invalid PO File', errMsg, 'warning');
             setIsParsingPo(false);
             setPoJob(null);
             if (poFileInputRef.current) poFileInputRef.current.value = '';
+            return;
+          }
+
+          const { uniqueRecords: uniquePoRows, skippedDuplicates: skippedPoDuplicates } = partitionDuplicatePoRows(
+            parsedPoCandidates,
+            existingOrgPoRecords
+          );
+          const parsedPOs = [...uniquePoRows].sort(
+            (a, b) => new Date(b.poDate || 0).getTime() - new Date(a.poDate || 0).getTime()
+          );
+          const totalPoCandidateCount = parsedPoCandidates.length;
+          const poStrings = UI_STRINGS.vendorPoIngestion.poDump;
+
+          poDedupeSummaryRef.current = {
+            fileName: file.name,
+            totalCount: totalPoCandidateCount,
+            skippedCount: skippedPoDuplicates.length,
+            isExcelOnly: !isCsvOrText,
+            allSkippedClientSide: parsedPOs.length === 0 && skippedPoDuplicates.length > 0,
+          };
+          setSkippedDuplicatePoRows(skippedPoDuplicates);
+
+          if (parsedPOs.length === 0 && skippedPoDuplicates.length > 0) {
+            const allDupErr = formatString(poStrings.allDuplicatesError, {
+              count: skippedPoDuplicates.length,
+              fileName: file.name,
+            });
+            logger.log(
+              'WARN',
+              'Rejected PO dump upload because all records were duplicates',
+              { fileName: file.name, skippedCount: skippedPoDuplicates.length },
+              'PURCHASE_ORDER_INGESTION'
+            );
+            setPoLineItems([]);
+            setPoDataUploaded(false);
+            setPoFileName(file.name);
+            setApiJoinedVendors(null);
+            setAiJob(null);
+            setPoUploadError(allDupErr);
+            setPoJob({
+              id: `job-po-${Date.now()}`,
+              jobType: 'PO_DUMP',
+              fileName: file.name,
+              status: 'COMPLETED',
+              uploadedRecords: totalPoCandidateCount,
+              totalRecords: 0,
+              processedRecords: 0,
+              importedRecords: 0,
+              skippedRecords: skippedPoDuplicates.length,
+              failedRecords: 0,
+            });
+            showToast(
+              poStrings.duplicatesWarningToastTitle,
+              formatString(poStrings.allDuplicatesToastBody, {
+                skipped: skippedPoDuplicates.length.toLocaleString('en-IN'),
+                fileName: file.name,
+              }),
+              'warning'
+            );
             return;
           }
 
@@ -1570,6 +1691,20 @@ export default function InitialSetupModal() {
           setApiJoinedVendors(null);
           setAiJob(null);
 
+          const localPoFallbackJob: IngestionJobState = {
+            id: `local-po-${Date.now()}`,
+            jobType: 'PO_DUMP',
+            fileName: file.name,
+            status: 'COMPLETED',
+            uploadedRecords: totalPoCandidateCount,
+            totalRecords: parsedPOs.length,
+            processedRecords: parsedPOs.length,
+            importedRecords: parsedPOs.length,
+            skippedRecords: skippedPoDuplicates.length,
+            failedRecords: 0,
+          };
+
+          let effectiveSkippedCount = skippedPoDuplicates.length;
           if (sessionId && !isCsvOrText) {
             try {
               const jobRes = await fetch(`/api/vendor-ingestion/${sessionId}/start-job`, {
@@ -1585,13 +1720,41 @@ export default function InitialSetupModal() {
               const { jobState, failureMessage } = buildStartJobStateFromResponse({
                 jobType: 'PO_DUMP',
                 fileName: file.name,
-                rawTotal: parsedPOs.length,
+                rawTotal: totalPoCandidateCount,
                 uniqueCount: parsedPOs.length,
-                skippedDuplicates: 0,
+                skippedDuplicates: skippedPoDuplicates.length,
                 ok: jobRes.ok,
                 payload: jobJson,
               });
               setPoJob(jobState);
+              const serverSkippedPos = extractSkippedDuplicatePosFromJob(jobState);
+              if (serverSkippedPos.length > 0) {
+                setSkippedDuplicatePoRows((prev) => (prev.length > 0 ? prev : serverSkippedPos));
+              }
+              effectiveSkippedCount = Math.max(jobState.skippedRecords || 0, skippedPoDuplicates.length);
+              if (
+                jobState.status === 'COMPLETED' &&
+                jobState.importedRecords === 0 &&
+                jobState.skippedRecords > 0 &&
+                jobState.failedRecords === 0
+              ) {
+                const serverAllDupErr = formatString(poStrings.allDuplicatesError, {
+                  count: jobState.skippedRecords,
+                  fileName: file.name,
+                });
+                setPoLineItems([]);
+                setPoDataUploaded(false);
+                setPoUploadError(serverAllDupErr);
+                showToast(
+                  poStrings.duplicatesWarningToastTitle,
+                  formatString(poStrings.allDuplicatesToastBody, {
+                    skipped: jobState.skippedRecords.toLocaleString('en-IN'),
+                    fileName: file.name,
+                  }),
+                  'warning'
+                );
+                return;
+              }
               if (failureMessage) {
                 showToast(
                   UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed,
@@ -1601,33 +1764,29 @@ export default function InitialSetupModal() {
               }
             } catch (e) {
               logger.log('WARN', 'Purchase order background job could not start; local parsing fallback will be used', { error: e }, 'PURCHASE_ORDER_INGESTION');
-              setPoJob({
-                id: `job-po-${Date.now()}`,
-                jobType: 'PO_DUMP',
-                fileName: file.name,
-                status: 'COMPLETED',
-                totalRecords: parsedPOs.length,
-                processedRecords: parsedPOs.length,
-                importedRecords: parsedPOs.length,
-                skippedRecords: 0,
-                failedRecords: 0,
-              });
+              setPoJob(localPoFallbackJob);
             }
           } else {
-            setPoJob({
-              id: `job-po-${Date.now()}`,
-              jobType: 'PO_DUMP',
-              fileName: file.name,
-              status: 'COMPLETED',
-              totalRecords: parsedPOs.length,
-              processedRecords: parsedPOs.length,
-              importedRecords: parsedPOs.length,
-              skippedRecords: 0,
-              failedRecords: 0,
-            });
+            setPoJob((prev) =>
+              isCsvOrText && sessionId && prev && !prev.id.startsWith('local-po-') ? prev : localPoFallbackJob
+            );
           }
 
-          showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
+          setExistingOrgPoRecords((prev) => [...prev, ...parsedPOs]);
+
+          if (effectiveSkippedCount > 0) {
+            showToast(
+              poStrings.duplicatesWarningToastTitle,
+              formatString(poStrings.duplicatesWarningToastBody, {
+                imported: parsedPOs.length.toLocaleString('en-IN'),
+                skipped: effectiveSkippedCount.toLocaleString('en-IN'),
+                fileName: file.name,
+              }),
+              'warning'
+            );
+          } else {
+            showToast('PO Dump Uploaded', `Successfully parsed & loaded ${parsedPOs.length.toLocaleString('en-IN')} PO line items from ${file.name}.`, 'success');
+          }
         } catch (err: any) {
           logger.log('ERROR', 'Purchase order dump parsing failed', { error: err }, 'PURCHASE_ORDER_INGESTION');
           const errMsg = `Could not parse PO file: ${err.message || 'Unknown format'}`;
@@ -1636,6 +1795,7 @@ export default function InitialSetupModal() {
           setPoJob(null);
         } finally {
           setIsParsingPo(false);
+          if (poFileInputRef.current) poFileInputRef.current.value = '';
         }
       };
 
@@ -1668,6 +1828,8 @@ export default function InitialSetupModal() {
   /** Clear the PO dump held in the browser, and any AI result or job built from it. */
   const clearPoDumpState = (period: '1_year' | '2_years' | '3_years') => {
     setPoLineItems([]);
+    setSkippedDuplicatePoRows([]);
+    poDedupeSummaryRef.current = null;
     setApiJoinedVendors(null);
     setAiJob(null);
     setPoJob(null);
@@ -1707,6 +1869,7 @@ export default function InitialSetupModal() {
       const json = await res.json();
       if (json?.poDataCleared) {
         clearPoDumpState(period);
+        setExistingOrgPoRecords([]);
         showToast('PO Dump Cleared', UI_STRINGS.vendorPoIngestion.horizon.changeWarning, 'info');
       }
     } catch (err) {
@@ -3000,30 +3163,159 @@ export default function InitialSetupModal() {
               />
             )}
 
+            {/* Skipped Duplicate PO Records Warning Banner & Table */}
+            {skippedDuplicatePoRows.length > 0 && (
+              <div
+                data-testid="skipped-duplicate-pos-banner"
+                className="p-4 rounded-2xl bg-amber-50/90 dark:bg-amber-950/35 border-2 border-amber-300 dark:border-amber-700/70 space-y-3 shadow-xs animate-fade-in"
+              >
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div className="flex items-start gap-2.5 min-w-0">
+                    <AlertTriangle className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" size={18} />
+                    <div className="min-w-0">
+                      <p className="text-xs font-black uppercase tracking-wider text-amber-900 dark:text-amber-200">
+                        {formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+                          count: skippedDuplicatePoRows.length,
+                          rowWord:
+                            skippedDuplicatePoRows.length === 1
+                              ? UI_STRINGS.vendorPoIngestion.poDump.duplicateRowSingular
+                              : UI_STRINGS.vendorPoIngestion.poDump.duplicateRowPlural,
+                        })}
+                      </p>
+                      <p className="text-[11px] text-amber-800/90 dark:text-amber-300/90 mt-0.5">
+                        {UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerHint}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 shrink-0 flex-wrap">
+                    <button
+                      type="button"
+                      onClick={() => downloadSkippedDuplicatePosCsv(skippedDuplicatePoRows)}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold flex items-center gap-1 border-amber-300 dark:border-amber-700 bg-white dark:bg-gray-900 text-amber-900 dark:text-amber-200"
+                    >
+                      <Download size={12} /> {UI_STRINGS.vendorPoIngestion.poDump.downloadDuplicatesCsv}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSkippedDuplicatePoRows([])}
+                      className="btn btn-secondary btn-xs text-[10px] font-bold border-amber-300 dark:border-amber-700 text-amber-800 dark:text-amber-300"
+                    >
+                      {UI_STRINGS.vendorPoIngestion.poDump.dismissDuplicatesAction}
+                    </button>
+                  </div>
+                </div>
+
+                <div className="max-h-56 overflow-auto rounded-xl border border-amber-200/80 dark:border-amber-800/60 bg-white/90 dark:bg-gray-900/80">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead className="sticky top-0 bg-amber-100/80 dark:bg-amber-950/90 text-amber-900 dark:text-amber-200 uppercase text-[10px] font-bold">
+                      <tr>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnRow}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnPoNumber}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnVendor}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnItem}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnSpecs}</th>
+                        <th className="px-3 py-2">{UI_STRINGS.vendorPoIngestion.poDump.duplicateColumnReason}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-amber-100 dark:divide-amber-900/40">
+                      {skippedDuplicatePoRows.map((dup, idx) => (
+                        <tr
+                          key={`po-dup-row-${dup.rowNumber}-${dup.poNumber || dup.vendorName}-${idx}`}
+                          className="hover:bg-amber-50/50 dark:hover:bg-amber-950/20"
+                        >
+                          <td className="px-3 py-2 font-mono font-bold text-amber-800 dark:text-amber-300 whitespace-nowrap">
+                            {dup.rowNumber > 0 ? `#${dup.rowNumber}` : '—'}
+                          </td>
+                          <td className="px-3 py-2 font-mono text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {dup.poNumber || '—'}
+                          </td>
+                          <td className="px-3 py-2 font-semibold text-slate-900 dark:text-slate-100">
+                            {dup.vendorName}
+                          </td>
+                          <td className="px-3 py-2 text-slate-800 dark:text-slate-200">
+                            {dup.itemDescription}
+                          </td>
+                          <td className="px-3 py-2 text-slate-600 dark:text-slate-400">
+                            {dup.specification || '—'}
+                          </td>
+                          <td className="px-3 py-2 text-amber-800 dark:text-amber-300 font-medium">
+                            {dup.reason}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
             {/* Drag & Drop PO Dump Area or Uploaded State Banner */}
-            {poLineItems.length > 0 || (poJob?.status === 'COMPLETED' && (poJob.importedRecords ?? 0) > 0) ? (
+            {poLineItems.length > 0 ||
+            (poJob?.status === 'COMPLETED' && ((poJob.importedRecords ?? 0) > 0 || poSkippedDisplayCount > 0)) ? (
               <div
                 data-testid="po-dump-uploaded-card"
-                className="p-5 rounded-2xl bg-emerald-50/70 dark:bg-emerald-950/30 border-2 border-emerald-500/40 dark:border-emerald-500/30 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in"
+                className={`p-5 rounded-2xl border-2 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 shadow-sm animate-fade-in ${
+                  isPoAllDuplicatesCard
+                    ? 'bg-amber-50/70 dark:bg-amber-950/30 border-amber-400/60 dark:border-amber-600/40'
+                    : 'bg-emerald-50/70 dark:bg-emerald-950/30 border-emerald-500/40 dark:border-emerald-500/30'
+                }`}
               >
                 <div className="flex items-center gap-3.5">
-                  <div className="w-12 h-12 rounded-2xl bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border border-emerald-500/30 flex items-center justify-center shrink-0 shadow-sm">
-                    <CheckCircle2 size={24} />
+                  <div
+                    className={`w-12 h-12 rounded-2xl border flex items-center justify-center shrink-0 shadow-sm ${
+                      isPoAllDuplicatesCard
+                        ? 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
+                        : 'bg-emerald-600/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+                    }`}
+                  >
+                    {isPoAllDuplicatesCard ? (
+                      <AlertTriangle size={24} />
+                    ) : (
+                      <CheckCircle2 size={24} />
+                    )}
                   </div>
                   <div className="space-y-0.5">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="text-xs font-black uppercase tracking-wider text-emerald-800 dark:text-emerald-300">
-                        PO Dump Uploaded Successfully
+                      <span
+                        className={`text-xs font-black uppercase tracking-wider ${
+                          isPoAllDuplicatesCard
+                            ? 'text-amber-900 dark:text-amber-300'
+                            : 'text-emerald-800 dark:text-emerald-300'
+                        }`}
+                      >
+                        {isPoAllDuplicatesCard
+                          ? formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, {
+                              count: poSkippedDisplayCount,
+                            })
+                          : 'PO Dump Uploaded Successfully'}
                       </span>
-                      <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
-                        <Check size={10} /> Active
-                      </span>
+                      {poLineItems.length > 0 && (
+                        <span className="inline-flex items-center gap-1 text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-200/60 dark:bg-emerald-900/60 text-emerald-900 dark:text-emerald-200 border border-emerald-400/40">
+                          <Check size={10} /> Active
+                        </span>
+                      )}
                     </div>
                     <p className="text-sm font-black font-mono text-slate-900 dark:text-white">
-                      {poFileName || poJob?.fileName || 'PO_Purchase_Dump.xlsx'}
+                      {poDisplayFileName}
                     </p>
-                    <p className="text-[11px] text-emerald-800/80 dark:text-emerald-300/80 font-medium">
-                      {(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO records loaded for period ({selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'})
+                    <p
+                      className={`text-[11px] font-medium ${
+                        isPoAllDuplicatesCard
+                          ? 'text-amber-800/90 dark:text-amber-300/90'
+                          : 'text-emerald-800/80 dark:text-emerald-300/80'
+                      }`}
+                    >
+                      {isPoAllDuplicatesCard
+                        ? formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerHint, {
+                            fileName: poDisplayFileName,
+                          })
+                        : `${(poJob?.importedRecords || poLineItems.length).toLocaleString('en-IN')} PO records loaded for period (${selectedPeriod === '1_year' ? '1 Year' : selectedPeriod === '2_years' ? '2 Years' : '3 Years'})${
+                            poSkippedDisplayCount > 0
+                              ? formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSummaryInline, {
+                                  count: poSkippedDisplayCount,
+                                })
+                              : ''
+                          }`}
                     </p>
                   </div>
                 </div>

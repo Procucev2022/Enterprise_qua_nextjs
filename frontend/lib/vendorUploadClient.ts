@@ -1,11 +1,16 @@
 import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
-import { isPlaceholderVendorCategory, normalizeVendorCategoryList } from './constants';
+import { isPlaceholderVendorCategory, normalizePoDate, normalizeVendorCategoryList } from './constants';
 import { formatString, UI_STRINGS } from './uiStrings';
 import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN } from './validationSchemas';
 import type {
+  ExistingPoDedupeCandidate,
   ExistingVendorDedupeCandidate,
   IngestionJobState,
+  PoDuplicatePartitionCandidate,
+  PoDuplicatePartitionResult,
+  PurchaseOrderLineItemRecord,
+  SkippedDuplicatePoRecord,
   SkippedDuplicateVendorRecord,
   VendorBulkInvitationResponse,
   VendorDedupeSummary,
@@ -735,4 +740,209 @@ export function reconcileVendorJobProgress(
   }
 
   return serverJob;
+}
+
+function normalizePoDedupeText(raw: string | null | undefined): string {
+  return String(raw || '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ');
+}
+
+function normalizePoDedupeNumber(raw: number | null | undefined): string {
+  if (raw === null || raw === undefined) return '';
+  const num = Number(raw);
+  if (!Number.isFinite(num) || num <= 0) return '';
+  return String(Math.round(num * 100) / 100);
+}
+
+/**
+ * Canonical PO line-item fingerprint matching backend `buildPoLineDedupeKey` so
+ * client-side and server-side duplicate checks agree 1:1 on both 3-column PO
+ * templates and full ERP PO dumps.
+ */
+export function buildPoLineDedupeKey(row: ExistingPoDedupeCandidate): string {
+  const poNumberKey = String(row.poNumber || '')
+    .trim()
+    .toUpperCase()
+    .replace(/\s+/g, ' ');
+  const poDateKey = normalizePoDate(row.poDate);
+  const rawVendorName = normalizePoDedupeText(row.vendorName ?? row.vendorIdentifier);
+  const rawVendorCode = normalizePoDedupeText(row.vendorCode);
+  const vendorKey =
+    rawVendorName && (!rawVendorCode || rawVendorName !== `vendor ${rawVendorCode}`)
+      ? rawVendorName
+      : rawVendorCode || rawVendorName;
+  const itemKey = normalizePoDedupeText(row.itemDescription ?? row.itemName);
+  if (!vendorKey && !itemKey) return '';
+  const specKey = normalizePoDedupeText(row.specification ?? row.specs);
+  const qtyKey = normalizePoDedupeNumber(row.quantity);
+  const spendKey = normalizePoDedupeNumber(row.spend ?? row.totalSpend);
+  return [poNumberKey, poDateKey, vendorKey, itemKey, specKey, qtyKey, spendKey].join('|');
+}
+
+function formatPoDuplicateSummary(row: {
+  poNumber?: string;
+  vendorName?: string;
+  itemDescription?: string;
+}): string {
+  const vendorLabel = String(row.vendorName || '').trim() || 'Unknown Vendor';
+  const itemLabel = String(row.itemDescription || '').trim() || 'PO Line';
+  const base = `${vendorLabel} — ${itemLabel}`;
+  return row.poNumber ? `${row.poNumber} / ${base}` : base;
+}
+
+/**
+ * Partition parsed PO Dump rows into unique records to import and duplicate PO
+ * rows to reject and display (both against previously uploaded PO records for
+ * the buyer organization and earlier rows within the same uploaded file).
+ */
+export function partitionDuplicatePoRows(
+  candidates: PoDuplicatePartitionCandidate[],
+  existingPoRecords: ExistingPoDedupeCandidate[] = []
+): PoDuplicatePartitionResult {
+  const existingKeys = new Set<string>();
+  for (const existing of existingPoRecords) {
+    const key = buildPoLineDedupeKey(existing);
+    if (key) existingKeys.add(key);
+  }
+
+  const fileKeys = new Map<string, number>();
+  const uniqueRecords: PurchaseOrderLineItemRecord[] = [];
+  const skippedDuplicates: SkippedDuplicatePoRecord[] = [];
+  const poStrings = UI_STRINGS.vendorPoIngestion.poDump;
+
+  for (const candidate of candidates) {
+    const rec = candidate.record;
+    const vendorName = String(rec.vendorName || rec.vendorIdentifier || '').trim();
+    const itemDescription = String(rec.itemDescription || rec.itemName || '').trim();
+    const specification = String(rec.specification || rec.specs || '').trim();
+    const poNumber = String(rec.poNumber || '').trim();
+    const poDate = normalizePoDate(rec.poDate);
+    const key = buildPoLineDedupeKey({
+      poNumber,
+      poDate,
+      vendorName,
+      itemDescription,
+      specification,
+      quantity: rec.quantity,
+      spend: rec.spend ?? rec.totalSpend,
+    });
+
+    if (key) {
+      const summary = formatPoDuplicateSummary({ poNumber, vendorName, itemDescription });
+      if (existingKeys.has(key)) {
+        skippedDuplicates.push({
+          rowNumber: candidate.rowNumber,
+          ...(poNumber ? { poNumber } : {}),
+          ...(poDate ? { poDate } : {}),
+          vendorName: vendorName || '—',
+          itemDescription: itemDescription || '—',
+          ...(specification ? { specification } : {}),
+          ...(rec.quantity > 0 ? { quantity: rec.quantity } : {}),
+          ...((rec.spend ?? rec.totalSpend ?? 0) > 0 ? { spend: rec.spend ?? rec.totalSpend } : {}),
+          reason: formatString(poStrings.duplicateReasonExisting, { summary }),
+          matchedAgainst: 'EXISTING_PO',
+        });
+        continue;
+      }
+
+      const firstRow = fileKeys.get(key);
+      if (firstRow !== undefined) {
+        skippedDuplicates.push({
+          rowNumber: candidate.rowNumber,
+          ...(poNumber ? { poNumber } : {}),
+          ...(poDate ? { poDate } : {}),
+          vendorName: vendorName || '—',
+          itemDescription: itemDescription || '—',
+          ...(specification ? { specification } : {}),
+          ...(rec.quantity > 0 ? { quantity: rec.quantity } : {}),
+          ...((rec.spend ?? rec.totalSpend ?? 0) > 0 ? { spend: rec.spend ?? rec.totalSpend } : {}),
+          reason: formatString(poStrings.duplicateReasonFile, { summary, firstRow }),
+          matchedAgainst: 'FILE',
+        });
+        continue;
+      }
+
+      fileKeys.set(key, candidate.rowNumber);
+    }
+
+    uniqueRecords.push(rec);
+  }
+
+  return { uniqueRecords, skippedDuplicates };
+}
+
+/** Extract structured skipped-duplicate PO rows from a backend PO_DUMP job's errorDetails array. */
+export function extractSkippedDuplicatePosFromJob(job: IngestionJobState): SkippedDuplicatePoRecord[] {
+  const details = Array.isArray(job.errorDetails) ? job.errorDetails : [];
+  const poStrings = UI_STRINGS.vendorPoIngestion.poDump;
+  return details
+    .filter(
+      (item) =>
+        Boolean(item) &&
+        (item.status === 'duplicate_skipped' || item.matchedAgainst === 'EXISTING_PO' || item.matchedAgainst === 'FILE')
+    )
+    .map((item) => ({
+      rowNumber: Number(item.rowNumber) || 0,
+      ...(item.poNumber ? { poNumber: item.poNumber } : {}),
+      ...(item.poDate ? { poDate: item.poDate } : {}),
+      vendorName: item.vendorName || item.companyName || '—',
+      itemDescription: item.itemDescription || '—',
+      ...(item.specification ? { specification: item.specification } : {}),
+      ...(typeof item.quantity === 'number' && item.quantity > 0 ? { quantity: item.quantity } : {}),
+      ...(typeof item.spend === 'number' && item.spend > 0 ? { spend: item.spend } : {}),
+      reason: item.reason || poStrings.duplicatesSkippedBannerHint,
+      matchedAgainst: item.matchedAgainst === 'EXISTING_PO' ? 'EXISTING_PO' : 'FILE',
+    }));
+}
+
+/** Trigger a browser CSV download listing skipped duplicate PO rows and duplicate reasons. */
+export function downloadSkippedDuplicatePosCsv(
+  records: SkippedDuplicatePoRecord[],
+  fileName = 'skipped_duplicate_po_records.csv'
+): void {
+  if (typeof window === 'undefined' || records.length === 0) return;
+  const escapeCsvCell = (value: unknown) => {
+    const raw = String(value ?? '');
+    return /[",\n\r]/.test(raw) ? `"${raw.replace(/"/g, '""')}"` : raw;
+  };
+  const header = [
+    'Row Number',
+    'PO Number',
+    'Vendor / Supplier',
+    'Item Description',
+    'Specifications',
+    'PO Date',
+    'Quantity',
+    'Spend',
+    'Match Type',
+    'Duplicate Reason',
+  ];
+  const lines = [
+    header.map(escapeCsvCell).join(','),
+    ...records.map((rec) =>
+      [
+        rec.rowNumber || '',
+        rec.poNumber || '',
+        rec.vendorName || '',
+        rec.itemDescription || '',
+        rec.specification || '',
+        rec.poDate || '',
+        rec.quantity ?? '',
+        rec.spend ?? '',
+        rec.matchedAgainst === 'EXISTING_PO' ? 'Previously Uploaded PO' : 'Within Uploaded File',
+        rec.reason || '',
+      ]
+        .map(escapeCsvCell)
+        .join(',')
+    ),
+  ];
+  const blob = new Blob([lines.join('\n')], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.href = url;
+  link.download = fileName;
+  link.click();
+  URL.revokeObjectURL(url);
 }

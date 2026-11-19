@@ -6753,3 +6753,17 @@ If we close outside of the popup window should close the window
 Remove the Text "Backend processing continues if you close this window or navigate away" while vendor upload
 ```
 ---
+
+### Prompt 291
+**Timestamp**: 2026-11-19T07:30:24+05:30
+```text
+Should not accept the same PO data when uploaded again. Should show the duplicates
+```
+---
+
+### Prompt 292
+**Timestamp**: 2026-11-19T08:01:48+05:30
+```text
+resume
+```
+---

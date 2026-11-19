@@ -1494,6 +1494,44 @@ export interface VendorDuplicatePartitionResult {
   skippedDuplicates: SkippedDuplicateVendorRecord[];
 }
 
+export interface ExistingPoDedupeCandidate {
+  poNumber?: string | null;
+  poDate?: string | null;
+  vendorCode?: string | null;
+  vendorName?: string | null;
+  vendorIdentifier?: string | null;
+  itemDescription?: string | null;
+  itemName?: string | null;
+  specification?: string | null;
+  specs?: string | null;
+  quantity?: number | null;
+  spend?: number | null;
+  totalSpend?: number | null;
+}
+
+export interface PoDuplicatePartitionCandidate {
+  record: PurchaseOrderLineItemRecord;
+  rowNumber: number;
+}
+
+export interface SkippedDuplicatePoRecord {
+  rowNumber: number;
+  poNumber?: string;
+  poDate?: string;
+  vendorName: string;
+  itemDescription: string;
+  specification?: string;
+  quantity?: number;
+  spend?: number;
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_PO';
+}
+
+export interface PoDuplicatePartitionResult {
+  uniqueRecords: PurchaseOrderLineItemRecord[];
+  skippedDuplicates: SkippedDuplicatePoRecord[];
+}
+
 export interface IngestionJobErrorDetail {
   rowNumber?: number;
   vendorCode?: string;
@@ -1502,9 +1540,15 @@ export interface IngestionJobErrorDetail {
   email?: string;
   phone?: string;
   gstNumber?: string;
+  poNumber?: string;
+  poDate?: string;
+  itemDescription?: string;
+  specification?: string;
+  quantity?: number;
+  spend?: number;
   status?: string;
   reason?: string;
-  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR';
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR' | 'EXISTING_PO';
 }
 
 export interface IngestionJobState {
@@ -1535,12 +1579,17 @@ export interface PurchaseOrderLineItemRecord {
   poNumber: string;
   poDate: string;
   vendorIdentifier: string; // Matches vendor code, company name or email
+  vendorName?: string;
   itemName: string;
+  itemDescription?: string;
   specs?: string;
+  specification?: string;
   quantity: number;
   unit: string;
+  uom?: string;
   unitPrice: number;
   totalSpend: number;
+  spend?: number;
   department?: string;
   category?: string;
   minorCategory?: string;

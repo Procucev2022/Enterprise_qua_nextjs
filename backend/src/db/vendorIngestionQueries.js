@@ -1052,6 +1052,39 @@ async function deletePoLineItems(sessionId, organizationId) {
 }
 
 /**
+ * Load existing PO line items previously uploaded by this organization so
+ * re-uploaded PO dumps can detect and reject duplicate PO records.
+ */
+async function findExistingPoLineItemsByOrganization(organizationId, limit = 5000) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const cap = Math.min(Math.max(counter(limit) || 5000, 1), 10000);
+  const rows = await pool.rows(
+    `select id, session_id, po_number, po_date, vendor_code, vendor_name,
+            item_description, specification, quantity, uom, spend, department
+       from po_line_items
+      where organization_id = $1
+      order by created_at desc
+      limit $2`,
+    [organizationId, cap],
+    { d1: true }
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    poNumber: row.po_number || null,
+    poDate: dateOnly(row.po_date),
+    vendorCode: row.vendor_code || null,
+    vendorName: row.vendor_name || null,
+    itemDescription: row.item_description || null,
+    specification: row.specification || null,
+    quantity: numeric(row.quantity),
+    uom: row.uom || null,
+    spend: numeric(row.spend),
+    department: row.department || null,
+  }));
+}
+
+/**
  * Attribute in-horizon PO lines to vendor-master rows.
  *
  * Runs as three UPDATEs in the documented priority order, each only touching
@@ -2503,6 +2536,7 @@ module.exports = {
   bulkInsertPoLineItems,
   countPoLineItems,
   deletePoLineItems,
+  findExistingPoLineItemsByOrganization,
   matchPoLineItemsToVendors,
   findVendorPurchasingProfiles,
   findUnmatchedPoVendors,

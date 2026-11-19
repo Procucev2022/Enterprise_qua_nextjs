@@ -1,12 +1,16 @@
 import * as XLSX from 'xlsx';
 import {
+  buildPoLineDedupeKey,
   bulkImportVendorRows,
+  downloadSkippedDuplicatePosCsv,
   downloadSkippedDuplicatesCsv,
   downloadVendorUploadTemplate,
+  extractSkippedDuplicatePosFromJob,
   extractSkippedDuplicatesFromJob,
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
+  partitionDuplicatePoRows,
   partitionDuplicateVendorMasterRows,
   reconcileVendorJobProgress,
   sendBulkVendorInvitations,
@@ -857,6 +861,154 @@ describe('vendorUploadClient', () => {
         expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
         expect(clickSpy).toHaveBeenCalledTimes(1);
         expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:dup-url');
+      } finally {
+        URL.createObjectURL = originalCreateObjectURL;
+        URL.revokeObjectURL = originalRevokeObjectURL;
+        clickSpy.mockRestore();
+      }
+    });
+
+    test('deduplicates PO dump rows against existing uploaded POs and intra-file duplicates, extracts server PO duplicate details, and downloads CSV', () => {
+      expect(buildPoLineDedupeKey({})).toBe('');
+      expect(
+        buildPoLineDedupeKey({
+          poNumber: '  po-101 ',
+          poDate: '15/06/2025',
+          vendorName: 'Vendor VND-9',
+          vendorCode: 'VND-9',
+          itemDescription: 'Ball Bearings',
+          specification: 'SKF 6205',
+          quantity: 10,
+          spend: 25000,
+        })
+      ).toBe('PO-101|2025-06-15|vnd-9|ball bearings|skf 6205|10|25000');
+
+      const makePo = (id: string, overrides: Record<string, unknown> = {}) => ({
+        id,
+        poNumber: '',
+        poDate: '',
+        vendorIdentifier: 'Apex Supplies',
+        vendorName: 'Apex Supplies',
+        itemName: 'Ball Bearings 6205',
+        itemDescription: 'Ball Bearings 6205',
+        specs: 'SKF',
+        specification: 'SKF',
+        quantity: 0,
+        unit: '',
+        uom: '',
+        unitPrice: 0,
+        totalSpend: 0,
+        spend: 0,
+        department: '',
+        ...overrides,
+      });
+
+      const partitioned = partitionDuplicatePoRows(
+        [
+          { rowNumber: 2, record: makePo('po-1') },
+          { rowNumber: 3, record: makePo('po-2', { poNumber: 'PO-500', poDate: '2025-07-01', itemName: 'Gate Valve', itemDescription: 'Gate Valve', specs: '2 inch', specification: '2 inch', quantity: 5, spend: 12000, totalSpend: 12000 }) },
+          { rowNumber: 4, record: makePo('po-3', { poNumber: 'po-500', poDate: '01/07/2025', itemName: 'Gate Valve', itemDescription: 'Gate Valve', specs: '2 inch', specification: '2 inch', quantity: 5, spend: 12000, totalSpend: 12000 }) },
+          { rowNumber: 5, record: makePo('po-4', { vendorIdentifier: '', vendorName: '', itemName: '', itemDescription: '' }) },
+        ],
+        [
+          {
+            vendorName: '  apex  supplies ',
+            itemDescription: 'ball bearings 6205',
+            specification: 'skf',
+          },
+        ]
+      );
+
+      expect(partitioned.uniqueRecords.map((r) => r.id)).toEqual(['po-2', 'po-4']);
+      expect(partitioned.skippedDuplicates).toHaveLength(2);
+      expect(partitioned.skippedDuplicates[0]).toMatchObject({
+        rowNumber: 2,
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Ball Bearings 6205',
+        specification: 'SKF',
+        matchedAgainst: 'EXISTING_PO',
+      });
+      expect(partitioned.skippedDuplicates[1]).toMatchObject({
+        rowNumber: 4,
+        poNumber: 'po-500',
+        quantity: 5,
+        spend: 12000,
+        matchedAgainst: 'FILE',
+      });
+
+      const extracted = extractSkippedDuplicatePosFromJob({
+        id: 'job-po-1',
+        jobType: 'PO_DUMP',
+        fileName: 'pos.xlsx',
+        status: 'COMPLETED',
+        totalRecords: 0,
+        processedRecords: 0,
+        importedRecords: 0,
+        skippedRecords: 2,
+        failedRecords: 0,
+        errorDetails: [
+          {
+            rowNumber: 2,
+            poNumber: 'PO-500',
+            poDate: '2025-07-01',
+            vendorName: 'Apex Supplies',
+            itemDescription: 'Gate Valve',
+            specification: '2 inch',
+            quantity: 5,
+            spend: 12000,
+            status: 'duplicate_skipped',
+            matchedAgainst: 'EXISTING_PO',
+            reason: 'Already uploaded previously',
+          },
+          {
+            rowNumber: 0,
+            matchedAgainst: 'FILE',
+          },
+          {
+            reason: 'Non-duplicate validation failure',
+          },
+        ],
+      });
+      expect(extracted).toHaveLength(2);
+      expect(extracted[0]).toMatchObject({
+        rowNumber: 2,
+        poNumber: 'PO-500',
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Gate Valve',
+        quantity: 5,
+        spend: 12000,
+        matchedAgainst: 'EXISTING_PO',
+      });
+      expect(extracted[1]).toMatchObject({
+        rowNumber: 0,
+        vendorName: '—',
+        itemDescription: '—',
+        matchedAgainst: 'FILE',
+        reason: UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerHint,
+      });
+
+      const originalCreateObjectURL = URL.createObjectURL;
+      const originalRevokeObjectURL = URL.revokeObjectURL;
+      const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      URL.createObjectURL = jest.fn().mockReturnValue('blob:po-dup-url');
+      URL.revokeObjectURL = jest.fn();
+      try {
+        downloadSkippedDuplicatePosCsv([]);
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+
+        downloadSkippedDuplicatePosCsv([
+          ...extracted,
+          {
+            rowNumber: 5,
+            vendorName: 'Quoted, "Vendor"',
+            itemDescription: 'Bolts',
+            matchedAgainst: 'FILE',
+            reason: 'Duplicate in file',
+          },
+        ]);
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:po-dup-url');
       } finally {
         URL.createObjectURL = originalCreateObjectURL;
         URL.revokeObjectURL = originalRevokeObjectURL;
