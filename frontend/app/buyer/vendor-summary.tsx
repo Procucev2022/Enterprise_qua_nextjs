@@ -3806,11 +3806,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       {selectedHistoryBatch ? 'Full Step Audit' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    {selectedHistoryBatch
-                      ? 'Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.'
-                      : 'View previous vendor template batches, inspect uploaded supplier records, and re-download template data.'}
-                  </p>
+                  {selectedHistoryBatch && (
+                    <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                      Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.
+                    </p>
+                  )}
                 </div>
               </div>
 

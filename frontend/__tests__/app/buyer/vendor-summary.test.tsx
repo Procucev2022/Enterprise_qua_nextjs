@@ -2736,6 +2736,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
       expect(screen.getByText('Vendor Template Upload History')).toBeInTheDocument();
+      expect(
+        screen.queryByText(
+          'View previous vendor template batches, inspect uploaded supplier records, and re-download template data.'
+        )
+      ).not.toBeInTheDocument();
       expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
 
       fireEvent.click(screen.getByRole('button', { name: /Upload Vendor Master Now/i }));

@@ -6732,3 +6732,10 @@ resume
 The notification bell icon always showing 9+ when loggedin and showing 2 when clicked. Majorly the number is not giving the right information
 ```
 ---
+
+### Prompt 288
+**Timestamp**: 2026-11-19T06:34:55+05:30
+```text
+In the vendor history tab in the vendor directory page remove the text "View previous vendor template batches, inspect uploaded supplier records, and re-download template data."
+```
+---
