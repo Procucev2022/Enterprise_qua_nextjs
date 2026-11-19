@@ -360,6 +360,20 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(card).getByText('alice@acme.com')).toBeInTheDocument();
     });
 
+    it('rejects a date string in requestedBy field and displays the user name', () => {
+      renderDetails(
+        buildRFQ({
+          requestedBy: '2026-09-02 11:07:16',
+          raisedByName: 'Rohit Verma',
+          buyerEmail: 'rohit@acme.com',
+        } as any)
+      );
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).queryByText('2026-09-02 11:07:16')).not.toBeInTheDocument();
+      expect(within(card).getByText('Rohit Verma')).toBeInTheDocument();
+    });
+
     it('marks a blank intake source as unset when no aiSummary exists', () => {
       renderDetails(buildRFQ({ source: undefined, aiSummary: null }));
 

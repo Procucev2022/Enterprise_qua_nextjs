@@ -1801,29 +1801,61 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     lineItems.find((i) => i.targetDate)?.targetDate ||
     '';
   const countdown = deliveryCountdown(daysUntil(resolvedTargetDeliveryDate));
-  const autoClassified = lineItems.filter((i) => i.confidence >= HIGH_CONFIDENCE).length;
-  const classifiedPercent = lineItems.length === 0 ? 0 : Math.round((autoClassified / lineItems.length) * 100);
   const totalQuantity = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
 
-  const requestedByName =
-    (activeRfq as any).buyerName ||
-    (activeRfq as any).buyerContact ||
-    (activeRfq as any).contactPerson ||
-    (activeRfq as any).requestedBy ||
-    (activeRfq as any).userName ||
-    activeBuyerAccount?.contactPerson ||
-    currentUserSession?.name ||
-    (activeRfq.raisedByEmail ? activeRfq.raisedByEmail.split('@')[0].replace(/[._-]/g, ' ') : '') ||
-    'Buyer';
+  const isDateValue = (val: unknown): boolean => {
+    if (!val || typeof val !== 'string') return false;
+    const trimmed = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return true;
+    if (/^\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}/i.test(trimmed)) return true;
+    if (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}/.test(trimmed)) return true;
+    return false;
+  };
 
-  const requestedByEmail =
-    (activeRfq as any).buyerEmail ||
+  const candidateNames = [
+    (activeRfq as any).raisedByName,
+    (activeRfq as any).buyerName,
+    (activeRfq as any).buyerContact,
+    (activeRfq as any).contactPerson,
+    (activeRfq as any).userName,
+    (activeRfq as any).requestedBy,
+    activeBuyerAccount?.contactPerson,
+    currentUserSession?.name,
+    activeBuyerAccount?.organizationName,
+    (activeRfq as any).buyerAccountName,
+  ];
+
+  const validName = candidateNames.find(
+    (name) => typeof name === 'string' && name.trim().length > 0 && !isDateValue(name)
+  )?.trim();
+
+  const fallbackFromEmail = (
     activeRfq.raisedByEmail ||
+    (activeRfq as any).buyerEmail ||
     (activeRfq as any).corporateEmail ||
     (activeRfq as any).userEmail ||
+    (activeRfq as any).sourceEmail ||
     activeBuyerAccount?.corporateEmail ||
     currentUserSession?.email ||
-    '';
+    ''
+  )
+    .split('@')[0]
+    ?.replace(/[._-]/g, ' ')
+    ?.replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+  const requestedByName = validName || fallbackFromEmail || 'Buyer';
+
+  const candidateEmails = [
+    (activeRfq as any).buyerEmail,
+    activeRfq.raisedByEmail,
+    (activeRfq as any).corporateEmail,
+    (activeRfq as any).userEmail,
+    (activeRfq as any).sourceEmail,
+    activeBuyerAccount?.corporateEmail,
+    currentUserSession?.email,
+  ];
+  const requestedByEmail =
+    candidateEmails.find((email) => typeof email === 'string' && email.includes('@'))?.trim() || '';
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
