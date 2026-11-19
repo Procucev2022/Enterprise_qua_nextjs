@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { createBackdropClickHandler } from '@/lib/constants';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type { QuestionEvaluationItem, VendorEntry, VendorEvaluationRecord } from '@/lib/types';
 import {
@@ -765,7 +766,10 @@ export default function VendorQualificationForm({ onBack, onSuccess }: VendorQua
 
       {/* Detailed Report Modal */}
       {showDetailedReportModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setShowDetailedReportModal, false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 rounded-2xl max-w-2xl w-full p-6 shadow-2xl border border-slate-200 dark:border-gray-800 space-y-4 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">

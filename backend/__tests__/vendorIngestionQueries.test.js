@@ -334,6 +334,21 @@ describe('scoped reads, limits and deletion results', () => {
     }
   });
 
+  test('findOrganizationVendorMasterRecords returns org vendor master records across sessions with bounded limits and guards', async () => {
+    expect(await queries.findOrganizationVendorMasterRecords(null)).toEqual([]);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findOrganizationVendorMasterRecords(ORG)).toEqual([]);
+    for (const limit of [undefined, 0, -5, 100, 5000]) {
+      const result = await queries.findOrganizationVendorMasterRecords(ORG, limit);
+      expect(result).toHaveLength(1);
+      expect(pool.rows.mock.calls.at(-1)[1]).toEqual(
+        typeof limit === 'number' && Number.isInteger(limit) && limit > 0
+          ? [ORG, Math.min(limit, 2000)]
+          : [ORG]
+      );
+    }
+  });
+
   test.each([
     ['findVendorMasterRecord', [SESSION, ORG]], ['findCategoryMappingByVendorRecord', [SESSION, ORG, 'master']],
   ])('%s distinguishes missing rows from mapped records without broadening the organization', async (name, args) => {

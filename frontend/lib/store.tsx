@@ -1181,7 +1181,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         tasks.push(loaders.ensureRFQs());
         tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/vendor-summary')) {
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendors(true));
         tasks.push(loaders.ensureVendorEvaluations());
       } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
         tasks.push(loaders.ensureVendorEvaluations());

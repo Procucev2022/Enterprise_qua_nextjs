@@ -743,6 +743,12 @@ describe('Header Session Timer and Auto Logout', () => {
     // Click backdrop closes it
     fireEvent.click(dialog);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Top-right user/buyer profile dropdown closes when clicking outside
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+    expect(screen.getByText('Logout')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByText('Logout')).not.toBeInTheDocument();
   });
 
   it('covers session timer keydown events and warning color intervals', () => {

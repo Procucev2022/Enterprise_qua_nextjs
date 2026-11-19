@@ -2338,7 +2338,13 @@ async function bulkImportVendors(req, res, next) {
           error: 'Your account is not linked to a buyer organization yet, so vendors cannot be bulk-imported.',
         });
       }
-      buyerAttribution = { buyerId: buyerAccount.id, addedByBuyerCompany: buyerAccount.organizationName, source: 'buyer_excel' };
+      buyerAttribution = {
+        buyerId: buyerAccount.id,
+        buyerAccountId: buyerAccount.id,
+        buyerEmail: buyerAccount.corporateEmail || req.user.email,
+        addedByBuyerCompany: buyerAccount.organizationName,
+        source: 'buyer_excel',
+      };
     } else {
       buyerAttribution = { source: 'category_manager_upload' };
     }

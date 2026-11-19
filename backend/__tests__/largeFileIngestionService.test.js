@@ -1329,6 +1329,29 @@ describe('largeFileIngestionService unit tests', () => {
         failedRecords: 0,
         status: 'COMPLETED',
       });
+
+      // Verify additive vendor master upload preserves existing session records and advances colliding numeric vendorCode
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(queries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([]);
+      jest.spyOn(queries, 'findVendorMasterRecords').mockResolvedValueOnce([
+        { vendorCode: '1', companyName: 'Prior Master Co', email: 'prior@master.in', phone: '9800000099' },
+      ]);
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-arr-additive',
+        sessionId: 'sess-arr-dup',
+        organizationId: 'org-1',
+        rows: [
+          { vendorCode: '1', companyName: 'Additive New Supplier', email: 'additive@new.in', phone: '9800000088' },
+        ],
+        fileName: 'vendors-batch2.xlsx',
+        jobType: 'VENDOR_MASTER',
+      });
+      expect(upsertSpy).toHaveBeenLastCalledWith(
+        'sess-arr-dup',
+        'org-1',
+        expect.arrayContaining([expect.objectContaining({ companyName: 'Additive New Supplier', vendorCode: '2' })])
+      );
     });
 
     it('clears prior PO dump line items and resets AI status when a replacement PO_DUMP upload finishes', async () => {

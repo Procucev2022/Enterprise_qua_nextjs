@@ -491,6 +491,7 @@ function createVendorDedupeState() {
     existingEmails: new Set(),
     existingGstins: new Set(),
     existingCodes: new Set(),
+    existingNumericCodes: new Set(),
     existingCompanyPhones: new Set(),
     fileEmails: new Map(),
     fileGstins: new Map(),
@@ -511,7 +512,11 @@ function seedExistingVendorsIntoDedupeState(state, existingVendors = []) {
     if (gstinKey) state.existingGstins.add(gstinKey);
 
     const codeKey = normalizeDedupeCode(existing.vendorCode);
-    if (codeKey && !/^\d+$/.test(codeKey)) state.existingCodes.add(codeKey);
+    if (codeKey) {
+      state.usedSequentialCodes.add(codeKey);
+      if (!/^\d+$/.test(codeKey)) state.existingCodes.add(codeKey);
+      else state.existingNumericCodes.add(codeKey);
+    }
 
     const companyPhoneKey = normalizeDedupeCompanyPhone(existing.companyName || existing.name, existing.phone);
     if (companyPhoneKey) state.existingCompanyPhones.add(companyPhoneKey);
@@ -528,6 +533,14 @@ async function loadExistingVendorDedupeState(session, organizationId) {
       session.createdByEmail || null
     );
     seedExistingVendorsIntoDedupeState(state, existingVendors);
+    let existingMasterRecords =
+      typeof queries.findOrganizationVendorMasterRecords === 'function'
+        ? await queries.findOrganizationVendorMasterRecords(organizationId, 500)
+        : [];
+    if ((!Array.isArray(existingMasterRecords) || existingMasterRecords.length === 0) && session.id && typeof queries.findVendorMasterRecords === 'function') {
+      existingMasterRecords = await queries.findVendorMasterRecords(session.id, organizationId, 500);
+    }
+    seedExistingVendorsIntoDedupeState(state, existingMasterRecords);
   } catch (err) {
     logger.warn(
       'Failed to pre-load existing buyer vendors for duplicate check; continuing with intra-file dedupe',
@@ -639,7 +652,10 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
   // Track existing vendor codes to prevent collisions and generate sequential codes
   for (const row of batch) {
     if (row.vendorCode && String(row.vendorCode).trim()) {
-      activeDedupeState.usedSequentialCodes.add(String(row.vendorCode).trim().toLowerCase());
+      const cleanCode = String(row.vendorCode).trim().toLowerCase();
+      if (!/^\d+$/.test(cleanCode) || !activeDedupeState.existingNumericCodes?.has(cleanCode)) {
+        activeDedupeState.usedSequentialCodes.add(cleanCode);
+      }
     }
   }
 
@@ -707,7 +723,13 @@ async function processVendorMasterBatch(sessionId, organizationId, batch, dedupe
       continue;
     }
 
-    const vendorCode = explicitVendorCode || getNextSequentialCode();
+    const isCollidingAutoNumericCode =
+      Boolean(explicitVendorCode) &&
+      /^\d+$/.test(explicitVendorCode) &&
+      Boolean(activeDedupeState.existingNumericCodes?.has(explicitVendorCode.toLowerCase()));
+    const vendorCode = (!explicitVendorCode || isCollidingAutoNumericCode)
+      ? getNextSequentialCode()
+      : explicitVendorCode;
 
     valid.push({
       ...row,
@@ -992,8 +1014,7 @@ async function recordVendorMasterUpload({ jobId, sessionId, organizationId, tota
 /** Clear prior session rows & stale AI state when a replacement file begins ingesting. */
 async function prepareSessionForReplacementUpload({ sessionId, organizationId, jobType }) {
   if (jobType === 'VENDOR_MASTER') {
-    await queries.deleteVendorMasterRecords(sessionId, organizationId);
-    await queries.deleteCategoryMappingsForSession(sessionId, organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, organizationId);
     return;
   }
   await queries.deletePoLineItems(sessionId, organizationId);

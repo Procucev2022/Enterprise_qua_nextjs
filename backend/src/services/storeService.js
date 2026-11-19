@@ -965,24 +965,27 @@ class StoreService {
    * other in-process paths that still iterate `this.buyerAccounts` directly
    * (e.g. `getBuyerAccounts()`) stay consistent with what was just read.
    */
-  async getBuyerAccountByEmail(email) {
+  async getBuyerAccountByEmail(email, { fresh = false } = {}) {
     if (!email) return null;
     const target = email.toLowerCase();
 
     if (pool.hasStorage()) {
       try {
-        const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
-        if (fresh) {
-          const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
+        const freshAccount = await domainQueries.getBuyerAccountByEmailFromDB(
+          email,
+          ...(fresh ? [{ fresh: true }] : [])
+        );
+        if (freshAccount) {
+          const idx = this.buyerAccounts.findIndex((a) => a.id === freshAccount.id);
           if (idx === -1) {
-            this.buyerAccounts.unshift(fresh);
+            this.buyerAccounts.unshift(freshAccount);
           } else {
-            this.buyerAccounts[idx] = fresh;
+            this.buyerAccounts[idx] = freshAccount;
           }
-          if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
-            this.activeBuyerAccount = fresh;
+          if (this.activeBuyerAccount && this.activeBuyerAccount.id === freshAccount.id) {
+            this.activeBuyerAccount = freshAccount;
           }
-          return fresh;
+          return freshAccount;
         }
         return null;
       } catch (error) {
@@ -2328,6 +2331,8 @@ class StoreService {
       // attribution the single-add createVendor path already applies.
       source: row.source || 'excel',
       ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+      ...(row.buyerAccountId || row.buyerId ? { buyerAccountId: row.buyerAccountId || row.buyerId } : {}),
+      ...(row.buyerEmail ? { buyerEmail: row.buyerEmail } : {}),
       ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
       status: 'REGISTERED / NOT EVALUATED',
       evaluated: false,

@@ -6767,3 +6767,24 @@ Should not accept the same PO data when uploaded again. Should show the duplicat
 resume
 ```
 ---
+
+### Prompt 293
+**Timestamp**: 2026-11-19T07:31:46+05:30
+```text
+Loggedin to various PCs and the vendor count in vendor directory is showing is changing like 11, 2, etc
+```
+---
+
+### Prompt 294
+**Timestamp**: 2026-11-19T07:33:57+05:30
+```text
+When the buyer profile at the top right corner is opened and when clicked on outside of the wondow is not closing the buyer profile. This is case for all windows. Please make sure the popup window closes whenever clicked outside of the popup window
+```
+---
+
+### Prompt 295
+**Timestamp**: 2026-11-19T08:17:19+05:30
+```text
+resume
+```
+---

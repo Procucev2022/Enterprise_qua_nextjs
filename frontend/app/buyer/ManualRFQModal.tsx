@@ -45,6 +45,7 @@ import {
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
 import {
+  createBackdropClickHandler,
   CURRENCY,
   SOURCING_MODES,
   RFQ_MODES,
@@ -824,6 +825,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
   return (
     <div
+      onClick={createBackdropClickHandler(handleClose)}
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 sm:p-8"
       role="dialog"
       aria-modal="true"

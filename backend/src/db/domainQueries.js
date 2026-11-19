@@ -1366,9 +1366,14 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const ids = Array.from(candidateSet);
   if (ids.length === 0) return [];
 
+  const options = arguments[3];
+  const fresh =
+    options && typeof options === 'object' && options.fresh !== undefined
+      ? Boolean(options.fresh)
+      : process.env.NODE_ENV !== 'test';
   const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
   const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
-  const cached = queryCache.get(cacheKey);
+  const cached = !fresh ? queryCache.get(cacheKey) : null;
   if (cached) return cached;
 
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');

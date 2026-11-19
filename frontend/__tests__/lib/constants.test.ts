@@ -1154,4 +1154,70 @@ describe('Indian address location extraction helpers', () => {
     expect(isBuyerQuotesSealed({ status: 'Expired', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
     expect(resolveQuotesUnsealIso({ createdAt: fiftyHoursAgo, closingDeadline: futureClosing })).toBe(futureClosing);
   });
+
+  it('handles createBackdropClickHandler and registerOutsideClickClose for modal backdrops and popovers', () => {
+    const {
+      createBackdropClickHandler,
+      registerOutsideClickClose,
+    } = require('@/lib/constants');
+
+    const backdrop = document.createElement('div');
+    const child = document.createElement('span');
+    backdrop.appendChild(child);
+
+    // 1. No-arg close callback
+    const onClose = jest.fn();
+    const handleBackdrop = createBackdropClickHandler(onClose);
+    handleBackdrop({ target: child, currentTarget: backdrop });
+    expect(onClose).not.toHaveBeenCalled();
+    handleBackdrop({ target: backdrop, currentTarget: backdrop });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // 2. Setter callback with explicit closeValue
+    const setOpen = jest.fn();
+    const handleSetterBackdrop = createBackdropClickHandler(setOpen, false);
+    handleSetterBackdrop({ target: backdrop, currentTarget: backdrop });
+    expect(setOpen).toHaveBeenCalledWith(false);
+
+    // 3. Blocked or null callback
+    const blockedClose = jest.fn();
+    createBackdropClickHandler(blockedClose, false, true)({ target: backdrop, currentTarget: backdrop });
+    expect(blockedClose).not.toHaveBeenCalled();
+    expect(() => createBackdropClickHandler(null)({ target: backdrop, currentTarget: backdrop })).not.toThrow();
+
+    // 4. registerOutsideClickClose when closed vs open
+    expect(registerOutsideClickClose(false, { current: backdrop }, onClose)).toBeUndefined();
+
+    const closeDropdown = jest.fn();
+    const cleanup = registerOutsideClickClose(true, { current: backdrop }, closeDropdown, false);
+    expect(typeof cleanup).toBe('function');
+
+    // Click inside container does not close
+    child.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(closeDropdown).not.toHaveBeenCalled();
+
+    // Click outside container closes with closeValue
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(closeDropdown).toHaveBeenCalledWith(false);
+    cleanup?.();
+
+    // Zero-arg close callback on outside click
+    const zeroArgClose = jest.fn();
+    const cleanupZeroArg = registerOutsideClickClose(true, { current: backdrop }, zeroArgClose);
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(zeroArgClose).toHaveBeenCalledTimes(1);
+    cleanupZeroArg?.();
+
+    const { collectExistingBuyerVendorCodes } = require('@/lib/constants');
+    expect(Array.from(collectExistingBuyerVendorCodes(null))).toEqual([]);
+    expect(
+      Array.from(
+        collectExistingBuyerVendorCodes([
+          { source: 'buyer_uploaded', vendorCode: ' VC-01 ' },
+          { source: 'procucev_network', vendorCode: 'NET-1' },
+          { source: 'buyer_uploaded', vendorCode: '   ' },
+        ])
+      )
+    ).toEqual(['vc-01']);
+  });
 });

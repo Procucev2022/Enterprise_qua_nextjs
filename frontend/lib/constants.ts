@@ -2697,3 +2697,70 @@ export function subscribeVendorUploadHistory(
     window.removeEventListener('storage', handleStorage);
   };
 }
+
+/**
+ * Builds a declarative backdrop click handler that invokes `onClose` (or a React
+ * state setter with `closeValue`) only when the user clicks directly on the outer
+ * backdrop overlay rather than inside the popup content.
+ */
+export function createBackdropClickHandler<T = boolean>(
+  onClose: (() => void) | ((value: T) => void) | null | undefined,
+  closeValue?: T,
+  isBlocked = false
+): (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => void {
+  const hasCloseValue = arguments.length >= 2;
+  return (event) => {
+    if (isBlocked || typeof onClose !== 'function') return;
+    if (event.target === event.currentTarget) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+}
+
+/**
+ * Registers a document `mousedown` listener while `isOpen` is true to close
+ * a floating dropdown/popover whenever the user clicks outside `containerRef`.
+ */
+export function registerOutsideClickClose<T = boolean>(
+  isOpen: boolean,
+  containerRef: { current: HTMLElement | null },
+  onClose: (() => void) | ((value: T) => void),
+  closeValue?: T
+): (() => void) | undefined {
+  if (!isOpen || typeof document === 'undefined') return undefined;
+  const hasCloseValue = arguments.length >= 4;
+  const handleMouseDown = (event: MouseEvent) => {
+    if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+  document.addEventListener('mousedown', handleMouseDown);
+  return () => {
+    document.removeEventListener('mousedown', handleMouseDown);
+  };
+}
+
+/**
+ * Extracts normalized lowercase vendor codes from existing buyer-owned vendor records
+ * so subsequent sequential vendor code generation avoids colliding with prior uploads.
+ */
+export function collectExistingBuyerVendorCodes(
+  vendors: Array<VendorOwnershipShape & { vendorCode?: string }> | null | undefined
+): Set<string> {
+  const codes = new Set<string>();
+  if (!Array.isArray(vendors)) return codes;
+  for (const v of vendors) {
+    if (isBuyerUploadedVendor(v) && v.vendorCode && String(v.vendorCode).trim()) {
+      codes.add(String(v.vendorCode).trim().toLowerCase());
+    }
+  }
+  return codes;
+}

@@ -20,7 +20,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { isPlaceholderVendorCategory, resolveVendorLocationFields } from '@/lib/constants';
+import { createBackdropClickHandler, isPlaceholderVendorCategory, resolveVendorLocationFields } from '@/lib/constants';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import {
   bulkImportVendorRows,
@@ -432,6 +432,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
 
   return (
     <div
+      onClick={createBackdropClickHandler(handleClose)}
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 sm:p-8"
       role="dialog"
       aria-modal="true"

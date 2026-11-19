@@ -4,7 +4,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { createBackdropClickHandler, formatFileSize, registerOutsideClickClose } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
@@ -177,6 +177,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPincodes, setSelectedPincodes] = useState<string[]>([]);
   const [isPincodeDropdownOpen, setIsPincodeDropdownOpen] = useState(false);
+  const pincodeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => registerOutsideClickClose(isPincodeDropdownOpen, pincodeDropdownRef, setIsPincodeDropdownOpen, false),
+    [isPincodeDropdownOpen]
+  );
   const [userSelectedTab, setUserSelectedTab] = useState<'all' | 'my_enquiries' | 'public_enquiries' | null>(null);
   const [locallyUnlockedRfqIds, setLocallyUnlockedRfqIds] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
@@ -1363,7 +1369,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </label>
 
             {/* Multi-Select Pincode Filter */}
-            <div className="relative block min-w-0">
+            <div ref={pincodeDropdownRef} className="relative block min-w-0">
               <span className="sr-only">Filter enquiries by pincode</span>
               <div className="relative">
                 <button
@@ -2006,7 +2012,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* INQUIRY / CLARIFICATION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {inquiryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setInquiryModal, null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -2158,7 +2167,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* BID / QUOTE SUBMISSION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {biddingOn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(closeBidForm)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-4 sm:p-6 max-w-6xl max-h-[92vh] overflow-y-auto w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">

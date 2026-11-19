@@ -39,14 +39,21 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     if (!orgId) return [];
 
     const session = await vendorIngestionQueries.findLatestSession(orgId);
-    if (!session || !session.id) return [];
-
-    const masterRecords = await vendorIngestionQueries.findVendorMasterRecords(session.id, orgId, 500);
+    const orgRecords =
+      typeof vendorIngestionQueries.findOrganizationVendorMasterRecords === 'function'
+        ? await vendorIngestionQueries.findOrganizationVendorMasterRecords(orgId, 500)
+        : [];
+    let masterRecords = Array.isArray(orgRecords) && orgRecords.length > 0 ? orgRecords : [];
+    if (masterRecords.length === 0) {
+      if (!session || !session.id) return [];
+      masterRecords = await vendorIngestionQueries.findVendorMasterRecords(session.id, orgId, 500);
+    }
     if (!Array.isArray(masterRecords) || masterRecords.length === 0) return [];
 
+    const activeSessionId = (session && session.id) || masterRecords[0]?.sessionId || null;
     const categoryMappings =
-      typeof vendorIngestionQueries.findCategoryMappings === 'function'
-        ? await vendorIngestionQueries.findCategoryMappings(session.id, orgId).catch(() => [])
+      activeSessionId && typeof vendorIngestionQueries.findCategoryMappings === 'function'
+        ? await vendorIngestionQueries.findCategoryMappings(activeSessionId, orgId).catch(() => [])
         : [];
     const mappingByRecordId = new Map(
       (Array.isArray(categoryMappings) ? categoryMappings : [])

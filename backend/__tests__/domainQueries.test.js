@@ -2185,6 +2185,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const cachedRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com');
       expect(cachedRes).toEqual([v]);
 
+      // Explicit fresh: true bypasses cache
+      pool.pool.query.mockResolvedValueOnce({ rows: [{ raw: v }] });
+      const freshRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com', { fresh: true });
+      expect(freshRes).toEqual([v]);
+      const explicitCachedRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com', { fresh: false });
+      expect(explicitCachedRes).toEqual([v]);
+
       // Stale cache fallback test
       const { queryCache } = require('../src/db/queryCache');
       const staleVendors = [{ id: 'stale-buyer-v' }];

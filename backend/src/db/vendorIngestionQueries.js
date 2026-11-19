@@ -726,6 +726,21 @@ async function findVendorMasterRecords(sessionId, organizationId, limit = null) 
   return rows.map(mapRowToVendorMaster);
 }
 
+/** Every vendor-master row for an organisation across ingestion sessions, newest first. */
+async function findOrganizationVendorMasterRecords(organizationId, limit = null) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitClause = hasLimit ? ' limit $2' : ' limit 2000';
+  const params = hasLimit ? [organizationId, Math.min(Number(limit), 2000)] : [organizationId];
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where organization_id = $1
+      order by updated_at desc, source_row_number nulls last, company_name${limitClause}`,
+    params,
+    { d1: true }
+  );
+  return rows.map(mapRowToVendorMaster);
+}
+
 /** One vendor-master row, org-scoped. */
 async function findVendorMasterRecord(recordId, organizationId) {
   if (!pool.hasStorage() || !recordId || !organizationId) return null;
@@ -2526,6 +2541,7 @@ module.exports = {
   // vendor master
   bulkUpsertVendorMasterRecords,
   findVendorMasterRecords,
+  findOrganizationVendorMasterRecords,
   findVendorMasterRecord,
   updateVendorMasterRecordActiveStatus,
   countVendorMasterRecords,
