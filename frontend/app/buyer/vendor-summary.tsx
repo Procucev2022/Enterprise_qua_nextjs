@@ -1007,8 +1007,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       vendor.gstNumber ||
       ''
     ).trim().toUpperCase();
+    const hasEvalRequest = Boolean(richer.evaluationRequested || richer.evaluationRequestedAt);
+    const resolvedStatus = isVendorInactive(richer)
+      ? VENDOR_ACTIVE_STATUSES.INACTIVE
+      : hasEvalRequest
+      ? 'PENDING EVALUATION'
+      : richer.status && richer.status !== 'PENDING EVALUATION'
+      ? richer.status
+      : 'REGISTERED / NOT EVALUATED';
+
     setSelectedVendorForCrud({
       ...richer,
+      status: resolvedStatus,
       ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
     });
     setViewModalOpen(true);
@@ -1472,8 +1482,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           hasRecord: true,
         };
       }
+      const hasEvaluationRequest = Boolean(bv.evaluationRequested || bv.evaluationRequestedAt);
+      const isInactive = isVendorInactive(bv);
+      const resolvedStatus = isInactive
+        ? VENDOR_ACTIVE_STATUSES.INACTIVE
+        : hasEvaluationRequest
+        ? 'PENDING EVALUATION'
+        : bv.status && bv.status !== 'PENDING EVALUATION'
+        ? bv.status
+        : 'REGISTERED / NOT EVALUATED';
+
       return {
         ...bv,
+        status: resolvedStatus as VendorEntry['status'],
         score: null,
         evaluated: false,
         hasRecord: false,
@@ -3110,7 +3131,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
+                    {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
+                  </span>
                   <div
                     className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
                       ? 'text-rose-600 dark:text-rose-400'
@@ -3119,8 +3142,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   >
                     {isVendorInactive(selectedVendorForCrud)
                       ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                      : selectedVendorForCrud.status || '—'}
+                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' && !selectedVendorForCrud.evaluationRequested && !selectedVendorForCrud.evaluationRequestedAt
+                        ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
+                        : selectedVendorForCrud.status || '—')}
                   </div>
+                  {selectedVendorForCrud.evaluationRequested && (
+                    <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
+                      {selectedVendorForCrud.evaluationRequestedAt
+                        ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+                          date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
+                        })
+                        : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+                    </span>
+                  )}
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">

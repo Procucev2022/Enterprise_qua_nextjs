@@ -5538,6 +5538,84 @@ describe('app/buyer/vendor-summary.tsx', () => {
       });
     });
   });
+
+  describe('vendor evaluation status in table and View Profile modal', () => {
+    it('shows REGISTERED / NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
+      const unevaluatedVendor = {
+        id: 'v-uneval-test',
+        name: 'Unrequested Supplier Corp',
+        contactPerson: 'Karan Mehra',
+        email: 'karan@unrequested.test',
+        phone: '+91 99887 76655',
+        majorCategory: 'Mechanical',
+        minorCategories: ['Valves'],
+        source: 'buyer_manual',
+        status: 'PENDING EVALUATION', // Historical or default incoming status
+        evaluated: false,
+        evaluationRequested: false,
+      };
+
+      const requestedVendor = {
+        id: 'v-requested-test',
+        name: 'Dispatched Supplier Corp',
+        contactPerson: 'Anita Roy',
+        email: 'anita@dispatched.test',
+        phone: '+91 99887 76656',
+        majorCategory: 'Electrical',
+        minorCategories: ['Cables'],
+        source: 'buyer_manual',
+        status: 'PENDING EVALUATION',
+        evaluated: false,
+        evaluationRequested: true,
+        evaluationRequestedAt: '2026-03-01T10:00:00.000Z',
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [unevaluatedVendor, requestedVendor],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: { organizationName: 'Testing Buyer Ltd' },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      // In the table, unevaluated vendor shows REGISTERED / NOT EVALUATED
+      expect(screen.getByText('REGISTERED / NOT EVALUATED')).toBeInTheDocument();
+
+      // Open View Profile modal on the unevaluated vendor
+      const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
+      fireEvent.click(viewButtons[0]);
+
+      // Inside View Profile modal: shows REGISTERED / NOT EVALUATED (1 in table, 1 in modal)
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading)).toBeInTheDocument();
+      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.notEvaluatedStatus).length).toBe(2);
+
+      // Close modal
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+
+      // Open View Profile on the vendor that WAS requested
+      fireEvent.click(viewButtons[1]);
+      expect(screen.getAllByText('PENDING EVALUATION').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getAllByText(formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+        date: new Date('2026-03-01T10:00:00.000Z').toLocaleDateString(),
+      })).length).toBeGreaterThanOrEqual(1);
+    });
+  });
 });
 
 
