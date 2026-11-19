@@ -451,6 +451,9 @@ describe('app/buyer/command-center.tsx', () => {
 
     // Click on KPI outreach card to open vendor follow-up details
     fireEvent.click(screen.getByTitle('Click to open vendor follow-up details'));
+    expect(screen.getByText('Live Multi-Channel Outreach')).toBeInTheDocument();
+    const deepDiveButtons = screen.getAllByRole('button', { name: /Deep Dive/i });
+    fireEvent.click(deepDiveButtons[0]);
     expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRfqs[0]);
 
     // Click on RFQ link inside AI Feed
@@ -877,8 +880,11 @@ describe('app/buyer/command-center.tsx', () => {
       />
     );
 
-    // Click Live Outreach when rfqs is present (lines 334-335)
+    // Click Live Outreach when rfqs is present
     fireEvent.click(screen.getByTitle('Click to open vendor follow-up details'));
+    expect(screen.getByText('Live Multi-Channel Outreach')).toBeInTheDocument();
+    const deepDiveButtons = screen.getAllByRole('button', { name: /Deep Dive/i });
+    fireEvent.click(deepDiveButtons[0]);
     expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(mockRfqs[0]);
 
     // Click on RFQ link in AI feed (line 654)

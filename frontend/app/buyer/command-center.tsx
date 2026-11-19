@@ -10,6 +10,7 @@ import {
   ActivePipelineModal,
   IntakeSourcesModal,
   SupplierQuotesModal,
+  LiveOutreachModal,
 } from '@/app/components/Modals';
 import {
   FileText,
@@ -68,6 +69,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
   const [intakeSourcesModalOpen, setIntakeSourcesModalOpen] = useState(false);
   const [supplierQuotesModalOpen, setSupplierQuotesModalOpen] = useState(false);
+  const [liveOutreachModalOpen, setLiveOutreachModalOpen] = useState(false);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side, via the same buyer_accounts record RFQs are stamped with —
@@ -328,6 +330,7 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
     setActivePipelineModalOpen(false);
     setIntakeSourcesModalOpen(false);
     setSupplierQuotesModalOpen(false);
+    setLiveOutreachModalOpen(false);
   };
 
   const handleOpenDeepDiveFromModal = (rfq: RFQItem) => {
@@ -461,7 +464,7 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         <div
           onClick={() => {
             if (rfqs.length > 0) {
-              openRFQDeepDive(rfqs[0]);
+              setLiveOutreachModalOpen(true);
             } else {
               showToast('No Active RFQs', 'Create or ingest an RFQ to view multi-channel follow-up telemetry.', 'info');
             }
@@ -844,6 +847,15 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         rfqs={rfqs}
         onNavigateToMatrix={handleNavigateToMatrixFromModal}
         onOpenDeepDive={handleOpenDeepDiveFromModal}
+      />
+
+      {/* Live Multi-Channel Outreach Overview Modal */}
+      <LiveOutreachModal
+        isOpen={liveOutreachModalOpen}
+        onClose={handleCloseModals}
+        rfqs={rfqs}
+        onOpenDeepDive={handleOpenDeepDiveFromModal}
+        onNavigateToMatrix={handleNavigateToMatrixFromModal}
       />
     </div>
   );

@@ -11,6 +11,12 @@ import {
   IntakeSourcesModal,
   SupplierQuotesModal,
   SubscriptionPaymentModal,
+  LiveOutreachModal,
+  getCallBadge,
+  getWhatsAppBadge,
+  getSMSBadge,
+  getEmailBadge,
+  numberToIndianWords,
 } from '@/app/components/Modals';
 import * as storeModule from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
@@ -1991,6 +1997,772 @@ describe('Modals.tsx', () => {
       expect(screen.getByText('Unsealed Closed Supplier')).toBeInTheDocument();
       expect(screen.queryByText('Hidden Modal Supplier')).not.toBeInTheDocument();
       expect(screen.queryByText('V0 Hidden Supplier')).not.toBeInTheDocument();
+    });
+  });
+
+  describe('LiveOutreachModal', () => {
+    const mockOnClose = jest.fn();
+    const mockOnOpenDeepDive = jest.fn();
+    const mockOnNavigateToMatrix = jest.fn();
+
+    const sampleMultiRfqs: RFQItem[] = [
+      {
+        id: 'rfq-out-1',
+        rfqNumber: 'RFQ-2026-001',
+        title: 'Centrifugal Slurry Pumps',
+        category: 'Mechanical',
+        sourcingMode: 'mode_1',
+        status: 'AI Recommended',
+        quotesCount: 2,
+        budget: 500000,
+        quotes: [],
+        chasingActive: true,
+        createdAt: '2026-08-29',
+        targetDeliveryDate: '2026-09-20',
+        extractedEntities: [],
+        assignedVendors: [
+          { id: 'v-1', name: 'Apex Engineering', contactPerson: 'Rajesh Kumar', phone: '+919876543210', email: 'rajesh@apex.com' },
+          { id: 'v-2', name: 'Flowserve India', contactPerson: 'Amit Shah', phone: '+919876543211', email: 'amit@flowserve.com' },
+        ],
+        followUpData: {
+          rfqNumber: 'RFQ-2026-001',
+          totalInvited: 2,
+          respondedCount: 1,
+          autoChasingEnabled: true,
+          callStats: { total: 2, connected: 1, avgDuration: '1m 20s' },
+          whatsappStats: { total: 2, delivered: 2, read: 1, replied: 1 },
+          smsStats: { total: 2, delivered: 2, clicked: 1 },
+          emailStats: { total: 2, delivered: 2, sent24h: 1, opened: 1 },
+          vendors: [
+            {
+              vendorId: 'v-1',
+              vendorName: 'Apex Engineering',
+              contactPerson: 'Rajesh Kumar',
+              phone: '+919876543210',
+              attemptsCount: 1,
+              call: { status: 'completed', lastAttempt: '2026-08-30T10:00:00.000Z' },
+              whatsapp: { status: 'replied', lastAttempt: '2026-08-30T10:00:00.000Z' },
+              sms: { status: 'clicked', lastAttempt: '2026-08-30T10:00:00.000Z' },
+              emailSent: true,
+              overallStatus: 'Responded',
+              bidStatus: 'Submitted',
+              lastInteraction: '2026-08-30T10:00:00.000Z',
+            },
+            {
+              vendorId: 'v-2',
+              vendorName: 'Flowserve India',
+              contactPerson: 'Amit Shah',
+              phone: '+919876543211',
+              attemptsCount: 1,
+              call: { status: 'voicemail', lastAttempt: '2026-08-30T11:00:00.000Z' },
+              whatsapp: { status: 'delivered', lastAttempt: '2026-08-30T11:00:00.000Z' },
+              sms: { status: 'delivered', lastAttempt: '2026-08-30T11:00:00.000Z' },
+              emailSent: true,
+              overallStatus: 'Follow-up Active',
+              bidStatus: 'In Progress',
+              lastInteraction: '2026-08-30T11:00:00.000Z',
+            },
+          ],
+        },
+      },
+      {
+        id: 'rfq-out-2',
+        rfqNumber: 'RFQ-2026-002',
+        title: 'Titanium Valves',
+        category: 'Piping',
+        sourcingMode: 'mode_2',
+        status: 'In Evaluation',
+        quotesCount: 0,
+        budget: 400000,
+        quotes: [],
+        chasingActive: true,
+        createdAt: '2026-08-30',
+        targetDeliveryDate: '2026-09-25',
+        extractedEntities: [],
+        assignedVendors: [
+          { id: 'v-3', name: 'Valvitalia SpA', contactPerson: 'Marco Rossi', phone: '+919876543212', email: 'marco@valvitalia.com' },
+        ],
+        followUpData: {
+          rfqNumber: 'RFQ-2026-002',
+          totalInvited: 2,
+          respondedCount: 0,
+          autoChasingEnabled: true,
+          callStats: { total: 1, connected: 0, avgDuration: '0s' },
+          whatsappStats: { total: 2, delivered: 1, read: 0, replied: 0 },
+          smsStats: { total: 1, delivered: 1, clicked: 0 },
+          emailStats: { total: 1, delivered: 1, sent24h: 0, opened: 0 },
+          vendors: [
+            {
+              vendorId: 'v-3',
+              vendorName: 'Valvitalia SpA',
+              contactPerson: 'Marco Rossi',
+              phone: '+919876543212',
+              attemptsCount: 1,
+              call: { status: 'scheduled', lastAttempt: '2026-08-31T09:00:00.000Z' },
+              whatsapp: { status: 'pending', lastAttempt: '2026-08-31T09:00:00.000Z' },
+              sms: { status: 'sent', lastAttempt: '2026-08-31T09:00:00.000Z' },
+              emailSent: false,
+              overallStatus: 'Pending',
+              bidStatus: 'Pending',
+              lastInteraction: '2026-08-31T09:00:00.000Z',
+            },
+          ],
+        },
+      },
+    ];
+
+    it('returns null when closed', () => {
+      const { container } = render(
+        <LiveOutreachModal
+          isOpen={false}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+      expect(container.firstChild).toBeNull();
+    });
+
+    it('displays multiple RFQs and aggregate telemetry across all relevant RFQs', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      // Verify Modal Title and Badge
+      expect(screen.getByText('Live Multi-Channel Outreach')).toBeInTheDocument();
+      expect(screen.getByText('2 Active RFQs')).toBeInTheDocument();
+
+      // Verify BOTH RFQs are visible in Grouped View
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+      expect(screen.getByText('Centrifugal Slurry Pumps')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-2026-002')).toBeInTheDocument();
+      expect(screen.getByText('Titanium Valves')).toBeInTheDocument();
+
+      // Verify vendor names across multiple RFQs
+      expect(screen.getByText('Apex Engineering')).toBeInTheDocument();
+      expect(screen.getByText('Flowserve India')).toBeInTheDocument();
+      expect(screen.getByText('Valvitalia SpA')).toBeInTheDocument();
+
+      // Verify Aggregate KPI strip
+      // Total outreach messages: WA(2+2=4) + SMS(2+1=3) + Email(2+1=3) = 10
+      expect(screen.getByText('Total Outreach').parentElement).toHaveTextContent('10');
+    });
+
+    it('handles search filtering by RFQ number, title, and vendor name', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      const searchInput = screen.getByPlaceholderText(/Search across all RFQs/i);
+
+      // Search for specific vendor in RFQ-2
+      fireEvent.change(searchInput, { target: { value: 'Valvitalia' } });
+      expect(screen.getByText('RFQ-2026-002')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-2026-001')).not.toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+      expect(screen.getByText('RFQ-2026-002')).toBeInTheDocument();
+    });
+
+    it('handles channel tabs and status filters', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      // Click WhatsApp channel tab
+      fireEvent.click(screen.getByRole('button', { name: /WhatsApp/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+
+      // Click Voice Calls channel tab
+      fireEvent.click(screen.getByRole('button', { name: /Voice Calls/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+
+      // Click SMS channel tab
+      fireEvent.click(screen.getByRole('button', { name: /SMS/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+
+      // Click Email channel tab
+      fireEvent.click(screen.getByRole('button', { name: /Email/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+
+      // Click All Channels tab
+      fireEvent.click(screen.getByRole('button', { name: /All Channels/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+
+      // Status filters
+      fireEvent.click(screen.getByRole('button', { name: /Responded \/ Connected/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ-2026-002')).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole('button', { name: /^delivered$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^pending$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /^all$/i }));
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+    });
+
+    it('toggles View Mode to All Records Table, filters, sorts, and triggers Deep Dive callback', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      // Toggle to All Records Table view
+      fireEvent.click(screen.getByRole('button', { name: /All Records Table/i }));
+      expect(screen.getByText('Empanelled Vendor')).toBeInTheDocument();
+      expect(screen.getAllByText('WhatsApp Bot').length).toBeGreaterThan(0);
+
+      // Verify rows exist for vendors across both RFQs
+      expect(screen.getByText('Rajesh Kumar')).toBeInTheDocument();
+      expect(screen.getByText('Marco Rossi')).toBeInTheDocument();
+
+      // Test RFQ selector dropdown
+      const rfqSelect = screen.getByLabelText('Filter by RFQ');
+      fireEvent.change(rfqSelect, { target: { value: 'RFQ-2026-001' } });
+      expect(screen.getByText('Rajesh Kumar')).toBeInTheDocument();
+      expect(screen.queryByText('Marco Rossi')).not.toBeInTheDocument();
+
+      // Reset RFQ dropdown
+      fireEvent.change(rfqSelect, { target: { value: 'all' } });
+      expect(screen.getByText('Marco Rossi')).toBeInTheDocument();
+
+      // Sort selection
+      const sortSelect = screen.getByLabelText('Sort Outreach Items');
+      fireEvent.change(sortSelect, { target: { value: 'vendors' } });
+      fireEvent.change(sortSelect, { target: { value: 'engagement' } });
+      fireEvent.change(sortSelect, { target: { value: 'newest' } });
+      fireEvent.change(sortSelect, { target: { value: 'activity' } });
+
+      // Click Deep Dive on a table row
+      const deepDiveBtns = screen.getAllByRole('button', { name: 'Deep Dive' });
+      fireEvent.click(deepDiveBtns[0]);
+      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnOpenDeepDive).toHaveBeenCalledWith(sampleMultiRfqs[0]);
+    });
+
+    it('handles Grouped View action buttons: Deep Dive, Quotes, and Close', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      // Click Quotes Matrix button for RFQ-1
+      const quotesBtns = screen.getAllByRole('button', { name: /Quotes/i });
+      fireEvent.click(quotesBtns[0]);
+      expect(mockOnClose).toHaveBeenCalled();
+      expect(mockOnNavigateToMatrix).toHaveBeenCalledWith(sampleMultiRfqs[0]);
+
+      // Click Close button
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(mockOnClose).toHaveBeenCalled();
+    });
+
+    it('renders empty state when search matches nothing and allows clearing filters', () => {
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={sampleMultiRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+          onNavigateToMatrix={mockOnNavigateToMatrix}
+        />
+      );
+
+      const searchInput = screen.getByPlaceholderText(/Search across all RFQs/i);
+      fireEvent.change(searchInput, { target: { value: 'NonexistentSearchStringXYZ' } });
+
+      expect(screen.getByText('No Requisitions Found')).toBeInTheDocument();
+      const clearBtn = screen.getByRole('button', { name: 'Clear Filters' });
+      fireEvent.click(clearBtn);
+
+      expect(screen.getByText('RFQ-2026-001')).toBeInTheDocument();
+    });
+
+    it('is robust against nullish rfqs and vendor fields', () => {
+      const oddRfqs: any[] = [
+        null,
+        {
+          id: 'rfq-nulls',
+          rfqNumber: 'RFQ-NULLS',
+          assignedVendors: [null, 'PlainStringVendor'],
+          followUpData: null,
+        },
+      ];
+
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqs={oddRfqs}
+          onOpenDeepDive={mockOnOpenDeepDive}
+        />
+      );
+
+      expect(screen.getAllByText('RFQ-NULLS').length).toBeGreaterThan(0);
+    });
+
+    it('covers all badge variants for call, whatsapp, sms, and email', () => {
+      // Call badges
+      expect(render(getCallBadge('completed')).container.textContent).toContain('Connected');
+      expect(render(getCallBadge('connected')).container.textContent).toContain('In Call');
+      expect(render(getCallBadge('voicemail')).container.textContent).toContain('Voicemail Left');
+      expect(render(getCallBadge('scheduled')).container.textContent).toContain('Callback Queued');
+      expect(render(getCallBadge('not_dispatched')).container.textContent).toContain(UI_STRINGS.recordPlaceholders.notDispatched);
+      expect(render(getCallBadge('ringing')).container.textContent).toContain('ringing');
+
+      // WhatsApp badges
+      expect(render(getWhatsAppBadge('replied')).container.textContent).toContain('Replied / Bid In');
+      expect(render(getWhatsAppBadge('read')).container.textContent).toContain('Read (Link Clicked)');
+      expect(render(getWhatsAppBadge('delivered')).container.textContent).toContain('Delivered');
+      expect(render(getWhatsAppBadge('pending')).container.textContent).toContain('Queued');
+      expect(render(getWhatsAppBadge('not_dispatched')).container.textContent).toContain(UI_STRINGS.recordPlaceholders.notDispatched);
+      expect(render(getWhatsAppBadge('custom_wa')).container.textContent).toContain('custom_wa');
+
+      // SMS badges
+      expect(render(getSMSBadge('clicked')).container.textContent).toContain('Link Clicked');
+      expect(render(getSMSBadge('delivered')).container.textContent).toContain('Delivered (DLT)');
+      expect(render(getSMSBadge('sent')).container.textContent).toContain('Sent');
+      expect(render(getSMSBadge('not_dispatched')).container.textContent).toContain(UI_STRINGS.recordPlaceholders.notDispatched);
+      expect(render(getSMSBadge('custom_sms')).container.textContent).toContain('custom_sms');
+
+      // Email badges
+      expect(render(getEmailBadge('replied')).container.textContent).toContain('Opened / Replied');
+      expect(render(getEmailBadge('opened')).container.textContent).toContain('Opened / Replied');
+      expect(render(getEmailBadge('delivered')).container.textContent).toContain('Delivered');
+      expect(render(getEmailBadge('escalated')).container.textContent).toContain('Escalated (24h)');
+      expect(render(getEmailBadge('sent')).container.textContent).toContain('Escalated (24h)');
+      expect(render(getEmailBadge('not_dispatched')).container.textContent).toContain(UI_STRINGS.recordPlaceholders.notDispatched);
+      expect(render(getEmailBadge('bounced')).container.textContent).toContain('bounced');
+    });
+
+    it('allows switching RFQs in RFQFollowUpDeepDiveModal when multiple RFQs exist', () => {
+      const mockSetSelected = jest.fn();
+      (storeModule.useApp as jest.Mock).mockReturnValue({
+        rfqs: sampleMultiRfqs,
+        setSelectedRFQForDeepDive: mockSetSelected,
+        triggerChannelChaser: jest.fn(),
+        triggerBatchChannelChaser: jest.fn(),
+        showToast: jest.fn(),
+      });
+
+      render(
+        <RFQFollowUpDeepDiveModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfq={sampleMultiRfqs[0]}
+        />
+      );
+
+      const switchSelect = screen.getByLabelText('Switch Deep Dive RFQ');
+      fireEvent.change(switchSelect, { target: { value: 'RFQ-2026-002' } });
+      expect(mockSetSelected).toHaveBeenCalledWith(sampleMultiRfqs[1]);
+    });
+
+    it('handles pagination across multiple RFQs and records, and covers remaining branches', () => {
+      const eightRfqs: RFQItem[] = Array.from({ length: 8 }).map((_, i) => ({
+        id: `rfq-page-${i + 1}`,
+        rfqNumber: `RFQ-PAGE-00${i + 1}`,
+        title: `Requisition Title ${i + 1}`,
+        category: i % 2 === 0 ? 'Mechanical' : 'Piping',
+        sourcingMode: i === 0 ? 'mode_3' : i === 1 ? 'mode_2' : (undefined as any),
+        status: i === 0 ? 'PO Generated' : i === 1 ? 'Parsing' : i === 2 ? 'Closed' : i === 3 ? 'Quotes Received' : ('CustomStatus' as any),
+        quotesCount: i === 0 ? 1 : 0,
+        budget: 100000 * (i + 1),
+        quotes: i === 0 ? [{ vendorId: 'v-q', vendorName: 'Quoted Vendor', totalPrice: 100000 } as any] : [],
+        chasingActive: true,
+        createdAt: `2026-08-0${i + 1}`,
+        targetDeliveryDate: `2026-09-0${i + 1}`,
+        extractedEntities: [],
+        assignedVendors: i === 0 ? [
+          { id: 'v-b1', name: 'Vendor 1' },
+          { id: 'v-b2', name: 'Vendor 2' },
+        ] : [],
+        followUpData: {
+          rfqNumber: `RFQ-PAGE-00${i + 1}`,
+          totalInvited: i === 0 ? 7 : 1,
+          respondedCount: 1,
+          autoChasingEnabled: true,
+          callStats: { total: 1, connected: 1, avgDuration: '1m' },
+          whatsappStats: { total: 1, delivered: 1, read: 1, replied: 0 },
+          smsStats: { total: 1, delivered: 1, clicked: 0 },
+          emailStats: { total: 1, delivered: 1, sent24h: 0, opened: 0 },
+          vendors: i === 0 ? [
+            {
+              vendorId: 'v-b1',
+              vendorName: 'Vendor 1',
+              contactPerson: 'Contact 1',
+              phone: '',
+              email: { address: 'email1@test.com' } as any,
+              attemptsCount: 1,
+              call: { status: 'connected', lastAttempt: '2026-08-01' },
+              whatsapp: { status: 'read', lastAttempt: '2026-08-01' },
+              sms: { status: 'delivered', lastAttempt: '2026-08-01' },
+              emailSent: true,
+              overallStatus: 'Responded',
+              bidStatus: 'Submitted',
+              lastInteraction: '2026-08-01',
+            },
+            {
+              vendorId: 'v-procucev',
+              vendorName: 'Procucev Sourced Vendor',
+              contactPerson: 'Contact 2',
+              phone: '',
+              email: undefined,
+              attemptsCount: 1,
+              call: { status: 'completed', lastAttempt: '2026-08-01' },
+              whatsapp: { status: 'replied', lastAttempt: '2026-08-01' },
+              sms: { status: 'clicked', lastAttempt: '2026-08-01' },
+              emailSent: false,
+              overallStatus: 'Responded',
+              bidStatus: 'Submitted',
+              lastInteraction: '2026-08-01',
+            },
+            {
+              vendorId: 'v-3',
+              vendorName: 'Vendor 3',
+              contactPerson: 'Contact 3',
+              phone: '123',
+              email: 'v3@test.com',
+              attemptsCount: 1,
+              call: { status: 'scheduled', lastAttempt: '2026-08-01' },
+              whatsapp: { status: 'pending', lastAttempt: '2026-08-01' },
+              sms: { status: 'sent', lastAttempt: '2026-08-01' },
+              emailSent: false,
+              overallStatus: 'Pending',
+              bidStatus: 'Pending',
+              lastInteraction: '2026-08-01',
+            },
+            { vendorId: 'v-4', vendorName: 'Vendor 4', contactPerson: '', phone: '', attemptsCount: 0, call: { status: 'not_dispatched', lastAttempt: '' }, whatsapp: { status: 'not_dispatched', lastAttempt: '' }, sms: { status: 'not_dispatched', lastAttempt: '' }, overallStatus: 'Pending', bidStatus: 'Pending', lastInteraction: '' },
+            { vendorId: 'v-5', vendorName: 'Vendor 5', contactPerson: '', phone: '', attemptsCount: 0, call: { status: 'not_dispatched', lastAttempt: '' }, whatsapp: { status: 'not_dispatched', lastAttempt: '' }, sms: { status: 'not_dispatched', lastAttempt: '' }, overallStatus: 'Pending', bidStatus: 'Pending', lastInteraction: '' },
+            { vendorId: 'v-6', vendorName: 'Vendor 6', contactPerson: '', phone: '', attemptsCount: 0, call: { status: 'not_dispatched', lastAttempt: '' }, whatsapp: { status: 'not_dispatched', lastAttempt: '' }, sms: { status: 'not_dispatched', lastAttempt: '' }, overallStatus: 'Pending', bidStatus: 'Pending', lastInteraction: '' },
+            { vendorId: 'v-7', vendorName: 'Vendor 7', contactPerson: '', phone: '', attemptsCount: 0, call: { status: 'not_dispatched', lastAttempt: '' }, whatsapp: { status: 'not_dispatched', lastAttempt: '' }, sms: { status: 'not_dispatched', lastAttempt: '' }, overallStatus: 'Pending', bidStatus: 'Pending', lastInteraction: '' },
+          ] : [
+            {
+              vendorId: `v-${i}`,
+              vendorName: `Single Vendor ${i}`,
+              contactPerson: 'Solo',
+              phone: '999',
+              email: 'solo@test.com',
+              attemptsCount: 1,
+              call: { status: 'completed', lastAttempt: '2026-08-01' },
+              whatsapp: { status: 'delivered', lastAttempt: '2026-08-01' },
+              sms: { status: 'sent', lastAttempt: '2026-08-01' },
+              emailSent: true,
+              overallStatus: 'Responded',
+              bidStatus: 'Submitted',
+              lastInteraction: '2026-08-01',
+            },
+          ],
+        },
+      }));
+
+      const mockOpenDeepDive = jest.fn();
+
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqs={eightRfqs}
+          onOpenDeepDive={mockOpenDeepDive}
+        />
+      );
+
+      // Verify +2 more is displayed
+      expect(screen.getByText('+2 more')).toBeInTheDocument();
+
+      // Verify Procucev Network vendor tag
+      expect(screen.getByText('Procucev Sourced Vendor')).toBeInTheDocument();
+
+      // Test fallback when onNavigateToMatrix is not provided
+      const quotesBtn = screen.getAllByRole('button', { name: /Quotes/i })[0];
+      fireEvent.click(quotesBtn);
+      expect(mockOpenDeepDive).toHaveBeenCalledWith(eightRfqs[0]);
+
+      // Pagination controls in Grouped mode (8 items, pageSize 6 => 2 pages)
+      const paginationButtons = screen.getAllByRole('button').filter(b => b.querySelector('svg.lucide-chevron-right') || b.querySelector('svg.lucide-chevron-left'));
+      const prevBtn = paginationButtons[0];
+      const pageNextBtn = paginationButtons[1];
+
+      if (pageNextBtn) {
+        fireEvent.click(pageNextBtn);
+        expect(screen.getByText('2 / 2')).toBeInTheDocument();
+        if (prevBtn) {
+          fireEvent.click(prevBtn);
+          expect(screen.getByText('1 / 2')).toBeInTheDocument();
+        }
+      }
+
+      // Switch to All Records Table mode
+      fireEvent.click(screen.getByRole('button', { name: /All Records Table/i }));
+
+      // Search in Records Table matching contact, phone, email
+      const searchInput = screen.getByPlaceholderText(/Search across all RFQs/i);
+      fireEvent.change(searchInput, { target: { value: 'email1@test.com' } });
+      expect(screen.getByText('Vendor 1')).toBeInTheDocument();
+
+      // Search matching non-existent string in records table
+      fireEvent.change(searchInput, { target: { value: 'ZeroMatchRecordXYZ' } });
+      expect(screen.getByText('No Outreach Records Found')).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Clear Filters' }));
+      expect(screen.getByText('Vendor 1')).toBeInTheDocument();
+    });
+
+    it('covers RFQ dropdown filter, category/status search, table pagination, and zero items display', () => {
+      const mockNav = jest.fn();
+      const mockDD = jest.fn();
+
+      const twelveVendors = Array.from({ length: 12 }).map((_, i) => ({
+        vendorId: `v-${i + 1}`,
+        vendorName: `Vendor ${i + 1}`,
+        contactPerson: `Contact ${i + 1}`,
+        phone: `+9190000000${i}`,
+        email: `v${i + 1}@corp.com`,
+        attemptsCount: 1,
+        call: { status: (i % 2 === 0 ? 'connected' : 'voicemail') as any, lastAttempt: '2026-08-01' },
+        whatsapp: { status: (i % 2 === 0 ? 'read' : 'delivered') as any, lastAttempt: '2026-08-01' },
+        sms: { status: (i % 2 === 0 ? 'clicked' : 'delivered') as any, lastAttempt: '2026-08-01' },
+        emailSent: true,
+        overallStatus: 'Responded' as const,
+        bidStatus: 'Submitted' as const,
+        lastInteraction: '2026-08-01',
+      }));
+
+      const rfqsWithMany: RFQItem[] = [
+        {
+          id: 'rfq-many-1',
+          rfqNumber: 'RFQ-MANY-001',
+          title: 'Specialized Industrial Turbines',
+          category: 'Turbomachinery',
+          sourcingMode: 'mode_1',
+          status: 'In Evaluation',
+          quotesCount: 3,
+          budget: 900000,
+          quotes: [{ vendorId: 'v-1', vendorName: 'Vendor 1', totalPrice: 900000 } as any],
+          chasingActive: true,
+          createdAt: '2026-08-15',
+          targetDeliveryDate: '2026-09-15',
+          extractedEntities: [],
+          assignedVendors: twelveVendors.map((v) => ({ id: v.vendorId, name: v.vendorName })),
+          followUpData: {
+            rfqNumber: 'RFQ-MANY-001',
+            totalInvited: 12,
+            respondedCount: 6,
+            autoChasingEnabled: true,
+            callStats: { total: 12, connected: 6, avgDuration: '1m' },
+            whatsappStats: { total: 12, delivered: 12, read: 6, replied: 3 },
+            smsStats: { total: 12, delivered: 12, clicked: 6 },
+            emailStats: { total: 12, delivered: 12, sent24h: 3, opened: 2 },
+            vendors: twelveVendors,
+          },
+        },
+        {
+          id: 'rfq-many-2',
+          rfqNumber: 'RFQ-MANY-002',
+          title: 'Seamless Steel Pipes',
+          category: 'Piping',
+          sourcingMode: 'mode_0',
+          status: 'Closed',
+          quotesCount: 0,
+          budget: 300000,
+          quotes: [],
+          chasingActive: false,
+          createdAt: '2026-08-10',
+          targetDeliveryDate: '2026-08-30',
+          extractedEntities: [],
+          assignedVendors: [],
+          followUpData: undefined,
+        },
+      ];
+
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqs={rfqsWithMany}
+          onOpenDeepDive={mockDD}
+          onNavigateToMatrix={mockNav}
+        />
+      );
+
+      // 1. Filter by RFQ dropdown in Grouped view
+      const rfqSelect = screen.getByLabelText('Filter by RFQ');
+      fireEvent.change(rfqSelect, { target: { value: 'RFQ-MANY-001' } });
+      expect(screen.getByText('Specialized Industrial Turbines')).toBeInTheDocument();
+      expect(screen.queryByText('Seamless Steel Pipes')).not.toBeInTheDocument();
+
+      // Reset dropdown
+      fireEvent.change(rfqSelect, { target: { value: 'all' } });
+      expect(screen.getByText('Seamless Steel Pipes')).toBeInTheDocument();
+
+      // 2. Search by category in Grouped view
+      const searchInput = screen.getByPlaceholderText(/Search across all RFQs/i);
+      fireEvent.change(searchInput, { target: { value: 'Turbomachinery' } });
+      expect(screen.getByText('Specialized Industrial Turbines')).toBeInTheDocument();
+      expect(screen.queryByText('Seamless Steel Pipes')).not.toBeInTheDocument();
+
+      // Clear search via clear button
+      const clearBtn = searchInput.parentElement?.querySelector('button');
+      if (clearBtn) {
+        fireEvent.click(clearBtn);
+        expect((searchInput as HTMLInputElement).value).toBe('');
+      }
+
+      // 3. Search by status in Grouped view
+      fireEvent.change(searchInput, { target: { value: 'Closed' } });
+      expect(screen.getByText('Seamless Steel Pipes')).toBeInTheDocument();
+      expect(screen.queryByText('Specialized Industrial Turbines')).not.toBeInTheDocument();
+
+      // 4. Search by vendor contact person in Grouped view
+      fireEvent.change(searchInput, { target: { value: 'Contact 10' } });
+      expect(screen.getByText('Specialized Industrial Turbines')).toBeInTheDocument();
+
+      // 5. Search by vendor phone in Grouped view
+      fireEvent.change(searchInput, { target: { value: '900000005' } });
+      expect(screen.getByText('Specialized Industrial Turbines')).toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Test all sort options in Grouped view
+      const sortSelect = screen.getByLabelText('Sort Outreach Items');
+      fireEvent.change(sortSelect, { target: { value: 'vendors' } });
+      fireEvent.change(sortSelect, { target: { value: 'engagement' } });
+      fireEvent.change(sortSelect, { target: { value: 'newest' } });
+      fireEvent.change(sortSelect, { target: { value: 'activity' } });
+
+      // Click Deep Dive on the first card
+      const deepDiveBtns = screen.getAllByRole('button', { name: /Deep Dive/i });
+      fireEvent.click(deepDiveBtns[0]);
+      expect(mockDD).toHaveBeenCalled();
+
+      // 6. Switch to All Records Table mode and test table pagination (12 records, pageSize 10 => 2 pages)
+      fireEvent.click(screen.getByRole('button', { name: /All Records Table/i }));
+      expect(screen.getByText(/1–10 of 12 vendor outreach records/)).toBeInTheDocument();
+
+      // Test all sort options in Records view
+      fireEvent.change(sortSelect, { target: { value: 'vendors' } });
+      fireEvent.change(sortSelect, { target: { value: 'engagement' } });
+      fireEvent.change(sortSelect, { target: { value: 'newest' } });
+      fireEvent.change(sortSelect, { target: { value: 'activity' } });
+
+      // Test channel filters in Records view
+      const waTab = screen.getByRole('button', { name: /WhatsApp/i });
+      fireEvent.click(waTab);
+      const callTab = screen.getByRole('button', { name: /Voice Calls/i });
+      fireEvent.click(callTab);
+      const smsTab = screen.getByRole('button', { name: /SMS/i });
+      fireEvent.click(smsTab);
+      const allChannelsTab = screen.getByRole('button', { name: /All Channels/i });
+      fireEvent.click(allChannelsTab);
+
+      // Test status filters in Records view
+      const engagedBtn = screen.getByRole('button', { name: /Responded \/ Connected/i });
+      fireEvent.click(engagedBtn);
+      const deliveredBtn = screen.getByRole('button', { name: /delivered/i });
+      fireEvent.click(deliveredBtn);
+      const pendingBtn = screen.getByRole('button', { name: /pending/i });
+      fireEvent.click(pendingBtn);
+      const allStatusBtn = screen.getByRole('button', { name: /^all$/i });
+      fireEvent.click(allStatusBtn);
+
+      // Search inside Records view matching email and phone
+      fireEvent.change(searchInput, { target: { value: 'user@domain.com' } });
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Switch back to Grouped view
+      fireEvent.click(screen.getByRole('button', { name: /Grouped by RFQ/i }));
+      expect(screen.getByText('Specialized Industrial Turbines')).toBeInTheDocument();
+
+      // Switch back to Records view
+      fireEvent.click(screen.getByRole('button', { name: /All Records Table/i }));
+
+      // Click Next page button in records mode
+      const pageButtons = screen.getAllByRole('button').filter(b => b.querySelector('svg.lucide-chevron-right') || b.querySelector('svg.lucide-chevron-left'));
+      const prevPageBtn = pageButtons[0];
+      const nextPageBtn = pageButtons[1];
+
+      if (nextPageBtn) {
+        fireEvent.click(nextPageBtn);
+        expect(screen.getByText(/11–12 of 12 vendor outreach records/)).toBeInTheDocument();
+        if (prevPageBtn) {
+          fireEvent.click(prevPageBtn);
+          expect(screen.getByText(/1–10 of 12 vendor outreach records/)).toBeInTheDocument();
+        }
+      }
+    });
+
+    it('handles Quotes button fallback to Deep Dive when onNavigateToMatrix is not provided', () => {
+      const mockDD = jest.fn();
+      render(
+        <LiveOutreachModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqs={[
+            {
+              id: 'rfq-fallback',
+              rfqNumber: 'RFQ-FALLBACK',
+              title: 'Fallback RFQ',
+              category: 'IT',
+              status: 'Quotes Received',
+              createdAt: '2026-08-01',
+              budget: 10000,
+              quotesCount: 3,
+              quotes: [{ vendorName: 'V1', totalPrice: 1000 }],
+              extractedEntities: [],
+              assignedVendors: ['Vendor 1'],
+            } as any,
+          ]}
+          onOpenDeepDive={mockDD}
+        />
+      );
+
+      const quotesBtn = screen.getByRole('button', { name: /Quotes/i });
+      fireEvent.click(quotesBtn);
+      expect(mockDD).toHaveBeenCalled();
+    });
+
+    it('covers numberToIndianWords comprehensively with all edge cases and boundaries', () => {
+      expect(numberToIndianWords(0)).toBe('');
+      expect(numberToIndianWords(-5)).toBe('');
+      expect(numberToIndianWords(NaN)).toBe('');
+      expect(numberToIndianWords(Infinity)).toBe('');
+      expect(numberToIndianWords(100000000000)).toBe('');
+      expect(numberToIndianWords(500)).toBe('Rupees Five Hundred Only');
+      expect(numberToIndianWords(525)).toBe('Rupees Five Hundred and Twenty Five Only');
+      expect(numberToIndianWords(1000)).toBe('Rupees One Thousand Only');
+      expect(numberToIndianWords(100000)).toBe('Rupees One Lakh Only');
+      expect(numberToIndianWords(10000000)).toBe('Rupees One Crore Only');
+      expect(numberToIndianWords(123456789)).toBe('Rupees Twelve Crore Thirty Four Lakh Fifty Six Thousand Seven Hundred and Eighty Nine Only');
     });
   });
 });
