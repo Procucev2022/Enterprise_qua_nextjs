@@ -2556,8 +2556,6 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
       const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
       fireEvent.click(submitBtn);
-      const discountForm = submitBtn.closest('form');
-      if (discountForm) fireEvent.submit(discountForm);
 
       await waitFor(() => {
         expect(screen.getByText('Discount approval quota exceeded')).toBeInTheDocument();
@@ -2566,7 +2564,6 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       // Test exception thrown
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network drop'));
       fireEvent.click(submitBtn);
-      if (discountForm) fireEvent.submit(discountForm);
       await waitFor(() => {
         expect(screen.getByText('Failed to submit discount approval request.')).toBeInTheDocument();
       });
