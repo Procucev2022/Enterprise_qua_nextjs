@@ -1220,4 +1220,110 @@ describe('Indian address location extraction helpers', () => {
       )
     ).toEqual(['vc-01']);
   });
+
+  it('covers table sorting, column visibility classes, sort indicators, and column reset helpers', () => {
+    const {
+      BUYER_VENDOR_DIRECTORY_COLUMNS,
+      BUYER_RFQ_SUMMARY_COLUMNS,
+      BUYER_EVALUATION_SUMMARY_COLUMNS,
+      BUYER_ACCOUNTS_TABLE_COLUMNS,
+      CM_ALL_RFQS_TABLE_COLUMNS,
+      nextTableSortState,
+      createColumnSortClickHandler,
+      createColumnResetHandler,
+      createBooleanSetterHandler,
+      getTableColumnClass,
+      getTableAriaSort,
+      getSortIndicatorSymbol,
+      resolveSortableCellValue,
+      sortTableRows,
+    } = require('@/lib/constants');
+
+    expect(BUYER_VENDOR_DIRECTORY_COLUMNS.length).toBeGreaterThan(10);
+    expect(BUYER_RFQ_SUMMARY_COLUMNS.length).toBeGreaterThan(8);
+    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.length).toBeGreaterThan(8);
+    expect(BUYER_ACCOUNTS_TABLE_COLUMNS.length).toBeGreaterThan(10);
+    expect(CM_ALL_RFQS_TABLE_COLUMNS.length).toBeGreaterThan(10);
+
+    // Sort state cycling
+    let sortState = { key: null as string | null, dir: 'asc' as 'asc' | 'desc' };
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'asc' });
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'desc' });
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'asc' });
+    sortState = nextTableSortState(sortState, 'email');
+    expect(sortState).toEqual({ key: 'email', dir: 'asc' });
+
+    const setSort = jest.fn((updater) => {
+      sortState = updater(sortState);
+    });
+    const clickSort = createColumnSortClickHandler('email', setSort);
+    clickSort();
+    expect(sortState).toEqual({ key: 'email', dir: 'desc' });
+
+    const setColumns = jest.fn();
+    createColumnResetHandler(BUYER_RFQ_SUMMARY_COLUMNS, setColumns)();
+    expect(setColumns).toHaveBeenCalledWith(BUYER_RFQ_SUMMARY_COLUMNS);
+
+    const setBool = jest.fn();
+    createBooleanSetterHandler(setBool, true)();
+    expect(setBool).toHaveBeenCalledWith(true);
+
+    // Column display class
+    const cols = [
+      { key: 'name', label: 'Name', visible: true },
+      { key: 'email', label: 'Email', visible: false },
+    ];
+    expect(getTableColumnClass(null, 'name', 'px-2')).toBe('px-2');
+    expect(getTableColumnClass(cols, 'name', 'px-2')).toBe('px-2');
+    expect(getTableColumnClass(cols, 'email', 'px-2')).toBe('px-2 hidden');
+    expect(getTableColumnClass(cols, 'email')).toBe('hidden');
+    expect(getTableColumnClass(cols, 'unknown', 'px-2')).toBe('px-2');
+
+    // Aria sort & indicator symbol
+    expect(getTableAriaSort(null, 'name')).toBe('none');
+    expect(getTableAriaSort({ key: 'other', dir: 'asc' }, 'name')).toBe('none');
+    expect(getTableAriaSort({ key: 'name', dir: 'asc' }, 'name')).toBe('ascending');
+    expect(getTableAriaSort({ key: 'name', dir: 'desc' }, 'name')).toBe('descending');
+    expect(getSortIndicatorSymbol(null, 'name')).toBe('↕');
+    expect(getSortIndicatorSymbol({ key: 'name', dir: 'asc' }, 'name')).toBe('↑');
+    expect(getSortIndicatorSymbol({ key: 'name', dir: 'desc' }, 'name')).toBe('↓');
+
+    // Cell value resolution
+    expect(resolveSortableCellValue(null, 'name')).toBe('');
+    expect(resolveSortableCellValue({ extractedEntities: [1, 2, 3] }, 'items')).toBe(3);
+    expect(resolveSortableCellValue({ lineItems: [1, 2] }, 'items')).toBe(2);
+    expect(resolveSortableCellValue({ items: 'fallback' }, 'items')).toBe('fallback');
+    expect(resolveSortableCellValue({ quotesCount: 4 }, 'quotes')).toBe(4);
+    expect(resolveSortableCellValue({ quotesCount: '7' }, 'quotes')).toBe(7);
+    expect(resolveSortableCellValue({}, 'quotes')).toBe(0);
+    expect(resolveSortableCellValue({ targetDeliveryDate: '2026-12-01' }, 'delivery')).toBe('2026-12-01');
+    expect(resolveSortableCellValue({ deadline: '2026-11-30' }, 'delivery')).toBe('2026-11-30');
+    expect(resolveSortableCellValue({}, 'delivery')).toBe('');
+    expect(resolveSortableCellValue({ minorCategories: ['Valves', 'Pumps'] }, 'minorCategories')).toBe('Valves, Pumps');
+    expect(resolveSortableCellValue({ minorCategories: null }, 'minorCategories')).toBe('');
+    expect(resolveSortableCellValue({ city: 'Pune' }, 'location')).toBe('Pune');
+    expect(resolveSortableCellValue({}, 'location')).toBe('');
+    expect(resolveSortableCellValue({ totalSpend: '₹1,25,000' }, 'totalSpend')).toBe(125000);
+    expect(resolveSortableCellValue({ totalSpend: 'abc' }, 'totalSpend')).toBe(0);
+    expect(resolveSortableCellValue({ score: 88 }, 'score')).toBe(88);
+    expect(resolveSortableCellValue({ vendorCode: '42' }, 'vendorCode')).toBe(42);
+    expect(resolveSortableCellValue({ name: ' Apex ' }, 'name')).toBe('apex');
+    expect(resolveSortableCellValue({ tags: ['a', 'b'] }, 'tags')).toBe(2);
+    expect(resolveSortableCellValue({ flag: true }, 'flag')).toBe('');
+
+    // Row sorting
+    expect(sortTableRows(null as unknown as unknown[], { key: 'name', dir: 'asc' })).toEqual([]);
+    const sampleRows = [
+      { name: 'Beta', score: 90 },
+      { name: 'Alpha', score: 75 },
+    ];
+    expect(sortTableRows(sampleRows, { key: null, dir: 'asc' })).toEqual(sampleRows);
+    expect(sortTableRows(sampleRows, { key: 'name', dir: 'asc' }).map((r: { name: string }) => r.name)).toEqual(['Alpha', 'Beta']);
+    expect(sortTableRows(sampleRows, { key: 'name', dir: 'desc' }).map((r: { name: string }) => r.name)).toEqual(['Beta', 'Alpha']);
+    expect(sortTableRows(sampleRows, { key: 'score', dir: 'asc' }).map((r: { score: number }) => r.score)).toEqual([75, 90]);
+    expect(sortTableRows(sampleRows, { key: 'score', dir: 'desc' }).map((r: { score: number }) => r.score)).toEqual([90, 75]);
+  });
 });

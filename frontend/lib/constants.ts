@@ -2764,3 +2764,221 @@ export function collectExistingBuyerVendorCodes(
   }
   return codes;
 }
+
+export interface TableSortState {
+  key: string | null;
+  dir: 'asc' | 'desc';
+}
+
+export interface TableColumnOption {
+  key: string;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'name', label: 'Supplier Name', visible: true, required: true },
+  { key: 'vendorCode', label: 'Vendor Code', visible: true },
+  { key: 'majorCategory', label: 'Division', visible: true },
+  { key: 'minorCategories', label: 'Category', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'origin', label: 'Origin', visible: true },
+  { key: 'engagement', label: 'RFQ Engagement', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'email', label: 'Email', visible: true },
+  { key: 'phone', label: 'Phone', visible: true },
+  { key: 'location', label: 'Location', visible: true },
+  { key: 'score', label: 'AI Score', visible: true },
+  { key: 'rating', label: 'Rating', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const BUYER_RFQ_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'sourcingMode', label: 'Mode', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'items', label: 'Items', visible: true },
+  { key: 'quotes', label: 'Quotes', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'delivery', label: 'Target Delivery', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const BUYER_EVALUATION_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'vendorName', label: 'Vendor Name', visible: true, required: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'email', label: 'Email', visible: true },
+  { key: 'phone', label: 'Phone', visible: true },
+  { key: 'submissionDate', label: 'Submitted', visible: true },
+  { key: 'status', label: 'Evaluation Status', visible: true },
+  { key: 'overallScore', label: 'Overall Score', visible: true },
+  { key: 'gateStatus', label: 'Qualification Gate', visible: true },
+  { key: 'categoryScores', label: 'Category Scores', visible: true },
+  { key: 'reviewStatus', label: 'Review Status', visible: true },
+];
+
+export const BUYER_ACCOUNTS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'organizationName', label: 'Organization', visible: true, required: true },
+  { key: 'brandName', label: 'Brand', visible: true },
+  { key: 'accountSource', label: 'Source', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'corporateEmail', label: 'Corporate Email', visible: true },
+  { key: 'mobileNumber', label: 'Mobile', visible: true },
+  { key: 'gstin', label: 'GSTIN', visible: true },
+  { key: 'panNumber', label: 'PAN', visible: true },
+  { key: 'sourcingMode', label: 'Sourcing Mode', visible: true },
+  { key: 'subscriptionPlan', label: 'Plan', visible: true },
+  { key: 'primaryPlantLocation', label: 'Plant Location', visible: true },
+  { key: 'industrySector', label: 'Industry', visible: true },
+  { key: 'supportedMajorCategories', label: 'Divisions', visible: true },
+  { key: 'status', label: 'Record Status', visible: true },
+  { key: 'totalRFQsCreated', label: 'Total RFQs', visible: true },
+  { key: 'totalSpend', label: 'Total Spend', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const CM_ALL_RFQS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'buyerAccountName', label: 'Buyer', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'quotesCount', label: 'Quotes', visible: true },
+  { key: 'invitedVendors', label: 'Invited Vendors', visible: true },
+  { key: 'quotedVendors', label: 'Quoted Vendors', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'createdAt', label: 'Raised', visible: true },
+  { key: 'latestQuote', label: 'Latest Quote', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export function nextTableSortState(current: TableSortState, clickedKey: string): TableSortState {
+  if (current.key === clickedKey) {
+    return { key: clickedKey, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  }
+  return { key: clickedKey, dir: 'asc' };
+}
+
+export function createColumnSortClickHandler(
+  key: string,
+  setSort: (updater: (prev: TableSortState) => TableSortState) => void
+): () => void {
+  return () => {
+    setSort((prev) => nextTableSortState(prev, key));
+  };
+}
+
+export function createColumnResetHandler<T extends TableColumnOption>(
+  defaults: ReadonlyArray<T>,
+  setColumns: (cols: T[]) => void
+): () => void {
+  return () => {
+    setColumns(defaults.map((col) => ({ ...col })));
+  };
+}
+
+export function createBooleanSetterHandler(
+  setter: (value: boolean) => void,
+  value: boolean
+): () => void {
+  return () => {
+    setter(value);
+  };
+}
+
+export function getTableColumnClass(
+  columns: ReadonlyArray<TableColumnOption> | null | undefined,
+  key: string,
+  baseClass = ''
+): string {
+  if (Array.isArray(columns)) {
+    const found = columns.find((col) => col.key === key);
+    if (found && !found.visible) {
+      return baseClass ? `${baseClass} hidden` : 'hidden';
+    }
+  }
+  return baseClass;
+}
+
+export function getTableAriaSort(
+  sort: TableSortState | null | undefined,
+  key: string
+): 'ascending' | 'descending' | 'none' {
+  if (!sort || sort.key !== key) return 'none';
+  return sort.dir === 'asc' ? 'ascending' : 'descending';
+}
+
+export function getSortIndicatorSymbol(
+  sort: TableSortState | null | undefined,
+  key: string
+): string {
+  if (!sort || sort.key !== key) return '↕';
+  return sort.dir === 'asc' ? '↑' : '↓';
+}
+
+export function resolveSortableCellValue(
+  row: Record<string, unknown> | null | undefined,
+  key: string
+): string | number {
+  if (!row || typeof row !== 'object') return '';
+  if (key === 'items') {
+    const entities = row.extractedEntities;
+    if (Array.isArray(entities)) return entities.length;
+    const lineItems = row.lineItems;
+    if (Array.isArray(lineItems)) return lineItems.length;
+  }
+  if (key === 'quotes') {
+    return typeof row.quotesCount === 'number' ? row.quotesCount : Number(row.quotesCount) || 0;
+  }
+  if (key === 'delivery') {
+    return String(row.targetDeliveryDate || row.deadline || row.deliveryLocation || '');
+  }
+  if (key === 'minorCategories' || key === 'supportedMajorCategories') {
+    const list = row[key];
+    return Array.isArray(list) ? list.join(', ') : '';
+  }
+  if (key === 'location') {
+    return String(row.location || row.city || row.state || row.primaryPlantLocation || '');
+  }
+  if (key === 'totalSpend') {
+    const raw = String(row.totalSpend || '').replace(/[^0-9.-]/g, '');
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  const direct = row[key];
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+  if (typeof direct === 'string') {
+    const trimmed = direct.trim();
+    const numeric = Number(trimmed);
+    if (trimmed !== '' && Number.isFinite(numeric) && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+      return numeric;
+    }
+    return trimmed.toLowerCase();
+  }
+  if (Array.isArray(direct)) return direct.length;
+  return '';
+}
+
+export function sortTableRows<T>(
+  rows: ReadonlyArray<T>,
+  sort: TableSortState | null | undefined
+): T[] {
+  if (!Array.isArray(rows)) return [];
+  if (!sort || !sort.key) return [...rows];
+  const factor = sort.dir === 'asc' ? 1 : -1;
+  const key = sort.key;
+  return [...rows].sort((a, b) => {
+    const left = resolveSortableCellValue(a as unknown as Record<string, unknown>, key);
+    const right = resolveSortableCellValue(b as unknown as Record<string, unknown>, key);
+    if (typeof left === 'number' && typeof right === 'number') {
+      return (left - right) * factor;
+    }
+    return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' }) * factor;
+  });
+}

@@ -7,6 +7,13 @@ import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories, findMajorForMinor, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
+  BUYER_VENDOR_DIRECTORY_COLUMNS,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
   isBuyerUploadedVendor,
   isPlaceholderVendorCategory,
   isProcucevNetworkVendor,
@@ -17,9 +24,13 @@ import {
   normalizeVendorCategoryList,
   reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
+  sortTableRows,
   VENDOR_ACTIVE_STATUSES,
+  type TableColumnOption,
+  type TableSortState,
 } from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
   Search,
   Building2,
@@ -56,6 +67,7 @@ import {
   Clock,
   Filter,
   ArrowLeft,
+  Settings,
 } from 'lucide-react';
 import {
   validatePincode,
@@ -335,6 +347,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [uploadHistoryList, setUploadHistoryList] = useState<any[]>([]);
   const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [vendorTableSort, setVendorTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [vendorColumns, setVendorColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_VENDOR_DIRECTORY_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
   const loadUploadHistory = useCallback(() => {
     setUploadHistoryList(loadVendorUploadHistoryFromStorage());
@@ -1310,11 +1327,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const handleBackdropClick =
     (onClose: () => void, blocked = false) =>
-    (e: React.MouseEvent<HTMLDivElement>) => {
-      if (!blocked && e.target === e.currentTarget) {
-        onClose();
-      }
-    };
+      (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!blocked && e.target === e.currentTarget) {
+          onClose();
+        }
+      };
 
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
@@ -1543,7 +1560,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return matchesSearch && matchesCategory && matchesStatus;
   };
 
-  const buyerFilteredVendors = sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem));
+  const buyerFilteredVendors = sortTableRows(
+    sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem)),
+    vendorTableSort
+  );
   const hasUploadedVendors = Boolean(
     initialSetupCompleted ||
     currentUserSession?.vendorMasterUploaded === true ||
@@ -1636,7 +1656,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
-        <td className="py-2.5 px-3 w-10 text-center align-middle">
+        <td className="py-1.5 px-2.5 w-10 text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
@@ -1647,68 +1667,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           />
         </td>
 
-        {/* Supplier & Details */}
-        <td className="py-2.5 px-3 min-w-[240px] align-middle">
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span
-                className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
-                  ? 'text-amber-600 dark:text-amber-400 italic'
-                  : 'text-slate-500 dark:text-gray-400'
-                  }`}
-                title={
-                  isPlaceholderVendorCategory(vendor.majorCategory)
-                    ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-                    : vendor.majorCategory
-                }
-              >
-                {isPlaceholderVendorCategory(vendor.majorCategory)
-                  ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-                  : vendor.majorCategory}
-              </span>
-              <span className="text-slate-300 dark:text-gray-600">•</span>
-
-              {/* Primary Source Badge */}
-              {isUploaded ? (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
-                  <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
-                  Internal Vendor
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
-                  <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
-                  Procucev Vendor
-                </span>
-              )}
-
-              {/* Secondary Origin Tag */}
-              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
-                {originDetails.origin}
-              </span>
-
-              {/* RFQ Engagement & Upload Status Badge */}
-              {engagement.isEngaged ? (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
-                  <CheckCircle2 size={9} /> {engagement.qualificationReason}
-                </span>
-              ) : (
-                <span
-                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
-                  title="Vendor neither uploaded nor used in any RFQs by your organization"
-                >
-                  <Lock size={9} /> No RFQs / Not Uploaded
-                </span>
-              )}
-
-              {isLockedForProcucevV2 && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
-                  <Lock size={9} /> Quote Submission Pending
-                </span>
-              )}
-            </div>
-
+        {/* 1. Supplier Name */}
+        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[180px] max-w-[240px] align-middle')}>
+          <div className="space-y-0.5">
             <h3
-              className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[280px]"
+              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[220px]"
               title={vendor.name}
             >
               <span className="truncate block" title={vendor.name}>
@@ -1721,7 +1684,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Performance Rating Revision Badge / History Line */}
             {vendor.latestRatingRevision && (
-              <div className="mt-1 p-2 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
+              <div className="mt-1 p-1.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
                 <div className="flex items-center justify-between gap-1">
                   <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
                     <Star size={11} className="fill-amber-500 text-amber-500" />
@@ -1753,50 +1716,40 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </td>
 
-        {/* Contact & Location */}
-        <td className="py-2.5 px-3 min-w-[200px] align-middle">
-          <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-gray-300">
-            <div
-              className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[190px]"
-              title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
-            >
-              👤 Contact: {vendor.contactPerson}
-            </div>
-            <div
-              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
-              title={vendor.email}
-            >
-              ✉️ {vendor.email}
-            </div>
-            <div
-              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
-              title={vendor.phone}
-            >
-              📞 {vendor.phone}
-            </div>
-            {(() => {
-              const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
-              return (
-                <div
-                  className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[190px]"
-                  title={vendorAddress || undefined}
-                >
-                  <MapPin size={11} className="shrink-0" />
-                  <span className="truncate">{vendorAddress || '—'}</span>
-                </div>
-              );
-            })()}
-          </div>
+        {/* 2. Vendor Code */}
+        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
+          <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
+            {vendor.vendorCode}
+          </span>
         </td>
 
-        {/* Category */}
-        <td className="py-2.5 px-3 min-w-[150px] align-middle">
+        {/* 3. Division (Major Category) */}
+        <td className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-1.5 px-2.5 min-w-[140px] max-w-[180px] align-middle')}>
+          <span
+            className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
+              ? 'text-amber-600 dark:text-amber-400 italic'
+              : 'text-slate-600 dark:text-gray-300'
+              }`}
+            title={
+              isPlaceholderVendorCategory(vendor.majorCategory)
+                ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+                : vendor.majorCategory
+            }
+          >
+            {isPlaceholderVendorCategory(vendor.majorCategory)
+              ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+              : vendor.majorCategory}
+          </span>
+        </td>
+
+        {/* 4. Category (Minor Categories) */}
+        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[150px] align-middle')}>
           {(() => {
             const normalizedRowMinors = normalizeVendorCategoryList(vendor.minorCategories);
             return (
-              <div className="space-y-1">
+              <div className="flex items-center gap-1 flex-wrap max-w-[200px]">
                 {normalizedRowMinors.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1 max-w-[200px]">
+                  <>
                     <span className="text-[9px] text-slate-400 font-semibold">{UI_STRINGS.vendorCategorySelect.categoryBadgePrefix}</span>
                     {normalizedRowMinors.map((m: string) => (
                       <span
@@ -1807,7 +1760,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         {m}
                       </span>
                     ))}
-                  </div>
+                  </>
                 ) : (
                   <div className="space-y-0.5">
                     <span className="text-[10px] text-slate-400 italic">None</span>
@@ -1841,17 +1794,104 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })()}
         </td>
 
-        {/* AI Score & Rating */}
-        <td className="py-2.5 px-3 min-w-[140px] text-center align-middle">
+        {/* 5. Primary Source Badge */}
+        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          {isUploaded ? (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
+              <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+              Internal Vendor
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
+              <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+              Procucev Vendor
+            </span>
+          )}
+        </td>
+
+        {/* 6. Secondary Origin Tag */}
+        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
+            {originDetails.origin}
+          </span>
+        </td>
+
+        {/* 7. RFQ Engagement */}
+        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          <div className="flex items-center gap-1 flex-wrap">
+            {engagement.isEngaged ? (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
+                <CheckCircle2 size={9} /> {engagement.qualificationReason}
+              </span>
+            ) : (
+              <span
+                className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
+                title="Vendor neither uploaded nor used in any RFQs by your organization"
+              >
+                <Lock size={9} /> No RFQs / Not Uploaded
+              </span>
+            )}
+            {isLockedForProcucevV2 && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
+                <Lock size={9} /> Quote Submission Pending
+              </span>
+            )}
+          </div>
+        </td>
+
+        {/* 8. Contact Person */}
+        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 max-w-[160px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
+          <div
+            className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
+            title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
+          >
+            👤 Contact: {vendor.contactPerson}
+          </div>
+        </td>
+
+        {/* 9. Email */}
+        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 max-w-[190px] align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
+            title={vendor.email}
+          >
+            ✉️ {vendor.email}
+          </div>
+        </td>
+
+        {/* 10. Phone */}
+        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 whitespace-nowrap align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
+            title={vendor.phone}
+          >
+            📞 {vendor.phone}
+          </div>
+        </td>
+
+        {/* 11. Location */}
+        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 max-w-[180px] align-middle text-[11px]')}>
+          {(() => {
+            const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
+            return (
+              <div
+                className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[170px]"
+                title={vendorAddress || undefined}
+              >
+                <MapPin size={11} className="shrink-0" />
+                <span className="truncate">{vendorAddress || '—'}</span>
+              </div>
+            );
+          })()}
+        </td>
+
+        {/* 12. AI Score */}
+        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
           {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
             <div className="space-y-0.5">
               <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-              <div className="text-base font-mono font-black text-indigo-600 dark:text-indigo-400">
+              <div className="text-sm font-mono font-black text-indigo-600 dark:text-indigo-400">
                 {vendor.score}%
-              </div>
-              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
-                <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
-                {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
               </div>
             </div>
           ) : (
@@ -1866,17 +1906,28 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       ? 'Locked (Buyer Roster Only)'
                       : 'Not Evaluated'}
               </div>
-              {vendor.rating && (
-                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
-                  <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
-                </div>
-              )}
             </div>
           )}
         </td>
 
-        {/* Status */}
-        <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
+        {/* 13. Rating */}
+        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+          {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
+            <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 inline-flex items-center justify-center gap-0.5">
+              <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
+              {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
+            </div>
+          ) : (
+            vendor.rating && (
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 inline-flex items-center justify-center gap-0.5">
+                <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
+              </div>
+            )
+          )}
+        </td>
+
+        {/* 14. Status */}
+        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
           {vendorInactive ? (
             <span
               data-testid={`status-badge-inactive-${vendor.id}`}
@@ -1914,7 +1965,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
-        <td className="py-2.5 px-3 min-w-[200px] text-right align-middle">
+        <td className={getTableColumnClass(vendorColumns, 'actions', 'py-1.5 px-2.5 min-w-[200px] text-right align-middle whitespace-nowrap')}>
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
             {/* View Profile Modal Button */}
             <button
@@ -2150,6 +2201,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               {selectedVendorIds.length} Selected
             </span>
           )}
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowVendorColumnSettings, true)}
+            data-testid="vendor-directory-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+          >
+            <Settings size={12} />
+            <span>Column Settings</span>
+          </button>
         </div>
         {selectedVendorIds.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -2205,23 +2267,125 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         )}
       </div>
 
+      <ColumnSettingsPopup
+        isOpen={showVendorColumnSettings}
+        onClose={createBooleanSetterHandler(setShowVendorColumnSettings, false)}
+        columns={vendorColumns}
+        onSave={setVendorColumns}
+        onReset={createColumnResetHandler(BUYER_VENDOR_DIRECTORY_COLUMNS, setVendorColumns)}
+        title="Column Settings"
+      />
+
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
           <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse min-w-[1100px]">
+              <table className="w-full text-left text-xs border-collapse min-w-[1380px]">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="py-2.5 px-3 w-10 text-center">
+                    <th className="py-2 px-2.5 w-10 text-center">
                       <span className="sr-only">Select</span>
                     </th>
-                    <th className="py-2.5 px-3 min-w-[240px]">Supplier &amp; Details</th>
-                    <th className="py-2.5 px-3 min-w-[200px]">Contact &amp; Location</th>
-                    <th className="py-2.5 px-3 min-w-[150px]">{UI_STRINGS.vendorCategorySelect.categoryHeader}</th>
-                    <th className="py-2.5 px-3 min-w-[140px] text-center">AI Score &amp; Rating</th>
-                    <th className="py-2.5 px-3 min-w-[130px] text-center">Status</th>
-                    <th className="py-2.5 px-3 min-w-[200px] text-right">Actions</th>
+                    <th
+                      onClick={createColumnSortClickHandler('name', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'name')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[180px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('majorCategory', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'majorCategory')}
+                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'majorCategory')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
+                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('source', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'source')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
+                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('email', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'email')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
+                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('location', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'location')}
+                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('score', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'score')}
+                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
+                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('status', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'status')}
+                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
+                    </th>
+                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap')}>Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
@@ -3354,17 +3518,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           : selectedVendorIds;
         const targetCount = modalTargetIds.length;
         return (
-        <div
-          className="modal-overlay !z-[1100]"
-          data-testid="bulk-vendor-status-modal"
-          onClick={handleBackdropClick(closeBulkStatusModal, isUpdatingBulkStatus)}
-        >
-          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
-              <div className="flex items-center gap-3">
-                <div
-                  className={`p-3 rounded-2xl border shrink-0 ${
-                    bulkTargetIsActive
+          <div
+            className="modal-overlay !z-[1100]"
+            data-testid="bulk-vendor-status-modal"
+            onClick={handleBackdropClick(closeBulkStatusModal, isUpdatingBulkStatus)}
+          >
+            <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
+              <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`p-3 rounded-2xl border shrink-0 ${bulkTargetIsActive
                       ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
                       : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/60'
                       }`}

@@ -2,11 +2,25 @@
 
 import React, { useEffect, useMemo, useState } from 'react';
 import { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
-import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
+import {
+  CM_ALL_RFQS_TABLE_COLUMNS,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  formatCurrency,
+  formatIndianDateTime,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
+  sortTableRows,
+  type TableColumnOption,
+  type TableSortState,
+} from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchAllRFQs } from '@/lib/rfqClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
-import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store, Download } from 'lucide-react';
+import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store, Download, Settings } from 'lucide-react';
 import InviteVendorsModal from './InviteVendorsModal';
 import BuyerDetailsModal from './BuyerDetailsModal';
 import VendorDetailsModal from './VendorDetailsModal';
@@ -113,6 +127,11 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
   const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
+  const [allRfqsSort, setAllRfqsSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [allRfqsColumns, setAllRfqsColumns] = useState<TableColumnOption[]>(() =>
+    CM_ALL_RFQS_TABLE_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showAllRfqsColumnSettings, setShowAllRfqsColumnSettings] = useState(false);
 
   const [selectedBuyerInfo, setSelectedBuyerInfo] = useState<{
     name: string | null;
@@ -296,6 +315,18 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
           <button
             type="button"
+            onClick={createBooleanSetterHandler(setShowAllRfqsColumnSettings, true)}
+            data-testid="all-rfqs-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900"
+          >
+            <Settings size={13} className="shrink-0" />
+            <span>Column Settings</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => void load()}
             disabled={loading}
             aria-label={S.retryAction}
@@ -432,40 +463,93 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         </div>
       )}
 
+      <ColumnSettingsPopup
+        isOpen={showAllRfqsColumnSettings}
+        onClose={createBooleanSetterHandler(setShowAllRfqsColumnSettings, false)}
+        columns={allRfqsColumns}
+        onSave={setAllRfqsColumns}
+        onReset={createColumnResetHandler(CM_ALL_RFQS_TABLE_COLUMNS, setAllRfqsColumns)}
+        title="Column Settings"
+      />
+
       {!loading && !error && filtered.length > 0 && (
         <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-850 dark:bg-gray-950/40">
-          <table className="w-full min-w-[1750px] table-fixed text-sm">
+          <table className="w-full min-w-[1850px] table-fixed text-xs">
             <caption className="sr-only">{S.subtitle}</caption>
-            <colgroup>
-              <col className="w-[155px]" />
-              <col className="w-[220px]" />
-              <col className="w-[165px]" />
-              <col className="w-[145px]" />
-              <col className="w-[75px]" />
-              <col className="w-[190px]" />
-              <col className="w-[190px]" />
-              <col className="w-[125px]" />
-              <col className="w-[105px]" />
-              <col className="w-[180px]" />
-              <col className="w-[300px]" />
-            </colgroup>
             <thead>
               <tr className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase tracking-wider text-slate-500 dark:text-gray-450">
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colRfqNumber}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colTitle}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colBuyer}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colStatus}</th>
-                <th scope="col" className="px-3 py-3 text-right font-bold">{S.colQuotes}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colInvitedVendors}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colVendors}</th>
-                <th scope="col" className="px-3 py-3 text-right font-bold">{S.colBudget}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colCreated}</th>
-                <th scope="col" className="px-3 py-3 text-left font-bold">{S.colLatestQuote}</th>
-                <th scope="col" className="px-3 py-3 text-right font-bold">{S.colActions}</th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('rfqNumber', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'rfqNumber')}
+                  className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colRfqNumber} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'rfqNumber')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('title', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'title')}
+                  className={getTableColumnClass(allRfqsColumns, 'title', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colTitle} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'title')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('category', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'category')}
+                  className={getTableColumnClass(allRfqsColumns, 'category', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colCategory} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'category')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('buyerAccountName', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'buyerAccountName')}
+                  className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colBuyer} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'buyerAccountName')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('status', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'status')}
+                  className={getTableColumnClass(allRfqsColumns, 'status', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colStatus} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'status')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('quotesCount', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'quotesCount')}
+                  className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-2.5 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center justify-end gap-1">{S.colQuotes} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'quotesCount')}</span></span>
+                </th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colInvitedVendors}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colVendors}</th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('budget', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'budget')}
+                  className={getTableColumnClass(allRfqsColumns, 'budget', 'px-2.5 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center justify-end gap-1">{S.colBudget} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'budget')}</span></span>
+                </th>
+                <th
+                  scope="col"
+                  onClick={createColumnSortClickHandler('createdAt', setAllRfqsSort)}
+                  aria-sort={getTableAriaSort(allRfqsSort, 'createdAt')}
+                  className={getTableColumnClass(allRfqsColumns, 'createdAt', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                >
+                  <span className="inline-flex items-center gap-1">{S.colCreated} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'createdAt')}</span></span>
+                </th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colLatestQuote}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'actions', 'px-2.5 py-2 text-right font-bold whitespace-nowrap')}>{S.colActions}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
-              {filtered.map((rfq) => {
+              {sortTableRows(filtered, allRfqsSort).map((rfq) => {
                 const isUncategorizedV0 =
                   (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as string) === 'v0') &&
                   !rfqHasCategorySignal(rfq) &&
@@ -474,12 +558,14 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
                 return (
                 <tr key={rfq.id} className="align-middle transition-colors hover:bg-slate-50 dark:hover:bg-gray-900/60">
-                  <td className="px-3 py-3 font-mono text-xs font-bold text-slate-800 dark:text-gray-200">{rfq.rfqNumber}</td>
-                  <td className="px-3 py-3">
+                  <td className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-2.5 py-2 font-mono text-xs font-bold text-slate-800 dark:text-gray-200 whitespace-nowrap')}>{rfq.rfqNumber}</td>
+                  <td className={getTableColumnClass(allRfqsColumns, 'title', 'px-2.5 py-2 max-w-[220px]')}>
                     <div className="truncate font-bold text-slate-800 dark:text-gray-200" title={rfq.title}>{rfq.title}</div>
+                  </td>
+                  <td className={getTableColumnClass(allRfqsColumns, 'category', 'px-2.5 py-2 max-w-[160px]')}>
                     <div className="truncate text-[11px] text-slate-500 dark:text-gray-450" title={rfq.category || undefined}>{rfq.category || '—'}</div>
                   </td>
-                  <td className="break-words px-3 py-3 text-slate-700 dark:text-gray-300">
+                  <td className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'break-words px-2.5 py-2 text-slate-700 dark:text-gray-300')}>
                     {rfq.buyerAccountName ? (
                       <button
                         type="button"
@@ -494,13 +580,13 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                         title={`Click to view full buyer details for ${rfq.buyerAccountName}`}
                       >
                         <Building2 size={13} className="text-slate-400 group-hover:text-indigo-500 shrink-0 transition-colors" />
-                        <span>{rfq.buyerAccountName}</span>
+                        <span className="truncate max-w-[160px]">{rfq.buyerAccountName}</span>
                       </button>
                     ) : (
                       <span className="italic text-slate-400">{S.buyerUnknown}</span>
                     )}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className={getTableColumnClass(allRfqsColumns, 'status', 'px-2.5 py-2')}>
                     <div className="flex flex-col items-start gap-1">
                       <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
                         {rfq.status}
@@ -512,9 +598,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                       )}
                     </div>
                   </td>
-                  <td className="px-3 py-3 text-right font-mono text-slate-700 dark:text-gray-300">{rfq.quotesCount}</td>
+                  <td className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-2.5 py-2 text-right font-mono text-slate-700 dark:text-gray-300')}>{rfq.quotesCount}</td>
                   {/* Invited Vendors column */}
-                  <td className="px-3 py-3">
+                  <td className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-2.5 py-2')}>
                     {rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
                       <div className="flex flex-col items-start gap-1 max-w-full">
                         <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
@@ -562,7 +648,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                     )}
                   </td>
                   {/* Quoted Vendors column */}
-                  <td className="px-3 py-3">
+                  <td className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-2.5 py-2')}>
                     {rfq.quotes && rfq.quotes.length > 0 ? (
                       <div className="flex flex-col items-start gap-1 max-w-full">
                         <div className="flex flex-wrap items-center gap-1.5">
@@ -606,13 +692,13 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                       <span className="italic text-slate-400 text-xs">{S.colVendorsNone}</span>
                     )}
                   </td>
-                  <td className="px-3 py-3 text-right font-mono text-xs text-slate-700 dark:text-gray-300">
+                  <td className={getTableColumnClass(allRfqsColumns, 'budget', 'px-2.5 py-2 text-right font-mono text-xs text-slate-700 dark:text-gray-300')}>
                     {rfq.budget > 0 ? formatCurrency(rfq.budget) : <span className="text-slate-400">{S.budgetUnset}</span>}
                   </td>
-                  <td className="whitespace-nowrap px-3 py-3 text-[11px] text-slate-500 dark:text-gray-450">
+                  <td className={getTableColumnClass(allRfqsColumns, 'createdAt', 'whitespace-nowrap px-2.5 py-2 text-[11px] text-slate-500 dark:text-gray-450')}>
                     {rfq.createdAt ? new Date(rfq.createdAt).toLocaleDateString() : '—'}
                   </td>
-                  <td className="px-3 py-3 text-[11px] text-slate-600 dark:text-gray-300" data-testid="all-rfqs-latest-quote">
+                  <td className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-2.5 py-2 text-[11px] text-slate-600 dark:text-gray-300')} data-testid="all-rfqs-latest-quote">
                     {(() => {
                       const latest = latestQuoteSubmittedAt(rfq);
                       return latest ? (
@@ -622,7 +708,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                       );
                     })()}
                   </td>
-                  <td className="px-3 py-3">
+                  <td className={getTableColumnClass(allRfqsColumns, 'actions', 'px-2.5 py-2')}>
                     <div className="flex flex-nowrap items-center justify-end gap-2">
                       <button
                         type="button"

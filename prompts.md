@@ -6788,3 +6788,10 @@ When the buyer profile at the top right corner is opened and when clicked on out
 resume
 ```
 ---
+
+### Prompt 296
+**Timestamp**: 2026-11-19T07:34:14+05:30
+```text
+Improve all the tables: Truncation, compact, sorting, column selector and single field in single column and not clubbing in a single column
+```
+---
