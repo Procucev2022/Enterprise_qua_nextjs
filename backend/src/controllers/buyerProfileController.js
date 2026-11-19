@@ -67,6 +67,21 @@ async function getMyProfile(req, res, next) {
 }
 
 /**
+ * GET /api/buyer-profile/completion
+ * Evaluate mandatory profile fields and category completion status for the signed-in buyer.
+ */
+async function getProfileCompletion(req, res, next) {
+  try {
+    logger.info('Buyer profile completion check requested', { user: req.user.email }, LOG_CATEGORY);
+    const profile = await buyerProfileService.getProfile(req.user);
+    const completion = buyerProfileService.checkProfileCompletion(profile);
+    return res.json({ success: true, data: completion });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error checking buyer profile completion');
+  }
+}
+
+/**
  * PUT /api/buyer-profile/me
  * Patch the signed-in buyer's own organisation profile. Omitted fields keep
  * their stored value; the response carries the re-read record so the client
@@ -311,6 +326,7 @@ module.exports = {
   getClientIp,
   respondWithError,
   getMyProfile,
+  getProfileCompletion,
   updateMyProfile,
   getCategoryTaxonomy,
   getDispatchTemplates,

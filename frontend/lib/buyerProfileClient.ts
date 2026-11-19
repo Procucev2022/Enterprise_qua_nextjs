@@ -136,6 +136,55 @@ export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Pro
 }
 
 /**
+ * Fetch and evaluate completion status for the signed-in buyer's profile.
+ */
+export async function fetchBuyerProfileCompletion(options?: {
+  signal?: AbortSignal;
+}): Promise<{
+  success: boolean;
+  status?: number;
+  data?: import('./buyerProfileCompletion').ProfileCompletionResult;
+  profile?: BuyerProfile;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(BUYER_PROFILE_ENDPOINTS.COMPLETION, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    if (res.ok) {
+      const body = await readEnvelope(res);
+      if (body?.success && body.data) {
+        return {
+          success: true,
+          status: res.status,
+          data: body.data as import('./buyerProfileCompletion').ProfileCompletionResult,
+        };
+      }
+    }
+  } catch {
+    // Fall back to fetchBuyerProfile and local evaluation
+  }
+
+  const profileRes = await fetchBuyerProfile(options);
+  if (!profileRes.success || !profileRes.data) {
+    return {
+      success: false,
+      status: profileRes.status,
+      error: profileRes.error || 'Failed to load buyer profile for completion evaluation',
+    };
+  }
+  const { checkBuyerProfileCompletion } = await import('./buyerProfileCompletion');
+  const completion = checkBuyerProfileCompletion(profileRes.data);
+  return {
+    success: true,
+    status: profileRes.status,
+    data: completion,
+    profile: profileRes.data,
+  };
+}
+
+/**
  * Patch the signed-in buyer's organisation profile.
  *
  * Omitted fields keep their stored value, so a caller that renders a subset of
@@ -173,6 +222,9 @@ export async function saveBuyerProfile(
   }
 
   logger.info('Buyer profile saved', { categoryCount: body.categoryCount }, 'BUYER_PROFILE');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('buyer-profile-updated', { detail: body.data }));
+  }
   return {
     success: true,
     status: res.status,
@@ -513,6 +565,7 @@ export async function fetchBuyerUploadedVendors(buyerId: string): Promise<{
 
 const buyerProfileClient = {
   fetchBuyerProfile,
+  fetchBuyerProfileCompletion,
   saveBuyerProfile,
   fetchCategoryTaxonomy,
   flattenCategorySelection,

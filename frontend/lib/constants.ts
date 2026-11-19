@@ -812,6 +812,8 @@ export const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 export const BUYER_PROFILE_ENDPOINTS = {
   /** The signed-in buyer's own profile: GET to read, PUT to patch. */
   ME: '/api/buyer-profile/me',
+  /** Profile completion evaluation for reminder popup and onboarding */
+  COMPLETION: '/api/buyer-profile/completion',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
   /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */

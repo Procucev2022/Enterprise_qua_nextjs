@@ -610,7 +610,7 @@ export default function BuyerProfilePage() {
 
       <form onSubmit={handleSaveProfile} className="space-y-2.5">
         {/* Section 1: Legal Entity & Tax Compliance */}
-        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+        <div id="section-organization" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
               <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 1: Organization & Tax Registration
@@ -764,7 +764,7 @@ export default function BuyerProfilePage() {
         {/* Section 2: Address & Primary Contact */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
           {/* Registered Address */}
-          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div id="section-address" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
               <MapPin className="text-indigo-600 dark:text-indigo-400" size={16} /> Registered Corporate Address
             </h2>
@@ -845,7 +845,7 @@ export default function BuyerProfilePage() {
           </div>
 
           {/* Primary Contact Person */}
-          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div id="section-contact" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
               <User className="text-indigo-600 dark:text-indigo-400" size={16} /> Key Procurement Contact Person
             </h2>
@@ -895,7 +895,7 @@ export default function BuyerProfilePage() {
         </div>
 
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
-        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+        <div id="section-categories" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <div>
               <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">

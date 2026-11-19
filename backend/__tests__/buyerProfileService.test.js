@@ -1288,4 +1288,113 @@ describe('Buyer profile service', () => {
       expect(safe.gstNumber).toBe('27AAACK3921P1Z9');
     });
   });
+
+  describe('checkProfileCompletion', () => {
+    const validFullProfile = {
+      companyName: 'Larsen & Toubro Ltd',
+      organizationType: 'Public Limited',
+      gstNumber: '27AAACL1234F1Z5',
+      panNumber: 'AAACL1234F',
+      street: 'L&T House, Ballard Estate',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      pincode: '400001',
+      contactName: 'Sanjay Deshmukh',
+      contactEmail: 'sanjay@larsentoubro.com',
+      contactPhone: '9820123456',
+      categories: [{ major: 'Mechanical', minor: 'Pumps' }],
+    };
+
+    test('evaluates a complete profile as 100% complete', () => {
+      const res = buyerProfileService.checkProfileCompletion(validFullProfile);
+      expect(res.isComplete).toBe(true);
+      expect(res.completionPercentage).toBe(100);
+      expect(res.completedCount).toBe(12);
+      expect(res.issues).toHaveLength(0);
+    });
+
+    test('evaluates null or undefined profile as 0% complete', () => {
+      const res = buyerProfileService.checkProfileCompletion(null);
+      expect(res.isComplete).toBe(false);
+      expect(res.completionPercentage).toBe(0);
+      expect(res.issues).toHaveLength(12);
+    });
+
+    test('flags missing or invalid fields and dummy pincodes', () => {
+      const incomplete = {
+        ...validFullProfile,
+        companyName: '',
+        gstNumber: 'INVALID_GST',
+        pincode: '000000',
+        contactPhone: '9999999999',
+        categories: [],
+      };
+      const res = buyerProfileService.checkProfileCompletion(incomplete);
+      expect(res.isComplete).toBe(false);
+      expect(res.issues.some((i) => i.field === 'companyName' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'gstNumber' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'pincode' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactPhone' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'categories' && i.status === 'missing')).toBe(true);
+    });
+
+    test('covers specific length, regex validation, and category fallback branches', () => {
+      const invalidLengths = {
+        companyName: 'A',
+        organizationType: '',
+        gstNumber: '',
+        panNumber: 'INVALID',
+        street: 'AB',
+        city: 'M',
+        state: 'S',
+        pincode: '400',
+        contactName: 'R',
+        contactEmail: 'invalid-email',
+        contactPhone: '12345',
+        categories: [{ major: '', minor: '' }],
+      };
+      const res = buyerProfileService.checkProfileCompletion(invalidLengths);
+      expect(res.isComplete).toBe(false);
+      expect(res.issues.some((i) => i.field === 'companyName' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'organizationType' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'gstNumber' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'panNumber' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'street' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'city' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'state' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'pincode' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactName' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactEmail' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactPhone' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'categories' && i.status === 'missing')).toBe(true);
+
+      // Test missing empty fields
+      const missingFields = {
+        companyName: '',
+        organizationType: '',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+        contactName: '',
+        contactEmail: '',
+        contactPhone: '',
+        categories: null,
+      };
+      const resMissing = buyerProfileService.checkProfileCompletion(missingFields);
+      expect(resMissing.completedCount).toBe(0);
+
+      // Test supportedMajorCategories and supportedMinorCategories fallback
+      const supportedCatProfile = {
+        ...validFullProfile,
+        categories: null,
+        supportedMajorCategories: ['Mechanical'],
+        supportedMinorCategories: ['Pumps'],
+      };
+      const resCat = buyerProfileService.checkProfileCompletion(supportedCatProfile);
+      expect(resCat.isComplete).toBe(true);
+    });
+  });
 });
