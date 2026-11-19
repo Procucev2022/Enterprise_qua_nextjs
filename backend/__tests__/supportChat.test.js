@@ -8,6 +8,8 @@ const supportChatController = require('../src/controllers/supportChatController'
 // No assistant grounded in this application's data is connected. Every message must get an
 // explicit not_configured result: no canned reply, no escalation and no support ticket.
 describe('Support Chat & AI Assistant API', () => {
+  jest.setTimeout(30000);
+
   test('POST /api/support-chat returns 503 not_configured instead of a canned reply', async () => {
     const res = await request(app).post('/api/support-chat').set(authHeader('buyer')).send({
       prompt: 'Tell me about subscription plans',

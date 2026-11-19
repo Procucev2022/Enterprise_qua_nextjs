@@ -8,7 +8,7 @@
 import type { RfqCategoryFormInput, VendorEntry } from './types';
 import { isProcucevVendor } from '../app/buyer/vendor-summary';
 import { ALL_CATEGORIES_OPTION, extractIndianAddressLocation, VENDOR_ASSIGNMENT_LIMITS } from './constants';
-import { findMajorForMinor } from './categoryTaxonomy';
+import { findMajorForMinor, resolveMinorCategory } from './categoryTaxonomy';
 import { UI_STRINGS } from './uiStrings';
 
 export interface CategoryMatchResult {
@@ -271,8 +271,7 @@ export function matchVendorAgainstSignals(
       }
     }
 
-    // 5. Legacy only: taxonomy major/minor association. A minor-level RFQ never
-    // reaches a vendor through the parent major of its minor.
+    // 5. Taxonomy major/minor association and product keyword matching.
     if (!minorOnly) {
       const signalMajor = findMajorForMinor(signal);
       if (signalMajor && vendorMajor && normalizeCategory(signalMajor) === vendorMajor) {
@@ -285,7 +284,14 @@ export function matchVendorAgainstSignals(
         if (vMinorMajor && normalizeCategory(vMinorMajor) === normSignal) {
           matched.add(minorLabels[i]);
           highestScore = Math.max(highestScore, 93);
+        } else if (signalMajor && vMinorMajor && normalizeCategory(vMinorMajor) === normalizeCategory(signalMajor)) {
+          matched.add(minorLabels[i]);
+          highestScore = Math.max(highestScore, 90);
         }
+      }
+      if (vendor.products && typeof vendor.products === 'string' && matchesCategoryToken(vendor.products, normSignal)) {
+        matched.add(vendor.products);
+        highestScore = Math.max(highestScore, 85);
       }
     }
   }
@@ -298,6 +304,137 @@ export function matchVendorAgainstSignals(
     matchScore: isMatch ? highestScore : 0,
     matchedCategories: matchedList,
     matchedMajor: vendor.majorCategory || matchedList[0] || '',
+  };
+}
+
+export interface RfqVendorCategoryMatchResult {
+  isMatch: boolean;
+  isStrictMinorMatch: boolean;
+  matchScore: number;
+  matchedCategories: string[];
+  matchedMajor: string;
+}
+
+/**
+ * Checks if a vendor matches an RFQ's category requirements or is a genuine mismatch.
+ *
+ * An RFQ specifies category signals that can include:
+ * - specific minor categories (Tier 1 specificity)
+ * - major categories / divisions (Tier 2 division alignment)
+ * - line item categories and raw signals
+ *
+ * A vendor is MATCHED (eligible for RFQ and NOT a mismatch) if:
+ * 1. Vendor matches any RFQ minor category (strict or token match), OR
+ * 2. Vendor matches any raw/broad category signal (major or minor), OR
+ * 3. Vendor's majorCategory matches the parent major of any RFQ minor (taxonomy mapping), OR
+ * 4. Vendor's majorCategory matches the RFQ's majorCategory, OR
+ * 5. Vendor's clientMappedCategories, vendorSelectedCategories, or products match the RFQ categories.
+ *
+ * A vendor is ONLY a MISMATCH if they have category data that does NOT align with any RFQ category.
+ */
+export function checkVendorRfqCategoryMatch(
+  vendor: VendorEntry,
+  categorySignalSet: {
+    signals?: string[];
+    rawSignals?: string[];
+    minorOnly?: boolean;
+    majorCategory?: string | null;
+    minorCategory?: string | null;
+  }
+): RfqVendorCategoryMatchResult {
+  if (!vendor) {
+    return { isMatch: false, isStrictMinorMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: '' };
+  }
+  const signals = categorySignalSet?.signals || [];
+  const rawSignals = (categorySignalSet?.rawSignals && categorySignalSet.rawSignals.length > 0)
+    ? categorySignalSet.rawSignals
+    : signals;
+  const minorOnly = Boolean(categorySignalSet?.minorOnly);
+
+  // If RFQ has no category signals at all, all vendors match
+  if (signals.length === 0 && rawSignals.length === 0) {
+    return {
+      isMatch: true,
+      isStrictMinorMatch: false,
+      matchScore: 100,
+      matchedCategories: [vendor.majorCategory || ALL_CATEGORIES_OPTION],
+      matchedMajor: vendor.majorCategory || '',
+    };
+  }
+
+  // 1. If minorOnly is true, check strict minor match first (Tier 1)
+  if (minorOnly && signals.length > 0) {
+    const strictMatch = matchVendorAgainstSignals(vendor, signals, true);
+    if (strictMatch.isMatch) {
+      return {
+        isMatch: true,
+        isStrictMinorMatch: true,
+        matchScore: strictMatch.matchScore,
+        matchedCategories: strictMatch.matchedCategories,
+        matchedMajor: strictMatch.matchedMajor,
+      };
+    }
+  }
+
+  // 2. Check broad category signals (rawSignals contains RFQ major and minor categories)
+  const broadSignals = rawSignals.length > 0 ? rawSignals : signals;
+  const broadMatch = matchVendorAgainstSignals(vendor, broadSignals, false);
+  if (broadMatch.isMatch) {
+    return {
+      isMatch: true,
+      isStrictMinorMatch: false,
+      matchScore: broadMatch.matchScore,
+      matchedCategories: broadMatch.matchedCategories,
+      matchedMajor: broadMatch.matchedMajor,
+    };
+  }
+
+  // 3. Check taxonomy parent major association for minor signals
+  if (minorOnly && signals.length > 0) {
+    const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
+    for (const sig of signals) {
+      let parentMajor = findMajorForMinor(sig);
+      if (!parentMajor) {
+        const resolved = resolveMinorCategory(sig);
+        if (resolved) parentMajor = findMajorForMinor(resolved);
+      }
+      if (
+        parentMajor &&
+        vendorMajor &&
+        (normalizeCategory(parentMajor) === vendorMajor ||
+          matchesCategoryToken(vendor.majorCategory || '', parentMajor))
+      ) {
+        return {
+          isMatch: true,
+          isStrictMinorMatch: false,
+          matchScore: 90,
+          matchedCategories: [vendor.majorCategory!],
+          matchedMajor: vendor.majorCategory!,
+        };
+      }
+    }
+  }
+
+  // 4. Check explicit majorCategory fallback if provided
+  if (categorySignalSet?.majorCategory && vendor.majorCategory) {
+    if (matchesCategoryToken(vendor.majorCategory, categorySignalSet.majorCategory)) {
+      return {
+        isMatch: true,
+        isStrictMinorMatch: false,
+        matchScore: 88,
+        matchedCategories: [vendor.majorCategory],
+        matchedMajor: vendor.majorCategory,
+      };
+    }
+  }
+
+  // No match across minor, major, taxonomy, or broad signals -> True category mismatch
+  return {
+    isMatch: false,
+    isStrictMinorMatch: false,
+    matchScore: 0,
+    matchedCategories: [],
+    matchedMajor: vendor.majorCategory || '',
   };
 }
 
