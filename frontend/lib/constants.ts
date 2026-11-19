@@ -1881,6 +1881,92 @@ export function isProcucevNetworkVendor(v: VendorOwnershipShape | null | undefin
   return !isBuyerUploadedVendor(v);
 }
 
+/**
+ * Regex patterns to detect RFQ identifiers, RFQ titles, and RFQ summaries.
+ * E.g., "RFQ-001", "RFQ_2024", "RFQ #1234", "RFQ: Pipes", "RFQ Summary", "RFQ 101", "RFQ"
+ */
+export const RFQ_ENTITY_PATTERN = /^rfq([-_#:\s\d]|$)/i;
+export const RFQ_SUMMARY_KEYWORD_PATTERN =
+  /\brfq\b[-_\s]*(summary|summaries|overview|details|batch|dump|feed|enquiry|quote)\b/i;
+
+/**
+ * Regex patterns to detect PO summaries, purchase order dumps, and PO references.
+ * E.g., "PO Summary", "PO_Summary", "Purchase Order Summary", "PO Purchase Dump", "Historical PO Dump",
+ * "PO Dump", "PO-10023", "PO #4500", "PO 2024", "Purchase Order", "PO"
+ */
+export const PO_SUMMARY_KEYWORD_PATTERN =
+  /\b(po|purchase\s*orders?)\b[-_\s]*(summary|summaries|dump|purchase\s*dump|data|batch|history|details|line\s*items?|feed|export)\b/i;
+export const PO_IDENTIFIER_PATTERN = /^po[-_#:\s\d]/i;
+export const PO_STANDALONE_NAME_PATTERN = /^(po|purchase\s*orders?)$/i;
+export const PO_OR_RFQ_PREFIXED_ID_PATTERN = /^(rfq|po)[-_]/i;
+
+export interface RfqOrPoSummaryCandidate {
+  id?: string | null;
+  name?: string | null;
+  vendorName?: string | null;
+  category?: string | null;
+  majorCategory?: string | null;
+}
+
+/**
+ * Returns true if an entity or dropdown option represents an RFQ, RFQ summary,
+ * Purchase Order, or PO summary/dump rather than a genuine supplier/vendor company.
+ */
+export function isRfqOrPoSummaryEntity(candidate: RfqOrPoSummaryCandidate | null | undefined): boolean {
+  if (!candidate) return false;
+
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  const name =
+    typeof candidate.name === 'string'
+      ? candidate.name.trim()
+      : typeof candidate.vendorName === 'string'
+      ? candidate.vendorName.trim()
+      : '';
+  const category =
+    typeof candidate.category === 'string'
+      ? candidate.category.trim()
+      : typeof candidate.majorCategory === 'string'
+      ? candidate.majorCategory.trim()
+      : '';
+
+  // 1. Check ID
+  if (id) {
+    if (RFQ_ENTITY_PATTERN.test(id) || PO_OR_RFQ_PREFIXED_ID_PATTERN.test(id)) {
+      return true;
+    }
+    if (PO_SUMMARY_KEYWORD_PATTERN.test(id)) {
+      return true;
+    }
+  }
+
+  // 2. Check Name / Vendor Name
+  if (name) {
+    if (
+      RFQ_ENTITY_PATTERN.test(name) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_IDENTIFIER_PATTERN.test(name) ||
+      PO_STANDALONE_NAME_PATTERN.test(name)
+    ) {
+      return true;
+    }
+  }
+
+  // 3. Check Category
+  if (category) {
+    if (
+      RFQ_ENTITY_PATTERN.test(category) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_STANDALONE_NAME_PATTERN.test(category)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 /** Safely reads locally saved vendor upload batches from browser storage. */
 export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[] {
   try {
@@ -2142,6 +2228,16 @@ export function reconcileBuyerVendorsWithUploadHistory(
       const rawEmail = String(rec.email || '').trim();
       const rawCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rawName && !rawEmail) return;
+
+      if (
+        isRfqOrPoSummaryEntity({
+          id: rec.id ? String(rec.id) : undefined,
+          name: rawName,
+          category: String(rec.category || rec.majorCategory || ''),
+        })
+      ) {
+        return;
+      }
 
       const emailKey = rawEmail.toLowerCase();
       const nameKey = rawName.toLowerCase();

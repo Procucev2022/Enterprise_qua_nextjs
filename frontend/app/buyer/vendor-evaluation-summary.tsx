@@ -16,6 +16,7 @@ import {
   VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   isBuyerUploadedVendor,
   isProcucevNetworkVendor,
+  isRfqOrPoSummaryEntity,
   isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
@@ -64,6 +65,7 @@ const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 // Classification helpers shared with Buyer Vendor Directory.
 export const isBuyerUploaded = isBuyerUploadedVendor;
 export const isProcucevVendor = isProcucevNetworkVendor;
+export const isRfqOrPoSummary = isRfqOrPoSummaryEntity;
 
 /** A finite number from a number or a numeric string. Anything else counts as not on record. */
 function toScore(value: unknown): number | null {
@@ -307,7 +309,7 @@ export default function VendorEvaluationSummary({
     const optionById = new Map<string, VendorEvaluationSelectOption>();
     const matchedEvaluationRefs = new Set<VendorEvaluationRecord>();
     reconciledBuyerVendors.forEach((v) => {
-      if (!v.id) return;
+      if (!v.id || isRfqOrPoSummaryEntity(v)) return;
       const matchedEval = findEvaluation(allEvaluations, v.id, v.name, v.email);
       // Inactive buyer vendors remain accessible when viewing a historical evaluation record,
       // but unevaluated inactive suppliers stay excluded from future evaluation selection.
@@ -316,24 +318,35 @@ export default function VendorEvaluationSummary({
       optionById.set(v.id, buildSelectOption(v, toScore(matchedEval?.overallScore)));
     });
     evaluationById.forEach((e, id) => {
+      if (isRfqOrPoSummaryEntity({ id: e.vendorId || id, name: e.vendorName, category: e.category })) return;
       if (!optionById.has(id) && !matchedEvaluationRefs.has(e)) optionById.set(id, buildOptionFromRecord(e));
     });
-    return Array.from(optionById.values());
+    return Array.from(optionById.values()).filter((opt) => !isRfqOrPoSummaryEntity(opt));
   }, [reconciledBuyerVendors, vendorEvaluations, evaluationRecord]);
 
   // Buyer-uploaded suppliers when there are any. Otherwise every supplier.
   const companyOptions = useMemo(() => {
-    const buyerUploaded = allOptions.filter(
+    const validOptions = allOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    const buyerUploaded = validOptions.filter(
       (c) => c.isBuyerUploaded || (evaluationRecord ? c.id === evaluationRecord.vendorId : false)
     );
-    return buyerUploaded.length > 0 ? buyerUploaded : allOptions;
+    return buyerUploaded.length > 0 ? buyerUploaded : validOptions;
   }, [allOptions, evaluationRecord]);
 
   const initialVendorId =
-    activeRecord?.vendorId ||
+    (activeRecord?.vendorId &&
+    !isRfqOrPoSummaryEntity({
+      id: activeRecord.vendorId,
+      name: activeRecord.vendorName,
+      category: activeRecord.category,
+    })
+      ? activeRecord.vendorId
+      : '') ||
     companyOptions[0]?.id ||
-    buyerVendors?.[0]?.id ||
-    vendorEvaluations?.[0]?.vendorId ||
+    reconciledBuyerVendors.find((v) => !isRfqOrPoSummaryEntity(v))?.id ||
+    vendorEvaluations?.find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    )?.vendorId ||
     '';
   const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
@@ -400,14 +413,17 @@ export default function VendorEvaluationSummary({
     if (first) return buildSummaryView(findEvaluation(vendorEvaluations, first.id, first.name, first.email), first);
 
     // 6. The first stored evaluation, when no supplier is listed.
-    const storedFirst = vendorEvaluations?.[0];
+    const storedFirst = (vendorEvaluations || []).find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    );
     return storedFirst ? buildSummaryView(storedFirst, null) : null;
   }, [evaluationRecord, selectedVendorId, vendorEvaluations, allOptions, companyOptions]);
 
   const filteredCompanyOptions = useMemo(() => {
-    if (!searchQuery.trim()) return companyOptions;
+    const validBase = companyOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    if (!searchQuery.trim()) return validBase;
     const q = searchQuery.toLowerCase();
-    return companyOptions.filter(
+    return validBase.filter(
       (c) =>
         (c.name || '').toLowerCase().includes(q) ||
         (c.category || '').toLowerCase().includes(q) ||

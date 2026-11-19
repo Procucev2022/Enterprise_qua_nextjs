@@ -38,6 +38,13 @@ import {
   VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
+  isRfqOrPoSummaryEntity,
+  RFQ_ENTITY_PATTERN,
+  RFQ_SUMMARY_KEYWORD_PATTERN,
+  PO_SUMMARY_KEYWORD_PATTERN,
+  PO_IDENTIFIER_PATTERN,
+  PO_STANDALONE_NAME_PATTERN,
+  PO_OR_RFQ_PREFIXED_ID_PATTERN,
   isVendorActive,
   isVendorInactive,
   setVendorsActiveStateInStorage,
@@ -1325,5 +1332,88 @@ describe('Indian address location extraction helpers', () => {
     expect(sortTableRows(sampleRows, { key: 'name', dir: 'desc' }).map((r: { name: string }) => r.name)).toEqual(['Beta', 'Alpha']);
     expect(sortTableRows(sampleRows, { key: 'score', dir: 'asc' }).map((r: { score: number }) => r.score)).toEqual([75, 90]);
     expect(sortTableRows(sampleRows, { key: 'score', dir: 'desc' }).map((r: { score: number }) => r.score)).toEqual([90, 75]);
+  });
+
+  describe('isRfqOrPoSummaryEntity and associated patterns', () => {
+    it('exports all expected regex patterns for RFQ and PO summary filtering', () => {
+      expect(RFQ_ENTITY_PATTERN).toBeInstanceOf(RegExp);
+      expect(RFQ_SUMMARY_KEYWORD_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_SUMMARY_KEYWORD_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_IDENTIFIER_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_STANDALONE_NAME_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_OR_RFQ_PREFIXED_ID_PATTERN).toBeInstanceOf(RegExp);
+    });
+
+    it('identifies RFQs, PO summaries, dumps, and order IDs across all candidate fields', () => {
+      expect(isRfqOrPoSummaryEntity(null)).toBe(false);
+      expect(isRfqOrPoSummaryEntity(undefined)).toBe(false);
+      expect(isRfqOrPoSummaryEntity({})).toBe(false);
+
+      // ID matching
+      expect(isRfqOrPoSummaryEntity({ id: 'rfq-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'po-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'po_summary_1' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'rfq_batch' })).toBe(true);
+
+      // Name / VendorName matching
+      expect(isRfqOrPoSummaryEntity({ name: 'RFQ-2024-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ vendorName: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Purchase Order' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Purchase Orders' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Historical PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO Purchase Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO-9872' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO #1234' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'RFQ Summary' })).toBe(true);
+
+      // Category / MajorCategory matching
+      expect(isRfqOrPoSummaryEntity({ category: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ majorCategory: 'RFQ' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ category: 'Purchase Order Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ category: 'PO' })).toBe(true);
+
+      // Genuine vendors
+      expect(isRfqOrPoSummaryEntity({ id: 'v-1', name: 'Polycab India Limited', category: 'Electrical' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-2', name: 'Polymer Technologies', category: 'Chemical' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-3', name: 'Posco Steel', category: 'Metals' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-4', name: 'Power Grid Corp', category: 'Energy' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-5', name: 'Veera Solutions Pvt LTD', category: 'Valves' })).toBe(false);
+    });
+
+    it('skips RFQ and PO summary records when reconciling upload history batches', () => {
+      const existingVendors = [
+        {
+          id: 'v-clean-1',
+          name: 'Clean Supplier Ltd',
+          contactPerson: 'Clean Contact',
+          phone: '9876543210',
+          email: 'clean@supplier.test',
+          majorCategory: 'Mechanical',
+          minorCategories: [],
+          location: 'Mumbai',
+          rating: 4,
+          source: 'buyer_manual',
+        },
+      ];
+
+      const batchWithSummaries = [
+        {
+          id: 'batch-po-dump',
+          records: [
+            { name: 'PO Summary', email: 'posummary@test.local', category: 'PO Summary' },
+            { name: 'Historical PO Dump', email: 'podump@test.local' },
+            { name: 'RFQ-2024-001', email: 'rfq@test.local' },
+            { name: 'Valid Uploaded Co', email: 'valid@uploaded.test', category: 'Electrical' },
+          ],
+        },
+      ];
+
+      const result = reconcileBuyerVendorsWithUploadHistory(existingVendors, batchWithSummaries);
+      expect(result.some((v) => v.name === 'PO Summary')).toBe(false);
+      expect(result.some((v) => v.name === 'Historical PO Dump')).toBe(false);
+      expect(result.some((v) => v.name === 'RFQ-2024-001')).toBe(false);
+      expect(result.some((v) => v.name === 'Valid Uploaded Co')).toBe(true);
+    });
   });
 });

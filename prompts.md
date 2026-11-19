@@ -6830,3 +6830,10 @@ resume
 When clicked on vendor inactive is giving the vendor code. please remove th vendor code.
 ```
 ---
+
+### Prompt 302
+**Timestamp**: 2026-11-19T09:15:51+05:30
+```text
+In the evaluation summary page, the searched in the dropdown to select other vendor, it is showing RFQs, PO summaries also. Please remove them
+```
+---

@@ -1,6 +1,10 @@
 import React from 'react';
 import { fireEvent, render, screen } from '@testing-library/react';
-import VendorEvaluationSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-evaluation-summary';
+import VendorEvaluationSummary, {
+  isBuyerUploaded,
+  isProcucevVendor,
+  isRfqOrPoSummary,
+} from '@/app/buyer/vendor-evaluation-summary';
 import { useApp } from '@/lib/store';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT, VENDOR_EVALUATION_GATE_SCORE, VENDOR_EVALUATION_PILLARS } from '@/lib/constants';
@@ -906,5 +910,168 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     expect(screen.getByRole('button', { name: /Active Supplier Co/ })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Inactive Historical Eval Co/ })).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /Inactive Without Eval Co/ })).not.toBeInTheDocument();
+  });
+
+  describe('RFQ and PO summary removal from supplier selection dropdown', () => {
+    it('isRfqOrPoSummary identifies RFQ, PO summary, and dump candidates while preserving genuine vendor companies', () => {
+      expect(isRfqOrPoSummary(null)).toBe(false);
+      expect(isRfqOrPoSummary(undefined)).toBe(false);
+      expect(isRfqOrPoSummary({})).toBe(false);
+
+      // Positive RFQ candidates
+      expect(isRfqOrPoSummary({ name: 'RFQ-001: Structural Steel' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ - Pipes and Fittings' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ: Precision Valves' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ #98432' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ 101' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'RFQ' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'rfq-2024-batch' })).toBe(true);
+      expect(isRfqOrPoSummary({ category: 'RFQ Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ majorCategory: 'RFQ' })).toBe(true);
+
+      // Positive PO summary and dump candidates
+      expect(isRfqOrPoSummary({ name: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO_Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO-Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Order Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Orders Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Historical PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Purchase Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO Data Batch' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO-2024-001' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO #4500' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'PO' })).toBe(true);
+      expect(isRfqOrPoSummary({ name: 'Purchase Order' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'po-summary-local' })).toBe(true);
+      expect(isRfqOrPoSummary({ id: 'po-9876' })).toBe(true);
+      expect(isRfqOrPoSummary({ category: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummary({ majorCategory: 'Purchase Order Dump' })).toBe(true);
+      expect(isRfqOrPoSummary({ vendorName: 'PO Summary' })).toBe(true);
+
+      // Negative genuine vendors
+      expect(isRfqOrPoSummary({ id: 'v-1', name: 'Polycab India Limited' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-2', name: 'Polymer Technologies Ltd' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-3', name: 'Power Grid Corporation' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-4', name: 'Posco Steel India' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-5', name: 'Port of Nhava Sheva Logistics' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-6', name: 'Veera Solutions Pvt LTD' })).toBe(false);
+      expect(isRfqOrPoSummary({ id: 'v-7', name: 'Alpha Pumps Ltd.' })).toBe(false);
+    });
+
+    it('strictly removes RFQs and PO summaries from the dropdown and search results while keeping genuine vendors', () => {
+      const genuineVendor1 = buildVendor({
+        id: 'v-poly-1',
+        name: 'Polycab India Limited',
+        source: 'buyer_uploaded',
+        majorCategory: 'Electrical',
+      });
+      const genuineVendor2 = buildVendor({
+        id: 'v-alpha-2',
+        name: 'Alpha Pumps Ltd.',
+        source: 'buyer_uploaded',
+        majorCategory: 'Mechanical',
+      });
+      const genuineVendor3 = buildVendor({
+        id: 'v-veera-3',
+        name: 'Veera Solutions Pvt LTD',
+        source: 'buyer_uploaded',
+        majorCategory: 'Valves',
+      });
+
+      const rfqItem1 = buildVendor({
+        id: 'rfq-item-1',
+        name: 'RFQ-2024-001: Structural Steel',
+        source: 'buyer_uploaded',
+        majorCategory: 'Steel',
+      });
+      const rfqItem2 = buildVendor({
+        id: 'v-rfq-sum',
+        name: 'RFQ Summary',
+        source: 'buyer_uploaded',
+        majorCategory: 'RFQ Summary',
+      });
+      const poSummaryItem1 = buildVendor({
+        id: 'po-sum-1',
+        name: 'PO Summary',
+        source: 'buyer_uploaded',
+        majorCategory: 'Purchase Orders',
+      });
+      const poDumpItem = buildVendor({
+        id: 'v-po-dump',
+        name: 'Historical PO Dump',
+        source: 'buyer_uploaded',
+        majorCategory: 'PO Purchase Dump',
+      });
+      const poItemNumber = buildVendor({
+        id: 'po-10023',
+        name: 'PO-10023',
+        source: 'buyer_uploaded',
+        majorCategory: 'Orders',
+      });
+
+      const rfqEvalRecord = buildRecord({
+        id: 'eval-rfq',
+        vendorId: 'rfq-foreign-1',
+        vendorName: 'RFQ #9901: Diesel Generator',
+        category: 'Electrical',
+      });
+      const poEvalRecord = buildRecord({
+        id: 'eval-po',
+        vendorId: 'po-summary-eval',
+        vendorName: 'PO_Summary',
+        category: 'PO Summary',
+      });
+
+      mockStore({
+        buyerVendors: [
+          genuineVendor1,
+          genuineVendor2,
+          genuineVendor3,
+          rfqItem1,
+          rfqItem2,
+          poSummaryItem1,
+          poDumpItem,
+          poItemNumber,
+        ],
+        vendorEvaluations: [rfqEvalRecord, poEvalRecord],
+      });
+
+      render(<VendorEvaluationSummary />);
+
+      // Open supplier dropdown picker
+      fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+
+      // Genuine vendors MUST be present
+      expect(screen.getByRole('button', { name: /Polycab India Limited/ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Alpha Pumps Ltd\./ })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Veera Solutions Pvt LTD/ })).toBeInTheDocument();
+
+      // RFQs and PO summaries MUST NOT be present
+      expect(screen.queryByRole('button', { name: /RFQ-2024-001/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ #9901/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO_Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Historical PO Dump/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO-10023/ })).not.toBeInTheDocument();
+
+      // Search for "PO": Genuine vendor "Polycab" matches, but PO summaries must NOT appear
+      const searchInput = screen.getByPlaceholderText(SEARCH_PLACEHOLDER);
+      fireEvent.change(searchInput, { target: { value: 'PO' } });
+
+      expect(screen.getByRole('button', { name: /Polycab India Limited/ })).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO_Summary/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Historical PO Dump/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /PO-10023/ })).not.toBeInTheDocument();
+
+      // Search for "RFQ": No RFQs exist in options, shows no match
+      fireEvent.change(searchInput, { target: { value: 'RFQ' } });
+      expect(screen.queryByRole('button', { name: /RFQ-2024-001/ })).not.toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /RFQ Summary/ })).not.toBeInTheDocument();
+      expect(screen.getByText(formatString(SUMMARY.noSearchMatch, { query: 'RFQ' }))).toBeInTheDocument();
+    });
   });
 });
