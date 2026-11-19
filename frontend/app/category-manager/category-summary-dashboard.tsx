@@ -4,6 +4,7 @@ import React, { useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { normalizeVendorRating } from '@/lib/constants';
 import {
   Layers,
   Search,
@@ -173,7 +174,8 @@ export function formatContactInfo(phone?: string, email?: string): string {
 }
 
 export function formatRating(rating?: number): string {
-  return typeof rating === 'number' && Number.isFinite(rating) ? String(rating) : EMPTY_VALUE;
+  const normalized = normalizeVendorRating(rating);
+  return normalized !== null ? String(normalized) : EMPTY_VALUE;
 }
 
 export function formatContactPerson(contactPerson?: string): string {

@@ -4,6 +4,7 @@ import React, { useEffect, useState } from 'react';
 import type { PublicVendor } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { isDummyPan } from '@/lib/validationSchemas';
+import { normalizeVendorRating } from '@/lib/constants';
 import {
   Building2,
   Mail,
@@ -430,7 +431,7 @@ function ComplianceTab({ vendor }: { vendor: PublicVendor }) {
 // ── Tab 4: Performance & Rating ─────────────────────────────────────────────
 
 function PerformanceTab({ vendor }: { vendor: PublicVendor }) {
-  const rating = vendor.rating ?? 0;
+  const rating = normalizeVendorRating(vendor.rating, (vendor as any).score) ?? 0;
   const pct = Math.min(100, (rating / 5) * 100);
   const createdStr = vendor.createdAt
     ? new Date(vendor.createdAt).toLocaleDateString('en-IN', {

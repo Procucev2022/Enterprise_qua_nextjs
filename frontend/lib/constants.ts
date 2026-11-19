@@ -3093,3 +3093,35 @@ export function sortTableRows<T>(
     return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' }) * factor;
   });
 }
+
+/**
+ * Normalizes vendor rating to a consistent 5.0-scale numeric rating with 1 decimal place.
+ * Handles:
+ * - Direct 1.0 - 5.0 scale (e.g., 4.5 -> 4.5)
+ * - Normalized ratios <= 1.0 (e.g., 0.9 -> 4.5)
+ * - 100-point scale scores > 5.0 (e.g., 90 -> 4.5, 85 -> 4.3)
+ * - Fallback to score when rating is omitted
+ */
+export function normalizeVendorRating(rating: unknown, score?: unknown): number | null {
+  const numRating = typeof rating === 'number' ? rating : typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null;
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) {
+      return Number((numRating * 5).toFixed(1));
+    }
+    if (numRating > 5.0) {
+      return Number((numRating / 20).toFixed(1));
+    }
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : typeof score === 'string' && score.trim() !== '' ? Number(score) : null;
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) {
+      return numScore;
+    }
+    return Number((numScore / 20).toFixed(1));
+  }
+  return null;
+}
+
