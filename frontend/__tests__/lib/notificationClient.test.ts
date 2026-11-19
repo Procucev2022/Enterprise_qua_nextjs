@@ -64,6 +64,14 @@ describe('fetchNotifications', () => {
     expect(res).toEqual({ success: true, notifications, unreadCount: 1 });
     expect(lastPath()).toBe('/api/notifications');
     expect(lastInit().headers).toEqual({ Authorization: 'Bearer jwt-token' });
+    expect(lastInit().cache).toBe('no-store');
+  });
+
+  it('clamps negative unread counts to zero', async () => {
+    signIn();
+    global.fetch = reply(200, { success: true, data: [], unreadCount: -4 });
+    const res = await fetchNotifications();
+    expect(res.unreadCount).toBe(0);
   });
 
   it('passes limit option when provided', async () => {

@@ -2363,6 +2363,25 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(query).toHaveBeenCalledTimes(2);
       expect(query.mock.calls[0][1]).toEqual(['vendor', 'v-1', 25]);
       expect(query.mock.calls[1][1]).toEqual(['vendor', 'v-1']);
+
+      // Reconciles parsed raw.read with authoritative SQL is_read column and bypasses query cache
+      const drifted = { id: 'ntf-drift-1', recipientType: 'buyer', recipientId: 'b-1', read: false };
+      query
+        .mockResolvedValueOnce({ rows: [{ is_read: 1, raw: JSON.stringify(drifted) }] })
+        .mockResolvedValueOnce({ rows: [{ unread_count: 0 }] });
+      const reconciled = await domainQueries.getNotificationsForRecipientFromDB('buyer', 'b-1', 20);
+      expect(reconciled).toEqual({
+        data: [{ ...drifted, read: true }],
+        unreadCount: 0,
+      });
+
+      // markNotificationReadInDB accepts RETURNING rows even when rowCount is 0/undefined
+      query.mockResolvedValueOnce({ rowCount: 0, rows: [{ id: 'ntf-ret-1' }] });
+      await expect(domainQueries.markNotificationReadInDB('ntf-ret-1', 'buyer', 'b-1')).resolves.toBe(true);
+
+      // markAllNotificationsReadInDB coerces missing rowCount cleanly to 0
+      query.mockResolvedValueOnce({ rows: [] });
+      await expect(domainQueries.markAllNotificationsReadInDB('buyer', 'b-1')).resolves.toBe(0);
     });
 
     test('markChaserJobFailedInDB schedules retry work and caps the terminal failure attempt', async () => {

@@ -6725,3 +6725,10 @@ GSTIN & Address: The GST number and registered address entered during buyer regi
 resume
 ```
 ---
+
+### Prompt 287
+**Timestamp**: 2026-11-19T06:34:34+05:30
+```text
+The notification bell icon always showing 9+ when loggedin and showing 2 when clicked. Majorly the number is not giving the right information
+```
+---

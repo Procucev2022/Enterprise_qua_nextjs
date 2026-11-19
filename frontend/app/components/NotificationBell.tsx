@@ -43,36 +43,47 @@ export function relativeTime(iso: string): string {
  * chaser feed, unchanged.
  */
 export default function NotificationBell() {
-  const { currentRole, isLoggedIn, aiFeed } = useApp();
+  const { currentRole, isLoggedIn, aiFeed, currentUserSession } = useApp();
   const router = useRouter();
 
   const hasInbox = isLoggedIn && INBOX_ROLES.has(currentRole);
+  const sessionKey = hasInbox
+    ? `${currentRole}:${currentUserSession?.id || currentUserSession?.email || ''}`
+    : '';
 
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const containerRef = useRef<HTMLDivElement>(null);
+  const refreshSeqRef = useRef(0);
 
   const refresh = useCallback(async () => {
-    const result = await fetchNotifications({ limit: 20 });
+    const seq = ++refreshSeqRef.current;
+    const result = await fetchNotifications({ limit: 50 });
+    if (seq !== refreshSeqRef.current) return;
     if (result.success) {
       setNotifications(result.notifications);
       setUnreadCount(result.unreadCount);
     }
   }, []);
 
-  // Poll while a vendor/buyer session is active. The interval is cleared on
-  // sign-out or unmount so a logged-out tab is not calling the API.
+  // Poll while a vendor/buyer session is active. Resets state and discards any
+  // in-flight responses on sign-out, account switch, role switch, or unmount so
+  // another session's badge count never bleeds across logins.
   useEffect(() => {
-    if (!hasInbox) {
-      setNotifications([]);
-      setUnreadCount(0);
+    refreshSeqRef.current += 1;
+    setNotifications([]);
+    setUnreadCount(0);
+    if (!sessionKey) {
       return;
     }
     void refresh();
     const timer = setInterval(() => void refresh(), POLL_MS);
-    return () => clearInterval(timer);
-  }, [hasInbox, refresh]);
+    return () => {
+      refreshSeqRef.current += 1;
+      clearInterval(timer);
+    };
+  }, [sessionKey, refresh]);
 
   // Close on an outside click, matching the other header dropdowns' behaviour.
   useEffect(() => {
@@ -93,9 +104,13 @@ export default function NotificationBell() {
   };
 
   const handleMarkAll = async () => {
+    refreshSeqRef.current += 1;
     setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
     setUnreadCount(0);
-    await apiMarkAllRead();
+    const ok = await apiMarkAllRead();
+    if (!ok) {
+      void refresh();
+    }
   };
 
   const routeFor = (n: AppNotification): string | null => {
@@ -123,9 +138,13 @@ export default function NotificationBell() {
   const handleOpenNotification = async (n: AppNotification) => {
     setOpen(false);
     if (!n.read) {
+      refreshSeqRef.current += 1;
       setNotifications((prev) => prev.map((x) => (x.id === n.id ? { ...x, read: true } : x)));
       setUnreadCount((c) => Math.max(0, c - 1));
-      await apiMarkRead(n.id);
+      const ok = await apiMarkRead(n.id);
+      if (!ok) {
+        void refresh();
+      }
     }
     const dest = routeFor(n);
     if (dest) router.push(dest);
@@ -141,16 +160,18 @@ export default function NotificationBell() {
     return <FileText size={13} className="text-indigo-600 dark:text-indigo-400" />;
   };
 
+  const bellLabel =
+    hasInbox && unreadCount > 0
+      ? formatString(N.bellAriaUnread, { count: unreadCount })
+      : N.bellAria;
+
   return (
     <div className="relative" ref={containerRef}>
       <button
         onClick={toggle}
         className="relative p-2 rounded-xl bg-slate-100 dark:bg-gray-800/70 border border-slate-300 dark:border-gray-700 hover:bg-slate-200 dark:hover:bg-gray-700 text-slate-700 dark:text-gray-300 transition-all shadow-sm"
-        aria-label={
-          hasInbox && unreadCount > 0
-            ? formatString(N.bellAriaUnread, { count: unreadCount })
-            : N.bellAria
-        }
+        aria-label={bellLabel}
+        title={bellLabel}
       >
         <Bell size={16} />
         {hasInbox ? (

@@ -6823,10 +6823,10 @@ class StoreService {
     return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
   }
 
-  /** Direct per-recipient notification query on unhydrated isolates; uses in-memory store once hydrated. */
+  /** Direct per-recipient notification query whenever persistent storage is configured; uses in-memory store only when storage is absent. */
   async getNotificationsSummaryForDurably(recipientType, recipientId, limit = 50) {
     if (!recipientType || !recipientId) return { data: [], unreadCount: 0 };
-    if (pool.hasStorage() && !this.isHydratedFromDB && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
+    if (pool.hasStorage() && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
       return domainQueries.getNotificationsForRecipientFromDB(recipientType, recipientId, limit);
     }
     return {
@@ -6914,7 +6914,6 @@ class StoreService {
     const notification = this.notifications.find(
       (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
     );
-    if (!notification && this.isHydratedFromDB) return null;
 
     try {
       const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
@@ -9547,7 +9546,26 @@ class StoreService {
       meta: meta || {},
     });
     this.notifications.unshift(notification);
-    this._persistNotification(notification);
+    if (!buyerAccount && String(emailOrId).includes('@') && pool.hasStorage()) {
+      this._background(
+        (async () => {
+          const resolved = await this.getBuyerAccountByEmail(emailOrId).catch(() => null);
+          if (resolved && resolved.id) {
+            notification.recipientId = resolved.id;
+          }
+          return eventOutboxService.persistWithOutboxFallback({
+            eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
+            idempotencyKey: notification.id,
+            payload: notification,
+            operation: 'persist-notification',
+            write: () => domainQueries.insertNotificationInDB(notification),
+          });
+        })(),
+        'Failed to persist notification or schedule its retry'
+      );
+    } else {
+      this._persistNotification(notification);
+    }
     return notification;
   }
 
