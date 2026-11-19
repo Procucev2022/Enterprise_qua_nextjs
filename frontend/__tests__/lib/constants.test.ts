@@ -810,13 +810,29 @@ describe('Indian address location extraction helpers', () => {
       VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
       isBuyerUploadedVendor,
       isProcucevNetworkVendor,
+      canBuyerManageVendor,
       loadVendorUploadHistoryFromStorage,
       reconcileBuyerVendorsWithUploadHistory,
     } = require('@/lib/constants');
 
     expect(isBuyerUploadedVendor(null)).toBe(false);
+    expect(isBuyerUploadedVendor({ isProcucevNetwork: true, source: 'buyer_uploaded' })).toBe(false);
     expect(isBuyerUploadedVendor({ source: 'buyer_uploaded' })).toBe(true);
     expect(isProcucevNetworkVendor({ source: 'procucev_network' })).toBe(true);
+
+    expect(canBuyerManageVendor(null)).toBe(false);
+    expect(canBuyerManageVendor({ isProcucevNetwork: true })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'procucev_network' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded' })).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded' }, null)).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerId: 'b-1' }, { id: 'b-1' })).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerId: 'b-2' }, { id: 'b-1' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerEmail: 'other@co.test' }, { corporateEmail: 'me@co.test' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', addedByBuyerCompany: 'Other Co' }, { organizationName: 'My Co' })).toBe(false);
+    expect(canBuyerManageVendor(
+      { source: 'buyer_uploaded', buyerAccountId: 'b-1', buyerEmail: 'me@co.test', addedByBuyerCompany: 'My Co' },
+      { id: 'b-1', corporateEmail: 'me@co.test', organizationName: 'My Co' }
+    )).toBe(true);
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     expect(loadVendorUploadHistoryFromStorage()).toEqual([]);

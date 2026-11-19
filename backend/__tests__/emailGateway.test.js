@@ -1706,6 +1706,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       ...emailGatewayService.resolveConfig(FULL_ENV),
       user: 'vendor-intake@procucev.com',
       isVendorMailbox: true,
+      autoRegisterUnregisteredBuyers: false,
     };
 
     const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), vendorConfig);
@@ -3367,7 +3368,11 @@ Content-Type: text/plain
 Need quotation for 2 units Hydraulic Pump.
 `;
 
-      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const vendorConfig = emailGatewayService.resolveVendorConfig({
+        ...VENDOR_ENV,
+        EMAIL_GATEWAY_AUTO_REGISTER: 'false',
+        VENDOR_EMAIL_GATEWAY_AUTO_REGISTER: 'false',
+      });
       const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
 
       expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
@@ -3378,6 +3383,38 @@ Need quotation for 2 units Hydraulic Pump.
         })
       );
       expect(rfqCreateSpy).not.toHaveBeenCalled();
+    });
+
+    test('unregistered buyer sending RFQ to vendor inbox auto-registers buyer and does not send unauthorized notification when auto-register is enabled', async () => {
+      const unauthSpy = jest.spyOn(mailerService, 'sendUnauthorizedBuyerNotificationEmail').mockResolvedValue(true);
+      jest.spyOn(storeService, 'createRFQ').mockReturnValue({ id: 'rfq-auto-1', rfqNumber: 'RFQ-AUTO-1' });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+      jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
+
+      const unauthEml = `From: new.buyer@enterprise.org
+To: srinu20252026@gmail.com
+Subject: RFQ: 5 Units Industrial Water Pumps
+Message-ID: <rfq-new-buyer-vendor-inbox@enterprise.org>
+Date: Fri, 18 Sep 2026 15:00:00 +0530
+Content-Type: text/plain
+
+Need quotation for 5 units Water Pump.
+`;
+
+      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
+        status: geminiService.EXTRACTION_STATUS.SUCCESS,
+        documentTitle: 'Industrial Water Pumps',
+        category: 'Machinery',
+        lineItems: [
+          { itemDescription: 'Water Pump', quantity: 5, uom: 'Nos' },
+        ],
+      });
+
+      const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
+
+      expect(unauthSpy).not.toHaveBeenCalled();
+      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
     });
 
     test('insufficient extraction or zero line items logs failure and does not create RFQ', async () => {

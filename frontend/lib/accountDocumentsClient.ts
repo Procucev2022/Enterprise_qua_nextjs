@@ -38,19 +38,42 @@ export interface RequestBuyerCreditApprovalPayload {
   amount?: number;
   reason?: string;
   approverName: string;
+  approverId?: string;
   initiatorName: string;
+  initiatorId?: string;
+  startDate?: string;
+  endDate?: string;
   idempotencyKey?: string;
   requestType?: BuyerProfileRequestType;
   discountPercentage?: number;
   durationDays?: number;
   paymentReference?: string;
+  selectedMode?: string;
+  billingDuration?: string;
+  originalPrice?: number;
+  discountAmount?: number;
+  remainingAmount?: number;
+  gstAmount?: number;
+  finalPayableAmount?: number;
+  paymentDate?: string;
+  paymentType?: string;
+  transactionId?: string;
+  buyerSourceMode?: string;
+  paymentAmount?: number;
+  proofFileName?: string;
+  proofFileUrl?: string;
+  proofFileType?: string;
+  proofFileSize?: number;
 }
 
 export interface RequestSellerQuoteCreditApprovalPayload {
   amount: number;
   reason?: string;
   approverName: string;
+  approverId?: string;
   initiatorName: string;
+  initiatorId?: string;
+  requestType?: 'Seller Credit Addition' | 'Seller Credit Deletion';
   idempotencyKey?: string;
 }
 

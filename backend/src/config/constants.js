@@ -3994,6 +3994,13 @@ const APPROVER_CONFIG = Object.freeze([
     passwordEnvironmentVariable: 'SRINU_APPROVER_PASSWORD',
   },
   {
+    id: 'rao_sir',
+    name: 'Rao Sir',
+    title: 'Management Authority',
+    email: process.env.RAO_APPROVER_EMAIL || null,
+    passwordEnvironmentVariable: 'RAO_APPROVER_PASSWORD',
+  },
+  {
     id: 'sudheer_sir',
     name: 'Sudheer Sir',
     title: 'Management Authority',
@@ -4004,6 +4011,19 @@ const APPROVER_CONFIG = Object.freeze([
 
 // Approver names are the single source for validation enums. Derived, never typed twice.
 const CREDIT_APPROVAL_APPROVERS = Object.freeze(APPROVER_CONFIG.map((approver) => approver.name));
+
+const OFFLINE_PAYMENT_TYPES = Object.freeze([
+  'NEFT / RTGS',
+  'Cheque',
+  'UPI',
+  'Cash',
+]);
+
+const BUYER_SOURCING_MODES = Object.freeze([
+  'Mode 1',
+  'Mode 2',
+  'Mode 3',
+]);
 
 // Matches an approver by exact name or id, case-insensitively. Substring matching is not used.
 function findApproverConfig(approverName) {
@@ -4304,6 +4324,8 @@ module.exports = {
   ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
   ACCOUNT_DOCUMENT_MAX_BYTES,
   CREDIT_APPROVAL_APPROVERS,
+  OFFLINE_PAYMENT_TYPES,
+  BUYER_SOURCING_MODES,
   SELLER_QUOTE_CREDITS_ALLOWED,
   APPROVAL_REQUEST_TYPES,
   ALL_LEGACY_APPROVAL_REQUEST_TYPES,

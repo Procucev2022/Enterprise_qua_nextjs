@@ -6,6 +6,8 @@ const { authenticate, requireRole } = require('../middleware/auth');
 const requireApprovalAccess = [authenticate, requireRole('admin', 'category_manager')];
 
 router.get('/summary', ...requireApprovalAccess, approvalController.getSummary);
+router.get('/approvers', ...requireApprovalAccess, approvalController.getApprovers);
+router.get('/users', ...requireApprovalAccess, approvalController.getUsers);
 router.get('/', ...requireApprovalAccess, approvalController.getApprovals);
 router.post('/:id/action', ...requireApprovalAccess, approvalController.processAction);
 

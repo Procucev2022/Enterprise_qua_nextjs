@@ -2475,7 +2475,9 @@ export default function InternalTasksDashboard() {
 
                     {/* Section 4: Credit Approval Workflow Panel */}
                     {(selectedTaskDetails.task_category === 'CREDIT_MANAGEMENT' ||
-                      selectedTaskDetails.credit_quantity) && (
+                      selectedTaskDetails.credit_quantity ||
+                      selectedTaskDetails.task_type === 'Offline Payments' ||
+                      (selectedTaskDetails.task_category as string) === 'PAYMENT') && (
                       <div className="p-3 bg-amber-50 dark:bg-amber-950/30 rounded-xl border border-amber-200 dark:border-amber-800/80 space-y-2.5">
                         <div className="flex items-center justify-between">
                           <div className="flex items-center gap-1.5 font-bold text-amber-900 dark:text-amber-100">
@@ -2553,6 +2555,98 @@ export default function InternalTasksDashboard() {
                             })()}
                           </div>
                         </div>
+
+                        {/* Offline Payment Information (when task_type is Offline Payments) */}
+                        {selectedTaskDetails.raw && (selectedTaskDetails.task_type === 'Offline Payments' || selectedTaskDetails.raw.payment_type !== undefined) && (
+                          <div className="space-y-1.5 text-[11px] p-2.5 bg-white/80 dark:bg-slate-900/80 rounded-lg border border-emerald-200/60 dark:border-emerald-800/50">
+                            <div className="flex items-center justify-between font-semibold border-b border-slate-100 dark:border-slate-800 pb-1.5 mb-1.5">
+                              <span className="text-slate-700 dark:text-slate-200 font-bold">Offline Payment Information</span>
+                              {Boolean(selectedTaskDetails.raw.buyer_source_mode) && (
+                                <span className="text-emerald-700 dark:text-emerald-300 font-bold bg-emerald-50 dark:bg-emerald-950/40 px-2 py-0.5 rounded-full border border-emerald-200 dark:border-emerald-800 text-[10px]">
+                                  {String(selectedTaskDetails.raw.buyer_source_mode)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="space-y-1">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Payment Date:</span>
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.payment_date || '—')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Payment Type:</span>
+                                <span className="font-semibold text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.payment_type || '—')}</span>
+                              </div>
+                              {Boolean(selectedTaskDetails.raw.payment_type !== 'Cash' && selectedTaskDetails.raw.transaction_id) && (
+                                <div className="flex justify-between">
+                                  <span className="text-slate-500">Transaction ID:</span>
+                                  <span className="font-mono font-semibold text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.transaction_id)}</span>
+                                </div>
+                              )}
+                              <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-bold">
+                                <span>Payment Amount:</span>
+                                <span>₹{Number(selectedTaskDetails.raw.payment_amount ?? selectedTaskDetails.raw.amount ?? selectedTaskDetails.credit_quantity ?? 0).toLocaleString('en-IN')}</span>
+                              </div>
+                              {Boolean(selectedTaskDetails.raw.proof_file_name) && (
+                                <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800">
+                                  <span className="text-slate-500 block mb-1">Payment Proof:</span>
+                                  <div className="flex items-center justify-between p-1.5 rounded bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700">
+                                    <div className="flex items-center gap-1.5 truncate max-w-[200px]">
+                                      <FileText size={13} className="text-emerald-500 shrink-0" />
+                                      <span className="font-medium text-slate-800 dark:text-slate-200 truncate" title={String(selectedTaskDetails.raw.proof_file_name)}>
+                                        {String(selectedTaskDetails.raw.proof_file_name)}
+                                      </span>
+                                    </div>
+                                    {Boolean(selectedTaskDetails.raw.proof_file_url) && (
+                                      <a
+                                        href={String(selectedTaskDetails.raw.proof_file_url)}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        download={String(selectedTaskDetails.raw.proof_file_name)}
+                                        className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold text-[10px]"
+                                      >
+                                        View / Download
+                                      </a>
+                                    )}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Trial Period Details (when task_type is Trial Periods) */}
+                        {selectedTaskDetails.raw && (selectedTaskDetails.task_type === 'Trial Periods' || selectedTaskDetails.raw.trial_days !== undefined || selectedTaskDetails.raw.start_date !== undefined) && (
+                          <div className="space-y-1 text-[11px] p-2 bg-white/80 dark:bg-slate-900/80 rounded-lg border border-amber-200/60 dark:border-amber-800/50">
+                            <div className="flex items-center justify-between font-semibold">
+                              <span className="text-slate-500 dark:text-slate-400">Trial Period Details:</span>
+                              {Boolean(selectedTaskDetails.raw.selected_mode) && (
+                                <span className="text-indigo-600 dark:text-indigo-400 font-bold">
+                                  {String(selectedTaskDetails.raw.selected_mode)}
+                                </span>
+                              )}
+                            </div>
+                            <div className="space-y-0.5 pt-1">
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Sourcing Mode:</span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.selected_mode || 'Mode 1')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Trial Days:</span>
+                                <span className="font-bold text-emerald-600 dark:text-emerald-400">
+                                  {String(selectedTaskDetails.raw.trial_days ?? selectedTaskDetails.raw.duration_days ?? selectedTaskDetails.credit_quantity ?? 0)} Days
+                                </span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Starting Date:</span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.start_date || '—')}</span>
+                              </div>
+                              <div className="flex justify-between">
+                                <span className="text-slate-500">Ending Date:</span>
+                                <span className="font-medium text-slate-800 dark:text-slate-200">{String(selectedTaskDetails.raw.end_date || '—')}</span>
+                              </div>
+                            </div>
+                          </div>
+                        )}
 
                         {/* Approval actions for Admin / Approver */}
                         {selectedTaskDetails.status === 'Pending Approval' && (

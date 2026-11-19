@@ -15,6 +15,7 @@ import {
   getTableAriaSort,
   getTableColumnClass,
   isBuyerUploadedVendor,
+  canBuyerManageVendor,
   isPlaceholderVendorCategory,
   isProcucevNetworkVendor,
   isVendorActive,
@@ -1180,7 +1181,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
   const resolveBulkTargetVendors = (targetIsActive: boolean): VendorEntry[] => {
-    const selectedVendors = mergedVendors.filter((v) => selectedVendorIds.includes(v.id));
+    const selectedVendors = mergedVendors.filter(
+      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount)
+    );
     const targetedVendors = selectedVendors.filter((v) =>
       targetIsActive ? isVendorInactive(v) : isVendorActive(v)
     );
@@ -1675,6 +1678,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
+    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount);
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
@@ -2045,8 +2049,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
             </button>
 
-            {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
-            {isUploaded && (
+            {/* Edit Vendor Button - Only for buyer-owned vendors */}
+            {canManage && (
               <button
                 type="button"
                 onClick={() => handleOpenEditModal(vendor)}
@@ -2057,8 +2061,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             )}
 
-            {/* Mark Inactive / Reactivate Button - Only for buyer-uploaded vendors */}
-            {isUploaded && (
+            {/* Mark Inactive / Reactivate Button - Only for buyer-owned vendors */}
+            {canManage && (
               <button
                 type="button"
                 data-testid={vendorInactive ? `enable-vendor-${vendor.id}` : `disable-vendor-${vendor.id}`}
@@ -3170,7 +3174,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
                     <Layers size={13} className="text-indigo-600" /> Procurement Taxonomy &amp; Products
                   </span>
-                  {isBuyerUploaded(selectedVendorForCrud) && (
+                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
                     <button
                       type="button"
                       data-testid="view-profile-edit-category-button"
@@ -3321,17 +3325,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewModalOpen(false);
-                    handleOpenEditModal(selectedVendorForCrud);
-                  }}
-                  className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
-                >
-                  <Pencil size={13} /> Edit Profile
-                </button>
-                {isBuyerUploaded(selectedVendorForCrud) && (
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewModalOpen(false);
+                      handleOpenEditModal(selectedVendorForCrud);
+                    }}
+                    className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
+                  >
+                    <Pencil size={13} /> Edit Profile
+                  </button>
+                )}
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
                   <button
                     type="button"
                     data-testid="view-profile-status-toggle-button"
