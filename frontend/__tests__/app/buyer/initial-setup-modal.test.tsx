@@ -1761,6 +1761,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       />
     );
     expect(screen.getAllByText('Processing...').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.queryByText(/Backend processing continues if you close this window or navigate away/i)
+    ).not.toBeInTheDocument();
 
     rerender(
       <IngestionProgressCard

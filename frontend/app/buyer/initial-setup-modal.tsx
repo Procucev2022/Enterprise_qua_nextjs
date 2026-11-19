@@ -344,10 +344,6 @@ export function IngestionProgressCard({
               : vmStrings.jobStatusPending}
           </strong>
         </span>
-        <span className="text-[10px] text-indigo-300/80 italic flex items-center gap-1">
-          <Sparkles size={11} className="text-indigo-400" />
-          Backend processing continues if you close this window or navigate away
-        </span>
       </div>
     </div>
   );

@@ -6746,3 +6746,10 @@ In the vendor history tab in the vendor directory page remove the text "View pre
 If we close outside of the popup window should close the window
 ```
 ---
+
+### Prompt 290
+**Timestamp**: 2026-11-19T07:30:09+05:30
+```text
+Remove the Text "Backend processing continues if you close this window or navigate away" while vendor upload
+```
+---
