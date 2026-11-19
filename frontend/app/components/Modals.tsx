@@ -1709,83 +1709,83 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
         {evalRecord ? (
           <div className="space-y-4">
             {/* Inline import pattern or standalone summary render */}
-            <div className="p-4 rounded-xl bg-slate-900 text-white flex items-center justify-between">
-              <div>
+            <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] uppercase font-bold text-indigo-300 tracking-wider">
                   Mode 3 Vendor Evaluation Summary Report
                 </span>
-                <h3 className="text-xl font-bold mt-0.5">{evalRecord.vendorName}</h3>
-                <p className="text-xs text-indigo-200/80 mt-0.5">{evalRecord.category} • Submitted: {evalRecord.submissionDate}</p>
+                <h3 className="text-xl font-bold mt-0.5 break-words">{evalRecord.vendorName}</h3>
+                <p className="text-xs text-indigo-200/80 mt-0.5 break-words">{evalRecord.category} • Submitted: {evalRecord.submissionDate}</p>
               </div>
-              <div className="text-right">
+              <div className="text-right shrink-0">
                 <div className="text-3xl font-black mono text-emerald-400">{typeof evalRecord.overallScore === 'number' ? `${evalRecord.overallScore}%` : UI_STRINGS.recordPlaceholders.notEvaluated}</div>
-                <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-block mt-1">
+                <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-flex items-center justify-center whitespace-nowrap mt-1">
                   {evalRecord.status}
                 </span>
               </div>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 text-xs text-emerald-900 dark:text-emerald-200">
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 text-xs text-emerald-900 dark:text-emerald-200 min-w-0 break-words">
               ⚡ <strong>Automated System Execution Action:</strong> {evalRecord.systemAction}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs min-w-0">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Commercial Terms (25%)</div>
                   <div className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.commercial)}</div>
                 </div>
-                <div className="p-2 rounded bg-indigo-50/70 dark:bg-indigo-950/40 text-[10px] text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-800">
+                <div className="p-2 rounded bg-indigo-50/70 dark:bg-indigo-950/40 text-[10px] text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.commercial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Technical Specs (15%)</div>
                   <div className="text-lg font-bold text-sky-600 dark:text-cyan-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.technical)}</div>
                 </div>
-                <div className="p-2 rounded bg-sky-50/70 dark:bg-cyan-950/40 text-[10px] text-sky-900 dark:text-cyan-200 border border-sky-100 dark:border-cyan-800">
+                <div className="p-2 rounded bg-sky-50/70 dark:bg-cyan-950/40 text-[10px] text-sky-900 dark:text-cyan-200 border border-sky-100 dark:border-cyan-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.technical?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Quality & Warranty (20%)</div>
                   <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.quality)}</div>
                 </div>
-                <div className="p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/40 text-[10px] text-emerald-900 dark:text-emerald-200 border border-emerald-100 dark:border-emerald-800">
+                <div className="p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/40 text-[10px] text-emerald-900 dark:text-emerald-200 border border-emerald-100 dark:border-emerald-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.quality?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Delivery OTIF (20%)</div>
                   <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.delivery)}</div>
                 </div>
-                <div className="p-2 rounded bg-purple-50/70 dark:bg-purple-950/40 text-[10px] text-purple-900 dark:text-purple-200 border border-purple-100 dark:border-purple-800">
+                <div className="p-2 rounded bg-purple-50/70 dark:bg-purple-950/40 text-[10px] text-purple-900 dark:text-purple-200 border border-purple-100 dark:border-purple-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.delivery?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Financial Rating (10%)</div>
                   <div className="text-lg font-bold text-amber-600 dark:text-amber-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.financial)}</div>
                 </div>
-                <div className="p-2 rounded bg-amber-50/70 dark:bg-amber-950/40 text-[10px] text-amber-900 dark:text-amber-200 border border-amber-100 dark:border-amber-800">
+                <div className="p-2 rounded bg-amber-50/70 dark:bg-amber-950/40 text-[10px] text-amber-900 dark:text-amber-200 border border-amber-100 dark:border-amber-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.financial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Governance & ESG (10%)</div>
                   <div className="text-lg font-bold text-rose-600 dark:text-rose-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.governance)}</div>
                 </div>
-                <div className="p-2 rounded bg-rose-50/70 dark:bg-rose-950/40 text-[10px] text-rose-900 dark:text-rose-200 border border-rose-100 dark:border-rose-800">
+                <div className="p-2 rounded bg-rose-50/70 dark:bg-rose-950/40 text-[10px] text-rose-900 dark:text-rose-200 border border-rose-100 dark:border-rose-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.governance?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
@@ -1795,9 +1795,9 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
               <div className="font-bold text-slate-800 dark:text-gray-200">{UI_STRINGS.modals.evaluation.documentsHeading}</div>
               <div className="space-y-1.5">
                 {(evalRecord.documents || []).map((doc: any) => (
-                  <div key={doc.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px]">
-                    <span className="font-semibold text-slate-700 dark:text-gray-200">{doc.name}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">{doc.verified ? `✓ ${doc.status}` : doc.status}</span>
+                  <div key={doc.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px] min-w-0">
+                    <span className="font-semibold text-slate-700 dark:text-gray-200 break-words">{doc.name}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap">{doc.verified ? `✓ ${doc.status}` : doc.status}</span>
                   </div>
                 ))}
               </div>
