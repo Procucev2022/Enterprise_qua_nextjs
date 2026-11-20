@@ -686,68 +686,227 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    const {
+      amount,
+      reason,
+      approverName,
+      approverId,
+      initiatorName,
+      initiatorId,
+      startDate,
+      endDate,
+      paymentDate,
+      paymentType,
+      transactionId,
+      buyerSourceMode,
+      sellerSourceMode,
+      paymentAmount,
+      proofFileName,
+      proofFileUrl,
+      proofFileType,
+      proofFileSize,
+      idempotencyKey,
+      requestType = 'Seller Credit Addition',
+      discountPercentage,
+      durationDays,
+      paymentReference,
+      selectedMode,
+      billingDuration,
+      originalPrice,
+      discountAmount,
+      remainingAmount,
+      gstAmount,
+      finalPayableAmount,
+    } = validation.sanitizedData;
+
     // The maker is the signed-in user. The request body does not set who submitted the approval.
     const makerName = actorDisplayName(req.user);
     if (!makerName) {
       return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
     }
+    const makerEmail = req.user?.email || null;
     const makerRole = req.user?.role || null;
+    const makerId = req.user?.uuid || req.user?.id || null;
 
     const vendorLabel = vendor.name || vendor.id;
-    const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
+    const balance = vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? vendor.credits ?? 0;
+    const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
+
+    if (requestType === 'Seller Credit Deletion') {
+      if (balance !== null && numAmount > balance) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete ${numAmount} credits: ${vendorLabel} only has ${balance} credits available.`,
+        });
+      }
+    }
+
+    let taskCategory = 'CREDIT_MANAGEMENT';
+    let taskType = 'Add Credits';
+    let title = `Quote Credit Allocation Request: ${numAmount} Credits for ${vendorLabel}`;
+    let description = reason || `Requested quote credit top-up for ${vendorLabel}`;
+    let valueImpact = `${numAmount} Quote Credits (${vendorLabel})`;
+    let quantity = numAmount || 1;
+    let effectiveAmount = numAmount;
+
+    if (requestType === 'Seller Credit Deletion') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Credit Deletion';
+      title = `Quote Credit Deduction Request: ${numAmount} Credits from ${vendorLabel}`;
+      description = reason || `Requested credit deduction for ${vendorLabel}`;
+      valueImpact = `-${numAmount} Quote Credits (${vendorLabel})`;
+      quantity = numAmount;
+      effectiveAmount = numAmount;
+    } else if (requestType === 'Discounts' || requestType === 'Discount') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Discounts';
+      const pct = discountPercentage !== undefined ? discountPercentage : (amount || 0);
+      title = `Discount Approval Request: ${pct}% for ${vendorLabel}`;
+      description = reason || `Requested ${pct}% discount for ${vendorLabel}`;
+      valueImpact = `${pct}% Subscription Discount (${vendorLabel})`;
+      effectiveAmount = pct;
+      quantity = 1;
+    } else if (requestType === 'Trial Periods' || requestType === 'Trial Period') {
+      taskCategory = 'ONBOARDING';
+      taskType = 'Trial Periods';
+      const days = durationDays || amount || 30;
+      title = `Trial Period Request: ${days} Days for ${vendorLabel}`;
+      description = reason || `Requested ${days} days trial extension for ${vendorLabel}`;
+      valueImpact = `${days} Days Free Trial (${vendorLabel})`;
+      effectiveAmount = days;
+      quantity = 1;
+    } else if (requestType === 'Offline Payments') {
+      taskCategory = 'PAYMENT';
+      taskType = 'Offline Payments';
+      const safeAmount = Number(paymentAmount !== undefined ? paymentAmount : numAmount) || 0;
+      effectiveAmount = safeAmount;
+      const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
+      const formattedAmount = safeAmount.toLocaleString('en-IN');
+      title = `Offline Payment Verification: ₹${formattedAmount} for ${vendorLabel}`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${vendorLabel}`;
+      valueImpact = `₹${formattedAmount} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
+      quantity = 1;
+    }
+
+    const discountPct = discountPercentage !== undefined ? discountPercentage : (requestType === 'Discounts' || requestType === 'Discount' ? (amount || 0) : undefined);
+
+    const taskAttachments = [];
+    if (proofFileName) {
+      taskAttachments.push({
+        name: proofFileName,
+        url: proofFileUrl || '',
+        size: proofFileSize || 0,
+        type: proofFileType || 'image/jpeg',
+      });
+    }
 
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
-        taskCategory: 'CREDIT_MANAGEMENT',
-        taskType: 'Add Credits',
-        title: `Quote Credit Allocation Request: ${amount} Credits for ${vendorLabel}`,
-        description: taskReason,
+        taskCategory,
+        taskType,
+        title,
+        description,
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
+        assignedToUserId: approverId || null,
         assignedToName: approverName,
         assignedTeam: 'Management Approvers',
+        createdByName: makerName,
+        createdByUserId: makerId,
         creditAccountType: 'seller',
         creditAccountId: vendor.id,
         creditAccountName: vendorLabel,
-        creditQuantity: amount,
+        creditQuantity: effectiveAmount,
         creditReason: reason,
         notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'SELLER',
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
+        attachments: taskAttachments,
+        raw: {
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          seller_source_mode: sellerSourceMode || selectedMode || buyerSourceMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          assigned_approver: approverName,
+          assigned_approver_id: approverId,
+        },
       },
       {
+        uuid: makerId,
         fullName: makerName,
         name: makerName,
-        email: req.user?.email || null,
+        email: makerEmail,
         role: makerRole,
       },
       {
-        module: 'Seller Credit Addition',
+        module: requestType,
         idempotencyKey,
-        request_type: 'Seller Credit Addition',
+        request_type: requestType,
         project: vendorLabel,
         applicant_name: vendorLabel,
         applicant_email: vendor.email || '',
-        value_impact: `${amount} Quote Credits (${vendorLabel})`,
-        amount,
-        quantity: amount,
-        available_balance: vendor.freeQuotationCredits ?? VENDOR_FREE_CREDITS_LIMIT,
+        value_impact: valueImpact,
+        amount: effectiveAmount,
+        quantity,
+        available_balance: balance,
         maker_name: makerName,
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: taskReason,
+        details: description,
         seller_id: vendor.id,
+        raw: {
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId,
+          payment_amount: effectiveAmount,
+          seller_source_mode: sellerSourceMode || selectedMode || buyerSourceMode,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+        },
         history: [
           {
             action: 'SUBMITTED',
             actor_name: makerName,
             actor_role: makerRole,
             timestamp: new Date().toISOString(),
-            remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
+            remarks: reason || `Submitted ${requestType} for approval (${approverName}).`,
           },
         ],
       }

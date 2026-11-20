@@ -214,4 +214,85 @@ describe('approvalClient', () => {
       );
     });
   });
+
+  describe('fetchApprovalApprovers', () => {
+    it('returns approvers from API when response is successful', async () => {
+      const mockApprovers = [{ id: 'appr-1', name: 'Sudheer Sir', title: 'Management Authority' }];
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ approvers: mockApprovers }),
+      });
+
+      const { fetchApprovalApprovers } = require('@/lib/approvalClient');
+      const res = await fetchApprovalApprovers();
+      expect(res.approvers).toEqual(mockApprovers);
+    });
+
+    it('falls back to APPROVER_CONFIG when response is not ok or empty or fails', async () => {
+      const { fetchApprovalApprovers } = require('@/lib/approvalClient');
+      
+      // non-ok
+      global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 500 });
+      const res1 = await fetchApprovalApprovers();
+      expect(res1.approvers.length).toBeGreaterThan(0);
+
+      // empty array
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ approvers: [] }) });
+      const res2 = await fetchApprovalApprovers();
+      expect(res2.approvers.length).toBeGreaterThan(0);
+
+      // catch error
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+      const res3 = await fetchApprovalApprovers();
+      expect(res3.approvers.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fetchApprovalUsers', () => {
+    it('returns users from API when response is successful', async () => {
+      const mockUsers = [{ id: 'usr-1', name: 'Krishna', role: 'Category Manager' }];
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ users: mockUsers }),
+      });
+
+      const { fetchApprovalUsers } = require('@/lib/approvalClient');
+      const res = await fetchApprovalUsers();
+      expect(res.users).toEqual(mockUsers);
+    });
+
+    it('falls back to internal tasks assignees or default static list on error', async () => {
+      const { fetchApprovalUsers } = require('@/lib/approvalClient');
+
+      // fallback fetch succeeds
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url.includes('/api/approvals/users')) {
+          return Promise.resolve({ ok: false, status: 404 });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: async () => ({ assignees: [{ id: 'usr-2', name: 'Govardhan', role: 'Category Manager' }] }),
+        });
+      });
+      const res1 = await fetchApprovalUsers();
+      expect(res1.users).toEqual([{ id: 'usr-2', name: 'Govardhan', role: 'Category Manager' }]);
+
+      // fallback fails with default static list
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+      const res2 = await fetchApprovalUsers();
+      expect(res2.users.length).toBe(4);
+
+      // ok true but empty users array
+      global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ users: [] }) });
+      const res3 = await fetchApprovalUsers();
+      expect(res3.users.length).toBe(4);
+
+      // catch error returns default static list
+      global.fetch = jest.fn().mockRejectedValue(new Error('Timeout'));
+      const res4 = await fetchApprovalUsers();
+      expect(res4.users.length).toBe(4);
+    });
+  });
 });
