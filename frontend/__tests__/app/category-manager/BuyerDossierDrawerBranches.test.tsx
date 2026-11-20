@@ -405,7 +405,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
         'submittingBtn',
       ]);
       signInAs(sessionUser);
-      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
+      (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockReturnValueOnce(new Promise(() => { }));
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
       fillCreditRequest('Test Approver');
@@ -535,7 +535,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="communications" />);
       const dialog = await openComposeDialog();
       await waitFor(() => expect(documentVaultClient.fetchDocuments).toHaveBeenCalled());
-      await act(async () => {});
+      await act(async () => { });
 
       fireEvent.change(scenarioSelectOf(dialog), { target: { value: 'blank_scenario' } });
       expect(subjectFieldOf(dialog).value).toBe('');
@@ -578,7 +578,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       const dialog = await openComposeDialog();
 
       await waitFor(() => expect(documentVaultClient.fetchDocuments).toHaveBeenCalled());
-      await act(async () => {});
+      await act(async () => { });
       expect(within(dialog).queryByText(UI_STRINGS.buyerDirectory.dossier.vaultLoadFailed)).not.toBeInTheDocument();
     });
 
@@ -2656,6 +2656,213 @@ describe('BuyerDossierDrawer branch coverage', () => {
       const dialogs = screen.getAllByRole('dialog');
       const composeDialog = dialogs[dialogs.length - 1];
       fireEvent.click(composeDialog);
+
+      unmount2();
+    });
+
+    it('covers edit categories search suggestions, keyboard shortcuts, tag toggling, and clear actions', async () => {
+      const { unmount } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="profile" />
+      );
+
+      const editCatBtn = screen.getByRole('button', { name: /^Edit$/i });
+      fireEvent.click(editCatBtn);
+
+      const catInput = document.getElementById('buyer-dossier-category-search-input') as HTMLInputElement;
+
+      // 1. Type < 3 chars ('ab')
+      fireEvent.change(catInput, { target: { value: 'ab' } });
+
+      // 2. Focus input with >= 3 chars
+      fireEvent.change(catInput, { target: { value: 'Steel' } });
+      fireEvent.focus(catInput);
+
+      // 4. Enter key when suggestions active
+      fireEvent.keyDown(catInput, { key: 'Enter' });
+
+      // 5. Enter key with text
+      fireEvent.change(catInput, { target: { value: 'Custom CNC Parts' } });
+      fireEvent.keyDown(catInput, { key: 'Enter' });
+
+      // 6. Add category button click
+      fireEvent.change(catInput, { target: { value: 'Pumps & Motors' } });
+      const addCustomBtn = screen.getByRole('button', { name: /^Add Category$/i });
+      fireEvent.click(addCustomBtn);
+
+      // 7. Duplicate check: add existing category
+      fireEvent.change(catInput, { target: { value: 'Pumps & Motors' } });
+      fireEvent.click(addCustomBtn);
+
+      // 8. Remove category tag
+      const removeButtons = screen.getAllByRole('button').filter(b => b.querySelector('svg.lucide-x'));
+      if (removeButtons.length > 0) {
+        fireEvent.click(removeButtons[removeButtons.length - 1]);
+      }
+
+      // 9. Save categories successfully
+      const saveBtn = screen.getByRole('button', { name: /Save Categories/i });
+      fireEvent.click(saveBtn);
+      await waitFor(() => {
+        expect(buyerProfileClient.updateBuyerCategories).toHaveBeenCalled();
+      });
+
+      // 10. Test Escape on catInput
+      fireEvent.click(editCatBtn);
+      const catInput2 = document.getElementById('buyer-dossier-category-search-input') as HTMLInputElement;
+      fireEvent.change(catInput2, { target: { value: 'Steel' } });
+      fireEvent.keyDown(catInput2, { key: 'Escape' });
+
+      unmount();
+    });
+
+    it('covers edit categories save failure and throw branches, and cancel button', async () => {
+      // 1. Save failure with res.error
+      (buyerProfileClient.updateBuyerCategories as jest.Mock).mockResolvedValueOnce({
+        success: false,
+        error: 'Backend category validation error',
+      });
+
+      const { unmount } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="profile" />
+      );
+
+      fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
+      await waitFor(() => {
+        expect(buyerProfileClient.updateBuyerCategories).toHaveBeenCalled();
+      });
+
+      // 2. Save failure with default error message (no error field)
+      (buyerProfileClient.updateBuyerCategories as jest.Mock).mockResolvedValueOnce({
+        success: false,
+      });
+      fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
+      await waitFor(() => {
+        expect(buyerProfileClient.updateBuyerCategories).toHaveBeenCalledTimes(2);
+      });
+
+      // 3. Save failure with exception thrown
+      (buyerProfileClient.updateBuyerCategories as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+      fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
+      await waitFor(() => {
+        expect(buyerProfileClient.updateBuyerCategories).toHaveBeenCalledTimes(3);
+      });
+
+      // 4. Cancel button click
+      const cancelBtn = screen.getByRole('button', { name: /^Cancel$/i });
+      fireEvent.click(cancelBtn);
+
+      unmount();
+    });
+
+    it('covers discounts steps 1, 2, 3 navigation, NaN percentage, back and cancel buttons', async () => {
+      const { unmount } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="credits" />
+      );
+
+      const reqBtn = screen.getByTestId('request-type-dropdown-btn');
+      fireEvent.click(reqBtn);
+      fireEvent.click(screen.getByRole('menuitem', { name: /Discounts/i }));
+
+      // Step 1: Select Mode 1
+      const modeButtons = screen.getAllByRole('button', { name: /Mode 1/i });
+      fireEvent.click(modeButtons[modeButtons.length - 1]);
+
+      // Step 2: Select Duration (6 Months)
+      const durationButtons = screen.getAllByRole('button', { name: /6 Months/i });
+      fireEvent.click(durationButtons[durationButtons.length - 1]);
+
+      // Step 3: Enter discount percentage with NaN
+      const discountInput = screen.getByPlaceholderText('0');
+      fireEvent.change(discountInput, { target: { value: '' } });
+      fireEvent.change(discountInput, { target: { value: '10' } });
+
+      // Click Back button
+      const backBtn = screen.getByRole('button', { name: /Back/i });
+      fireEvent.click(backBtn);
+
+      // Re-advance to Step 3
+      const durationButtons2 = screen.getAllByRole('button', { name: /6 Months/i });
+      fireEvent.click(durationButtons2[durationButtons2.length - 1]);
+
+      // Click Cancel button
+      const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
+      fireEvent.click(cancelBtn);
+
+      unmount();
+    });
+
+    it('covers email and payment modal backdrop clicks', async () => {
+      // 1. Email detail modal backdrop click
+      const mockComms = [
+        {
+          id: 'comm-email-1',
+          channel: 'EMAIL',
+          subject: 'RFQ Requirement Update',
+          message: 'Hello, please review the RFQ details attached.',
+          sentAt: '2026-11-19T10:00:00Z',
+          sender: 'Category Manager',
+          recipient: 'buyer@example.com',
+        },
+      ];
+      (buyerProfileClient.fetchBuyerCommunications as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: mockComms,
+      });
+
+      const { unmount } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="communications" />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('RFQ Requirement Update')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('RFQ Requirement Update'));
+
+      const dialogs = screen.getAllByRole('dialog');
+      const emailModal = dialogs[dialogs.length - 1];
+      fireEvent.click(emailModal);
+
+      unmount();
+
+      // 2. Payment detail modal backdrop click
+      const mockPayments = [
+        {
+          id: 'pay-1',
+          invoiceNo: 'INV-998877',
+          amount: 25000,
+          status: 'PAID',
+          transactionDate: '2026-11-18T10:00:00Z',
+          gateway: 'Razorpay',
+          description: 'Subscription Renewal',
+        },
+      ];
+      (buyerProfileClient.fetchBuyerPaymentHistory as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        payments: mockPayments,
+        summary: {
+          totalAmountPaid: 25000,
+          totalSuccessfulPayments: 1,
+          pendingPayments: 0,
+          failedPayments: 0,
+        },
+      });
+
+      const { unmount: unmount2 } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="payments" />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('INV-998877')).toBeInTheDocument();
+      });
+
+      const detailsBtn = screen.getByRole('button', { name: /^Details$/i });
+      fireEvent.click(detailsBtn);
+
+      const dialogs2 = screen.getAllByRole('dialog');
+      const paymentModal = dialogs2[dialogs2.length - 1];
+      fireEvent.click(paymentModal);
 
       unmount2();
     });
