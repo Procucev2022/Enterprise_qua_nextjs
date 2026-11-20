@@ -784,11 +784,13 @@ async function requestCreditApproval(req, res, next) {
     } else if (requestType === 'Offline Payments') {
       taskCategory = 'PAYMENT';
       taskType = 'Offline Payments';
-      effectiveAmount = paymentAmount !== undefined ? paymentAmount : numAmount;
+      const safeAmount = Number(paymentAmount !== undefined ? paymentAmount : numAmount) || 0;
+      effectiveAmount = safeAmount;
       const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
-      title = `Offline Payment Verification: ₹${effectiveAmount.toLocaleString('en-IN')} for ${vendorLabel}`;
+      const formattedAmount = safeAmount.toLocaleString('en-IN');
+      title = `Offline Payment Verification: ₹${formattedAmount} for ${vendorLabel}`;
       description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${vendorLabel}`;
-      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
+      valueImpact = `₹${formattedAmount} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
       quantity = 1;
     }
 
