@@ -38,6 +38,9 @@ function sendApprovalError(res, error, fallbackMessage) {
       retryable: false,
     });
   }
+  if (error?.code === 'APPROVER_OTP_INVALID') {
+    return res.status(401).json({ success: false, error: APPROVAL_MESSAGES.OTP_INVALID, retryable: false });
+  }
   if (error?.code === 'APPROVER_PASSWORD_INVALID') {
     return res.status(401).json({ success: false, error: APPROVAL_MESSAGES.PASSWORD_INVALID, retryable: false });
   }
@@ -110,6 +113,7 @@ async function getApprovals(req, res) {
  * POST /api/approvals/:id/action
  */
 async function processAction(req, res) {
+  let actor = null;
   try {
     const { id } = req.params;
     const validation = validatePayload(VALIDATION_SCHEMAS.approvalAction, req.body);
@@ -121,7 +125,7 @@ async function processAction(req, res) {
       });
     }
 
-    const actor = extractActor(req);
+    actor = extractActor(req);
     if (!actor) {
       return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
     }
@@ -133,7 +137,11 @@ async function processAction(req, res) {
     logger.info(`Approval action processed on ${updated.request_number}: ${updated.status}`, { actor: actor.email }, 'APPROVAL_CONTROLLER');
     return res.json({ success: true, data: updated });
   } catch (err) {
-    logger.error(`Failed to process approval action on ${req.params.id}`, err, 'APPROVAL_CONTROLLER');
+    if (err?.code === 'APPROVER_PASSWORD_INVALID' || err?.code === 'APPROVER_OTP_INVALID' || err?.code === 'APPROVAL_ALREADY_DECIDED') {
+      logger.warn(`Approval action rejected on ${req.params.id}: ${err.message}`, { actor: actor?.email, code: err.code }, 'APPROVAL_CONTROLLER');
+    } else {
+      logger.error(`Failed to process approval action on ${req.params.id}`, err, 'APPROVAL_CONTROLLER');
+    }
     return sendApprovalError(res, err, 'Failed to process approval action.');
   }
 }

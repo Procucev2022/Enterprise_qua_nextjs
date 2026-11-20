@@ -383,6 +383,11 @@ describe('Approvals API & Controller', () => {
         .rejects.toMatchObject({ code: 'APPROVER_PASSWORD_INVALID', statusCode: 401 });
     });
 
+    it('refuses an invalid or expired approver OTP', async () => {
+      await expect(approvalQueries.processApprovalAction('appr-1', { ...body, otp: '123456', password: '' }, actor))
+        .rejects.toMatchObject({ code: 'APPROVER_OTP_INVALID', statusCode: 401, message: APPROVAL_MESSAGES.OTP_INVALID });
+    });
+
     it('decides a PostgreSQL management approval inside one transaction and writes its audit event', async () => {
       const current = { id: 'appr-pg-1', request_number: 'REQ-PG-1', status: 'Pending' };
       const saved = { ...current, status: 'Approved', approver_name: 'Sudheer Sir' };
@@ -838,6 +843,7 @@ describe('Approvals API & Controller', () => {
     it.each([
       ['ACTOR_REQUIRED', 401, undefined],
       ['APPROVAL_ALREADY_DECIDED', 409, APPROVAL_MESSAGES.ALREADY_DECIDED],
+      ['APPROVER_OTP_INVALID', 401, APPROVAL_MESSAGES.OTP_INVALID],
       ['APPROVER_PASSWORD_INVALID', 401, APPROVAL_MESSAGES.PASSWORD_INVALID],
       ['APPROVER_PASSWORD_NOT_CONFIGURED', 503, APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE],
       ['PERSISTENCE_UNAVAILABLE', 503, APPROVAL_MESSAGES.DATABASE_UNAVAILABLE],

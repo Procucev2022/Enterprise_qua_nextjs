@@ -1580,13 +1580,15 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
 
   if (vendorEmail || vendorPhone) {
     try {
+      const emailCondition = vendorEmail ? 'lower(email) = lower($1)' : '1=0';
+      const phoneCondition = vendorPhone ? "(raw->>'phone' = $2 AND $2 != '')" : '1=0';
       const relatedResult = await pool.query(
         `SELECT raw FROM vendors
-         WHERE (lower(email) = lower($1) OR (raw->>'phone' = $2 AND $2 != ''))
+         WHERE (${emailCondition} OR ${phoneCondition})
            AND (raw->>'buyerId' IS NOT NULL OR raw->>'buyerAccountId' IS NOT NULL OR raw->>'buyerEmail' IS NOT NULL OR raw->>'addedByBuyerCompany' IS NOT NULL)
          LIMIT 25`,
         [vendorEmail, vendorPhone],
-        { d1: true }
+        { d1: true, useCache: true, tag: 'vendors', ttlMs: 120000 }
       );
       for (const row of relatedResult.rows || []) {
         const parsed = parseVendorRaw(row.raw) || {};
@@ -1605,7 +1607,7 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
       const vmrResult = await pool.query(
         `SELECT organization_id, created_at FROM vendor_master_records WHERE lower(email) = lower($1) LIMIT 20`,
         [vendorEmail],
-        { d1: true }
+        { d1: true, useCache: true, tag: 'vendor_master_records', ttlMs: 120000 }
       );
       for (const row of vmrResult.rows || []) {
         addId(row.organization_id);
@@ -1647,7 +1649,7 @@ async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
         const buyersResult = await pool.query(
           `SELECT id, corporate_email, status, created_at, raw FROM buyer_accounts WHERE (${conditions.join(' OR ')}) LIMIT ${Number(limit) || 50}`,
           params,
-          { d1: true }
+          { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 120000 }
         );
         for (const row of buyersResult.rows || []) {
           const rawBuyer = parseRaw(row.raw) || {};
