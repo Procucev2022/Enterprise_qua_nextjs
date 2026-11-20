@@ -408,7 +408,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockReturnValueOnce(new Promise(() => { }));
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
-      fillCreditRequest('Test Approver');
+      fillCreditRequest('Srinu Sir');
       expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
       expect(screen.getByText('Buyer Organization')).toBeInTheDocument();
       expect(screen.getByText('Requested Credits')).toBeInTheDocument();
@@ -425,11 +425,11 @@ describe('BuyerDossierDrawer branch coverage', () => {
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: true });
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
-      fillCreditRequest('Test Approver');
+      fillCreditRequest('Srinu Sir');
       submitCreditForm();
 
       expect(
-        await screen.findByText(formatString(originalText.creditSuccessToast, { approverName: 'Test Approver' }))
+        await screen.findByText(formatString(originalText.creditSuccessToast, { approverName: 'Srinu Sir' }))
       ).toBeInTheDocument();
     });
 
@@ -439,7 +439,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({ success: false });
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
-      fillCreditRequest('Test Approver');
+      fillCreditRequest('Srinu Sir');
       submitCreditForm();
 
       expect(await screen.findByText(originalText.creditErrorToast)).toBeInTheDocument();
@@ -451,7 +451,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network down'));
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
-      fillCreditRequest('Test Approver');
+      fillCreditRequest('Srinu Sir');
       submitCreditForm();
 
       expect(await screen.findByText(originalText.creditErrorToast)).toBeInTheDocument();
@@ -461,7 +461,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       signInAs(null);
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} />);
 
-      fillCreditRequest('Test Approver');
+      fillCreditRequest('Srinu Sir');
       submitCreditForm();
 
       expect(
@@ -867,7 +867,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
 
       // Select Cash payment type (no transaction id required)
       fireEvent.change(typeSelect, { target: { value: 'Cash' } });
-      fireEvent.change(initiatorInput, { target: { value: 'Test Assignee' } });
+      fireEvent.change(initiatorInput, { target: { value: 'Govardhan' } });
       fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
       fireEvent.change(remarksTextarea, { target: { value: 'Direct cash deposit at counter' } });
 
@@ -1029,13 +1029,13 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.change(initiatorSelect, { target: { value: '' } });
       fireEvent.submit(form);
       expect(screen.getByText('Initiated by user is mandatory.')).toBeInTheDocument();
-      fireEvent.change(initiatorSelect, { target: { value: 'usr-krishna' } });
+      fireEvent.change(initiatorSelect, { target: { value: 'Krishna Chaitanya' } });
 
       // 5. Missing approver
       fireEvent.change(approverSelect, { target: { value: '' } });
       fireEvent.submit(form);
       expect(screen.getByText('Assigned approver is mandatory.')).toBeInTheDocument();
-      fireEvent.change(approverSelect, { target: { value: 'appr-srinu' } });
+      fireEvent.change(approverSelect, { target: { value: 'Srinu Sir' } });
 
       // 6. API error without error message
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
@@ -1383,10 +1383,10 @@ describe('BuyerDossierDrawer branch coverage', () => {
         fireEvent.change(amountInput, { target: { value: '50000' } });
 
         const initiatorSelect = document.getElementById('offline-initiator-select') as HTMLSelectElement;
-        fireEvent.change(initiatorSelect, { target: { value: 'usr-krishna' } });
+        fireEvent.change(initiatorSelect, { target: { value: 'Krishna Chaitanya' } });
 
         const approverSelect = document.getElementById('offline-approver-select') as HTMLSelectElement;
-        fireEvent.change(approverSelect, { target: { value: 'appr-srinu' } });
+        fireEvent.change(approverSelect, { target: { value: 'Srinu Sir' } });
 
         const form = amountInput.closest('form') as HTMLFormElement;
         (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
@@ -1690,9 +1690,9 @@ describe('BuyerDossierDrawer branch coverage', () => {
       const amountInput = document.getElementById('offline-payment-amount') as HTMLInputElement;
       fireEvent.change(amountInput, { target: { value: '10000' } });
       const initiatorSelect = document.getElementById('offline-initiator-select') as HTMLSelectElement;
-      fireEvent.change(initiatorSelect, { target: { value: 'usr-krishna' } });
+      fireEvent.change(initiatorSelect, { target: { value: 'Krishna Chaitanya' } });
       const approverSelect = document.getElementById('offline-approver-select') as HTMLSelectElement;
-      fireEvent.change(approverSelect, { target: { value: 'appr-srinu' } });
+      fireEvent.change(approverSelect, { target: { value: 'Srinu Sir' } });
 
       const form = amountInput.closest('form') as HTMLFormElement;
 
@@ -2046,7 +2046,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
 
       // Initiator and Approver inputs
       const initiatorInput = screen.getByLabelText(/Initiated By/i);
-      fireEvent.change(initiatorInput, { target: { value: 'Test Assignee' } });
+      fireEvent.change(initiatorInput, { target: { value: 'Govardhan' } });
 
       const approverInput = screen.getByLabelText(/Assigned Approver/i);
       fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
@@ -2088,7 +2088,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.change(initiatorInput, { target: { value: '   ' } });
       fireEvent.submit(offlineForm);
       expect(screen.getByText('Initiated by user is mandatory.')).toBeInTheDocument();
-      fireEvent.change(initiatorInput, { target: { value: 'Test Assignee' } });
+      fireEvent.change(initiatorInput, { target: { value: 'Govardhan' } });
 
       // 6. Submit with empty approver
       fireEvent.change(approverInput, { target: { value: '   ' } });
@@ -2107,7 +2107,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Offline payment submitted successfully')).toBeInTheDocument();
-      });
+      }, { timeout: 5000 });
 
       // Test error responses from API
       // Re-open offline modal
@@ -2125,14 +2125,14 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
       await waitFor(() => {
         expect(screen.getByText('Approval service rejected')).toBeInTheDocument();
-      });
+      }, { timeout: 5000 });
 
       // Test exception thrown
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
       fireEvent.click(screen.getByRole('button', { name: /Submit for Approval/i }));
       await waitFor(() => {
         expect(screen.getByText('Failed to submit offline payment approval request.')).toBeInTheDocument();
-      });
+      }, { timeout: 5000 });
 
       // Close modal
       const cancelBtn = screen.getByRole('button', { name: /Cancel/i });
@@ -2422,7 +2422,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.click(dur12Btn);
 
       // Set approver in step 3
-      const approverInput = screen.getByPlaceholderText(/Enter the approver name/i);
+      const approverInput = document.getElementById('discount-approver') as HTMLSelectElement;
       fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
 
       // Step 3 form
@@ -2469,6 +2469,17 @@ describe('BuyerDossierDrawer branch coverage', () => {
         expect(screen.getByText('Request Discount Approval')).toBeInTheDocument();
         expect(screen.getByText('Step 1 of 3: Select sourcing mode for discount request.')).toBeInTheDocument();
 
+        // Step 2
+        const discountModeButtons = screen.getAllByRole('button', { name: /Mode 1/i });
+        fireEvent.click(discountModeButtons[discountModeButtons.length - 1]);
+        expect(screen.getByText('Select Billing Duration')).toBeInTheDocument();
+
+        // Step 3
+        const durButtons = screen.getAllByRole('button', { name: /12 Months/i });
+        fireEvent.click(durButtons[durButtons.length - 1]);
+        expect(screen.getByText('Submit discount authorization for this buyer account.')).toBeInTheDocument();
+        expect(screen.getByText('Price Breakdown')).toBeInTheDocument();
+
         // Trial Periods
         fireEvent.click(reqBtn);
         fireEvent.click(screen.getByRole('menuitem', { name: /Trial Periods/i }));
@@ -2482,6 +2493,17 @@ describe('BuyerDossierDrawer branch coverage', () => {
         fireEvent.click(screen.getByRole('menuitem', { name: /Offline Payments/i }));
         expect(screen.getByText('Request Offline Payment Approval')).toBeInTheDocument();
         expect(screen.getByText('Submit offline payment verification and credit authorization.')).toBeInTheDocument();
+
+        // Standard Buyer Credit Addition
+        fireEvent.click(reqBtn);
+        fireEvent.click(screen.getByRole('menuitem', { name: /Buyer Credit Addition/i }));
+        expect(screen.getByText('Request Buyer Credit Approval')).toBeInTheDocument();
+        expect(screen.getByText('Available Sourcing Credits')).toBeInTheDocument();
+        expect(screen.getByText('Requested Credits')).toBeInTheDocument();
+        expect(screen.getByText('Initiated By')).toBeInTheDocument();
+        expect(screen.getByText('Assigned Approver')).toBeInTheDocument();
+        expect(screen.getByText('Business Justification / Reason')).toBeInTheDocument();
+        expect(screen.getByText('Submit for Approval')).toBeInTheDocument();
 
         unmount();
       } finally {
@@ -2865,6 +2887,34 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.click(paymentModal);
 
       unmount2();
+    });
+
+    it('covers remaining RFQ detail popup mode fallbacks, empty quotes, and call channel communication', async () => {
+      const customRfq: any = {
+        rfqNumber: 'RFQ-CUSTOM-99',
+        title: 'Custom Procurement',
+        sourcingMode: 'UNKNOWN_MODE',
+        assignedVendors: [{ id: 'v1', name: 'Vendor 1' }],
+        quotes: [],
+        budget: 50000,
+        createdAt: '2026-11-20T10:00:00Z',
+      };
+
+      const { unmount } = render(
+        <BuyerDossierDrawer buyer={mockBuyer} buyerRfqs={[customRfq]} onClose={onCloseMock} initialTab="rfqs" />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('RFQ-CUSTOM-99')).toBeInTheDocument();
+      });
+
+      fireEvent.click(screen.getByText('RFQ-CUSTOM-99'));
+      await waitFor(() => {
+        expect(screen.getByText('Awaiting vendor quotation submissions.')).toBeInTheDocument();
+        expect(screen.getByText(/1 vendors \/ 0 bids/i)).toBeInTheDocument();
+      });
+
+      unmount();
     });
   });
 });

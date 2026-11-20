@@ -731,13 +731,7 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
-    let transactions = [];
-    try {
-      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
-    } catch (dbErr) {
-      logger.warn('Failed to load credit transactions from database, falling back to empty list', { buyerId: buyer.id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
-      transactions = [];
-    }
+    const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
 
     let totalAllocated = 0;
     let totalConsumed = 0;

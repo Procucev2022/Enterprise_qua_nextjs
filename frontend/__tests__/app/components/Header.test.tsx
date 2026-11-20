@@ -148,6 +148,11 @@ describe('Header', () => {
     const { rerender } = render(<Header />);
     expect(screen.getByText(UI_STRINGS.headerNav.vendorDirectory)).toBeInTheDocument();
 
+    mockCurrentPath = '/category-manager/vendor-console';
+    rerender(<Header />);
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
+    mockCurrentPath = '/login';
+
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'buyer',
       isLoggedIn: true,

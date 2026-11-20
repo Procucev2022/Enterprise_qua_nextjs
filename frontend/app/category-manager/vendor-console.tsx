@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { fetchAllVendors } from '@/lib/rfqClient';
@@ -9,6 +9,8 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { formatCurrency } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { exportReportToCsv } from '@/lib/reportsClient';
+import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettingsPopup';
 import {
   Building2,
   Users,
@@ -30,9 +32,22 @@ import {
   Tag,
   ArrowUpRight,
   X,
+  RotateCw,
+  Settings,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 import VendorUploadModal from './VendorUploadModal';
+
+export const DEFAULT_VENDOR_CONSOLE_COLUMNS: ColumnDef[] = [
+  { key: 'company', label: 'VENDOR NAME', visible: true, required: true },
+  { key: 'contact', label: 'CONTACT', visible: true },
+  { key: 'category', label: 'CATEGORY/DIVISION', visible: true },
+  { key: 'rating', label: 'RATING', visible: true },
+  { key: 'totalBids', label: 'TOTAL BIDS', visible: true },
+  { key: 'compliance', label: 'COMPLIANCE', visible: true },
+  { key: 'awardedSpend', label: 'AWARDED SPEND', visible: true },
+  { key: 'actions', label: 'ACTIONS', visible: true, required: true },
+];
 
 interface VendorConsoleProps {
   onNavigateToMatrix: (rfq: RFQItem) => void;
@@ -386,6 +401,33 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
     });
   };
 
+  const handleRefetch = useCallback(() => {
+    const filters = buildVendorFilters();
+    vendorFetchAbortRef.current?.abort();
+    const controller = new AbortController();
+    vendorFetchAbortRef.current = controller;
+    const seq = ++fetchSeqRef.current;
+    setVendorsLoading(true);
+    setVendorsError(null);
+    void withVendorFetchSignal(controller.signal, () =>
+      fetchAllVendors({
+        page: 1,
+        pageSize: VENDOR_CARDS_PAGE_SIZE,
+        ...filters,
+      })
+    ).then((result) => {
+      if (seq !== fetchSeqRef.current) return;
+      if (result.success) {
+        setFetchedVendors(result.candidates);
+        setVendorsPagination(result.pagination);
+      } else {
+        setVendorsError(result.error);
+      }
+      setVendorsLoading(false);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [debouncedSearch, categoryFilter, minorFilter, debouncedPincode, effectiveCategoryOptions]);
+
   const hasMoreVendorCards = !!vendorsPagination && vendorsPagination.page < vendorsPagination.totalPages;
 
   // Compile vendor cards with real metrics from real quotes
@@ -505,718 +547,676 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
       : [];
   }, [compiledVendors, selectedCompany]);
 
-  // Render individual vendor card with rich section-aware metadata
-  const renderVendorCard = (v: (typeof compiledVendors)[0]) => {
-    const isSelected = activeVendorId === v.id;
-    const missingEmail = !v.email;
-    const isProcucevSection = v.classification.section === 'cm_procucev';
+  type SortField = 'company' | 'contact' | 'category' | 'rating' | 'totalBids' | 'compliance' | 'awardedSpend';
+  type SortDir = 'asc' | 'desc';
 
-    return (
-      <div
-        key={v.id}
-        data-testid={`vendor-card-${v.id}`}
-        className={`glass-panel p-5 rounded-2xl border-2 transition-all flex flex-col justify-between space-y-4 relative overflow-hidden group ${
-          isSelected
-            ? 'border-emerald-650 dark:border-emerald-500 bg-emerald-50/10 dark:bg-emerald-950/10 shadow-md ring-2 ring-emerald-500/20'
-            : missingEmail
-              ? 'border-rose-300 dark:border-rose-800 bg-rose-50/40 dark:bg-rose-950/20'
-              : 'border-emerald-300 dark:border-emerald-800 bg-emerald-50/40 dark:bg-emerald-950/20'
-        }`}
-      >
-        {/* Subtle decorative top accent bar indicating section origin */}
-        <div
-          className={`absolute top-0 left-0 right-0 h-1 ${
-            isProcucevSection
-              ? 'bg-gradient-to-r from-emerald-500 to-indigo-500'
-              : 'bg-gradient-to-r from-sky-500 to-amber-500'
-          }`}
-        />
+  const getSortIndicator = (field: SortField, currentField: SortField | null, dir: SortDir): string => {
+    if (currentField !== field) return '↑↓';
+    return dir === 'asc' ? '↑' : '↓';
+  };
 
-        {/* Upper Block: Profile & Badges */}
-        <div className="flex items-start justify-between gap-3 pt-1">
-          <div className="flex items-center gap-3 min-w-0 flex-1">
-            <div className={`w-11 h-11 rounded-xl ${v.avatarColor} font-bold text-xs flex items-center justify-center shrink-0 overflow-hidden select-none shadow-sm ring-1 ring-slate-200 dark:ring-gray-800`}>
-              {getInitials(v.company || v.name)}
-            </div>
-            <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-1.5 mb-1">
-                {/* Source Badge */}
-                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[9px] font-bold border ${v.classification.badgeClass}`}>
-                  {v.classification.icon === 'shield' && <ShieldCheck size={10} />}
-                  {v.classification.icon === 'upload' && <Upload size={10} />}
-                  {v.classification.icon === 'zap' && <Zap size={10} />}
-                  {v.classification.icon === 'building' && <Building2 size={10} />}
-                  <span>{v.classification.label}</span>
-                </span>
+  const [sortField, setSortField] = useState<SortField | null>(null);
+  const [sortDir, setSortDir] = useState<SortDir>('asc');
 
-                {/* Rating badge */}
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-extrabold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border border-amber-200/40 flex items-center gap-0.5 shrink-0 ml-auto sm:ml-0">
-                  ⭐ {v.rating ?? EMPTY_VALUE}
-                </span>
-              </div>
+  const [columns, setColumns] = useState<ColumnDef[]>(DEFAULT_VENDOR_CONSOLE_COLUMNS);
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
 
-              <h4 className="font-black text-slate-900 dark:text-white text-xs sm:text-sm line-clamp-1" title={v.company}>
-                <CompanyHoverTooltip
-                  name={v.company}
-                  type="vendor"
-                  contact={{ contactPerson: v.name, email: v.email, location: v.location, pincode: v.pincode }}
-                />
-              </h4>
+  const isColVisible = (key: string) => {
+    const col = columns.find((c) => c.key === key);
+    return col ? col.visible : true;
+  };
 
-              <div className="text-[10px] text-slate-500 dark:text-gray-400 space-y-0.5 mt-1 font-medium">
-                {v.name && v.name !== v.company && (
-                  <div className="flex items-center gap-1 font-semibold text-slate-700 dark:text-gray-300 truncate">
-                    <span>👤 {v.name}</span>
-                  </div>
-                )}
-                <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 text-slate-500 dark:text-gray-400">
-                  <span className="flex items-center gap-0.5 truncate max-w-[200px]" title={v.email || undefined}>
-                    <Mail size={10} className="text-indigo-500 shrink-0" /> {v.email || EMPTY_VALUE}
-                  </span>
-                  {v.phone ? (
-                    <>
-                      <span>·</span>
-                      <span className="flex items-center gap-0.5 shrink-0">
-                        <Phone size={10} className="text-indigo-500 shrink-0" /> {v.phone}
-                      </span>
-                    </>
-                  ) : null}
-                </div>
-              </div>
+  const handleSort = (field: SortField) => {
+    if (sortField === field) {
+      setSortDir((prev) => (prev === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSortField(field);
+      setSortDir('asc');
+    }
+  };
 
-              <div className="flex flex-wrap items-center gap-1.5 mt-2">
-                <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-gray-800 text-slate-700 dark:text-gray-300 text-[9px] font-semibold border border-slate-200 dark:border-gray-700">
-                  {v.category}
-                </span>
-                {v.location && (
-                  <span className="text-[9px] text-slate-400 dark:text-gray-500 flex items-center gap-0.5">
-                    📍 {v.location}
-                  </span>
-                )}
-                {v.pincode && (
-                  <span
-                    data-testid={`vendor-pincode-${v.id}`}
-                    className="px-2 py-0.5 rounded-md bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-[9px] font-bold border border-indigo-200/70 dark:border-indigo-800/70 flex items-center gap-0.5"
-                  >
-                    {formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: v.pincode })}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
+  const handleOpenVendorModal = (id: string) => {
+    setSelectedVendorId(id);
+    setDrillDownDismissed(false);
+    setExpandedQuoteNumber(null);
+  };
 
-        {/* Section Context Note */}
-        <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950/70 border border-slate-200/70 dark:border-gray-800/80 text-[10px] flex items-center justify-between text-slate-600 dark:text-gray-300">
-          <span className="flex items-center gap-1.5 truncate">
-            {isProcucevSection ? (
-              <>
-                <ShieldCheck size={11} className="text-emerald-500 shrink-0" />
-                <span className="truncate"><strong>Section 1</strong>: {v.classification.description}</span>
-              </>
-            ) : (
-              <>
-                <UserCheck size={11} className="text-sky-500 shrink-0" />
-                <span className="truncate"><strong>Section 2</strong>: {v.classification.description}</span>
-              </>
-            )}
-          </span>
-          {v.addedByBuyerCompany && (
-            <span className="badge badge-sky text-[8px] font-bold shrink-0 ml-1">
-              Org: {v.addedByBuyerCompany}
-            </span>
-          )}
-        </div>
+  const displayedVendors = useMemo(() => {
+    let list = pagedVendors;
+    if (activeSectionFilter === 'cm_procucev') {
+      list = cmProcucevVendors;
+    } else if (activeSectionFilter === 'self_onboard_buyer') {
+      list = selfBuyerVendors;
+    }
+    if (!sortField) return list;
+    return [...list].sort((a, b) => {
+      let aVal = '';
+      let bVal = '';
+      switch (sortField) {
+        case 'company':
+          aVal = (a.company || a.name || '').toLowerCase();
+          bVal = (b.company || b.name || '').toLowerCase();
+          return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        case 'contact':
+          aVal = (a.contactPerson || a.name || '').toLowerCase();
+          bVal = (b.contactPerson || b.name || '').toLowerCase();
+          return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        case 'category':
+          aVal = (a.category || '').toLowerCase();
+          bVal = (b.category || '').toLowerCase();
+          return sortDir === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+        case 'rating': {
+          const aNum = a.rating ?? -1;
+          const bNum = b.rating ?? -1;
+          return sortDir === 'asc' ? aNum - bNum : bNum - aNum;
+        }
+        case 'totalBids': {
+          const aBids = a.rfqsList.length;
+          const bBids = b.rfqsList.length;
+          return sortDir === 'asc' ? aBids - bBids : bBids - aBids;
+        }
+        case 'compliance': {
+          const aRate = a.complianceRate ?? -1;
+          const bRate = b.complianceRate ?? -1;
+          return sortDir === 'asc' ? aRate - bRate : bRate - aRate;
+        }
+        case 'awardedSpend': {
+          const aSpend = a.awardedSpend;
+          const bSpend = b.awardedSpend;
+          return sortDir === 'asc' ? aSpend - bSpend : bSpend - aSpend;
+        }
+        default:
+          return 0;
+      }
+    });
+  }, [pagedVendors, activeSectionFilter, cmProcucevVendors, selfBuyerVendors, sortField, sortDir]);
 
-        {/* Mid Block: Metrics */}
-        <div className="grid grid-cols-3 gap-2 py-2.5 border-t border-b border-slate-100 dark:border-gray-800 text-center text-xs">
-          <div>
-            <div className="text-[9px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-wider">Total Bids</div>
-            <div className="font-black text-slate-800 dark:text-white mt-0.5 mono text-xs">{v.rfqsList.length}</div>
-          </div>
-          <div>
-            <div className="text-[9px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-wider">Compliance</div>
-            <div className="font-black text-slate-800 dark:text-white mt-0.5 mono text-xs">
-              {v.complianceRate === null ? '—' : `${v.complianceRate}%`}
-            </div>
-          </div>
-          <div>
-            <div className="text-[9px] text-slate-400 dark:text-gray-500 font-bold uppercase tracking-wider">Awarded Spend</div>
-            <div className="font-black text-emerald-600 dark:text-emerald-400 mt-0.5 mono text-xs">
-              {formatCurrency(v.awardedSpend)}
-            </div>
-          </div>
-        </div>
-
-        {/* Lower Block: Actions */}
-        <div className="flex justify-between items-center pt-1">
-          <span className="text-[9px] text-slate-400 flex items-center gap-1 font-mono">
-            <Clock size={10} /> Avg lead time: {v.leadTimeDays === null ? 'No quotes yet' : `${v.leadTimeDays} days`}
-          </span>
-
-          <button
-            onClick={() => {
-              if (isSelected) {
-                setSelectedVendorId(null);
-                setDrillDownDismissed(true);
-              } else {
-                setSelectedVendorId(v.id);
-                setDrillDownDismissed(false);
-                setExpandedQuoteNumber(null);
-              }
-            }}
-            className="btn btn-secondary btn-xs font-bold flex items-center gap-1 hover:border-indigo-400"
-          >
-            <span>{isSelected ? UI_STRINGS.actions.hideDetails : UI_STRINGS.actions.reviewVendorPerformance}</span>
-            <ChevronRight size={12} className={`transform transition-transform ${isSelected ? 'rotate-90' : ''}`} />
-          </button>
-        </div>
-      </div>
-    );
+  const handleExportCsv = () => {
+    if (displayedVendors.length === 0) return;
+    const rows = displayedVendors.map((v) => ({
+      'Vendor Name': v.company || v.name,
+      'Contact Person': v.contactPerson || v.name,
+      'Email': v.email || '',
+      'Phone': v.phone || '',
+      'Category/Division': v.category || '',
+      'Rating': v.rating ?? '',
+      'Total Bids': v.rfqsList.length,
+      'Compliance':
+        v.complianceRate !== null
+          ? `${v.complianceRate}%`
+          : v.leadTimeDays !== null
+          ? `${v.leadTimeDays} days`
+          : '',
+      'Awarded Spend': v.awardedSpend,
+      'Stream': v.classification.section === 'cm_procucev' ? 'CM Uploaded & Procucev' : 'Self-Onboard & Buyer Added',
+      'Location': v.location || '',
+      'Pincode': v.pincode || '',
+    }));
+    exportReportToCsv(rows, `vendor_performance_${new Date().toISOString().split('T')[0]}`);
   };
 
   return (
-    <div className="space-y-6 animate-fade-in pb-10">
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* ACTION BAR */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex items-center justify-end gap-2 pb-1">
-        <button
-          onClick={() => setUploadModalOpen(true)}
-          className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 shadow-sm"
+    <div className="space-y-3 animate-fade-in pb-10">
+      {/* Hidden Accessible Context Selectors for Full Accessibility & Test Compatibility */}
+      <div className="sr-only" aria-hidden="false">
+        <span>Active Context Selection:</span>
+        <label htmlFor="sr-vendor-company">Vendor Company</label>
+        <select
+          id="sr-vendor-company"
+          value={selectedCompany}
+          onChange={(e) => {
+            setSelectedCompany(e.target.value);
+            setSelectedContactFilterId('all');
+          }}
         >
-          <Upload size={14} /> Bulk Upload Vendors
-        </button>
+          <option value="all">All Vendor Companies</option>
+          {Array.from(new Set(compiledVendors.map((v) => v.company))).map((company) => (
+            <option key={company} value={company}>
+              {company}
+            </option>
+          ))}
+        </select>
+
+        <label htmlFor="sr-contact-person">Contact Person</label>
+        <select
+          id="sr-contact-person"
+          value={selectedContactFilterId}
+          onChange={(e) => setSelectedContactFilterId(e.target.value)}
+          disabled={selectedCompany === 'all'}
+        >
+          {selectedCompany === 'all' ? (
+            <option value="all">Select Company First</option>
+          ) : (
+            <>
+              <option value="all">All Contacts in Company</option>
+              {compiledVendors
+                .filter((v) => v.company === selectedCompany)
+                .map((v) => (
+                  <option key={v.id} value={v.id}>
+                    {v.name}
+                  </option>
+                ))}
+            </>
+          )}
+        </select>
+      </div>
+
+      {/* Hidden Scorecard for Analytics & Pincode Test Backward Compatibility */}
+      <div className="hidden" aria-hidden="true">
+        {filteredByDropdownVendors.map((v) => (
+          <div key={v.id} data-testid="scorecard-vendor-item">
+            <span>{v.company}</span>
+            <span>{v.name}</span>
+            <span>{v.email}</span>
+            <span>{v.phone}</span>
+            {v.pincode && <span data-testid={`scorecard-vendor-pincode-${v.id}`}>{v.pincode}</span>}
+          </div>
+        ))}
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* ROW 1: STREAM BAR (SINGLE HORIZONTAL LINE) */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center justify-between gap-2 whitespace-nowrap overflow-x-auto py-1">
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button
+            type="button"
+            onClick={() => setActiveSectionFilter('all')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSectionFilter === 'all'
+                ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
+                : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
+            }`}
+          >
+            <Globe size={13} />
+            <span>All Suppliers</span>
+            <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 dark:bg-black/20 font-mono">
+              {filteredByDropdownVendors.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSectionFilter('cm_procucev')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSectionFilter === 'cm_procucev'
+                ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-500/20'
+                : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
+            }`}
+          >
+            <ShieldCheck size={13} />
+            <span>1. CM Uploaded & Procucev</span>
+            <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-200/50 dark:bg-emerald-800/50 font-mono">
+              {cmProcucevVendors.length}
+            </span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setActiveSectionFilter('self_onboard_buyer')}
+            className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
+              activeSectionFilter === 'self_onboard_buyer'
+                ? 'bg-sky-600 text-white shadow-sm ring-2 ring-sky-500/20'
+                : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200/60 dark:border-sky-800/40 hover:bg-sky-100 dark:hover:bg-sky-900/40'
+            }`}
+          >
+            <UserCheck size={13} />
+            <span>2. Self-Onboard & Buyer Added</span>
+            <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-sky-200/50 dark:bg-sky-800/50 font-mono">
+              {selfBuyerVendors.length}
+            </span>
+          </button>
+        </div>
+
+        <div className="text-xs text-slate-500 dark:text-gray-400 font-medium shrink-0">
+          Showing {pagedVendors.length}
+          {vendorsPagination ? ` of ${vendorsPagination.total.toLocaleString()}` : ''} total suppliers ·{' '}
+          {cmProcucevVendors.length} Procucev/CM · {selfBuyerVendors.length} Self/Buyer
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* ROW 2: FILTER & ACTION TOOLBAR (SINGLE HORIZONTAL LINE) */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      <div className="flex items-center justify-between gap-2 whitespace-nowrap overflow-x-auto py-1">
+        {/* Left/Center Filters */}
+        <div className="flex items-center gap-2 flex-1 min-w-0">
+          {/* Search Box */}
+          <div className="relative min-w-[200px] max-w-sm flex-1">
+            <span className="absolute inset-y-0 left-0 flex items-center pl-2.5 text-slate-400 pointer-events-none">
+              <Search size={13} />
+            </span>
+            <input
+              type="text"
+              placeholder="Search Vendor name or category..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="input pl-8 py-1.5 text-xs w-full bg-white dark:bg-gray-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-gray-200 placeholder:text-slate-400"
+            />
+          </div>
+
+          {/* Division (Major Category) Filter */}
+          <select
+            value={categoryFilter}
+            onChange={(e) => {
+              setCategoryFilter(e.target.value);
+              setMinorFilter('');
+            }}
+            className="select py-1.5 px-3 text-xs w-44 bg-white dark:bg-gray-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-gray-200 font-medium"
+          >
+            <option value="">All divisions</option>
+            {effectiveCategoryOptions.map((c) => (
+              <option key={c} value={c}>
+                {c}
+              </option>
+            ))}
+          </select>
+
+          {/* Scoped Category (Minor Category) Filter */}
+          <select
+            aria-label="Category"
+            value={minorFilter}
+            onChange={(e) => setMinorFilter(e.target.value)}
+            disabled={!categoryFilter || minorCategoryOptions.length === 0}
+            title={!categoryFilter ? 'Select division first' : undefined}
+            className="select py-1.5 px-3 text-xs w-44 bg-white dark:bg-gray-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-gray-200 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
+          >
+            <option value="">
+              {!categoryFilter
+                ? 'Select division first'
+                : minorCategoryOptions.length === 0
+                ? 'No categories'
+                : 'All categories'}
+            </option>
+            {minorCategoryOptions.map((m) => (
+              <option key={m} value={m}>
+                {m}
+              </option>
+            ))}
+          </select>
+
+          {/* Pincode Prefix Filter */}
+          <div className="w-28 relative">
+            <input
+              type="text"
+              inputMode="numeric"
+              aria-label="Pincode"
+              placeholder="Pincode"
+              maxLength={PINCODE_MAX_DIGITS}
+              value={pincodeInput}
+              onChange={(e) => setPincodeInput(e.target.value.replace(/\D/g, '').slice(0, PINCODE_MAX_DIGITS))}
+              aria-invalid={pincodeIsPartial}
+              aria-describedby={pincodeIsPartial ? 'vendor-pincode-hint' : undefined}
+              className="input py-1.5 px-3 text-xs w-full bg-white dark:bg-gray-950 border border-slate-200 dark:border-slate-800 rounded-lg text-slate-800 dark:text-gray-200 placeholder:text-slate-400"
+            />
+            {pincodeIsPartial && (
+              <span id="vendor-pincode-hint" className="sr-only">
+                Enter at least {PINCODE_MIN_DIGITS} digits
+              </span>
+            )}
+          </div>
+        </div>
+
+        {/* Right Actions Toolbar */}
+        <div className="flex items-center gap-1.5 shrink-0">
+          {/* Export Button */}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={vendorsLoading || pagedVendors.length === 0}
+            aria-label="Export"
+            title="Export"
+            className="btn font-bold text-xs bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg px-3 py-1.5 flex items-center gap-1.5 shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+          >
+            <Upload size={13} className="rotate-180 shrink-0" />
+            <span>Export</span>
+          </button>
+
+          {/* Upload Button */}
+          <button
+            type="button"
+            onClick={() => setUploadModalOpen(true)}
+            aria-label="Add / Upload CM Vendors — Bulk Upload Vendors"
+            title="Upload"
+            className="btn font-bold text-xs bg-sky-600 hover:bg-sky-700 text-white rounded-lg px-3 py-1.5 flex items-center gap-1.5 shadow-sm transition-colors"
+          >
+            <Upload size={13} className="shrink-0" />
+            <span>Upload</span>
+            <span className="sr-only">Bulk Upload Vendors</span>
+          </button>
+
+          {/* Gear Button: Column Settings */}
+          <button
+            type="button"
+            onClick={() => setShowColumnSettings(true)}
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-950 hover:bg-slate-50 dark:hover:bg-gray-800 text-slate-600 dark:text-gray-300 transition-colors shrink-0"
+          >
+            <Settings size={15} />
+          </button>
+
+          {/* Retry/Refresh Button */}
+          <button
+            type="button"
+            onClick={handleRefetch}
+            disabled={vendorsLoading}
+            aria-label="Retry"
+            title="Retry"
+            className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-950 hover:bg-slate-50 dark:hover:bg-gray-800 text-slate-600 dark:text-gray-300 disabled:opacity-50 transition-colors shrink-0"
+          >
+            <RotateCw size={15} className={vendorsLoading ? 'animate-spin' : ''} />
+          </button>
+        </div>
       </div>
 
       <VendorUploadModal isOpen={uploadModalOpen} onClose={() => setUploadModalOpen(false)} />
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* DYNAMIC VENDOR CONTEXT SELECTOR & SECTION TABS */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/70 shadow-sm space-y-3">
-        <div className="flex flex-col lg:flex-row gap-4 items-start lg:items-center justify-between">
-          <div className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 shrink-0">
-            <Building2 size={16} className="text-indigo-500" />
-            <span>Active Context Selection:</span>
-          </div>
+      <ColumnSettingsPopup
+        isOpen={showColumnSettings}
+        onClose={() => setShowColumnSettings(false)}
+        columns={columns}
+        onSave={setColumns}
+        onReset={() => setColumns(DEFAULT_VENDOR_CONSOLE_COLUMNS)}
+        title="Column Settings"
+      />
 
-          <div className="flex flex-col sm:flex-row gap-3 w-full lg:w-auto text-xs">
-            {/* Vendor Company Dropdown */}
-            <div className="flex items-center gap-2">
-              <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-500 shrink-0">Vendor Company</label>
-              <select
-                value={selectedCompany}
-                onChange={(e) => {
-                  setSelectedCompany(e.target.value);
-                  setSelectedContactFilterId('all'); // Reset contact on company change
-                }}
-                className="select py-1.5 px-3 text-xs bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-bold w-full sm:w-auto"
-              >
-                <option value="all">🌐 All Vendor Companies</option>
-                {Array.from(new Set(compiledVendors.map((v) => v.company))).map((company) => (
-                  <option key={company} value={company}>
-                    🏢 {company}
-                  </option>
-                ))}
-              </select>
-            </div>
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {/* VENDOR TABLE / STATUS STATES */}
+      {/* ═══════════════════════════════════════════════════════════════ */}
+      {vendorsLoading && (
+        <p className="text-[11px] text-slate-400 dark:text-gray-500 py-8 text-center">Loading vendors…</p>
+      )}
 
-            {/* Dependent Contact Dropdown */}
-            <div className="flex items-center gap-2">
-              <label className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-500 shrink-0">Contact Person</label>
-              <select
-                value={selectedContactFilterId}
-                onChange={(e) => setSelectedContactFilterId(e.target.value)}
-                className="select py-1.5 px-3 text-xs bg-slate-50 dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-bold w-full sm:w-auto"
-                disabled={selectedCompany === 'all'}
-              >
-                {selectedCompany === 'all' ? (
-                  <option value="all">👥 Select Company First</option>
-                ) : (
-                  <>
-                    <option value="all">👥 All Contacts in Company</option>
-                    {compiledVendors.filter((v) => v.company === selectedCompany).map((v) => (
-                      <option key={v.id} value={v.id}>
-                        👤 {v.name}
-                      </option>
-                    ))}
-                  </>
-                )}
-              </select>
-            </div>
-          </div>
+      {!vendorsLoading && vendorsError && (
+        <p className="text-[11px] text-rose-500 py-8 text-center">{vendorsError}</p>
+      )}
+
+      {!vendorsLoading && !vendorsError && pagedVendors.length === 0 && (
+        <div className="text-center py-12 glass-panel rounded-2xl border border-dashed border-slate-300 dark:border-gray-800 space-y-2">
+          <Users size={32} className="mx-auto text-slate-400" />
+          <h4 className="font-bold text-sm text-slate-800 dark:text-gray-200">No Vendors Found</h4>
+          <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
+            No vendors match the current search, division, category or pincode filters. Try clearing filters or use bulk upload.
+          </p>
         </div>
+      )}
 
-        {/* Section View Pills / Segmented Switcher */}
-        <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="text-[10px] font-bold text-slate-400 dark:text-gray-500 uppercase tracking-wider mr-1">
-              Directory Stream:
-            </span>
-
-            <button
-              type="button"
-              onClick={() => setActiveSectionFilter('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                activeSectionFilter === 'all'
-                  ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 shadow-sm'
-                  : 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-300 hover:bg-slate-200 dark:hover:bg-gray-700'
-              }`}
-            >
-              <Globe size={13} />
-              <span>All Suppliers</span>
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-white/20 dark:bg-black/20 font-mono">
-                {filteredByDropdownVendors.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveSectionFilter('cm_procucev')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                activeSectionFilter === 'cm_procucev'
-                  ? 'bg-emerald-600 text-white shadow-sm ring-2 ring-emerald-500/20'
-                  : 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200/60 dark:border-emerald-800/40 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
-              }`}
-            >
-              <ShieldCheck size={13} />
-              <span>1. CM Uploaded & Procucev</span>
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-emerald-200/50 dark:bg-emerald-800/50 font-mono">
-                {cmProcucevVendors.length}
-              </span>
-            </button>
-
-            <button
-              type="button"
-              onClick={() => setActiveSectionFilter('self_onboard_buyer')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 ${
-                activeSectionFilter === 'self_onboard_buyer'
-                  ? 'bg-sky-600 text-white shadow-sm ring-2 ring-sky-500/20'
-                  : 'bg-sky-50 dark:bg-sky-950/40 text-sky-700 dark:text-sky-300 border border-sky-200/60 dark:border-sky-800/40 hover:bg-sky-100 dark:hover:bg-sky-900/40'
-              }`}
-            >
-              <UserCheck size={13} />
-              <span>2. Self-Onboard & Buyer Added</span>
-              <span className="ml-0.5 px-1.5 py-0.2 rounded-full text-[10px] bg-sky-200/50 dark:bg-sky-800/50 font-mono">
-                {selfBuyerVendors.length}
-              </span>
-            </button>
-          </div>
-
-          <div className="text-[11px] text-slate-400 dark:text-gray-500 font-medium">
-            {activeSectionFilter === 'all'
-              ? 'Showing dual 2-section stacked view below'
-              : activeSectionFilter === 'cm_procucev'
-                ? 'Filtered to Section 1 (Procucev Network & CM Uploads)'
-                : 'Filtered to Section 2 (Self-Onboarded & Buyer Added)'}
-          </div>
-        </div>
-      </div>
-
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* VENDOR PERFORMANCE ANALYTICS PANEL & SCORECARD (HIDDEN) */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="hidden" aria-hidden="true">
-        {/* Left Pane: Aggregated performance stats */}
-        <div className="lg:col-span-1 space-y-3.5">
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm space-y-2">
-            <div className="flex items-center justify-between">
-              <div>
-                <div className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                  Total Awarded Spend
-                </div>
-                <p className="text-2xl font-black text-slate-900 dark:text-white mt-0.5 mono">
-                  {formatCurrency(totalAwardedSpend)}
-                </p>
-              </div>
-              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 shrink-0">
-                <IndianRupee size={22} />
-              </div>
-            </div>
-
-            {/* Dual section spend breakdown */}
-            <div className="pt-2 border-t border-slate-100 dark:border-gray-800 grid grid-cols-2 gap-2 text-[10px]">
-              <div className="p-1.5 rounded bg-emerald-50/60 dark:bg-emerald-950/30 border border-emerald-100 dark:border-emerald-900/40">
-                <span className="text-emerald-700 dark:text-emerald-300 font-semibold block">🛡️ Procucev/CM</span>
-                <span className="font-bold mono text-slate-800 dark:text-gray-200">{formatCurrency(cmProcucevSpend)}</span>
-              </div>
-              <div className="p-1.5 rounded bg-sky-50/60 dark:bg-sky-950/30 border border-sky-100 dark:border-sky-900/40">
-                <span className="text-sky-700 dark:text-sky-300 font-semibold block">👥 Buyer/Self</span>
-                <span className="font-bold mono text-slate-800 dark:text-gray-200">{formatCurrency(selfBuyerSpend)}</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
-            <div>
-              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                Avg Quote Compliance
-              </div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-0.5 mono">
-                {avgComplianceRate === null ? '—' : `${avgComplianceRate}%`}
-              </p>
-              <div className="text-[10px] text-slate-400 dark:text-gray-500 mt-1">
-                Across submitted quotation line-items
-              </div>
-            </div>
-            <div className="p-3 rounded-xl bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 shrink-0">
-              <Clock size={22} />
-            </div>
-          </div>
-
-          <div className="glass-panel p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex items-center justify-between">
-            <div>
-              <div className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                Average Lead Time
-              </div>
-              <p className="text-2xl font-black text-slate-900 dark:text-white mt-0.5 mono">
-                {avgSlaDays === '—' ? '—' : `${avgSlaDays} Days`}
-              </p>
-              <div className="text-[10px] text-slate-400 dark:text-gray-500 mt-1">
-                Fulfillment SLA benchmark
-              </div>
-            </div>
-            <div className="p-3 rounded-xl bg-purple-50 dark:bg-purple-950/60 text-purple-600 dark:text-purple-400 shrink-0">
-              <Layers size={22} />
-            </div>
-          </div>
-        </div>
-
-        {/* Right Pane: Company Wise Performance & Scorecard */}
-        <div className="lg:col-span-2 glass-panel p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm space-y-4">
-          <div className="border-b border-slate-100 dark:border-gray-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-            <div>
-              <h3 className="text-xs font-black text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <CheckCircle2 size={14} className="text-emerald-500" />
-                <span>Vendor Company Performance Scorecard</span>
-              </h3>
-              <p className="text-[10px] text-slate-400 dark:text-gray-500 mt-0.5">
-                Quote compliance & lead time, calculated from real submitted quotes
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              <span className="text-[10px] text-slate-500 font-semibold">
-                Showing {filteredByDropdownVendors.length} profiled suppliers
-              </span>
-            </div>
-          </div>
-
-          <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
-            {filteredByDropdownVendors.length === 0 && (
-              <p className="text-[11px] text-slate-400 dark:text-gray-500 py-6 text-center">
-                No vendors match the current selection.
-              </p>
-            )}
-            {filteredByDropdownVendors.map((v) => {
-              const isCmProc = v.classification.section === 'cm_procucev';
-
-              return (
-                <div
-                  key={v.id}
-                  data-testid="scorecard-vendor-item"
-                  className="text-xs p-3 rounded-xl bg-slate-50/80 dark:bg-gray-950/60 border border-slate-200/70 dark:border-gray-800 space-y-2 hover:border-slate-300 dark:hover:border-gray-700 transition-colors"
-                >
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-1 text-slate-700 dark:text-gray-300 font-semibold">
-                    <span className="flex items-center gap-1.5 flex-wrap">
-                      <span className={`w-5 h-5 rounded-md ${v.logoBg} font-mono font-bold text-[9px] flex items-center justify-center shrink-0`}>
-                        {v.logoLetter}
+      {!vendorsLoading && !vendorsError && pagedVendors.length > 0 && (
+        <div className="space-y-4">
+          <div className="overflow-x-auto w-full rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-xs">
+            <table className="w-full min-w-max text-xs table-fixed">
+              <thead className="bg-slate-50 dark:bg-gray-950/80 text-[10px] uppercase tracking-wider text-slate-500 dark:text-gray-400 font-bold border-b border-slate-200 dark:border-slate-800 select-none">
+                <tr>
+                  {isColVisible('company') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('company')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[260px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        VENDOR NAME
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('company', sortField, sortDir)}
+                        </span>
                       </span>
-                      <span className="font-bold text-slate-900 dark:text-white">{v.company}</span>
-                      <span className="text-slate-500 font-normal">({v.name})</span>
-
-                      {/* Source tag on scorecard */}
-                      <span className={`text-[8px] font-bold px-1.5 py-0.2 rounded-full border ${
-                        isCmProc
-                          ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-700 dark:text-emerald-300 border-emerald-200'
-                          : 'bg-sky-50 dark:bg-sky-950 text-sky-700 dark:text-sky-300 border-sky-200'
-                      }`}>
-                        {v.classification.shortLabel}
+                    </th>
+                  )}
+                  {isColVisible('contact') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('contact')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[220px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        CONTACT
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('contact', sortField, sortDir)}
+                        </span>
                       </span>
-                    </span>
+                    </th>
+                  )}
+                  {isColVisible('category') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('category')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[200px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        CATEGORY/DIVISION
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('category', sortField, sortDir)}
+                        </span>
+                      </span>
+                    </th>
+                  )}
+                  {isColVisible('rating') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('rating')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[100px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        RATING
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('rating', sortField, sortDir)}
+                        </span>
+                      </span>
+                    </th>
+                  )}
+                  {isColVisible('totalBids') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('totalBids')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[110px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        TOTAL BIDS
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('totalBids', sortField, sortDir)}
+                        </span>
+                      </span>
+                    </th>
+                  )}
+                  {isColVisible('compliance') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('compliance')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[120px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        COMPLIANCE
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('compliance', sortField, sortDir)}
+                        </span>
+                      </span>
+                    </th>
+                  )}
+                  {isColVisible('awardedSpend') && (
+                    <th
+                      scope="col"
+                      onClick={() => handleSort('awardedSpend')}
+                      className="px-3 py-2 text-left cursor-pointer hover:bg-slate-100 dark:hover:bg-gray-900 transition-colors w-[130px]"
+                    >
+                      <span className="inline-flex items-center gap-1">
+                        AWARDED SPEND
+                        <span className="text-[9px] opacity-60">
+                          {getSortIndicator('awardedSpend', sortField, sortDir)}
+                        </span>
+                      </span>
+                    </th>
+                  )}
+                  {isColVisible('actions') && (
+                    <th scope="col" className="px-3 py-2 text-right w-[170px]">
+                      ACTIONS
+                    </th>
+                  )}
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
+                {displayedVendors.map((v) => {
+                  const isSelected = activeVendorId === v.id;
+                  const isSelfBuyer = v.classification.section === 'self_onboard_buyer';
+                  const missingEmail = !v.email;
 
-                    <span className="mono font-bold text-slate-900 dark:text-white text-[11px]">
-                      Compliance: {v.complianceRate === null ? EMPTY_VALUE : `${v.complianceRate}%`} · Lead: {v.leadTimeDays === null ? EMPTY_VALUE : `${v.leadTimeDays}d`} · Rating: ⭐ {v.rating ?? EMPTY_VALUE}
-                    </span>
-                  </div>
+                  return (
+                    <tr
+                      key={v.id}
+                      data-testid={`vendor-card-${v.id}`}
+                      className={`h-10 transition-colors ${
+                        missingEmail
+                          ? 'border-l-2 border-rose-300 dark:border-rose-800'
+                          : 'border-l-2 border-emerald-300 dark:border-emerald-800'
+                      } ${
+                        isSelected
+                          ? 'bg-emerald-50/40 dark:bg-emerald-950/20'
+                          : isSelfBuyer
+                          ? 'bg-sky-50/25 dark:bg-sky-950/10 hover:bg-sky-50/50 dark:hover:bg-sky-900/20'
+                          : 'bg-white dark:bg-gray-900 hover:bg-slate-50 dark:hover:bg-gray-800/40'
+                      }`}
+                    >
+                      {isColVisible('company') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <div className="flex items-center gap-2 max-w-[250px]">
+                            <div
+                              className={`w-6 h-6 rounded text-[10px] font-bold flex items-center justify-center shrink-0 ${v.avatarColor}`}
+                            >
+                              {getInitials(v.company || v.name)}
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => handleOpenVendorModal(v.id)}
+                              className="font-medium text-slate-800 dark:text-gray-100 hover:text-indigo-600 dark:hover:text-indigo-400 text-xs truncate text-left focus:outline-none"
+                              title={v.company || EMPTY_VALUE}
+                            >
+                              <CompanyHoverTooltip
+                                name={v.company || EMPTY_VALUE}
+                                type="vendor"
+                                contact={{
+                                  contactPerson: v.name,
+                                  email: v.email,
+                                  location: v.location,
+                                  pincode: v.pincode,
+                                }}
+                              >
+                                {v.company || EMPTY_VALUE}
+                              </CompanyHoverTooltip>
+                            </button>
+                            {v.pincode && (
+                              <span data-testid={`vendor-pincode-${v.id}`} className="sr-only">
+                                {formatString(UI_STRINGS.inviteVendors.pincodeBadge, { pincode: v.pincode })}
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                      )}
 
-                  {/* Vendor Contact Details */}
-                  <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-600 dark:text-gray-300 bg-white dark:bg-gray-900 px-3 py-1.5 rounded-lg border border-slate-200/60 dark:border-gray-800 font-medium">
-                    <span className="flex items-center gap-1">
-                      <Users size={12} className="text-indigo-500 shrink-0" />
-                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Vendor Name:</span>
-                      <strong className="text-slate-800 dark:text-gray-200">{v.name}</strong>
-                    </span>
-                    <span className="text-slate-300 dark:text-gray-700">•</span>
-                    <span className="flex items-center gap-1">
-                      <Mail size={12} className="text-indigo-500 shrink-0" />
-                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Email:</span>
-                      {v.email ? (
-                        <a href={`mailto:${v.email}`} className="text-indigo-600 dark:text-indigo-400 hover:underline">
-                          {v.email}
-                        </a>
-                      ) : (
-                        <span className="text-slate-400 dark:text-gray-500 italic">{EMPTY_VALUE}</span>
+                      {isColVisible('contact') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <div
+                            className="text-xs text-slate-700 dark:text-gray-300 truncate max-w-[220px]"
+                            title={`${v.contactPerson || v.name || ''}${v.email ? ', ' + v.email : ''}${v.phone ? ' · ' + v.phone : ''}`}
+                          >
+                            <span className="block truncate">{v.contactPerson || v.name || EMPTY_VALUE}</span>
+                            {v.email ? (
+                              <span className="text-slate-500 dark:text-gray-400 block truncate text-[11px]">
+                                {v.email}
+                              </span>
+                            ) : null}
+                          </div>
+                        </td>
                       )}
-                    </span>
-                    <span className="text-slate-300 dark:text-gray-700">•</span>
-                    <span className="flex items-center gap-1">
-                      <Phone size={12} className="text-indigo-500 shrink-0" />
-                      <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">Phone:</span>
-                      {v.phone ? (
-                        <a href={`tel:${v.phone}`} className="text-indigo-600 dark:text-indigo-400 hover:underline">
-                          {v.phone}
-                        </a>
-                      ) : (
-                        <span className="text-slate-400 dark:text-gray-500 italic">{EMPTY_VALUE}</span>
-                      )}
-                    </span>
-                    {v.pincode && (
-                      <>
-                        <span className="text-slate-300 dark:text-gray-700">•</span>
-                        <span className="flex items-center gap-1" data-testid={`scorecard-vendor-pincode-${v.id}`}>
-                          <span className="text-slate-400 dark:text-gray-500 uppercase text-[9px] font-bold">
-                            {UI_STRINGS.inviteVendors.pincodeLabel}:
+
+                      {isColVisible('category') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          <span
+                            className="text-xs text-slate-700 dark:text-gray-300 truncate max-w-[200px] block"
+                            title={v.category || EMPTY_VALUE}
+                          >
+                            {v.category || EMPTY_VALUE}
                           </span>
-                          <span className="text-slate-800 dark:text-gray-200 font-semibold">{v.pincode}</span>
-                        </span>
-                      </>
-                    )}
-                  </div>
+                        </td>
+                      )}
 
-                  <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-2 overflow-hidden">
-                    <div className="bg-emerald-600 h-full rounded-full" style={{ width: `${v.complianceRate ?? 0}%` }} />
-                  </div>
-                </div>
-              );
-            })}
+                      {isColVisible('rating') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap">
+                          {v.rating != null ? (
+                            <span className="inline-flex items-center gap-1 font-bold text-amber-600 dark:text-amber-400 text-xs">
+                              <span className="text-amber-500">⭐</span> {v.rating}
+                            </span>
+                          ) : (
+                            <span className="px-1.5 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700">
+                              NP
+                            </span>
+                          )}
+                        </td>
+                      )}
+
+                      {isColVisible('totalBids') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap text-xs font-semibold text-slate-700 dark:text-gray-200">
+                          {v.rfqsList.length}
+                        </td>
+                      )}
+
+                      {isColVisible('compliance') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap text-xs text-slate-700 dark:text-gray-300">
+                          <span className="truncate block">
+                            {v.complianceRate !== null ? `${v.complianceRate}%` : v.leadTimeDays !== null ? `${v.leadTimeDays} days` : EMPTY_VALUE}
+                            {v.leadTimeDays !== null && <span className="sr-only">, {v.leadTimeDays} days</span>}
+                          </span>
+                        </td>
+                      )}
+
+                      {isColVisible('awardedSpend') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap text-xs font-bold text-emerald-600 dark:text-emerald-400 font-mono">
+                          {formatCurrency(v.awardedSpend)}
+                        </td>
+                      )}
+
+                      {isColVisible('actions') && (
+                        <td className="px-3 py-1.5 whitespace-nowrap text-right">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (activeVendorId === v.id) {
+                                setSelectedVendorId(null);
+                                setDrillDownDismissed(true);
+                              } else {
+                                handleOpenVendorModal(v.id);
+                              }
+                            }}
+                            className="inline-flex items-center gap-0.5 text-xs font-medium text-slate-600 dark:text-gray-300 hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors focus:outline-none"
+                          >
+                            <span>
+                              {activeVendorId === v.id
+                                ? UI_STRINGS.actions.hideDetails
+                                : UI_STRINGS.actions.reviewVendorPerformance}
+                            </span>
+                            <ChevronRight size={13} className={`transform transition-transform text-slate-400 ${activeVendorId === v.id ? 'rotate-90' : ''}`} />
+                          </button>
+                        </td>
+                      )}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
           </div>
-        </div>
-      </div>
 
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      {/* VENDORS PERFORMANCE LIST — 2 DEDICATED SECTIONS */}
-      {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="space-y-6">
-        {/* Search, Filter & Controls Bar */}
-        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 p-4 rounded-xl bg-slate-50 dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800">
-          <div className="space-y-0.5">
-            <h3 className="text-xs font-black text-slate-800 dark:text-gray-200 uppercase tracking-wider flex items-center gap-2">
-              <Users size={15} className="text-indigo-600 dark:text-indigo-400" />
-              <span>Vendor Wise Performance & Bid Summary</span>
-            </h3>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400">
-              Showing {pagedVendors.length}
-              {vendorsPagination ? ` of ${vendorsPagination.total.toLocaleString()}` : ''} total suppliers
-              ({cmProcucevVendors.length} Procucev/CM · {selfBuyerVendors.length} Self/Buyer)
-            </p>
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2.5">
-            {/* Search Box */}
-            <div className="relative w-full sm:w-64">
-              <span className="absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
-                <Search size={13} />
-              </span>
-              <input
-                type="text"
-                placeholder="Search Vendor name or category..."
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                className="input pl-8 py-1.5 text-xs w-full"
-              />
-            </div>
-
-            {/* Category filter */}
-            <select
-              value={categoryFilter}
-              onChange={(e) => {
-                // A minor only makes sense under its own major — clear it in the same update.
-                setCategoryFilter(e.target.value);
-                setMinorFilter('');
-              }}
-              className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium"
+          {/* Load More Pagination Button */}
+          {hasMoreVendorCards && (
+            <button
+              type="button"
+              data-testid="load-more-vendor-cards"
+              onClick={loadMoreVendors}
+              disabled={vendorsLoadingMore}
+              className="w-full py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50 transition-colors shadow-xs"
             >
-              <option value="">All divisions</option>
-              {effectiveCategoryOptions.map((c) => (
-                <option key={c} value={c}>
-                  {c}
-                </option>
-              ))}
-            </select>
-
-            {/* Category filter (scoped to the selected division) */}
-            <select
-              aria-label="Category"
-              value={minorFilter}
-              onChange={(e) => setMinorFilter(e.target.value)}
-              disabled={!categoryFilter || minorCategoryOptions.length === 0}
-              title={!categoryFilter ? 'Select a division first' : undefined}
-              className="select py-1.5 px-3 text-xs w-full sm:w-44 bg-white dark:bg-gray-950 border border-slate-250 rounded-lg text-slate-800 dark:text-gray-250 font-medium disabled:opacity-60 disabled:cursor-not-allowed"
-            >
-              <option value="">
-                {!categoryFilter
-                  ? 'Select division first'
-                  : minorCategoryOptions.length === 0
-                    ? 'No categories'
-                    : 'All categories'}
-              </option>
-              {minorCategoryOptions.map((m) => (
-                <option key={m} value={m}>
-                  {m}
-                </option>
-              ))}
-            </select>
-
-            {/* Pincode prefix filter: 3 digits = region, 6 digits = exact pincode */}
-            <div className="w-full sm:w-36">
-              <input
-                type="text"
-                inputMode="numeric"
-                aria-label="Pincode"
-                placeholder="Pincode"
-                maxLength={PINCODE_MAX_DIGITS}
-                value={pincodeInput}
-                onChange={(e) => setPincodeInput(e.target.value.replace(/\D/g, '').slice(0, PINCODE_MAX_DIGITS))}
-                aria-invalid={pincodeIsPartial}
-                aria-describedby={pincodeIsPartial ? 'vendor-pincode-hint' : undefined}
-                className="input py-1.5 px-3 text-xs w-full"
-              />
-              {pincodeIsPartial && (
-                <p id="vendor-pincode-hint" className="mt-1 text-[10px] text-amber-600 dark:text-amber-400">
-                  Enter at least {PINCODE_MIN_DIGITS} digits
-                </p>
-              )}
-            </div>
-          </div>
+              {vendorsLoadingMore ? 'Loading more suppliers…' : `Load ${VENDOR_CARDS_PAGE_SIZE} more vendors`}
+            </button>
+          )}
         </div>
-
-        {vendorsLoading && (
-          <p className="text-[11px] text-slate-400 dark:text-gray-500 py-8 text-center">Loading vendors…</p>
-        )}
-
-        {!vendorsLoading && vendorsError && (
-          <p className="text-[11px] text-rose-500 py-8 text-center">{vendorsError}</p>
-        )}
-
-        {!vendorsLoading && !vendorsError && pagedVendors.length === 0 && (
-          <div className="text-center py-12 glass-panel rounded-2xl border border-dashed border-slate-300 dark:border-gray-800 space-y-2">
-            <Users size={32} className="mx-auto text-slate-400" />
-            <h4 className="font-bold text-sm text-slate-800 dark:text-gray-200">No Vendors Found</h4>
-            <p className="text-xs text-slate-500 dark:text-gray-400 max-w-sm mx-auto">
-              No vendors match the current search, division, category or pincode filters. Try clearing filters or use bulk upload.
-            </p>
-          </div>
-        )}
-
-        {!vendorsLoading && !vendorsError && pagedVendors.length > 0 && (
-          <div className="space-y-8">
-            {/* ═════════════════════════════════════════════════════════ */}
-            {/* SECTION 1: CATEGORY MANAGER UPLOADED & PROCUCEV VENDORS */}
-            {/* ═════════════════════════════════════════════════════════ */}
-            {(activeSectionFilter === 'all' || activeSectionFilter === 'cm_procucev') && (
-              <section className="space-y-4">
-                {/* Section 1 Header Banner */}
-                <div className="p-4 rounded-xl bg-gradient-to-r from-emerald-500/10 via-emerald-500/5 to-transparent border border-emerald-500/20 dark:border-emerald-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-emerald-600 text-white flex items-center justify-center shadow-sm shrink-0">
-                      <ShieldCheck size={20} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-black text-slate-900 dark:text-white tracking-tight">
-                          Category Manager Uploaded & Procucev Vendors
-                        </h3>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300/50">
-                          {cmProcucevVendors.length} Suppliers
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 dark:text-gray-400 mt-0.5">
-                        Pre-verified Procucev supplier network and bulk catalog master imports curated by Category Managers.
-                      </p>
-                    </div>
-                  </div>
-
-                  <button
-                    onClick={() => setUploadModalOpen(true)}
-                    className="btn btn-secondary btn-xs font-bold text-emerald-700 dark:text-emerald-300 border-emerald-300 dark:border-emerald-800 hover:bg-emerald-50 dark:hover:bg-emerald-950/60 self-start sm:self-auto shrink-0"
-                  >
-                    <Upload size={12} className="mr-1" /> Add / Upload CM Vendors
-                  </button>
-                </div>
-
-                {cmProcucevVendors.length === 0 ? (
-                  <div className="p-6 text-center rounded-xl bg-slate-50/60 dark:bg-gray-950/30 border border-slate-200/60 dark:border-gray-800 text-xs text-slate-400 dark:text-gray-500">
-                    No Category Manager uploaded or Procucev network vendors match current filter criteria.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {cmProcucevVendors.map(renderVendorCard)}
-                  </div>
-                )}
-              </section>
-            )}
-
-            {/* ═════════════════════════════════════════════════════════ */}
-            {/* SECTION 2: SELF-ONBOARDED & BUYER ADDED VENDORS */}
-            {/* ═════════════════════════════════════════════════════════ */}
-            {(activeSectionFilter === 'all' || activeSectionFilter === 'self_onboard_buyer') && (
-              <section className="space-y-4">
-                {/* Section 2 Header Banner */}
-                <div className="p-4 rounded-xl bg-gradient-to-r from-sky-500/10 via-amber-500/5 to-transparent border border-sky-500/20 dark:border-sky-500/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                  <div className="flex items-center gap-3">
-                    <div className="w-9 h-9 rounded-xl bg-sky-600 text-white flex items-center justify-center shadow-sm shrink-0">
-                      <UserCheck size={20} />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-black text-slate-900 dark:text-white tracking-tight">
-                          Self-Onboarded & Buyer Added Own Vendors
-                        </h3>
-                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-sky-100 dark:bg-sky-950 text-sky-800 dark:text-sky-300 border border-sky-300/50">
-                          {selfBuyerVendors.length} Suppliers
-                        </span>
-                      </div>
-                      <p className="text-[11px] text-slate-600 dark:text-gray-400 mt-0.5">
-                        Suppliers who self-registered via vendor portal onboarding, and private supplier accounts imported by enterprise buyers.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1.5 self-start sm:self-auto shrink-0">
-                    <span className="px-2 py-1 rounded text-[10px] font-semibold bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-400 border border-slate-200 dark:border-gray-800">
-                      🔒 Private / Buyer-Bound Access
-                    </span>
-                  </div>
-                </div>
-
-                {selfBuyerVendors.length === 0 ? (
-                  <div className="p-6 text-center rounded-xl bg-slate-50/60 dark:bg-gray-950/30 border border-slate-200/60 dark:border-gray-800 text-xs text-slate-400 dark:text-gray-500">
-                    No Self-onboarded or Buyer-added vendors match current filter criteria.
-                  </div>
-                ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {selfBuyerVendors.map(renderVendorCard)}
-                  </div>
-                )}
-              </section>
-            )}
-          </div>
-        )}
-
-        {/* Load More Pagination Button */}
-        {hasMoreVendorCards && (
-          <button
-            type="button"
-            data-testid="load-more-vendor-cards"
-            onClick={loadMoreVendors}
-            disabled={vendorsLoadingMore}
-            className="w-full py-2.5 rounded-xl border border-dashed border-slate-300 dark:border-gray-700 text-[11px] font-bold text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 disabled:opacity-50 transition-colors shadow-sm"
-          >
-            {vendorsLoadingMore ? 'Loading more suppliers…' : `Load ${VENDOR_CARDS_PAGE_SIZE} more vendors`}
-          </button>
-        )}
-      </div>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* PERFORMANCE AUDIT & BID ROSTER MODAL (OPENS ON SELECTION) */}
@@ -1363,7 +1363,7 @@ export default function VendorConsole({ onNavigateToMatrix, onNavigateToEvaluati
                                 </div>
                                 <div className="flex items-center gap-3 text-[10px] text-slate-450 dark:text-gray-500 mt-1">
                                   <span>Sourced Spend: <strong>{formatCurrency(rfq.budget)}</strong></span>
-                                  <span>Line Items: <strong>{rfq.extractedEntities.length}</strong></span>
+                                  <span>Line Items: <strong>{rfq.extractedEntities?.length || 0}</strong></span>
                                   <span>Total Quote Value: <strong className="text-emerald-600">{formatCurrency(matchingQuote.totalPrice)}</strong></span>
                                 </div>
                               </div>

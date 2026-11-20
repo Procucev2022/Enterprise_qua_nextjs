@@ -325,7 +325,7 @@ export default function Header() {
 
         {/* Right Section: Buyer Credits / Active Plan, Theme Toggle, Notifications, and Sleek Corner User Profile Box */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {currentRole === 'category_manager' && (
+          {currentRole === 'category_manager' && pathname !== '/category-manager/vendor-console' && (
             <Link
               href="/vendors"
               className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"

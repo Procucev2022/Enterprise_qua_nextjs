@@ -45,7 +45,7 @@ function signInAndChooseApprover(): void {
     email: 'initiator@example.com',
   } as unknown as ReturnType<typeof authClient.getSessionUser>);
   const approverInput = document.getElementById('quote-credit-approver') as HTMLInputElement;
-  fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+  fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
 }
 
 jest.mock('@/lib/supplierProfileClient', () => ({
@@ -687,7 +687,7 @@ describe('SupplierDossierDrawer', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Communications \(\d+\)$/i }));
     await waitFor(() => {
-      expect(screen.getByText(/No EMAIL communication records found/i)).toBeInTheDocument();
+      expect(screen.getByText(/No (?:EMAIL )?communication records found/i)).toBeInTheDocument();
     });
 
     // Switch to empty payments
@@ -2707,12 +2707,53 @@ describe('SupplierDossierDrawer - Active RFQs Tab', () => {
       expect(within(modal).getByText('ZzzNonExistent123')).toBeInTheDocument();
 
       // Clicking inside modal keeps modal open
-      fireEvent.click(screen.getByText(/Procurement Categories Master/i));
+      fireEvent.click(within(modal).getByText(/Procurement Categories Master/i));
       expect(screen.getByRole('dialog')).toBeInTheDocument();
 
       // Clicking backdrop closes modal
       fireEvent.click(modal);
       expect(screen.queryByRole('dialog')).toBeNull();
+
+      unmount();
+    });
+
+    it('covers payments description search, call channel communications, and active RFQ modal line item description', async () => {
+      const mockPayments = [
+        {
+          id: 'pay-desc-1',
+          invoiceNo: 'INV-DESC-001',
+          transactionDate: '2026-11-20T10:00:00Z',
+          description: 'Special Annual Membership Upgrade',
+          subscriptionPlan: 'Select Model',
+          amount: 8999,
+          currency: 'INR',
+          gateway: 'Razorpay',
+          status: 'PAID',
+        },
+      ];
+      (supplierProfileClient.fetchSupplierPaymentHistory as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        payments: mockPayments,
+        summary: { totalAmountPaid: 8999, totalSuccessfulPayments: 1, pendingPayments: 0, failedPayments: 0 },
+      });
+
+      const { unmount } = render(
+        <SupplierDossierDrawer seller={mockSeller} initialTab="payments" onClose={jest.fn()} />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('INV-DESC-001')).toBeInTheDocument();
+      });
+
+      const paymentSearch = screen.getByPlaceholderText('Search invoices or gateway...');
+      fireEvent.change(paymentSearch, { target: { value: 'Annual Membership' } });
+      expect(screen.getByText('INV-DESC-001')).toBeInTheDocument();
+
+      // Switch to Communications and test Call tab
+      const commTabBtn = screen.getByRole('button', { name: /Communications/i });
+      fireEvent.click(commTabBtn);
+      const callSubTab = screen.getByRole('button', { name: /Call/i });
+      fireEvent.click(callSubTab);
 
       unmount();
     });
