@@ -1216,8 +1216,20 @@ async function resolveOrPromoteVendorForStatusChange({ id, user, isActive, metad
     const { buyerAccount, resolvedOrgId, buyerScope, buyerCompany } = ctx;
     const initialStatusFields = storeService.buildVendorActiveStatusUpdates(null, isActive, user.email);
 
-    if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId) {
-      const masterRec = await vendorIngestionQueries.findVendorMasterRecord(id.slice(SYNTHETIC_MASTER_PREFIX.length), resolvedOrgId);
+    if (id.startsWith(SYNTHETIC_MASTER_PREFIX)) {
+      const rawMasterId = id.slice(SYNTHETIC_MASTER_PREFIX.length);
+      const candidateOrgIds = [
+        resolvedOrgId,
+        user?.orgId,
+        user?.organizationId,
+        buyerAccount?.organizationId,
+        buyerAccount?.id,
+      ].filter(Boolean);
+      let masterRec = null;
+      for (const orgCandidate of candidateOrgIds) {
+        masterRec = await vendorIngestionQueries.findVendorMasterRecord(rawMasterId, orgCandidate).catch(() => null);
+        if (masterRec) break;
+      }
       const candidateEmail = masterRec ? String(masterRec.email || metadataHint.vendorEmail || '').trim().toLowerCase() : '';
       if (masterRec && candidateEmail) {
         const buyerOwned = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
@@ -1678,7 +1690,7 @@ function isSyntheticFallbackVendorId(id) {
 }
 
 async function resolveBuyerOrgIdForScope(user, buyerAccount) {
-  let resolvedOrgId = buyerAccount?.organizationId || user?.orgId || user?.organizationId || null;
+  let resolvedOrgId = user?.orgId || user?.organizationId || buyerAccount?.organizationId || null;
   if (
     user?.role === 'buyer' &&
     !resolvedOrgId &&
@@ -1707,6 +1719,7 @@ async function empanelFallbackVendorForEvaluation({
 }) {
   const email = String(candidate.email || '').trim().toLowerCase();
   if (requireEmail && !email) return null;
+  const attributedBuyerId = buyerAccount?.id || resolvedOrgId || user?.sub || user?.id || user?.email || null;
   // Never overwrite or claim an existing vendor owned by another buyer. The preceding
   // getVendorByIdWithDBFallback lookup already synced any DB match into storeService.vendors.
   if (email) {
@@ -1724,7 +1737,6 @@ async function empanelFallbackVendorForEvaluation({
   }
 
   const cleanCategories = resolveValidVendorCategories(candidate);
-  const attributedBuyerId = buyerAccount?.id || resolvedOrgId || user?.sub || user?.id || user?.email || null;
   return storeService.empanelIngestedVendor(
     {
       ...candidate,
@@ -1781,8 +1793,43 @@ async function resolveFallbackVendorRecord({
     if (foreignCheck) return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
   }
 
-  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId && typeof vendorIngestionQueries.findVendorMasterRecord === 'function') {
-    const masterRec = await vendorIngestionQueries.findVendorMasterRecord(id.slice(SYNTHETIC_MASTER_PREFIX.length), resolvedOrgId);
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && typeof vendorIngestionQueries.findVendorMasterRecord === 'function') {
+    const rawMasterId = id.slice(SYNTHETIC_MASTER_PREFIX.length);
+    const candidateOrgIds = [
+      resolvedOrgId,
+      user?.orgId,
+      user?.organizationId,
+      buyerAccount?.organizationId,
+      buyerAccount?.id,
+    ].filter(Boolean);
+    let masterRec = null;
+    for (const orgCandidate of candidateOrgIds) {
+      masterRec = await vendorIngestionQueries.findVendorMasterRecord(rawMasterId, orgCandidate).catch(() => null);
+      if (masterRec) break;
+    }
+    if (!masterRec && user?.role === 'buyer' && (updates?.name || bodyData.vendorName || bodyData.name)) {
+      const fallbackMasterName = updates?.name || bodyData.vendorName || bodyData.name;
+      const fallbackGstin = String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null;
+      const payloadCategories = resolveValidVendorCategories({ ...bodyData, ...(updates || {}) });
+      masterRec = {
+        id: rawMasterId,
+        masterRecordId: rawMasterId,
+        companyName: fallbackMasterName,
+        email: sanitizedVendorEmail || null,
+        contactPerson: updates?.contactPerson || bodyData.contactPerson || null,
+        phone: updates?.phone || bodyData.phone || null,
+        location: updates?.location || bodyData.location || null,
+        city: updates?.city || bodyData.city || null,
+        state: updates?.state || bodyData.state || null,
+        pincode: updates?.pincode || bodyData.pincode || null,
+        gstin: fallbackGstin,
+        gst: fallbackGstin,
+        vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
+        majorCategory: payloadCategories.majorCategory || '',
+        minorCategories: payloadCategories.minorCategories,
+        source: 'vendor_master_ingestion',
+      };
+    }
     if (masterRec) {
       const candidateEmail = String(masterRec.email || sanitizedVendorEmail || '').trim().toLowerCase();
       if (requireEmail && !candidateEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
@@ -1795,7 +1842,7 @@ async function resolveFallbackVendorRecord({
       const mapping =
         masterRec.sessionId && typeof vendorIngestionQueries.findCategoryMappingByVendorRecord === 'function'
           ? await vendorIngestionQueries
-            .findCategoryMappingByVendorRecord(masterRec.sessionId, resolvedOrgId, masterRec.id)
+            .findCategoryMappingByVendorRecord(masterRec.sessionId, resolvedOrgId || masterRec.organizationId, masterRec.id)
             .catch(() => null)
           : null;
       const isRejectedMapping =
@@ -1829,7 +1876,7 @@ async function resolveFallbackVendorRecord({
         ...masterRec,
         ...(updates || {}),
         masterRecordId: masterRec.id,
-        name: updates?.name || masterRec.companyName,
+        name: updates?.name || bodyData.vendorName || bodyData.name || masterRec.companyName,
         email: candidateEmail || null,
         gstin: resolvedMasterGstin,
         gst: resolvedMasterGstin,

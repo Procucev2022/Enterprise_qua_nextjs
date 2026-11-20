@@ -2327,6 +2327,34 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }, missingMasterUpdRes, jest.fn());
       expect(missingMasterUpdRes.status).toHaveBeenCalledWith(404);
 
+      // Synthetic v-master-* update when master record lookup returns null, but vendorName and categories are provided in payload
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue(null);
+      jest.spyOn(storeService, 'empanelIngestedVendor').mockImplementationOnce(async (candidate) => ({
+        id: 'vnd-promoted-gov',
+        ...candidate,
+      }));
+      const fallbackMasterUpdRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmv-6091371f-a51e-47fd-ad3a-ecb5168f4ffb' },
+        user: buyerReqUser,
+        body: {
+          vendorName: 'Govardhan Solutions pvt LTD.',
+          majorCategory: 'IT',
+          minorCategories: ['Laptop'],
+          vendorCode: 'V-GOV-01',
+          email: 'govardhan.kilari@procucev.com',
+          location: 'Hyderabad',
+        },
+      }, fallbackMasterUpdRes, jest.fn());
+      expect(fallbackMasterUpdRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          name: 'Govardhan Solutions pvt LTD.',
+          majorCategory: 'IT',
+          minorCategories: ['Laptop'],
+        }),
+      }));
+
       // Cover findCategoryMappingByVendorRecord rejection catch (line 1372)
       jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
         id: 'gov-cat-err-1',
