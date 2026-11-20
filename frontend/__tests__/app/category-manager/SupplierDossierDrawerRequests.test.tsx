@@ -865,6 +865,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     });
 
     // 3c. Seller Credit Deletion without res.message
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add Quote Credits/i }));
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Deletion' }));
     fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '2' } });
@@ -875,6 +876,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     });
 
     // 3d. Seller Credit Addition without res.message
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add Quote Credits/i }));
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '3' } });
@@ -885,6 +887,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     });
 
     // 3e. Offline Payments without res.message
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add Quote Credits/i }));
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
     fireEvent.change(document.getElementById('offline-payment-date') as HTMLInputElement, { target: { value: '2026-11-19' } });
@@ -898,6 +901,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
 
     // 4. API failures without res.error (fallback error strings)
     (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValueOnce({ success: false });
+    fireEvent.click(screen.getByRole('button', { name: /\+ Add Quote Credits/i }));
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '1' } });
