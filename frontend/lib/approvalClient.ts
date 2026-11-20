@@ -113,13 +113,14 @@ export async function processApprovalAction(
   action: 'APPROVE' | 'REJECT',
   remarks = '',
   password = '',
-  approverName = ''
+  approverName = '',
+  verificationType?: 'password' | 'otp'
 ): Promise<{ success: boolean; data?: ApprovalRequest; error?: string }> {
   try {
     const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ action, remarks, password, approverName }),
+      body: JSON.stringify({ action, remarks, password, approverName, verificationType }),
     });
     const json = await res.json();
     if (!res.ok) {
@@ -129,6 +130,37 @@ export async function processApprovalAction(
     return { success: true, data: json.data };
   } catch (err: unknown) {
     logApprovalTransportFailure('Approval decision', err);
+    const msg = err instanceof Error && err.message ? err.message : 'Network error';
+    return { success: false, error: msg };
+  }
+}
+
+/**
+ * Send an OTP code to the assigned approver email for authorization.
+ */
+export async function sendApprovalOtp(
+  approverName: string,
+  id?: string
+): Promise<{ success: boolean; message?: string; email?: string; expiresInSeconds?: number; error?: string }> {
+  try {
+    const res = await fetch('/api/approvals/send-otp', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ approverName, id }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      logApprovalResponseFailure('Approval OTP request', res.status);
+      return { success: false, error: json.error || 'Failed to send verification OTP.' };
+    }
+    return {
+      success: true,
+      message: json.message,
+      email: json.email,
+      expiresInSeconds: json.expiresInSeconds,
+    };
+  } catch (err: unknown) {
+    logApprovalTransportFailure('Approval OTP request', err);
     const msg = err instanceof Error && err.message ? err.message : 'Network error';
     return { success: false, error: msg };
   }

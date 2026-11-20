@@ -644,6 +644,82 @@ describe('Approvals API & Controller', () => {
       await approvalController.processAction(req, res);
       expect(res.status).toHaveBeenCalledWith(401);
     });
+
+    it('sendApprovalOtp sends OTP email to approver and saves OTP', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      const saveOtpSpy = jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      const sendOtpEmailSpy = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValueOnce({ success: true });
+
+      const req = {
+        body: { approverName: 'Srinu Sir', id: 'appr-1' },
+        user: { uuid: 'u-1', fullName: 'Category Manager', email: 'cm@procucev.com', role: 'category_manager' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await approvalController.sendApprovalOtp(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          email: 'srinivas.mukku@procucev.com',
+          expiresInSeconds: 600,
+        })
+      );
+      expect(saveOtpSpy).toHaveBeenCalled();
+      expect(sendOtpEmailSpy).toHaveBeenCalledWith(
+        'srinivas.mukku@procucev.com',
+        expect.any(String),
+        600,
+        expect.objectContaining({ approverName: 'Srinu Sir' })
+      );
+    });
+
+    it('sendApprovalOtp handles email sending rejection gracefully', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValueOnce(new Error('SMTP down'));
+
+      const req = {
+        body: { approverName: 'Rao Sir' },
+        user: { uuid: 'u-1', fullName: 'CM', email: 'cm@procucev.com', role: 'category_manager' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await approvalController.sendApprovalOtp(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          email: 'mnrao@procucev.com',
+        })
+      );
+    });
+
+    it('sendApprovalOtp validates input and rejects missing actor or invalid approver', async () => {
+      const resNoActor = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user: null }, resNoActor);
+      expect(resNoActor.status).toHaveBeenCalledWith(401);
+
+      const user = { uuid: 'u-1', fullName: 'CM', role: 'category_manager' };
+      const resNoName = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user, body: {} }, resNoName);
+      expect(resNoName.status).toHaveBeenCalledWith(400);
+
+      const resBadName = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user, body: { approverName: 'Unknown Person' } }, resBadName);
+      expect(resBadName.status).toHaveBeenCalledWith(400);
+
+      const resErr = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('Crash');
+        }),
+      };
+      await approvalController.sendApprovalOtp({ user, body: { approverName: 'Sudheer Sir' } }, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+    });
   });
 
   describe('HTTP routes', () => {
@@ -852,6 +928,59 @@ describe('Approvals API & Controller', () => {
       await approvalController.processAction(req, res);
       expect(res.status).toHaveBeenCalledWith(401);
       expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('POST /api/approvals/send-otp issues an OTP to the approver email', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValueOnce({ success: true });
+
+      const res = await request(app)
+        .post('/api/approvals/send-otp')
+        .set(authHeader('admin'))
+        .send({ approverName: 'Srinu Sir', id: 'appr-101' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.email).toBe('srinivas.mukku@procucev.com');
+    });
+
+    it('decides an approval using valid OTP when password matches OTP and deletes OTP', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValueOnce({
+        code: '654321',
+        expiresAt: Date.now() + 600000,
+      });
+      const deleteSpy = jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValueOnce(true);
+
+      const saved = { id: 'd1-appr-otp', request_number: 'REQ-OTP-1', status: 'Approved', approver_name: 'Srinu Sir' };
+
+      // Using D1 mock to execute
+      const batch = jest.fn().mockResolvedValue([
+        { results: [saved], meta: { changes: 1 } },
+        { results: [{ id: 'event-1' }], meta: { changes: 1 } },
+      ]);
+      const previousEnv = globalThis.__CF_ENV__;
+      globalThis.__CF_ENV__ = {
+        DB: {
+          prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }),
+          batch,
+        },
+      };
+
+      try {
+        const result = await approvalQueries.processApprovalAction(
+          'REQ-OTP-1',
+          { action: 'APPROVE', remarks: 'OTP approved', password: 'wrong-pass', otp: '654321', approverName: 'Srinu Sir' },
+          { uuid: 'u1', name: 'CM' }
+        );
+        expect(result).toEqual(saved);
+        expect(deleteSpy).toHaveBeenCalledWith('approval_otp:srinu_sir');
+      } finally {
+        if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = previousEnv;
+      }
     });
   });
 });

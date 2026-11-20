@@ -303,7 +303,7 @@ describe('SupplierDossierDrawer', () => {
     expect(screen.getByText('Sudheer Solutions pvt LTD')).toBeInTheDocument();
     expect(screen.getByText('Buyer Uploaded')).toBeInTheDocument();
     expect(screen.getByText(/360° AI Score:\s*88\/100/i)).toBeInTheDocument();
-    expect(screen.getByText(/Rating:\s*★\s*4.5/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Rating:/i)).not.toBeInTheDocument();
 
     // Verify Seller ID (v-hist-...) is NOT rendered in visible UI header
     expect(screen.queryByText(/ID:\s*v-hist/i)).not.toBeInTheDocument();
@@ -314,7 +314,7 @@ describe('SupplierDossierDrawer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  test('2. Profile Tab allows editing categories, selecting checkboxes, adding custom and saving', async () => {
+  test('2. Profile Tab allows editing categories, selecting suggestions, adding custom and saving', async () => {
     render(
       <SupplierDossierDrawer
         seller={mockSeller}
@@ -327,14 +327,19 @@ describe('SupplierDossierDrawer', () => {
     const editBtn = screen.getByRole('button', { name: /^Edit$/i });
     fireEvent.click(editBtn);
 
-    expect(screen.getByText('Select Procurement Divisions:')).toBeInTheDocument();
+    const modal = screen.getByRole('dialog');
+    expect(within(modal).getByRole('heading', { name: /Procurement Categories Master/i })).toBeInTheDocument();
 
-    // Toggle a category checkbox
-    const spareCheckbox = await screen.findByLabelText('Raw Materials & Metallurgy');
-    fireEvent.click(spareCheckbox);
+    // Min chars hint with < 3 chars
+    const customInput = screen.getByPlaceholderText(/Search category/i);
+    fireEvent.change(customInput, { target: { value: 'ca' } });
+    expect(screen.getByText(/Type at least 3 characters to search/i)).toBeInTheDocument();
+
+    // Autocomplete with >= 3 chars
+    fireEvent.change(customInput, { target: { value: 'Pumps' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).toBeNull();
 
     // Add custom category
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
     fireEvent.change(customInput, { target: { value: 'Solar Inverters & Panels' } });
     const addBtn = screen.getByRole('button', { name: /Add Category/i });
     fireEvent.click(addBtn);
@@ -364,17 +369,16 @@ describe('SupplierDossierDrawer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
 
-    // Uncheck existing category to test validation
-    const checked = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    checked.forEach((cb) => {
-      if (cb.checked) fireEvent.click(cb);
-    });
+    // Remove existing category to test validation
+    const modal = screen.getByRole('dialog');
+    const removeButtons = within(modal).getAllByRole('button', { name: /^Remove /i });
+    removeButtons.forEach((btn) => fireEvent.click(btn));
 
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     expect(screen.getByText(/Please select at least one division/i)).toBeInTheDocument();
 
     // Add back category and test API failure
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
+    const customInput = screen.getByPlaceholderText(UI_STRINGS.vendorCategorySelect.searchPlaceholder);
     fireEvent.change(customInput, { target: { value: 'IT Hardware' } });
     fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
 
@@ -462,10 +466,10 @@ describe('SupplierDossierDrawer', () => {
     // Test Category modal dismiss
     fireEvent.click(screen.getByRole('button', { name: /^Profile$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
-    expect(screen.getByText('Select Procurement Divisions:')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('Select Procurement Divisions:')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   test('6. Credit Tab displays summary cards, transaction table, sorting, pagination and CSV export', async () => {
@@ -1022,18 +1026,18 @@ describe('SupplierDossierDrawer', () => {
       />
     );
 
-    expect(screen.getByText(/Division: Packaging Materials/i)).toBeInTheDocument();
+    expect(screen.getByText('Packaging Materials')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
+    const customInput = screen.getByPlaceholderText(/Search category/i);
     // Try adding duplicate
     fireEvent.change(customInput, { target: { value: 'Packaging Materials' } });
     fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
 
-    // Toggle off the existing category
-    const chk = screen.getByLabelText('Packaging Materials');
-    fireEvent.click(chk);
-    fireEvent.click(chk);
+    // Toggle off the existing category via badge remove button
+    const modal = screen.getByRole('dialog');
+    const removeButtons = within(modal).getAllByRole('button', { name: /^Remove /i });
+    if (removeButtons.length > 0) fireEvent.click(removeButtons[0]);
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
   });
 
@@ -1055,7 +1059,7 @@ describe('SupplierDossierDrawer', () => {
     );
 
     // Tests category fallback to seller.category
-    expect(screen.getByText(/Division: Chemical Reagents/i)).toBeInTheDocument();
+    expect(screen.getByText('Chemical Reagents')).toBeInTheDocument();
 
     // Credit Tab failure
     fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));
@@ -1647,7 +1651,8 @@ test('reuses seller credit idempotency key when retrying unchanged request detai
       <SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     const submitButton = screen.getByRole('button', { name: 'Submit for Approval' });
@@ -1697,8 +1702,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    const addCreditsHeaderBtn = screen.getByTitle('Add Quote Credits (1-5)');
-    fireEvent.click(addCreditsHeaderBtn);
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
 
     // Enter requested credits amount and reason
@@ -1742,7 +1747,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1765,7 +1771,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1785,7 +1792,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1794,12 +1802,14 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     });
 
     // Test closing modal via backdrop click and cancel button
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const modalDialog = screen.getByRole('dialog');
     fireEvent.click(modalDialog); // clicks backdrop
     expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
     expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
@@ -1819,7 +1829,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     expect(screen.getByText(mockSeller.name)).toBeInTheDocument();
 
     // Open add quote credits and test inner dialog click (does not close modal)
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const modalHeading = screen.getByText('Request Seller Quote Credit Approval');
     fireEvent.click(modalHeading);
     expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
@@ -1842,7 +1853,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
         onClose={jest.fn()}
       />
     );
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1907,9 +1919,11 @@ test('requires an approver name before a seller quote credit request is submitte
   } as unknown as ReturnType<typeof authClient.getSessionUser>);
   render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
 
-  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
   fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+  const form = screen.getByRole('button', { name: 'Submit for Approval' }).closest('form') as HTMLFormElement;
+  fireEvent.submit(form);
 
   expect(
     await screen.findByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired)
@@ -1944,7 +1958,8 @@ test('shows no supplier category when none is recorded, and asks for a credit am
   );
   expect(screen.queryByText('Engineering Spares - Electrical')).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
   const form = screen.getByRole('button', { name: 'Submit for Approval' }).closest('form') as HTMLFormElement;
   fireEvent.submit(form);
 
@@ -2592,6 +2607,114 @@ describe('SupplierDossierDrawer - Active RFQs Tab', () => {
           nextFollowupDate: '2026-12-01T15:30',
         }));
       });
+    });
+
+    test('39. Verified Seller Directory changes: no Add Quote Credit button, no rating badge, no tab icons, and category popup autocomplete behavior with click-outside', async () => {
+      const { unmount } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          onClose={jest.fn()}
+          sellerRfqs={mockRfqs}
+        />
+      );
+
+      // 1. "+ Add Quote Credit" button is not in header
+      expect(screen.queryByTitle('Add Quote Credits (1-5)')).toBeNull();
+      expect(screen.queryByRole('button', { name: /\+ Add Quote Credits/i })).toBeNull();
+
+      // 2. Rating badge is not in header
+      expect(screen.queryByText(/★/i)).toBeNull();
+
+      // 3. Action buttons / tabs do not have SVG icons
+      const profileBtn = screen.getByRole('button', { name: /^Profile$/i });
+      expect(profileBtn.querySelector('svg')).toBeNull();
+      const creditBtn = screen.getByRole('button', { name: /^Credit$/i });
+      expect(creditBtn.querySelector('svg')).toBeNull();
+
+      // 4. Open Category modal
+      const editBtn = screen.getByRole('button', { name: /^Edit$/i });
+      fireEvent.click(editBtn);
+
+      // Modal is open
+      const modal = screen.getByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Does not display categories by default
+      expect(screen.queryByText('Select Procurement Divisions:')).toBeNull();
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.vendorCategorySelect.searchPlaceholder);
+
+      // Typing < 3 characters shows hint
+      fireEvent.change(searchInput, { target: { value: 'it' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Typing >= 3 characters displays matching suggestions in popup
+      fireEvent.change(searchInput, { target: { value: 'Pump' } });
+      expect(screen.queryByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeNull();
+      const listbox = within(modal).getByRole('listbox');
+      expect(listbox).toBeInTheDocument();
+
+      // Clicking inside listbox keeps it open
+      fireEvent.click(listbox);
+      expect(within(modal).getByRole('listbox')).toBeInTheDocument();
+
+      // Clicking outside the listbox closes it
+      fireEvent.mouseDown(document.body);
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Focus again to reopen
+      fireEvent.focus(searchInput);
+      expect(within(modal).getByRole('listbox')).toBeInTheDocument();
+
+      // Press Escape closes suggestions
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Reopen suggestions with a new keyword
+      fireEvent.change(searchInput, { target: { value: 'Motors' } });
+      const suggestions = within(modal).getAllByRole('option');
+      expect(suggestions.length).toBeGreaterThan(0);
+
+      // Clicking an option adds the tag and closes suggestions
+      fireEvent.click(suggestions[0]);
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test clear button
+      fireEvent.change(searchInput, { target: { value: 'Transformers' } });
+      const clearBtn = screen.getByRole('button', { name: 'Clear category input' });
+      fireEvent.click(clearBtn);
+      expect((searchInput as HTMLInputElement).value).toBe('');
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test enter key with suggestion
+      fireEvent.change(searchInput, { target: { value: 'Cables' } });
+      fireEvent.keyDown(searchInput, { key: 'Enter' });
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test enter key with custom text when suggestions closed
+      fireEvent.change(searchInput, { target: { value: 'Custom Hardware Category' } });
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+      fireEvent.keyDown(searchInput, { key: 'Enter' });
+      expect(within(modal).getByText('Custom Hardware Category')).toBeInTheDocument();
+
+      // Test no matches found branch
+      fireEvent.change(searchInput, { target: { value: 'ZzzNonExistent123' } });
+      expect(within(modal).getByText(UI_STRINGS.vendorCategorySelect.noMatches)).toBeInTheDocument();
+      const addCustomTagBtn = within(modal).getByRole('button', { name: UI_STRINGS.vendorCategorySelect.addCustomTag });
+      fireEvent.click(addCustomTagBtn);
+      expect(within(modal).getByText('ZzzNonExistent123')).toBeInTheDocument();
+
+      // Clicking inside modal keeps modal open
+      fireEvent.click(screen.getByText(/Procurement Categories Master/i));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      // Clicking backdrop closes modal
+      fireEvent.click(modal);
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      unmount();
     });
   });
 });

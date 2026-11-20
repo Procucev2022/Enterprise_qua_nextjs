@@ -12,6 +12,7 @@ jest.mock('@/lib/approvalClient', () => {
     fetchApprovalSummary: jest.fn(),
     fetchApprovals: jest.fn(),
     processApprovalAction: jest.fn(),
+    sendApprovalOtp: jest.fn(),
   };
 });
 
@@ -1415,5 +1416,116 @@ describe('ApprovalsDashboard', () => {
     // Close action modal via Escape key (line 168)
     fireEvent.keyDown(window, { key: 'Escape' });
     expect(screen.queryByRole('heading', { name: strings.confirmApprovalTitle })).toBeNull();
+  });
+
+  it('supports Email OTP authentication mode, sends OTP, and approves with OTP', async () => {
+    (approvalClient.sendApprovalOtp as jest.Mock).mockResolvedValue({
+      success: true,
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: 600,
+    });
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { ...mockApprovalsList[0], status: 'Approved' },
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    // Open action modal
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    // Click quick select buttons
+    const raoBtn = screen.getByRole('button', { name: 'Rao Sir' });
+    fireEvent.click(raoBtn);
+    expect(screen.getByDisplayValue('Rao Sir')).toBeInTheDocument();
+    expect(screen.getByText('mnrao@procucev.com')).toBeInTheDocument();
+
+    const srinuBtn = screen.getByRole('button', { name: 'Srinu Sir' });
+    fireEvent.click(srinuBtn);
+    expect(screen.getByDisplayValue('Srinu Sir')).toBeInTheDocument();
+    expect(screen.getByText('srinivas.mukku@procucev.com')).toBeInTheDocument();
+
+    // Switch to Email OTP mode
+    const otpModeBtn = screen.getByRole('button', { name: strings.authModeOtp });
+    fireEvent.click(otpModeBtn);
+
+    expect(screen.getByText(new RegExp(strings.recipientLabel, 'i'))).toBeInTheDocument();
+
+    // Click Send OTP
+    const sendOtpBtn = screen.getByRole('button', { name: strings.sendOtpBtn });
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+
+    expect(approvalClient.sendApprovalOtp).toHaveBeenCalledWith('Srinu Sir', 'appr-101');
+
+    // Verify OTP input placeholder
+    const otpInput = screen.getByPlaceholderText(strings.otpPlaceholder);
+    expect(otpInput).toBeInTheDocument();
+
+    // Try submitting without OTP -> error
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    expect(screen.getByText(strings.otpRequiredError)).toBeInTheDocument();
+
+    // Enter OTP
+    fireEvent.change(otpInput, { target: { value: '123456' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    });
+
+    expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
+      'appr-101',
+      'APPROVE',
+      '',
+      '123456',
+      'Srinu Sir',
+      'otp'
+    );
+  });
+
+  it('handles send OTP failure and error handling in action modal', async () => {
+    (approvalClient.sendApprovalOtp as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'Approver email not found',
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    // Clear approver and try sending OTP
+    const approverInput = screen.getByLabelText(strings.approverLabel);
+    fireEvent.change(approverInput, { target: { value: '   ' } });
+
+    // Switch to OTP mode
+    fireEvent.click(screen.getByRole('button', { name: strings.authModeOtp }));
+    expect(screen.getByText(strings.selectApproverFirst)).toBeInTheDocument();
+
+    fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
+    const sendOtpBtn = screen.getByRole('button', { name: strings.sendOtpBtn });
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+
+    expect(screen.getByText('Approver email not found')).toBeInTheDocument();
+
+    // Also test sendApprovalOtp rejecting with exception
+    (approvalClient.sendApprovalOtp as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+    expect(screen.getByText(strings.databaseSyncError)).toBeInTheDocument();
+
+    // Switch back to password mode
+    fireEvent.click(screen.getByRole('button', { name: strings.authModePassword }));
+    expect(screen.getByPlaceholderText(strings.passwordPlaceholder)).toBeInTheDocument();
   });
 });

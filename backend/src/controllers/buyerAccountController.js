@@ -731,7 +731,13 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
-    const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+    let transactions = [];
+    try {
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load credit transactions from database, falling back to empty list', { buyerId: buyer.id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      transactions = [];
+    }
 
     let totalAllocated = 0;
     let totalConsumed = 0;
@@ -1268,7 +1274,13 @@ async function getBuyerCommunications(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    const comms = await paymentDuesQueries.getCommunicationHistory(id);
+    let comms = [];
+    try {
+      comms = (await paymentDuesQueries.getCommunicationHistory(id)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load communication history from database, returning empty list', { id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      comms = [];
+    }
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching buyer communications', err, 'BUYER_ACCOUNT_CONTROLLER');

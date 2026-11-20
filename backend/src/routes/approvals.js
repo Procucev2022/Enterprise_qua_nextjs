@@ -9,6 +9,8 @@ router.get('/summary', ...requireApprovalAccess, approvalController.getSummary);
 router.get('/approvers', ...requireApprovalAccess, approvalController.getApprovers);
 router.get('/users', ...requireApprovalAccess, approvalController.getUsers);
 router.get('/', ...requireApprovalAccess, approvalController.getApprovals);
+router.post('/send-otp', ...requireApprovalAccess, approvalController.sendApprovalOtp);
+router.post('/:id/send-otp', ...requireApprovalAccess, approvalController.sendApprovalOtp);
 router.post('/:id/action', ...requireApprovalAccess, approvalController.processAction);
 
 module.exports = router;

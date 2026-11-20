@@ -45,11 +45,12 @@ jest.mock('@/lib/documentVaultClient', () => ({
 }));
 
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import SupplierDossierDrawer from '@/app/category-manager/components/SupplierDossierDrawer';
 import { authClient } from '@/lib/authClient';
 import { requestSellerQuoteCreditApproval } from '@/lib/accountDocumentsClient';
 import { updateSupplierCategories } from '@/lib/supplierProfileClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 
 class MockFileReader {
   result: string | null = null;
@@ -201,7 +202,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
 
     // Step 3: Enter Discount & Review Breakdown
-    expect(screen.getByText('Submit discount authorization for this seller account.')).toBeInTheDocument();
+    expect(screen.getByText(/Price Breakdown/i)).toBeInTheDocument();
     expect(screen.getAllByText('Original Plan Price')[0]).toBeInTheDocument();
     expect(screen.getAllByText('₹7,499')[0]).toBeInTheDocument();
 
@@ -257,10 +258,6 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     expect(screen.getByText('Request Trial Period Approval')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
 
-    // Input trial days
-    const daysInput = document.getElementById('trial-days-input') as HTMLInputElement;
-    fireEvent.change(daysInput, { target: { value: '30' } });
-
     // Test start date change
     const startDateInput = document.getElementById('trial-start-date') as HTMLInputElement;
     fireEvent.change(startDateInput, { target: { value: '2026-12-01' } });
@@ -270,7 +267,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.change(endDateInput, { target: { value: '2026-11-01' } });
     expect(screen.getByText('End date cannot be earlier than start date.')).toBeInTheDocument();
 
-    // Correct end date
+    // Correct end date (30 days)
     fireEvent.change(endDateInput, { target: { value: '2026-12-31' } });
 
     const approverInput = document.getElementById('quote-credit-approver') as HTMLInputElement;
@@ -477,26 +474,14 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     // Select Connect Model again
     fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
 
-    // Test days <= 0 validation
-    const daysInput = document.getElementById('trial-days-input') as HTMLInputElement;
-    fireEvent.change(daysInput, { target: { value: '0' } });
-    const submitBtn = screen.getByRole('button', { name: 'Submit for Approval' });
-    fireEvent.click(submitBtn);
-
-    // Test days > 365 validation
-    fireEvent.change(daysInput, { target: { value: '400' } });
-    fireEvent.click(submitBtn);
-
-    // Test start date change and end date change with days mismatch
+    // Test start date change and end date change
     const startDateInput = document.getElementById('trial-start-date') as HTMLInputElement;
     const endDateInput = document.getElementById('trial-end-date') as HTMLInputElement;
     fireEvent.change(startDateInput, { target: { value: '2026-11-01' } });
     fireEvent.change(endDateInput, { target: { value: '2026-11-15' } }); // 14 days difference
-    fireEvent.change(daysInput, { target: { value: '60' } }); // Mismatch!
-    fireEvent.click(submitBtn);
 
-    // Fix days to match and clear approver
-    fireEvent.change(daysInput, { target: { value: '14' } });
+    // Clear approver and submit
+    const submitBtn = screen.getByRole('button', { name: 'Submit for Approval' });
     const approverInput = document.getElementById('quote-credit-approver') as HTMLInputElement;
     fireEvent.change(approverInput, { target: { value: '' } });
     fireEvent.click(submitBtn);
@@ -635,7 +620,8 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     expect(screen.queryByText('Request Seller Credit Deletion')).not.toBeInTheDocument();
 
     // 2. Credit Addition: amount <= 0, empty approver, cancel button, and API error
-    fireEvent.click(screen.getByRole('button', { name: /\+ Add Quote Credits/i }));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
 
     const addCreditInput = document.getElementById('quote-credits-requested') as HTMLInputElement;
@@ -724,15 +710,14 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     const editBtn = screen.getByRole('button', { name: /^Edit$/i });
     fireEvent.click(editBtn);
 
-    expect(screen.getByText('Select Procurement Divisions:')).toBeInTheDocument();
+    const modal = screen.getByRole('dialog');
+    expect(within(modal).getByRole('heading', { name: /Procurement Categories Master/i })).toBeInTheDocument();
 
     // Add new category
-    const input = screen.getByPlaceholderText('Enter custom category...');
+    const input = screen.getByPlaceholderText(UI_STRINGS.vendorCategorySelect.searchPlaceholder);
     fireEvent.change(input, { target: { value: 'Custom Hardware Division' } });
-    const addCategoryForm = input.closest('form');
-    if (addCategoryForm) {
-      fireEvent.submit(addCategoryForm);
-    }
+    const addCategoryBtn = within(modal).getByRole('button', { name: /Add Category/i });
+    fireEvent.click(addCategoryBtn);
 
     // Save
     const saveBtn = screen.getByRole('button', { name: /Save Categories/i });
@@ -793,9 +778,9 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Period' }));
     fireEvent.click(screen.getByText('Select Model'));
-    expect(document.getElementById('trial-days-input')).toBeInTheDocument();
+    expect(document.getElementById('trial-start-date')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
-    expect(document.getElementById('trial-days-input')).not.toBeInTheDocument();
+    expect(document.getElementById('trial-start-date')).not.toBeInTheDocument();
 
     // Offline Payments: Change sourcing mode, remarks, and Close (X)
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
@@ -857,7 +842,8 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Period' }));
     fireEvent.click(screen.getByText('Connect Model'));
-    fireEvent.change(document.getElementById('trial-days-input') as HTMLInputElement, { target: { value: '30' } });
+    fireEvent.change(document.getElementById('trial-start-date') as HTMLInputElement, { target: { value: '2026-11-01' } });
+    fireEvent.change(document.getElementById('trial-end-date') as HTMLInputElement, { target: { value: '2026-12-01' } });
     fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
@@ -879,7 +865,8 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '3' } });
     fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+    const additionForm = (document.getElementById('quote-credit-approver') as HTMLInputElement).closest('form') as HTMLFormElement;
+    fireEvent.submit(additionForm);
     await waitFor(() => {
       expect(screen.getAllByText(/Quote credit request submitted/i)[0]).toBeInTheDocument();
     });
