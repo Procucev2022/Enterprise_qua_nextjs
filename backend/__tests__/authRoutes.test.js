@@ -1432,6 +1432,23 @@ describe('Changing your own password', () => {
       expect(updateVendorSpy).not.toHaveBeenCalled();
     });
 
+    test('successfully changes vendor password using verification code when vendor has no mobile in database', async () => {
+      const email = 'vendor-no-mobile@procucev.com';
+      identityQueries.findUserByEmail.mockResolvedValue(
+        signedInBuyer({ role: 'vendor', email, id: UUID, mobile: '' })
+      );
+      await authSessionQueries.saveOtp(`otp:${email}`, '123456', Date.now() + 60000, email);
+
+      const result = await call({ email, currentPassword: '', code: '123456' });
+      expect(result.success).toBe(true);
+      expect(await authSessionQueries.findOtp(`otp:${email}`)).toBeNull();
+      expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
+        UUID,
+        NEXT,
+        email
+      );
+    });
+
     test.each([
       ['no current password', { currentPassword: '' }],
       ['no new password', { newPassword: '' }],

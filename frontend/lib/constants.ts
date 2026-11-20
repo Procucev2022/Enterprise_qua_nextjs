@@ -812,6 +812,8 @@ export const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 export const BUYER_PROFILE_ENDPOINTS = {
   /** The signed-in buyer's own profile: GET to read, PUT to patch. */
   ME: '/api/buyer-profile/me',
+  /** Profile completion evaluation for reminder popup and onboarding */
+  COMPLETION: '/api/buyer-profile/completion',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
   /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */
@@ -3262,3 +3264,35 @@ export function sortTableRows<T>(
     return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' }) * factor;
   });
 }
+
+/**
+ * Normalizes vendor rating to a consistent 5.0-scale numeric rating with 1 decimal place.
+ * Handles:
+ * - Direct 1.0 - 5.0 scale (e.g., 4.5 -> 4.5)
+ * - Normalized ratios <= 1.0 (e.g., 0.9 -> 4.5)
+ * - 100-point scale scores > 5.0 (e.g., 90 -> 4.5, 85 -> 4.3)
+ * - Fallback to score when rating is omitted
+ */
+export function normalizeVendorRating(rating: unknown, score?: unknown): number | null {
+  const numRating = typeof rating === 'number' ? rating : typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null;
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) {
+      return Number((numRating * 5).toFixed(1));
+    }
+    if (numRating > 5.0) {
+      return Number((numRating / 20).toFixed(1));
+    }
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : typeof score === 'string' && score.trim() !== '' ? Number(score) : null;
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) {
+      return numScore;
+    }
+    return Number((numScore / 20).toFixed(1));
+  }
+  return null;
+}
+

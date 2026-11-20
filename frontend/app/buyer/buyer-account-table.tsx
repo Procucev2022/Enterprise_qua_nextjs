@@ -322,9 +322,9 @@ export default function BuyerAccountTable() {
       </div>
 
       {/* ── KPI Cards: Master Database Breakdown ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-4">
         {/* Total Integrated Buyers */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] relative overflow-hidden">
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] min-w-0 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Integrated Buyers</span>
             <Building2 size={16} className="text-indigo-600 dark:text-indigo-400" />
@@ -340,7 +340,7 @@ export default function BuyerAccountTable() {
         </div>
 
         {/* Aligned from Public System */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 shadow-xs flex flex-col justify-between min-h-[110px] relative overflow-hidden">
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 shadow-xs flex flex-col justify-between min-h-[110px] min-w-0 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Public System Accounts</span>
             <Database size={16} className="text-amber-600 dark:text-amber-400" />
@@ -358,7 +358,7 @@ export default function BuyerAccountTable() {
         </div>
 
         {/* Web Registrations */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] relative overflow-hidden">
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] min-w-0 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Web Signups / SSO</span>
             <Globe size={16} className="text-sky-600 dark:text-cyan-400" />
@@ -376,7 +376,7 @@ export default function BuyerAccountTable() {
         </div>
 
         {/* Active Sourcing Modes */}
-        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] relative overflow-hidden">
+        <div className="rounded-2xl p-4 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-xs flex flex-col justify-between min-h-[110px] min-w-0 relative overflow-hidden">
           <div className="flex items-center justify-between">
             <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400">Sourcing Mode Split</span>
             <Layers size={16} className="text-purple-600 dark:text-purple-400" />

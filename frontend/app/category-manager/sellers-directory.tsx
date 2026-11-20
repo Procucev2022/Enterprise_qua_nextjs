@@ -52,6 +52,7 @@ import {
   SELLER_DIRECTORY_COLUMN_PREF_KEY,
   DEFAULT_SELLER_DIRECTORY_COLUMNS,
   getVendorCreditBalance,
+  normalizeVendorRating,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
@@ -120,8 +121,8 @@ function formatScore360(value: unknown): string {
 
 // Shows a rating to one decimal place, or a dash when the record has no numeric rating.
 function formatRating(value: unknown): string {
-  const numeric = toNumberOrNull(value);
-  return numeric === null ? EMPTY_VALUE : String(numeric);
+  const normalized = normalizeVendorRating(value);
+  return normalized === null ? EMPTY_VALUE : String(normalized);
 }
 
 // The finite number held by a record field, or null when the record does not hold one. Never a default.
@@ -312,7 +313,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
         score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
         score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
-        rating: typeof (v as any).rating === 'number' ? (v as any).rating : null,
+        rating: normalizeVendorRating((v as any).rating, (v as any).score),
         status: (v as any).status || '',
         subscriptionPlan: (v as any).subscriptionPlan || '',
         // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
@@ -354,7 +355,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
           score: toNumberOrNull((bv as any).qualityScore ?? bv.score),
           score360: toNumberOrNull((bv as any).qualityScore ?? bv.score),
-          rating: toNumberOrNull(bv.rating),
+          rating: normalizeVendorRating(bv.rating, (bv as any).qualityScore ?? bv.score),
           status: (bv as any).status || '',
           subscriptionPlan: (bv as any).subscriptionPlan || '',
           freeQuotationCredits: getVendorCreditBalance(bv as any),

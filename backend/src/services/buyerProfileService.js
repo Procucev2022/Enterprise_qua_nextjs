@@ -21,6 +21,12 @@ const { logger } = require('./loggerService');
 const {
   derivePanFromGstin,
   parsePrimaryPlantLocation,
+  PAN_REGEX,
+  GSTIN_REGEX,
+  INDIAN_PINCODE_REGEX,
+  isDummyPincode,
+  EMAIL_REGEX,
+  INDIAN_MOBILE_REGEX,
 } = require('../config/validationSchemas');
 const {
   AUTH_MESSAGES,
@@ -705,6 +711,205 @@ async function getCategoryTaxonomy() {
   }
 }
 
+function checkProfileCompletion(profile) {
+  const issues = [];
+  const completedFields = [];
+
+  if (!profile) {
+    return {
+      isComplete: false,
+      completionPercentage: 0,
+      completedCount: 0,
+      totalCount: 12,
+      issues: [
+        { field: 'companyName', label: 'Legal Entity Name', section: 'organization', issue: 'Legal entity name is required.', status: 'missing' },
+        { field: 'organizationType', label: 'Organization Constitution', section: 'organization', issue: 'Organization constitution / legal structure is required.', status: 'missing' },
+        { field: 'gstNumber', label: 'GSTIN / GST Number', section: 'organization', issue: 'GSTIN is required for tax and statutory compliance.', status: 'missing' },
+        { field: 'panNumber', label: 'PAN Number', section: 'organization', issue: 'Permanent Account Number (PAN) is required.', status: 'missing' },
+        { field: 'street', label: 'Registered Street Address', section: 'address', issue: 'Street address is required for plant & delivery logistics.', status: 'missing' },
+        { field: 'city', label: 'City', section: 'address', issue: 'City is required.', status: 'missing' },
+        { field: 'state', label: 'State', section: 'address', issue: 'State is required.', status: 'missing' },
+        { field: 'pincode', label: 'PIN Code', section: 'address', issue: 'PIN code is required.', status: 'missing' },
+        { field: 'contactName', label: 'Primary Contact Person', section: 'contact', issue: 'Contact person name is required.', status: 'missing' },
+        { field: 'contactEmail', label: 'Corporate Email Address', section: 'contact', issue: 'Official contact email address is required.', status: 'missing' },
+        { field: 'contactPhone', label: 'Contact Mobile Number', section: 'contact', issue: 'Mobile number is required.', status: 'missing' },
+        { field: 'categories', label: 'Product Categories', section: 'categories', issue: 'At least one procurement category must be selected to receive relevant supplier quotations.', status: 'missing' },
+      ],
+      missingSections: ['organization', 'address', 'contact', 'categories'],
+    };
+  }
+
+  // 1. Company Name
+  const rawCompanyName = profile.companyName || profile.organizationName || '';
+  const trimmedCompanyName = String(rawCompanyName).trim();
+  if (!trimmedCompanyName) {
+    issues.push({ field: 'companyName', label: 'Legal Entity Name', section: 'organization', issue: 'Legal entity name is required.', status: 'missing' });
+  } else if (trimmedCompanyName.length < 2) {
+    issues.push({ field: 'companyName', label: 'Legal Entity Name', section: 'organization', issue: 'Legal entity name must be at least 2 characters long.', status: 'invalid' });
+  } else {
+    completedFields.push('companyName');
+  }
+
+  // 2. Organization Constitution / Type
+  const rawOrgType = profile.organizationType;
+  const trimmedOrgType = typeof rawOrgType === 'string' ? rawOrgType.trim() : '';
+  if (!trimmedOrgType) {
+    issues.push({ field: 'organizationType', label: 'Organization Constitution', section: 'organization', issue: 'Organization constitution / legal structure is required.', status: 'missing' });
+  } else {
+    completedFields.push('organizationType');
+  }
+
+  // 3. GSTIN
+  const rawGst = profile.gstNumber || profile.gstin || profile.gst || '';
+  const trimmedGst = String(rawGst).trim().toUpperCase();
+  if (!trimmedGst) {
+    issues.push({ field: 'gstNumber', label: 'GSTIN / GST Number', section: 'organization', issue: 'GSTIN is required for tax and statutory compliance.', status: 'missing' });
+  } else if (!GSTIN_REGEX.test(trimmedGst)) {
+    issues.push({ field: 'gstNumber', label: 'GSTIN / GST Number', section: 'organization', issue: 'Invalid GSTIN format (15 alphanumeric characters required e.g. 27AAACL1234F1Z5).', status: 'invalid' });
+  } else {
+    completedFields.push('gstNumber');
+  }
+
+  // 4. PAN Number
+  const rawPan = profile.panNumber || profile.pan || (trimmedGst && GSTIN_REGEX.test(trimmedGst) ? derivePanFromGstin(trimmedGst) : '') || '';
+  const trimmedPan = String(rawPan).trim().toUpperCase();
+  if (!trimmedPan) {
+    issues.push({ field: 'panNumber', label: 'PAN Number', section: 'organization', issue: 'Permanent Account Number (PAN) is required.', status: 'missing' });
+  } else if (!PAN_REGEX.test(trimmedPan)) {
+    issues.push({ field: 'panNumber', label: 'PAN Number', section: 'organization', issue: 'Invalid PAN format (10 alphanumeric characters required e.g. AAACL1234F).', status: 'invalid' });
+  } else {
+    completedFields.push('panNumber');
+  }
+
+  // 5. Registered Street Address
+  const rawStreet = profile.street || profile.streetAddress || profile.address1 || profile.address || profile.registeredAddress || '';
+  const trimmedStreet = String(rawStreet).trim();
+  if (!trimmedStreet) {
+    issues.push({ field: 'street', label: 'Registered Street Address', section: 'address', issue: 'Street address is required for plant & delivery logistics.', status: 'missing' });
+  } else if (trimmedStreet.length < 3) {
+    issues.push({ field: 'street', label: 'Registered Street Address', section: 'address', issue: 'Street address must be at least 3 characters long.', status: 'invalid' });
+  } else {
+    completedFields.push('street');
+  }
+
+  // 6. City
+  const rawCity = profile.city || '';
+  const trimmedCity = String(rawCity).trim();
+  if (!trimmedCity) {
+    issues.push({ field: 'city', label: 'City', section: 'address', issue: 'City is required.', status: 'missing' });
+  } else if (trimmedCity.length < 2) {
+    issues.push({ field: 'city', label: 'City', section: 'address', issue: 'City must be at least 2 characters long.', status: 'invalid' });
+  } else {
+    completedFields.push('city');
+  }
+
+  // 7. State
+  const rawState = profile.state || '';
+  const trimmedState = String(rawState).trim();
+  if (!trimmedState) {
+    issues.push({ field: 'state', label: 'State', section: 'address', issue: 'State is required.', status: 'missing' });
+  } else if (trimmedState.length < 2) {
+    issues.push({ field: 'state', label: 'State', section: 'address', issue: 'State must be at least 2 characters long.', status: 'invalid' });
+  } else {
+    completedFields.push('state');
+  }
+
+  // 8. PIN Code
+  const rawPincode = profile.pincode || profile.zip_code || profile.zipCode || '';
+  const trimmedPincode = String(rawPincode).trim();
+  if (!trimmedPincode) {
+    issues.push({ field: 'pincode', label: 'PIN Code', section: 'address', issue: 'PIN code is required.', status: 'missing' });
+  } else if (!/^\d{6}$/.test(trimmedPincode)) {
+    issues.push({ field: 'pincode', label: 'PIN Code', section: 'address', issue: 'PIN code must be exactly 6 numeric digits.', status: 'invalid' });
+  } else if (isDummyPincode(trimmedPincode)) {
+    issues.push({ field: 'pincode', label: 'PIN Code', section: 'address', issue: 'PIN code cannot be a dummy or placeholder value (e.g. 000000, 123456).', status: 'invalid' });
+  } else {
+    completedFields.push('pincode');
+  }
+
+  // 9. Contact Person
+  const rawContactName = profile.contactName || profile.contactPerson || '';
+  const trimmedContactName = String(rawContactName).trim();
+  if (!trimmedContactName) {
+    issues.push({ field: 'contactName', label: 'Primary Contact Person', section: 'contact', issue: 'Primary procurement contact person name is required.', status: 'missing' });
+  } else if (trimmedContactName.length < 2) {
+    issues.push({ field: 'contactName', label: 'Primary Contact Person', section: 'contact', issue: 'Contact person name must be at least 2 characters long.', status: 'invalid' });
+  } else {
+    completedFields.push('contactName');
+  }
+
+  // 10. Contact Email
+  const rawEmail = profile.contactEmail || profile.corporateEmail || '';
+  const trimmedEmail = String(rawEmail).trim().toLowerCase();
+  if (!trimmedEmail) {
+    issues.push({ field: 'contactEmail', label: 'Corporate Email Address', section: 'contact', issue: 'Official contact email address is required.', status: 'missing' });
+  } else if (!EMAIL_REGEX.test(trimmedEmail)) {
+    issues.push({ field: 'contactEmail', label: 'Corporate Email Address', section: 'contact', issue: 'Invalid email address format.', status: 'invalid' });
+  } else {
+    completedFields.push('contactEmail');
+  }
+
+  // 11. Contact Phone
+  const rawPhone = profile.contactPhone || profile.mobileNumber || profile.phone || '';
+  const trimmedPhone = String(rawPhone).trim();
+  const digitsOnly = trimmedPhone.replace(/\D/g, '');
+  const isPlaceholderPhone =
+    digitsOnly.includes('9999999999') ||
+    digitsOnly.includes('0000000000') ||
+    digitsOnly.includes('1111111111');
+
+  if (!trimmedPhone) {
+    issues.push({ field: 'contactPhone', label: 'Contact Mobile Number', section: 'contact', issue: 'Contact mobile number is required.', status: 'missing' });
+  } else if (isPlaceholderPhone) {
+    issues.push({ field: 'contactPhone', label: 'Contact Mobile Number', section: 'contact', issue: 'Please update your mobile number from the temporary placeholder.', status: 'invalid' });
+  } else if (!INDIAN_MOBILE_REGEX.test(trimmedPhone) && digitsOnly.length < 10) {
+    issues.push({ field: 'contactPhone', label: 'Contact Mobile Number', section: 'contact', issue: 'Valid 10-digit mobile number starting with 6-9 is required.', status: 'invalid' });
+  } else {
+    completedFields.push('contactPhone');
+  }
+
+  // 12. Categories
+  const rawCategories = profile.categories;
+  const majorList = profile.supportedMajorCategories;
+  const minorList = profile.supportedMinorCategories;
+
+  let hasValidCategories = false;
+  if (Array.isArray(rawCategories) && rawCategories.length > 0) {
+    hasValidCategories = rawCategories.some(
+      (c) => Boolean(c && (c.major || c.majorCategory) && (c.minor || c.minorCategory))
+    );
+  } else if (
+    Array.isArray(majorList) &&
+    majorList.length > 0 &&
+    Array.isArray(minorList) &&
+    minorList.length > 0
+  ) {
+    hasValidCategories = true;
+  }
+
+  if (!hasValidCategories) {
+    issues.push({ field: 'categories', label: 'Product Categories', section: 'categories', issue: 'At least one procurement category must be selected to receive relevant supplier quotations.', status: 'missing' });
+  } else {
+    completedFields.push('categories');
+  }
+
+  const totalCount = 12;
+  const completedCount = completedFields.length;
+  const completionPercentage = Math.round((completedCount / totalCount) * 100);
+  const isComplete = issues.length === 0;
+  const missingSections = Array.from(new Set(issues.map((i) => i.section)));
+
+  return {
+    isComplete,
+    completionPercentage,
+    completedCount,
+    totalCount,
+    issues,
+    missingSections,
+    completedFields,
+  };
+}
+
 module.exports = {
   BuyerProfileError,
   assertIdentityConfigured,
@@ -714,6 +919,7 @@ module.exports = {
   pickPatchableFields,
   getProfile,
   saveProfile,
+  checkProfileCompletion,
   getCategoryTaxonomy,
   getDispatchTemplates,
   saveDispatchTemplate,

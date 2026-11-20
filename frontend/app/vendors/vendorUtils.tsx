@@ -1,6 +1,7 @@
 import React from 'react';
 import { Star } from 'lucide-react';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { normalizeVendorRating } from '@/lib/constants';
 import type { PublicVendorFilterState } from '@/lib/types';
 
 const S = UI_STRINGS.publicVendorDirectory;
@@ -30,7 +31,8 @@ export function getInitials(name: string): string {
 }
 
 export function renderStars(rating: number | null | undefined): React.ReactNode {
-  const r = Math.round((rating ?? 0) * 2) / 2;
+  const normalized = normalizeVendorRating(rating);
+  const r = normalized !== null ? Math.round(normalized * 2) / 2 : 0;
   return (
     <span className="flex items-center gap-0.5" aria-label={formatString(S.labels.ratingStars, { rating: r })}>
       {[1, 2, 3, 4, 5].map((star) => (

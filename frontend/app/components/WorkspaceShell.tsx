@@ -11,6 +11,7 @@ import type { UserRole } from '@/lib/types';
 import RoleNavigation from '@/app/components/RoleNavigation';
 import SupportChatWidget from '@/app/components/SupportChatWidget';
 import InitialSetupModal from '@/app/buyer/initial-setup-modal';
+import BuyerProfileCompletionModal from '@/app/buyer/buyer-profile-completion-modal';
 
 interface WorkspaceShellProps {
   /** Role whose routes this shell wraps; used to keep the sidebar in sync. */
@@ -136,6 +137,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
       </main>
 
       {role === 'buyer' && <InitialSetupModal />}
+      {role === 'buyer' && <BuyerProfileCompletionModal />}
       <SupportChatWidget />
     </div>
   );

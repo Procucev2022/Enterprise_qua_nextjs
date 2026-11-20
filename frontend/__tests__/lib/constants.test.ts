@@ -48,6 +48,7 @@ import {
   isVendorActive,
   isVendorInactive,
   setVendorsActiveStateInStorage,
+  normalizeVendorRating,
 } from '@/lib/constants';
 import type { BuyerAccount } from '@/lib/types';
 
@@ -1435,6 +1436,47 @@ describe('Indian address location extraction helpers', () => {
       expect(result.some((v) => v.name === 'Historical PO Dump')).toBe(false);
       expect(result.some((v) => v.name === 'RFQ-2024-001')).toBe(false);
       expect(result.some((v) => v.name === 'Valid Uploaded Co')).toBe(true);
+    });
+  });
+
+  describe('normalizeVendorRating', () => {
+    it('normalizes standard 1.0 - 5.0 scale ratings correctly', () => {
+      expect(normalizeVendorRating(4.5)).toBe(4.5);
+      expect(normalizeVendorRating(4.8)).toBe(4.8);
+      expect(normalizeVendorRating(1.0)).toBe(1.0);
+      expect(normalizeVendorRating(5.0)).toBe(5.0);
+      expect(normalizeVendorRating('4.5')).toBe(4.5);
+    });
+
+    it('converts normalized ratio (< 1.0) ratings to 5.0 scale', () => {
+      // 0.9 ratio represents 90% -> 4.5 / 5.0
+      expect(normalizeVendorRating(0.9)).toBe(4.5);
+      expect(normalizeVendorRating('0.9')).toBe(4.5);
+      expect(normalizeVendorRating(0.8)).toBe(4.0);
+    });
+
+    it('converts 100-point scale scores (> 5.0) to 5.0 scale', () => {
+      expect(normalizeVendorRating(90)).toBe(4.5);
+      expect(normalizeVendorRating(85)).toBe(4.3);
+      expect(normalizeVendorRating('90')).toBe(4.5);
+      expect(normalizeVendorRating(100)).toBe(5.0);
+    });
+
+    it('falls back to score when rating is absent', () => {
+      expect(normalizeVendorRating(null, 90)).toBe(4.5);
+      expect(normalizeVendorRating(undefined, 85)).toBe(4.3);
+      expect(normalizeVendorRating(null, 4.5)).toBe(4.5);
+      expect(normalizeVendorRating(null, '90')).toBe(4.5);
+    });
+
+    it('handles 0 and invalid inputs gracefully', () => {
+      expect(normalizeVendorRating(0)).toBe(0);
+      expect(normalizeVendorRating(null, 0)).toBe(0);
+      expect(normalizeVendorRating(null)).toBeNull();
+      expect(normalizeVendorRating(undefined)).toBeNull();
+      expect(normalizeVendorRating('')).toBeNull();
+      expect(normalizeVendorRating('abc')).toBeNull();
+      expect(normalizeVendorRating(NaN)).toBeNull();
     });
   });
 });

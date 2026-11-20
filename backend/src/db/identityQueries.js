@@ -274,6 +274,25 @@ async function findUserByEmailAndPhone(email, phone) {
 }
 
 /**
+ * Look up a single account by UUID primary key.
+ */
+async function findUserByUuid(uuid) {
+  if (!uuid) return null;
+  const result = await pool.rows(
+    `${USER_SELECT} where u.uuid = $1 limit 1`,
+    [String(uuid)],
+    {
+      d1: true,
+      d1Text: `${USER_SELECT} where u.uuid = $1 limit 1`,
+      useCache: true,
+      tag: 'user',
+      ttlMs: 60000,
+    }
+  );
+  return mapRowToUser(result[0]);
+}
+
+/**
  * List accounts for the admin users screen.
  */
 async function listUsers(limit = 200) {
@@ -1248,12 +1267,12 @@ async function insertVendorAccount({
  */
 async function updateUserPassword(email, newPassword) {
   const result = await pool.query(
-    'update "user" set password = $1, last_modified_ts = now() where lower(username) = $2',
+    'update "user" set password = $1, reset_password = false, last_modified_ts = now() where lower(username) = $2',
     [newPassword, String(email).trim().toLowerCase()],
     {
       d1: true,
       d1Text:
-        'update "user" set password = $1, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where lower(username) = $2',
+        'update "user" set password = $1, reset_password = false, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where lower(username) = $2',
     }
   );
   queryCache.invalidate('user');
@@ -1269,7 +1288,7 @@ async function updateUserPassword(email, newPassword) {
  * cannot promise.
  */
 async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
-  const result = await pool.query(
+  let result = await pool.query(
     'update "user" set password = $1, reset_password = false, last_modified_by = $2, last_modified_ts = now() where uuid = $3',
     [newPassword, actorEmail || 'enterprise-workspace', String(userUuid)],
     {
@@ -1278,8 +1297,19 @@ async function updateUserPasswordByUuid(userUuid, newPassword, actorEmail) {
         'update "user" set password = $1, reset_password = false, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where uuid = $3',
     }
   );
+  if ((result?.rowCount || 0) === 0 && actorEmail) {
+    result = await pool.query(
+      'update "user" set password = $1, reset_password = false, last_modified_by = $2, last_modified_ts = now() where lower(username) = $3',
+      [newPassword, actorEmail || 'enterprise-workspace', String(actorEmail).trim().toLowerCase()],
+      {
+        d1: true,
+        d1Text:
+          'update "user" set password = $1, reset_password = false, last_modified_by = $2, last_modified_ts = strftime(\'%Y-%m-%dT%H:%M:%fZ\',\'now\') where lower(username) = $3',
+      }
+    );
+  }
   queryCache.invalidate('user');
-  return (result.rowCount || 0) > 0;
+  return (result?.rowCount || 0) > 0;
 }
 
 /**
@@ -1517,6 +1547,7 @@ module.exports = {
   findUserByEmail,
   findExistingUsernames,
   findUserByEmailAndPhone,
+  findUserByUuid,
   listUsers,
   resolveMasterUuid,
   buildUniqueId,

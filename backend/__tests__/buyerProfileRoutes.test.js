@@ -124,6 +124,24 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
     });
   });
 
+  describe('GET /api/buyer-profile/completion', () => {
+    test('returns completion status for buyer profile', async () => {
+      jest.spyOn(buyerProfileService, 'getProfile').mockResolvedValue(STORED_PROFILE);
+      const res = await request(app).get('/api/buyer-profile/completion').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty('isComplete');
+      expect(res.body.data).toHaveProperty('completionPercentage');
+      expect(res.body.data).toHaveProperty('issues');
+    });
+
+    test('returns error when service fails', async () => {
+      jest.spyOn(buyerProfileService, 'getProfile').mockRejectedValue(new Error('completion failure'));
+      const res = await request(app).get('/api/buyer-profile/completion').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
   // ── Write ─────────────────────────────────────────────────────────────────
   describe('PUT /api/buyer-profile/me', () => {
     test('saves the profile and returns the stored record', async () => {

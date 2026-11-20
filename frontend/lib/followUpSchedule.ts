@@ -117,18 +117,27 @@ export function normalizeFollowUpVendors(
   const followUp = rfq.followUpData;
   const rawVendors: VendorFollowUpRecord[] = followUp?.vendors
     ? followUp.vendors
-    : (rfq.assignedVendors || []).map((av, idx) => ({
-        vendorId: av.id || `v-${idx + 1}`,
-        vendorName: av.name || notRecordedLabel,
-        contactPerson: av.contactPerson || '',
-        phone: av.phone || '',
-        overallStatus: 'Pending' as const,
-        lastInteraction: '',
-        bidStatus: 'Pending' as const,
-        call: NOT_DISPATCHED_CHANNEL,
-        whatsapp: NOT_DISPATCHED_CHANNEL,
-        sms: NOT_DISPATCHED_CHANNEL,
-      }));
+    : (rfq.assignedVendors || [])
+        .filter((av): av is NonNullable<typeof av> => Boolean(av))
+        .map((av, idx) => {
+          const isStr = typeof av === 'string';
+          const name = isStr ? av : av.name || notRecordedLabel;
+          const id = isStr ? `v-${idx + 1}` : av.id || `v-${idx + 1}`;
+          const contact = isStr ? '' : av.contactPerson || '';
+          const phone = isStr ? '' : av.phone || '';
+          return {
+            vendorId: id,
+            vendorName: name,
+            contactPerson: contact,
+            phone: phone,
+            overallStatus: 'Pending' as const,
+            lastInteraction: '',
+            bidStatus: 'Pending' as const,
+            call: NOT_DISPATCHED_CHANNEL,
+            whatsapp: NOT_DISPATCHED_CHANNEL,
+            sms: NOT_DISPATCHED_CHANNEL,
+          };
+        });
 
   return rawVendors.map((v, idx) => {
     const bidStatus = v.bidStatus || 'Pending';

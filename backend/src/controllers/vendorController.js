@@ -50,6 +50,7 @@ const {
   VENDOR_ACTIVE_STATUSES,
   VENDOR_STATUS_MESSAGES,
   isVendorInactive,
+  normalizeVendorRating,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -259,6 +260,7 @@ const VENDOR_BUYER_CREATE_FIELDS = [
   'name', 'brandName', 'email', 'phone', 'contactPerson', 'contactDesignation',
   'gstin', 'gst', 'gstNumber', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
   'country', 'pincode', 'majorCategory', 'minorCategories', 'products',
+  'rating', 'score',
 ];
 
 function pickVendorBuyerCreateFields(body) {
@@ -371,8 +373,7 @@ function sanitizePublicVendor(vendor) {
   const rawObj = vendor.raw && typeof vendor.raw === 'object' ? vendor.raw : {};
   const v = { ...rawObj, ...vendor };
   const majorCategory = v._majorCategory || v.major_category || v.majorCategory || rawObj.majorCategory || 'General Industrial';
-  const rating = typeof v.rating === 'number' ? v.rating :
-    (typeof v.score === 'number' ? Math.round((v.score / 20) * 10) / 10 : null);
+  const rating = normalizeVendorRating(v.rating, v.score);
   const city = v.city || null;
   const state = v.state || null;
   const location = [city, state].filter(Boolean).join(', ') || v.location || city || state || 'India';

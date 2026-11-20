@@ -44,6 +44,7 @@ import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   extractRfqCategoryFilters,
   extractRfqCategorySignals,
+  checkVendorRfqCategoryMatch,
   matchVendorAgainstSignals,
   selectTopProcucevVendorsForMode3,
   selectVendorsForCategories,
@@ -1255,7 +1256,7 @@ export default function IngestionWizard({
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
           ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
           : activeReconciledVendors;
-        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
+        const { signals: dispatchSignals, rawSignals: dispatchRawSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -1270,7 +1271,14 @@ export default function IngestionWizard({
           const mismatchedVendors: typeof candidatePool = [];
 
           for (const v of candidatePool) {
-            if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: dispatchSignals,
+              rawSignals: dispatchRawSignals,
+              minorOnly: dispatchMinorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            if (dispatchSignals.length === 0 || matchEval.isMatch) {
               matchingVendors.push(v);
             } else {
               mismatchedVendors.push(v);
@@ -2118,12 +2126,28 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const { signals: mode1Signals, rawSignals: mode1RawSignals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
+                const matchingVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: mode1Signals,
+                        rawSignals: mode1RawSignals,
+                        minorOnly: mode1MinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : allMyVendors;
-                const mismatchedVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const mismatchedVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      !checkVendorRfqCategoryMatch(v, {
+                        signals: mode1Signals,
+                        rawSignals: mode1RawSignals,
+                        minorOnly: mode1MinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : [];
 
                 let pool = allMyVendors;
@@ -2199,8 +2223,14 @@ export default function IngestionWizard({
                           type="button"
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
-                              if (mode1Signals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
+                              if (mode1Signals.length === 0 && mode1RawSignals.length === 0) return true;
+                              return checkVendorRfqCategoryMatch(v, {
+                                signals: mode1Signals,
+                                rawSignals: mode1RawSignals,
+                                minorOnly: mode1MinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              }).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2252,10 +2282,16 @@ export default function IngestionWizard({
                                 ? vendor.vendorSelectedCategories
                                 : [];
 
-                          const matchResult = mode1Signals.length > 0
-                            ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
+                          const matchResult = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                            ? checkVendorRfqCategoryMatch(vendor, {
+                                signals: mode1Signals,
+                                rawSignals: mode1RawSignals,
+                                minorOnly: mode1MinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              })
                             : { isMatch: true };
-                          const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
+                          const isCategoryMismatch = (mode1Signals.length > 0 || mode1RawSignals.length > 0) && !matchResult.isMatch;
 
                           const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
                           const isSelected = selectedVendorIds.length === 0
@@ -2430,12 +2466,29 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
+                const matchingVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : allMyVendors;
-                const mismatchedVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const mismatchedVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      !checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : [];
 
                 let pool = allMyVendors;
@@ -2580,8 +2633,14 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => {
                               const selectableIds = myVendors.filter((v) => {
-                                if (rfqSignals.length === 0) return true;
-                                return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
+                                if (rfqSignals.length === 0 && rfqRawSignals.length === 0) return true;
+                                return checkVendorRfqCategoryMatch(v, {
+                                  signals: rfqSignals,
+                                  rawSignals: rfqRawSignals,
+                                  minorOnly: rfqMinorOnly,
+                                  majorCategory: form.majorCategory,
+                                  minorCategory: form.minorCategory,
+                                }).isMatch;
                               }).map((v) => v.id);
 
                               if (allSelected) {
@@ -2626,10 +2685,16 @@ export default function IngestionWizard({
                                   ? vendor.vendorSelectedCategories
                                   : [];
 
-                            const matchResult = rfqSignals.length > 0
-                              ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
+                            const matchResult = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                              ? checkVendorRfqCategoryMatch(vendor, {
+                                  signals: rfqSignals,
+                                  rawSignals: rfqRawSignals,
+                                  minorOnly: rfqMinorOnly,
+                                  majorCategory: form.majorCategory,
+                                  minorCategory: form.minorCategory,
+                                })
                               : { isMatch: true };
-                            const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+                            const isCategoryMismatch = (rfqSignals.length > 0 || rfqRawSignals.length > 0) && !matchResult.isMatch;
 
                             const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
                             const isSelected = selectedVendorIds.length === 0
@@ -2804,7 +2869,8 @@ export default function IngestionWizard({
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
                 const allMyVendors = activeReconciledVendors.filter(isBuyerUploaded);
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
                 const lineItemMinors = Array.from(
                   new Set(
                     (form.lineItems || [])
@@ -2817,15 +2883,39 @@ export default function IngestionWizard({
                 let myVendors = allMyVendors;
                 if (lineItemMinors.length > 0) {
                   const minorMatched = allMyVendors.filter((v) =>
-                    lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
+                    lineItemMinors.some((m) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: [m],
+                        rawSignals: [m, form.majorCategory, form.minorCategory].filter(Boolean) as string[],
+                        minorOnly: true,
+                        majorCategory: form.majorCategory,
+                        minorCategory: m,
+                      }).isMatch
+                    )
                   );
                   if (minorMatched.length > 0) {
                     myVendors = minorMatched;
-                  } else if (rfqSignals.length > 0) {
-                    myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                  } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                    myVendors = allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    );
                   }
-                } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                  myVendors = allMyVendors.filter((v) =>
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  );
                 }
 
                 return (

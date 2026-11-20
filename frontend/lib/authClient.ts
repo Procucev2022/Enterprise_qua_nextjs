@@ -195,7 +195,7 @@ class AuthClient {
   public async changePassword(
     currentPasswordOrCode: string,
     newPassword: string,
-    codeOrOptions?: string | { code?: string; resetToken?: string }
+    codeOrOptions?: string | { code?: string; resetToken?: string; currentPassword?: string }
   ): Promise<AuthResponse> {
     if (!this.token) {
       return { success: false, error: UI_STRINGS.auth.sessionExpired };
@@ -209,6 +209,7 @@ class AuthClient {
     } else if (codeOrOptions && typeof codeOrOptions === 'object') {
       if (codeOrOptions.code) payload.code = codeOrOptions.code;
       if (codeOrOptions.resetToken) payload.resetToken = codeOrOptions.resetToken;
+      if (codeOrOptions.currentPassword) payload.currentPassword = codeOrOptions.currentPassword;
     }
     if (currentPasswordOrCode) {
       if (/^\d{6}$/.test(currentPasswordOrCode.trim())) {
@@ -216,6 +217,9 @@ class AuthClient {
       } else {
         payload.currentPassword = currentPasswordOrCode;
       }
+    }
+    if (codeOrOptions && typeof codeOrOptions === 'object' && codeOrOptions.currentPassword) {
+      payload.currentPassword = codeOrOptions.currentPassword;
     }
 
     let res: Response;

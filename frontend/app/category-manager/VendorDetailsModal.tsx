@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import type { QuoteComparison, RFQAssignedVendor, RFQItem, VendorEntry } from '@/lib/types';
-import { formatCurrency, formatIndianDateTime } from '@/lib/constants';
+import { formatCurrency, formatIndianDateTime, normalizeVendorRating } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { isDummyPan } from '@/lib/validationSchemas';
 
@@ -176,7 +176,7 @@ export default function VendorDetailsModal({
       ? matchedVendor.minorCategories
       : [];
 
-  const displayRating = matchedVendor?.rating !== undefined && matchedVendor?.rating !== null ? Number(matchedVendor.rating) : null;
+  const displayRating = normalizeVendorRating(matchedVendor?.rating, matchedVendor?.score);
   const displayScore = matchedVendor?.score ?? resolvedQuote?.aiMatchScore ?? null;
   const displayStatus = matchedVendor?.status || 'PREFERRED ENTERPRISE SUPPLIER';
 

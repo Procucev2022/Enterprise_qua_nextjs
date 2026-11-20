@@ -4285,7 +4285,25 @@ function resolveValidVendorCategories(payload = {}) {
   };
 }
 
+function normalizeVendorRating(rating, score) {
+  const numRating = typeof rating === 'number' ? rating : (typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null);
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) return Math.round(numRating * 50) / 10;
+    if (numRating > 5.0) return Math.round((numRating / 20) * 10) / 10;
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : (typeof score === 'string' && score.trim() !== '' ? Number(score) : null);
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) return numScore;
+    return Math.round((numScore / 20) * 10) / 10;
+  }
+  return null;
+}
+
 module.exports = {
+  normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
   ACTION_CENTER_MESSAGES,

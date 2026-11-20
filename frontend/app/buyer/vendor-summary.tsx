@@ -26,6 +26,7 @@ import {
   reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
   sortTableRows,
+  normalizeVendorRating,
   VENDOR_ACTIVE_STATUSES,
   type TableColumnOption,
   type TableSortState,
@@ -1987,18 +1988,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
         {/* 13. Rating */}
         <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
-          {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
-            <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 inline-flex items-center justify-center gap-0.5">
-              <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
-              {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
-            </div>
-          ) : (
-            vendor.rating && (
+          {(() => {
+            const displayRating = normalizeVendorRating(vendor.rating, vendor.score);
+            return displayRating !== null ? (
               <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 inline-flex items-center justify-center gap-0.5">
-                <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
+                <Star size={10} className="fill-amber-500 text-amber-500" /> {displayRating.toFixed(1)} / 5.0
               </div>
-            )
-          )}
+            ) : null;
+          })()}
         </td>
 
         {/* 14. Status */}
@@ -3110,7 +3107,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
                   <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
                     <Star size={13} className="fill-amber-500 text-amber-500" />
-                    {typeof selectedVendorForCrud.rating === 'number' ? `${selectedVendorForCrud.rating} / 5.0` : '—'}
+                    {normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) !== null
+                      ? `${normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score)!.toFixed(1)} / 5.0`
+                      : '—'}
                   </div>
                 </div>
 
@@ -3794,10 +3793,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         (() => {
           const vendor = selectedVendorForRevision;
           // Previous figures are the vendor's recorded values. A missing value shows a dash.
+          const previousRating: number | null = normalizeVendorRating(vendor.rating, vendor.score);
           const previousScore: number | null =
-            typeof vendor.score === 'number' ? vendor.score : typeof vendor.rating === 'number' ? Math.round(vendor.rating * 20) : null;
-          const previousRating: number | null =
-            typeof vendor.rating === 'number' ? vendor.rating : previousScore !== null ? Number((previousScore / 20).toFixed(1)) : null;
+            typeof vendor.score === 'number' && vendor.score > 5
+              ? Math.round(vendor.score)
+              : previousRating !== null
+              ? Math.round(previousRating * 20)
+              : null;
           const scoresEntered = [qualityScore, costScore, deliveryScore].every((s) => s !== '');
           const buyerAverage = scoresEntered
             ? parseFloat(((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3).toFixed(2))

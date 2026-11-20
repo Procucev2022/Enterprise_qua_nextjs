@@ -789,5 +789,69 @@ describe('Approvals API & Controller', () => {
       expect(res.status).toBe(500);
       expect(res.body.error).toBe('Failed to process approval action.');
     });
+
+    it('returns approvers list via GET /api/approvals/approvers', async () => {
+      const res = await request(app)
+        .get('/api/approvals/approvers')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.approvers)).toBe(true);
+      expect(res.body.approvers.length).toBeGreaterThan(0);
+    });
+
+    it('answers 500 when getApprovers encounters an error', async () => {
+      const req = {};
+      const res = {
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('json rendering error');
+        }),
+        status: jest.fn().mockReturnThis(),
+      };
+      await approvalController.getApprovers(req, res);
+      expect(logger.error).toHaveBeenCalledWith('Failed to retrieve approvers list', expect.any(Error), 'APPROVAL_CONTROLLER');
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    it('returns users list via GET /api/approvals/users', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValueOnce([
+        { id: 'usr_govardhan', name: 'Govardhan', role: 'Category Manager' },
+      ]);
+      const res = await request(app)
+        .get('/api/approvals/users')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.users)).toBe(true);
+      expect(res.body.users).toHaveLength(1);
+    });
+
+    it('answers 500 when getUsers encounters an error', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockRejectedValueOnce(new Error('db err'));
+      const res = await request(app)
+        .get('/api/approvals/users')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('Failed to retrieve users list.');
+    });
+
+    it('returns 401 in processAction when session actor cannot be extracted', async () => {
+      const req = {
+        params: { id: 'appr-1' },
+        body: withApprovalCredentials({ action: 'APPROVE' }),
+        user: null,
+      };
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      await approvalController.processAction(req, res);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
   });
 });

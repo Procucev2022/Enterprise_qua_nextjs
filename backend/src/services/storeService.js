@@ -4641,6 +4641,9 @@ class StoreService {
       // Mechanical' used to be substituted here, which silently mis-filed the RFQ
       // and routed it to the wrong vendor pool.
       category: rfqData.category || null,
+      majorCategory: rfqData.majorCategory || null,
+      minorCategory: rfqData.minorCategory || null,
+      minorCategories: Array.isArray(rfqData.minorCategories) ? rfqData.minorCategories : [],
       createdAt,
       closingDeadline,
       deadline: resolvedDeadline,
@@ -9421,6 +9424,18 @@ class StoreService {
     const shortlisted = [];
     const excluded = [];
 
+    // Precompute parent major keys for the RFQ's minor and major categories
+    const rfqMinors = this._rfqMinorCategories(rfq);
+    const parentMajors = new Set(this._majorCategoriesForMinors(rfqMinors, { allMajors: true }));
+    if (rfq.majorCategory || rfq.category) {
+      const directMajor = String(rfq.majorCategory || rfq.category).trim().toLowerCase();
+      if (directMajor) {
+        parentMajors.add(directMajor);
+        const folded = foldCategoryDashes(directMajor);
+        if (folded) parentMajors.add(folded);
+      }
+    }
+
     for (const v of vendorList) {
       const vendorRecord = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
       const hasCategory = Boolean(
@@ -9429,7 +9444,24 @@ class StoreService {
         (Array.isArray(vendorRecord.vendorSelectedCategories) && vendorRecord.vendorSelectedCategories.length > 0) ||
         (Array.isArray(vendorRecord.clientMappedCategories) && vendorRecord.clientMappedCategories.length > 0)
       );
-      const isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendorRecord));
+
+      // 1. Direct rfq matching (strict minor if minors exist, else signals)
+      let isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendorRecord));
+
+      // 2. Division / parent major fallback: if vendor's major matches RFQ's major or parent major of RFQ's minors
+      if (!isMatch && hasCategory && parentMajors.size > 0) {
+        const vMajors = vendorMajorKeys(vendorRecord);
+        if (vMajors.some((k) => parentMajors.has(k))) {
+          isMatch = true;
+        }
+      }
+
+      // 3. Broad category coverage fallback for buyer-uploaded vendors
+      if (!isMatch && hasCategory && this.isBuyerUploaded(vendorRecord) && signals.length > 0) {
+        if (signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig))) {
+          isMatch = true;
+        }
+      }
 
       if (isMatch) {
         shortlisted.push(v);

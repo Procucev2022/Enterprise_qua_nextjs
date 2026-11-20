@@ -3165,6 +3165,24 @@ describe('Store Service & Business Operations', () => {
       expect(res.excluded.map((v) => v.id)).toEqual(['v-mech']);
       expect(mismatchEmailSpy).not.toHaveBeenCalled();
     });
+
+    test('shortlists vendors whose major category covers the parent major of an RFQ minor category', () => {
+      const rfq = storeService.createRFQ({
+        title: 'Pump Procurement',
+        category: 'Engineering Spares - Mechanical',
+        minorCategory: 'Pumps & Accessories',
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+
+      const vendorList = [
+        { id: 'v-parent', name: 'Mechanical Corp', email: 'mechcorp@ex.com', majorCategory: 'Engineering Spares - Mechanical', minorCategories: [] },
+        { id: 'v-unrelated', name: 'IT Solutions', email: 'it@ex.com', majorCategory: 'Information Technology', minorCategories: [] },
+      ];
+
+      const res = storeService.validateAndShortlistVendors(rfq, vendorList, 'buyer@company.com');
+      expect(res.shortlisted.map((v) => v.id)).toContain('v-parent');
+      expect(res.excluded.map((v) => v.id)).toContain('v-unrelated');
+    });
   });
 
   describe('getVendorByIdWithDBFallback', () => {

@@ -1123,4 +1123,297 @@ describe('ApprovalsDashboard', () => {
     const closeBtn = screen.getByRole('button', { name: strings.closeDetails });
     fireEvent.click(closeBtn);
   });
+
+  it('renders discount, offline payment, and trial period details breakdown in details modal', async () => {
+    const detailedRequests = [
+      {
+        id: 'appr-discount-full',
+        request_number: 'REQ-DSC-FULL',
+        module: 'Discounts',
+        request_type: 'Discounts',
+        project: 'JSW Steel Energy Sourcing',
+        applicant_name: 'JSW Energy Plant 4',
+        applicant_email: 'sourcing@jsw.in',
+        value_impact: '20% Discount',
+        amount: 20000,
+        quantity: 1,
+        available_balance: 10,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Discount for annual commitment',
+        raw: {
+          original_price: 100000,
+          discount_percentage: 20,
+          discount_amount: 20000,
+          remaining_amount: 80000,
+          gst_amount: 14400,
+          final_payable_amount: 94400,
+          selected_mode: 'Full Sourcing',
+          billing_duration: '24 Months',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-discount-empty',
+        request_number: 'REQ-DSC-EMPTY',
+        module: 'Discounts',
+        request_type: 'Discounts',
+        project: 'Tata Steel Maintenance',
+        applicant_name: 'Tata Steel',
+        applicant_email: 'tata@steel.com',
+        value_impact: 'Custom Discount',
+        amount: 0,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Govardhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Discount without raw fields',
+        raw: {},
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-offline-full',
+        request_number: 'REQ-OFF-FULL',
+        module: 'Offline Payments',
+        request_type: 'Offline Payments',
+        project: 'Offline Bank Transfer',
+        applicant_name: 'Larsen & Toubro',
+        applicant_email: 'lt@lnt.com',
+        value_impact: '₹50,000 NEFT',
+        amount: 50000,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Krishna',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Sudheer Sir',
+        status: 'Pending',
+        details: 'Offline NEFT payment proof attached',
+        raw: {
+          buyer_source_mode: 'Annual Pass',
+          payment_date: '2026-11-15',
+          payment_type: 'NEFT',
+          transaction_id: 'TXN-OFFLINE-999',
+          payment_amount: 50000,
+          proof_file_name: 'receipt.pdf',
+          proof_file_url: 'https://example.com/receipt.pdf',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-offline-cash',
+        request_number: 'REQ-OFF-CASH',
+        module: 'Offline Payments',
+        request_type: 'Offline Payments',
+        project: 'Cash Counter Payment',
+        applicant_name: 'Small Supplier',
+        applicant_email: 'cash@vendor.com',
+        value_impact: '₹5,000 Cash',
+        amount: 5000,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Krishna',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Sudheer Sir',
+        status: 'Pending',
+        details: 'Cash payment without transaction id or proof',
+        raw: {
+          payment_type: 'Cash',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-trial-full',
+        request_number: 'REQ-TRL-FULL',
+        module: 'Trial Periods',
+        request_type: 'Trial Periods',
+        project: 'Trial Extension',
+        applicant_name: 'JSW Steel',
+        applicant_email: 'jsw@steel.com',
+        value_impact: '45 Days Trial',
+        amount: 45,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: '45 days trial extension for evaluation',
+        raw: {
+          selected_mode: 'Priority Access',
+          trial_days: 45,
+          start_date: '2026-11-01',
+          end_date: '2026-12-15',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-trial-empty',
+        request_number: 'REQ-TRL-EMPTY',
+        module: 'Trial Periods',
+        request_type: 'Trial Periods',
+        project: 'Trial Basic',
+        applicant_name: 'JSW Steel',
+        applicant_email: 'jsw@steel.com',
+        value_impact: 'Trial',
+        amount: 0,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Trial with empty raw',
+        raw: {},
+        created_at: '2026-10-30T10:00:00Z',
+      },
+    ];
+
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
+      data: detailedRequests,
+      total: detailedRequests.length,
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-DSC-FULL')).toBeInTheDocument();
+    });
+
+    // 1. Open Discount Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-DSC-FULL' }));
+    expect(screen.getByText('Discount Price Breakdown')).toBeInTheDocument();
+    expect(screen.getByText(/Full Sourcing • 24 Months/)).toBeInTheDocument();
+    expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
+    expect(screen.getByText('20%')).toBeInTheDocument();
+    expect(screen.getByText('−₹20,000')).toBeInTheDocument();
+    expect(screen.getByText('₹80,000')).toBeInTheDocument();
+    expect(screen.getByText('+₹14,400')).toBeInTheDocument();
+    expect(screen.getByText('₹94,400')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 2. Open Discount Empty Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-DSC-EMPTY' }));
+    expect(screen.getByText('Discount Price Breakdown')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 3. Open Offline Payment Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-OFF-FULL' }));
+    expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+    expect(screen.getByText('Annual Pass')).toBeInTheDocument();
+    expect(screen.getByText('2026-11-15')).toBeInTheDocument();
+    expect(screen.getByText('NEFT')).toBeInTheDocument();
+    expect(screen.getByText('TXN-OFFLINE-999')).toBeInTheDocument();
+    expect(screen.getByText('receipt.pdf')).toBeInTheDocument();
+    expect(screen.getByText('View / Download')).toHaveAttribute('href', 'https://example.com/receipt.pdf');
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 4. Open Offline Payment Cash Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-OFF-CASH' }));
+    expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+    expect(screen.getByText('Cash')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 5. Open Trial Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-TRL-FULL' }));
+    expect(screen.getByText('Trial Period Details')).toBeInTheDocument();
+    expect(screen.getAllByText('Priority Access').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('45 Days')).toBeInTheDocument();
+    expect(screen.getByText('2026-11-01')).toBeInTheDocument();
+    expect(screen.getByText('2026-12-15')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 6. Open Trial Empty Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-TRL-EMPTY' }));
+    expect(screen.getByText('Trial Period Details')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+  });
+
+  it('handles keyboard escape dismissals and action modal error reset', async () => {
+    const escapeApproval = {
+      id: 'appr-escape-1',
+      request_number: 'REQ-ESC-01',
+      module: '',
+      request_type: 'Discounts',
+      project: 'Escape Test Project',
+      applicant_name: 'Escape Buyer',
+      applicant_email: 'escape@buyer.com',
+      value_impact: '₹10,000',
+      amount: 10000,
+      quantity: 1,
+      available_balance: 0,
+      maker_name: 'Maker',
+      maker_role: 'Role',
+      assigned_approver: '',
+      status: 'Pending',
+      details: 'Escape test',
+      history: [
+        {
+          action: 'SUBMITTED',
+          actor_name: 'Maker',
+          actor_role: '',
+          timestamp: '2026-10-29T11:00:00Z',
+          remarks: '',
+        },
+      ],
+      created_at: '2026-10-30T10:00:00Z',
+    };
+
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
+      data: [escapeApproval],
+      total: 1,
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-ESC-01')).toBeInTheDocument();
+    });
+
+    // 1. Open details modal and close via Escape key
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-ESC-01' }));
+    expect(screen.getByRole('heading', { name: strings.detailsTitle })).toBeInTheDocument();
+    expect(screen.getByText(/No notes/)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.detailsTitle })).toBeNull();
+
+    // 2. Open column settings and close via Escape key
+    fireEvent.click(screen.getByTestId('toolbar-settings-btn'));
+    expect(screen.getByRole('heading', { name: strings.columnSettingsTitle })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.columnSettingsTitle })).toBeNull();
+
+    // 3. Open summary modal and close via Escape key
+    const totalCard = screen.getByTestId('card-total-requests');
+    fireEvent.click(totalCard);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: new RegExp(strings.summaryModalTitlePrefix) })).toBeInTheDocument();
+    });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: new RegExp(strings.summaryModalTitlePrefix) })).toBeNull();
+    });
+
+    // 4. Open action modal, trigger password error, then type to clear password error
+    const rowApproveBtn = screen.getAllByRole('button', { name: strings.approveBtn })[0];
+    fireEvent.click(rowApproveBtn);
+    expect(screen.getByRole('heading', { name: strings.confirmApprovalTitle })).toBeInTheDocument();
+
+    // Click confirm without approver name -> sets passwordError to approverRequired
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    fireEvent.click(confirmBtn);
+    expect(screen.getByText(strings.approverRequired)).toBeInTheDocument();
+
+    // Typing in password input should clear passwordError (line 1688)
+    const passInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passInput, { target: { value: 'secret' } });
+    expect(screen.queryByText(strings.approverRequired)).toBeNull();
+
+    // Close action modal via Escape key (line 168)
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.confirmApprovalTitle })).toBeNull();
+  });
 });
