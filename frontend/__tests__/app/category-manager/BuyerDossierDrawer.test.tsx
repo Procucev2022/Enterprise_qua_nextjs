@@ -230,7 +230,7 @@ describe('BuyerDossierDrawer', () => {
       document.getElementById('trial-approver-select') ||
       document.getElementById('offline-approver-select')) as HTMLInputElement | HTMLSelectElement | null;
     if (approverInput) {
-      fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+      fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
     }
     const initiatorInput = (document.getElementById('credit-initiator') ||
       document.getElementById('discount-initiator') ||
@@ -388,8 +388,8 @@ describe('BuyerDossierDrawer', () => {
 
     // Reopen and test X button (line 1268)
     openRequestModal('Buyer Credit Addition');
-    const xButtons = screen.getAllByRole('button');
-    const modalX = xButtons.find(b => b.querySelector('.lucide-x') && b.closest('.max-w-md'));
+    const modalHeading = screen.getByText('Request Buyer Credit Approval');
+    const modalX = modalHeading.closest('[class*="max-w-"]')?.querySelector('button');
     if (modalX) fireEvent.click(modalX);
     expect(screen.queryByText('Request Buyer Credit Approval')).toBeNull();
 
@@ -691,7 +691,7 @@ describe('BuyerDossierDrawer', () => {
       expect(buyerProfileClient.fetchBuyerCommunications).toHaveBeenCalledWith('buyer-acc-1789811073812-ux3');
     });
 
-    const commSearchInput = screen.getByPlaceholderText(/Search email communications/i);
+    const commSearchInput = screen.getByPlaceholderText(/Search (?:email )?communications/i);
     fireEvent.change(commSearchInput, { target: { value: 'Onboarding' } });
     expect(await screen.findByText('Enterprise Onboarding Confirmation & API Key Generation')).toBeInTheDocument();
 
@@ -855,7 +855,7 @@ describe('BuyerDossierDrawer', () => {
     // Communications tab
     fireEvent.click(screen.getByRole('button', { name: /Communications/i }));
     await waitFor(() => {
-      expect(screen.getByText(/No recorded EMAIL communications found/i)).toBeInTheDocument();
+      expect(screen.getByText(/No recorded (?:EMAIL )?communications found/i)).toBeInTheDocument();
     });
 
     // Payments tab
@@ -869,6 +869,9 @@ describe('BuyerDossierDrawer', () => {
     fireEvent.click(retryButton);
     await waitFor(() => {
       expect(buyerProfileClient.fetchBuyerPaymentHistory).toHaveBeenCalledTimes(2);
+    });
+    await waitFor(() => {
+      expect(screen.queryByText(UI_STRINGS.buyerDirectory.dossier.payments.loadFailure)).not.toBeInTheDocument();
     });
   });
 
@@ -1098,7 +1101,10 @@ describe('BuyerDossierDrawer', () => {
     // Switch to Communications tab
     const commsTabBtn = screen.getByRole('button', { name: /Communications/i });
     fireEvent.click(commsTabBtn);
-    expect(await screen.findByText('No recorded EMAIL communications found for this buyer.')).toBeInTheDocument();
+    expect(await screen.findByText('sparse msg')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Email$/i }));
+    expect(await screen.findByText(/No recorded (?:EMAIL )?communications found for this buyer\./i)).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /SMS/i }));
     expect(await screen.findByText('sparse msg')).toBeInTheDocument();
@@ -1910,6 +1916,10 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
 
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
+    const approverSelect = document.getElementById('credit-approver') as HTMLSelectElement;
+    if (approverSelect) {
+      fireEvent.change(approverSelect, { target: { value: '' } });
+    }
     fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '5' } });
     const form = screen.getByRole('button', { name: /Submit for Approval/i }).closest('form') as HTMLFormElement;
     fireEvent.submit(form);
@@ -2429,7 +2439,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       expect(onCloseMock).not.toHaveBeenCalled();
 
       // Click the X button closes ONLY the popup, does NOT close the drawer
-      const modalCard = modalHeading.closest('.max-w-md');
+      const modalCard = modalHeading.closest('[class*="max-w-"]');
       const closeXBtn = modalCard?.querySelector('button');
       expect(closeXBtn).toBeInTheDocument();
       fireEvent.click(closeXBtn!);
@@ -2507,18 +2517,18 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
       fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
-      expect(screen.getByText(/Discount Percentage/i)).toBeInTheDocument();
+      expect(screen.getAllByText(/Discount Percentage/i).length).toBeGreaterThanOrEqual(1);
 
       const closeBtnStep3 = screen.getByRole('button', { name: 'Close' });
       fireEvent.click(closeBtnStep3);
-      expect(screen.queryByText(/Discount Percentage/i)).toBeNull();
+      expect(screen.queryAllByText(/Discount Percentage/i)).toHaveLength(0);
 
       fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
       fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
       fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(screen.queryByText(/Discount Percentage/i)).toBeNull();
+      expect(screen.queryAllByText(/Discount Percentage/i)).toHaveLength(0);
 
       // Reopen and test error response
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({
@@ -2531,7 +2541,7 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
       const approverSelect = document.getElementById('discount-approver') as HTMLSelectElement;
       expect(approverSelect).toBeInTheDocument();
-      fireEvent.change(approverSelect, { target: { value: 'VP Procurement' } });
+      fireEvent.change(approverSelect, { target: { value: 'Srinu Sir' } });
       const amountInput = screen.getByRole('spinbutton');
       fireEvent.change(amountInput, { target: { value: '15' } });
       const reasonInput = screen.getByPlaceholderText(/Reason for discount request/i);

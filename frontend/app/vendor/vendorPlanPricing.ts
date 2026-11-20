@@ -21,12 +21,16 @@ export function formatVendorPlanAmount(value: unknown): string {
 }
 
 /**
- * The 12-month price of a paid vendor tier, read from the pricing API response.
+ * The price of a paid vendor tier (defaults to 12 months, supports 6 months), read from the pricing API response.
  * Returns null when the response is missing or any of the three amounts is absent,
  * so callers show a dash or block payment instead of falling back to a fixed price.
  */
-export function getPaidVendorPlanPrice(pricing: SubscriptionPricingResponse | null, plan: PaidVendorPlanId) {
-  const row = pricing?.seller?.[plan]?.['12_months'];
+export function getPaidVendorPlanPrice(
+  pricing: SubscriptionPricingResponse | null,
+  plan: PaidVendorPlanId,
+  duration: '6_months' | '12_months' = '12_months'
+) {
+  const row = pricing?.seller?.[plan]?.[duration];
   if (!row) return null;
   if (!isFiniteNumber(row.totalWithGst) || !isFiniteNumber(row.baseDurationPrice) || !isFiniteNumber(row.gstAmount)) {
     return null;
