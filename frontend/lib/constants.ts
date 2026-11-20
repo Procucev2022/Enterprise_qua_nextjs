@@ -2853,11 +2853,13 @@ export function getStandardDiscountPlanPrice(
   planId: 'version_1' | 'version_2' | 'version_3' | 'connect' | 'select' | string,
   durationId: '6_months' | '12_months' | string
 ): number {
-  const fromBuyerConfig = pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
+  const normPlan = planId === 'Select Model' ? 'select' : planId === 'Connect Model' ? 'connect' : planId;
+  const normDur = durationId === '6 Months' ? '6_months' : durationId === '12 Months' ? '12_months' : durationId;
+  const fromBuyerConfig = pricingConfig?.buyer?.[normPlan]?.[normDur]?.baseDurationPrice ?? pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
   if (typeof fromBuyerConfig === 'number' && Number.isFinite(fromBuyerConfig) && fromBuyerConfig > 0) {
     return fromBuyerConfig;
   }
-  const fromSellerConfig = pricingConfig?.seller?.[planId]?.[durationId]?.baseDurationPrice;
+  const fromSellerConfig = pricingConfig?.seller?.[normPlan]?.[normDur]?.baseDurationPrice ?? pricingConfig?.seller?.[planId]?.[durationId]?.baseDurationPrice;
   if (typeof fromSellerConfig === 'number' && Number.isFinite(fromSellerConfig) && fromSellerConfig > 0) {
     return fromSellerConfig;
   }
@@ -2868,7 +2870,7 @@ export function getStandardDiscountPlanPrice(
     connect: { '6_months': 3999, '12_months': 7499 },
     select: { '6_months': 7999, '12_months': 14999 },
   };
-  return FALLBACK_PRICES[planId]?.[durationId] ?? 0;
+  return FALLBACK_PRICES[normPlan]?.[normDur] ?? FALLBACK_PRICES[planId]?.[durationId] ?? 0;
 }
 
 export const DEFAULT_APPROVAL_COLUMNS: Array<{

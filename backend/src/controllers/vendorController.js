@@ -1915,6 +1915,45 @@ async function resolveFallbackVendorRecord({
     }
   }
 
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && user?.role === 'buyer') {
+    const hasMasterIdentity = Boolean(sanitizedVendorEmail || bodyData.vendorName || bodyData.name || updates?.name);
+    if (hasMasterIdentity) {
+      if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
+      const effectiveCandidate = {
+        ...(updates || {}),
+        name: updates?.name || bodyData.vendorName || bodyData.name || sanitizedVendorEmail || id,
+        email: sanitizedVendorEmail || null,
+        contactPerson: updates?.contactPerson || bodyData.contactPerson || null,
+        phone: updates?.phone || bodyData.phone || null,
+        location: updates?.location || bodyData.location || null,
+        city: updates?.city || bodyData.city || null,
+        state: updates?.state || bodyData.state || null,
+        pincode: updates?.pincode || bodyData.pincode || null,
+        gstin: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+        gst: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+        vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
+        majorCategory: updates?.majorCategory ?? bodyData.majorCategory,
+        minorCategories: updates?.minorCategories ?? bodyData.minorCategories,
+        clientMappedCategories: updates?.clientMappedCategories ?? bodyData.clientMappedCategories,
+        source: 'vendor_master_ingestion',
+        masterRecordId: id.slice(SYNTHETIC_MASTER_PREFIX.length),
+      };
+      if (!allowUnassignedCategory && !resolveValidVendorCategories(effectiveCandidate).hasCategory) {
+        return { vendor: null, missingEmail: false, missingCategory: true, promoted: false };
+      }
+      vendor = await empanelFallbackVendorForEvaluation({
+        candidate: effectiveCandidate,
+        buyerAccount,
+        resolvedOrgId,
+        user,
+        buyerCompany,
+        requireEmail,
+        allowUnassignedCategory,
+      });
+      return { vendor, missingEmail: false, missingCategory: false, promoted: Boolean(vendor) };
+    }
+  }
+
   if (id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX) && user?.role === 'buyer') {
     if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
     const effectiveCandidate = {

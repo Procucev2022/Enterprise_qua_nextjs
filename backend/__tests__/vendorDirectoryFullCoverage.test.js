@@ -2492,6 +2492,37 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }, foreignMasterUnownedRes, jest.fn());
       expect(foreignMasterUnownedRes.status).toHaveBeenCalledWith(404);
 
+      // Cover synthetic v-master-* update when master record is absent from DB but payload includes vendor identity
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce(null);
+      empanelSpy.mockResolvedValueOnce({
+        id: 'v-promoted-fallback',
+        name: 'Fallback Master Vendor Inc',
+        email: 'fallback.master@vendor.test',
+        majorCategory: 'Civil',
+        minorCategories: ['Cement'],
+        buyerId: 'ba-cat-promo',
+      });
+      const promotedMasterRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmr-fallback-promoted' },
+        user: buyerReqUser,
+        body: {
+          name: 'Fallback Master Vendor Inc',
+          email: 'fallback.master@vendor.test',
+          majorCategory: 'Civil',
+          minorCategories: ['Cement'],
+          phone: '9876543210',
+        },
+      }, promotedMasterRes, jest.fn());
+      expect(promotedMasterRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          name: 'Fallback Master Vendor Inc',
+          email: 'fallback.master@vendor.test',
+          majorCategory: 'Civil',
+        }),
+      }));
       // Cover findCategoryMappingByVendorRecord rejection catch (line 1372)
       jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
         id: 'gov-cat-err-1',

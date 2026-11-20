@@ -821,7 +821,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     unmount2();
 
     // 3. Render fresh component for remaining workflow assertions
-    render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
+    const { unmount: unmount3 } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
 
     // 3. Test success toasts without res.message (fallbacks for Discount, Trial, Addition, Deletion, Offline)
     (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValue({ success: true });
@@ -865,20 +865,21 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '3' } });
     fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
-    const additionForm = (document.getElementById('quote-credit-approver') as HTMLInputElement).closest('form') as HTMLFormElement;
-    fireEvent.submit(additionForm);
+    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(screen.getAllByText(/Quote credit request submitted/i)[0]).toBeInTheDocument();
     });
 
+    // 3e. Offline Payments without res.message
     // 3e. Offline Payments without res.message
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
     fireEvent.change(document.getElementById('offline-payment-date') as HTMLInputElement, { target: { value: '2026-11-19' } });
     fireEvent.change(screen.getByTestId('offline-payment-type-select'), { target: { value: 'Cash' } });
     fireEvent.change(document.getElementById('offline-payment-amount') as HTMLInputElement, { target: { value: '1500' } });
-    fireEvent.change(document.getElementById('offline-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+    fireEvent.change(document.getElementById('offline-initiator') as HTMLSelectElement, { target: { value: 'Govardhan' } });
+    fireEvent.change(document.getElementById('offline-approver') as HTMLSelectElement, { target: { value: 'Srinu Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
     await waitFor(() => {
       expect(screen.getAllByText(/Offline payment request submitted/i)[0]).toBeInTheDocument();
     });
@@ -893,6 +894,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     await waitFor(() => {
       expect(screen.getAllByText(/Failed to submit quote credit approval request/i)[0]).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 4b. Offline payment API failure without res.error
     (requestSellerQuoteCreditApproval as jest.Mock).mockResolvedValueOnce({ success: false });
@@ -901,18 +903,362 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.change(document.getElementById('offline-payment-date') as HTMLInputElement, { target: { value: '2026-11-19' } });
     fireEvent.change(screen.getByTestId('offline-payment-type-select'), { target: { value: 'Cash' } });
     fireEvent.change(document.getElementById('offline-payment-amount') as HTMLInputElement, { target: { value: '1000' } });
-    fireEvent.change(document.getElementById('offline-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+    fireEvent.change(document.getElementById('offline-initiator') as HTMLSelectElement, { target: { value: 'Govardhan' } });
+    fireEvent.change(document.getElementById('offline-approver') as HTMLSelectElement, { target: { value: 'Srinu Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
     await waitFor(() => {
       expect(screen.getAllByText('Failed to submit offline payment approval request.')[0]).toBeInTheDocument();
     });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 5. Trial period date validation where end date is before start date
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Period' }));
-    fireEvent.click(screen.getByText('Connect Model'));
+    fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
     fireEvent.change(document.getElementById('trial-start-date') as HTMLInputElement, { target: { value: '2026-12-01' } });
     fireEvent.change(document.getElementById('trial-end-date') as HTMLInputElement, { target: { value: '2026-11-01' } });
     expect(screen.getByRole('button', { name: 'Submit for Approval' })).toBeDisabled();
+    unmount3();
+  });
+
+  it('Scenario 19: Validates 2 Modes (Connect & Select Model), 6 & 12 Months durations, Initiators, and Approvers', async () => {
+    const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
+
+    // Open Discount workflow
+    const dropdownBtn = screen.getByTestId('request-type-dropdown-btn');
+    fireEvent.click(dropdownBtn);
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Discount$/i }));
+
+    // Step 1: Verify Connect Model and Select Model are available
+    expect(screen.getByText('Connect Model')).toBeInTheDocument();
+    expect(screen.getByText('Select Model')).toBeInTheDocument();
+
+    // Select "Select Model"
+    fireEvent.click(screen.getByText('Select Model'));
+
+    // Step 2: Verify 6 Months and 12 Months are clearly available
+    expect(screen.getAllByText('6 Months').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('12 Months').length).toBeGreaterThanOrEqual(1);
+
+    // Test Back button from Step 2 to Step 1
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getByText('Connect Model')).toBeInTheDocument();
+
+    // Re-select Select Model and then 6 Months
+    fireEvent.click(screen.getByText('Select Model'));
+    fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
+
+    // Step 3: Verify Selected Mode and Duration displayed
+    expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('6 Months')).toBeInTheDocument();
+
+    // Verify Initiated By dropdown options: first four strictly Govardhan, Chandan, Krishna Chaitanya, Sudheer
+    const initiatorSelect = document.getElementById('discount-initiator') as HTMLSelectElement;
+    expect(initiatorSelect).toBeInTheDocument();
+    const initiatorOptionValues = Array.from(initiatorSelect.options).map((opt) => opt.value);
+    expect(initiatorOptionValues[1]).toBe('Govardhan');
+    expect(initiatorOptionValues[2]).toBe('Chandan');
+    expect(initiatorOptionValues[3]).toBe('Krishna Chaitanya');
+    expect(initiatorOptionValues[4]).toBe('Sudheer');
+
+    // Verify Assigned Approver dropdown: strictly 3 options (Srinu Sir, Rao Sir, Sudheer Sir)
+    const approverSelect = document.getElementById('quote-credit-approver') as HTMLSelectElement;
+    expect(approverSelect).toBeInTheDocument();
+    const approverOptions = Array.from(approverSelect.options).filter((opt) => opt.value !== '').map((opt) => opt.value);
+    expect(approverOptions).toEqual(['Srinu Sir', 'Rao Sir', 'Sudheer Sir']);
+
+    // Change discount percent and check breakdown
+    const discountInput = document.getElementById('seller-discount-percentage') as HTMLInputElement;
+    fireEvent.change(discountInput, { target: { value: '25' } });
+    expect(discountInput.value).toBe('25');
+
+    // Submit discount approval request
+    fireEvent.change(initiatorSelect, { target: { value: 'Chandan' } });
+    fireEvent.change(approverSelect, { target: { value: 'Rao Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+
+    await waitFor(() => {
+      expect(screen.getByText(/Request submitted/i)).toBeInTheDocument();
+    });
+    unmount();
+  });
+
+  it('Scenario 20: Validates 12 Months selection, back button, and credit deletion validations', async () => {
+    const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
+
+    // Test 12 Months duration flow
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: /^Discount$/i }));
+    fireEvent.click(screen.getByText('Connect Model'));
+    fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
+    expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('12 Months')).toBeInTheDocument();
+
+    // Test Back button from Step 3 to Step 2
+    fireEvent.click(screen.getByRole('button', { name: 'Back' }));
+    expect(screen.getAllByText('6 Months').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText('12 Months').length).toBeGreaterThanOrEqual(1);
+
+    // Cancel Step 2
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // Test Seller Credit Deletion
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Deletion' }));
+
+    // Initiator dropdown first 4 options
+    const delInitiatorSelect = document.getElementById('quote-credit-initiator') as HTMLSelectElement;
+    expect(delInitiatorSelect).toBeInTheDocument();
+    const delInitiatorOptions = Array.from(delInitiatorSelect.options).map((opt) => opt.value);
+    expect(delInitiatorOptions[1]).toBe('Govardhan');
+    expect(delInitiatorOptions[2]).toBe('Chandan');
+    expect(delInitiatorOptions[3]).toBe('Krishna Chaitanya');
+    expect(delInitiatorOptions[4]).toBe('Sudheer');
+
+    // Approver dropdown strictly 3 options
+    const delApproverSelect = document.getElementById('quote-credit-approver') as HTMLSelectElement;
+    expect(delApproverSelect).toBeInTheDocument();
+    const delApproverOptions = Array.from(delApproverSelect.options).filter((opt) => opt.value !== '').map((opt) => opt.value);
+    expect(delApproverOptions).toEqual(['Srinu Sir', 'Rao Sir', 'Sudheer Sir']);
+
+    // Attempt to deduct more than available credits
+    const deductInput = document.getElementById('quote-credits-requested') as HTMLInputElement;
+    fireEvent.change(deductInput, { target: { value: '9999' } });
+    fireEvent.change(delApproverSelect, { target: { value: 'Sudheer Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+    expect(requestSellerQuoteCreditApproval).not.toHaveBeenCalled();
+
+    // Valid deduction amount
+    fireEvent.change(deductInput, { target: { value: '2' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+    await waitFor(() => {
+      expect(requestSellerQuoteCreditApproval).toHaveBeenCalledWith(
+        mockSeller.id,
+        expect.objectContaining({
+          requestType: 'Seller Credit Deletion',
+          amount: 2,
+          approverName: 'Sudheer Sir',
+        })
+      );
+    });
+    unmount();
+  });
+
+  it('Scenario 21: Validates Category Management autocomplete, keyboard, removal, empty error, and tag addition', async () => {
+    const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
+
+    // Open Category Modal
+    const editCatBtn = screen.getByRole('button', { name: /^Edit$/i });
+    fireEvent.click(editCatBtn);
+
+    const catInput = screen.getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
+    expect(catInput).toBeInTheDocument();
+
+    // Type 2 chars (< 3 chars minCharsHint)
+    fireEvent.change(catInput, { target: { value: 'El' } });
+    expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
+
+    // Type 3+ chars to trigger suggestions
+    fireEvent.change(catInput, { target: { value: 'Elec' } });
+    fireEvent.focus(catInput);
+
+    // Press Escape to hide suggestions
+    fireEvent.keyDown(catInput, { key: 'Escape' });
+
+    // Press Enter to add custom category
+    fireEvent.keyDown(catInput, { key: 'Enter' });
+
+    // Clear input using clear button
+    fireEvent.change(catInput, { target: { value: 'Custom Hardware' } });
+    const clearBtn = screen.getByLabelText('Clear category input');
+    fireEvent.click(clearBtn);
+
+    // Add category using Add button
+    fireEvent.change(catInput, { target: { value: 'New Test Division' } });
+    const addCatBtn = screen.getByRole('button', { name: /Add Category/i });
+    fireEvent.click(addCatBtn);
+
+    // Remove all categories to trigger empty validation
+    const removeButtons = screen.getAllByLabelText(/^Remove /i);
+    for (const btn of removeButtons) {
+      fireEvent.click(btn);
+    }
+
+    // Try saving empty categories
+    const saveBtn = screen.getByRole('button', { name: /Save Categories/i });
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(screen.getByText(/Please select at least one division/i)).toBeInTheDocument();
+    });
+
+    // Add a category and save successfully
+    fireEvent.change(catInput, { target: { value: 'Engineering Spares' } });
+    fireEvent.click(addCatBtn);
+    fireEvent.click(saveBtn);
+    await waitFor(() => {
+      expect(updateSupplierCategories).toHaveBeenCalled();
+    });
+
+    unmount();
+  });
+
+  it('Scenario 22: Validates Trial Period edge dates and Offline Payment file/field validations', async () => {
+    const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
+
+    // 1. Trial Period Date Edge Cases
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Trial Period' }));
+    fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
+
+    const startInput = document.getElementById('trial-start-date') as HTMLInputElement;
+    const endInput = document.getElementById('trial-end-date') as HTMLInputElement;
+
+    // Same day -> Trial period must be at least 1 day
+    fireEvent.change(startInput, { target: { value: '2026-11-20' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-20' } });
+    expect(screen.getByText(/Trial period must be at least 1 day/i)).toBeInTheDocument();
+
+    // 400 days in future -> Trial extension cannot exceed 365 days
+    fireEvent.change(endInput, { target: { value: '2028-01-01' } });
+    expect(screen.getByText(/Trial extension cannot exceed 365 days/i)).toBeInTheDocument();
+
+    // Close Trial Period modal
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // 2. Offline Payment File Format and Size Validations
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+
+    const fileInput = screen.getByTestId('offline-proof-file-input');
+
+    // Invalid file extension
+    const invalidFile = new File(['dummy content'], 'document.txt', { type: 'text/plain' });
+    fireEvent.change(fileInput, { target: { files: [invalidFile] } });
+    await waitFor(() => {
+      expect(screen.getByText(/Please upload an image file in JPG, JPEG, or PNG format/i)).toBeInTheDocument();
+    });
+
+    // File too large (>10MB)
+    const largeFile = new File([new ArrayBuffer(11 * 1024 * 1024)], 'large.png', { type: 'image/png' });
+    fireEvent.change(fileInput, { target: { files: [largeFile] } });
+    await waitFor(() => {
+      expect(screen.getByText(/Payment proof file must be smaller than 10MB/i)).toBeInTheDocument();
+    });
+
+    // Valid file upload and then remove it
+    const validFile = new File(['valid image content'], 'receipt.png', { type: 'image/png' });
+    fireEvent.change(fileInput, { target: { files: [validFile] } });
+    await waitFor(() => {
+      expect(screen.getByTitle('Remove attachment')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTitle('Remove attachment'));
+
+    // 3. Offline Payment Field Validations
+    const getOfflineForm = () => screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!;
+
+    // Missing date
+    fireEvent.change(document.getElementById('offline-payment-date') as HTMLInputElement, { target: { value: '' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/Payment date is mandatory/i)).toBeInTheDocument();
+    });
+
+    // Set date, missing transaction ID for non-Cash
+    fireEvent.change(document.getElementById('offline-payment-date') as HTMLInputElement, { target: { value: '2026-11-20' } });
+    fireEvent.change(screen.getByTestId('offline-payment-type-select'), { target: { value: 'NEFT / RTGS' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/Transaction ID is mandatory for NEFT \/ RTGS/i)).toBeInTheDocument();
+    });
+
+    // Set transaction ID, missing/zero amount
+    fireEvent.change(document.getElementById('offline-transaction-id') as HTMLInputElement, { target: { value: 'TXN-9988' } });
+    fireEvent.change(document.getElementById('offline-payment-amount') as HTMLInputElement, { target: { value: '0' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/greater than 0/i)).toBeInTheDocument();
+    });
+
+    // Set amount, missing initiator
+    fireEvent.change(document.getElementById('offline-payment-amount') as HTMLInputElement, { target: { value: '5000' } });
+    fireEvent.change(document.getElementById('offline-initiator') as HTMLSelectElement, { target: { value: '' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/Initiated by user is mandatory/i)).toBeInTheDocument();
+    });
+
+    // Set initiator, missing approver
+    fireEvent.change(document.getElementById('offline-initiator') as HTMLSelectElement, { target: { value: 'Govardhan' } });
+    fireEvent.change(document.getElementById('offline-approver') as HTMLSelectElement, { target: { value: '' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/Assigned approver is mandatory/i)).toBeInTheDocument();
+    });
+
+    // Valid approver and submit successfully
+    fireEvent.change(document.getElementById('offline-approver') as HTMLSelectElement, { target: { value: 'Srinu Sir' } });
+    fireEvent.submit(getOfflineForm());
+    await waitFor(() => {
+      expect(screen.getByText(/Request submitted|Offline payment request submitted/i)).toBeInTheDocument();
+    });
+
+    unmount();
+  });
+
+  it('Scenario 23: Covers category suggestion selection, file upload without files, and credit amount zero validations', async () => {
+    const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
+
+    // 1. Category suggestion selection via Add button
+    const editCatBtn = screen.getByRole('button', { name: /^Edit$/i });
+    fireEvent.click(editCatBtn);
+
+    const catInput = screen.getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
+    fireEvent.change(catInput, { target: { value: 'Industrial' } });
+    fireEvent.focus(catInput);
+
+    const addCatBtn = screen.getByRole('button', { name: /Add Category/i });
+    fireEvent.click(addCatBtn);
+
+    // Close category modal
+    fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
+
+    // 2. Offline proof file input with empty files list
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Offline Payments' }));
+    const fileInput = screen.getByTestId('offline-proof-file-input');
+    fireEvent.change(fileInput, { target: { files: [] } });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // 3. Deletion with zero amount and balance exceed
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Deletion' }));
+    fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '0' } });
+    fireEvent.change(document.getElementById('quote-credit-initiator') as HTMLSelectElement, { target: { value: 'Govardhan' } });
+    fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError)).toBeInTheDocument();
+    });
+
+    fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '9999' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByText(/Cannot delete 9999 credits/i)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    // 4. Addition with zero amount
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
+    fireEvent.change(document.getElementById('quote-credits-requested') as HTMLInputElement, { target: { value: '0' } });
+    fireEvent.change(document.getElementById('quote-credit-initiator') as HTMLSelectElement, { target: { value: 'Govardhan' } });
+    fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
+    fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError)).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+
+    unmount();
   });
 });

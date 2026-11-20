@@ -1895,11 +1895,23 @@ async function getInternalAssignees() {
       FROM "user" u
       INNER JOIN role r ON r.uuid = u.role_uuid
       WHERE LOWER(REPLACE(COALESCE(r.role_name, ''), ' ', '')) IN (${placeholders})`;
-    const staffResult = await pool.query(staffSql, [...INTERNAL_STAFF_ROLE_KEYS], { d1: true, d1Text: staffSql });
+    const staffResult = await pool.query(staffSql, [...INTERNAL_STAFF_ROLE_KEYS], {
+      d1: true,
+      d1Text: staffSql,
+      useCache: true,
+      tag: 'internal_tasks',
+      ttlMs: 60000,
+    });
     staffRows = staffResult?.rows || [];
 
     const taskSql = "SELECT DISTINCT assigned_to_user_id, assigned_to_name FROM internal_tasks WHERE assigned_to_name IS NOT NULL AND assigned_to_name != '' AND assigned_to_name != 'Unassigned'";
-    const taskResult = await pool.query(taskSql, [], { d1: true, d1Text: taskSql });
+    const taskResult = await pool.query(taskSql, [], {
+      d1: true,
+      d1Text: taskSql,
+      useCache: true,
+      tag: 'internal_tasks',
+      ttlMs: 60000,
+    });
     taskRows = taskResult?.rows || [];
   } catch (error) {
     throw storageUnavailableError('list-internal-assignees', error);

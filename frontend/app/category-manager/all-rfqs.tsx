@@ -1,7 +1,7 @@
 'use client';
 
-import React, { useEffect, useMemo, useState } from 'react';
-import { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import type { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
 import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
   CM_ALL_RFQS_TABLE_COLUMNS,
@@ -20,7 +20,20 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchAllRFQs } from '@/lib/rfqClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
-import { ClipboardList, Search, ChevronRight, RefreshCw, AlertTriangle, FileText, UserPlus, X, Building2, Store, Download, Settings } from 'lucide-react';
+import {
+  Search,
+  ChevronRight,
+  RefreshCw,
+  AlertTriangle,
+  FileText,
+  UserPlus,
+  X,
+  Building2,
+  Store,
+  Download,
+  Settings,
+  Calendar,
+} from 'lucide-react';
 import InviteVendorsModal from './InviteVendorsModal';
 import BuyerDetailsModal from './BuyerDetailsModal';
 import VendorDetailsModal from './VendorDetailsModal';
@@ -112,9 +125,7 @@ function rfqHasCategorySignal(rfq: RFQItem): boolean {
  * Category-manager "All RFQs" console.
  *
  * Reads `GET /api/rfqs/all` — the full cross-buyer list, which the server
- * gates to the category_manager/admin roles. Deliberately does not use the
- * store's `rfqs`: that list is loaded through the buyer-scoped endpoint and a
- * category manager who also holds a buyer account would see only their own.
+ * gates to the category_manager/admin roles.
  */
 export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: AllRFQsConsoleProps) {
   const [rfqs, setRfqs] = useState<RFQItem[]>([]);
@@ -151,6 +162,65 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     rfq: RFQItem;
     mode: 'quotes' | 'assigned';
   } | null>(null);
+
+  const [hoveredInvitedRfq, setHoveredInvitedRfq] = useState<{
+    rfq: RFQItem;
+    rect: { top: number; left: number };
+  } | null>(null);
+
+  const startDateInputRef = useRef<HTMLInputElement>(null);
+  const endDateInputRef = useRef<HTMLInputElement>(null);
+  const hoverTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    };
+  }, []);
+
+  const handleCellMouseEnter = (rfq: RFQItem, target: HTMLElement) => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+    const rect = target.getBoundingClientRect();
+    setHoveredInvitedRfq({ rfq, rect: { top: rect.bottom + 4, left: Math.max(8, rect.left) } });
+  };
+
+  const handleCellMouseLeave = () => {
+    hoverTimeoutRef.current = setTimeout(() => {
+      setHoveredInvitedRfq(null);
+    }, 200);
+  };
+
+  const handlePopoverMouseEnter = () => {
+    if (hoverTimeoutRef.current) clearTimeout(hoverTimeoutRef.current);
+  };
+
+  const handlePopoverMouseLeave = () => {
+    setHoveredInvitedRfq(null);
+  };
+
+  const openStartDatePicker = () => {
+    if (typeof startDateInputRef.current?.showPicker === 'function') {
+      try {
+        startDateInputRef.current.showPicker();
+        return;
+      } catch {
+        // Fall back to focus if showPicker fails
+      }
+    }
+    startDateInputRef.current?.focus();
+  };
+
+  const openEndDatePicker = () => {
+    if (typeof endDateInputRef.current?.showPicker === 'function') {
+      try {
+        endDateInputRef.current.showPicker();
+        return;
+      } catch {
+        // Fall back to focus if showPicker fails
+      }
+    }
+    endDateInputRef.current?.focus();
+  };
 
   const load = async () => {
     setLoading(true);
@@ -261,94 +331,28 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   };
 
   return (
-    <div className="mx-auto w-full max-w-[1600px] space-y-5 p-4 sm:p-6">
-      <div className="flex items-center justify-between gap-4 flex-wrap pb-1">
-        {!loading && !error ? (
-          <p className="text-xs font-bold text-slate-500 dark:text-gray-450" data-testid="all-rfqs-count">
+    <div className="mx-auto w-full max-w-[1700px] space-y-3 p-3 sm:p-4">
+      {/* Hidden live regions for screen reader a11y */}
+      {!loading && !error && (
+        <>
+          <p className="sr-only" data-testid="all-rfqs-count">
             {formatString(S.countSummary, { count: rfqs.length, buyers: buyerNames.length })}
           </p>
-        ) : (
-          <div />
-        )}
-        <div className="flex items-center gap-2.5 flex-wrap ml-auto">
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="all-rfqs-start-date" className="text-xs font-bold text-slate-600 dark:text-gray-300 whitespace-nowrap">
-              {S.startDateLabel}
-            </label>
-            <input
-              id="all-rfqs-start-date"
-              type="date"
-              value={startDate}
-              onChange={(e) => setStartDate(e.target.value)}
-              aria-label={S.startDateLabel}
-              placeholder={S.startDatePlaceholder}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250"
-            />
-          </div>
+          <p className="sr-only" aria-live="polite">
+            {formatString(S.resultCount, { shown: filtered.length, total: rfqs.length })}
+          </p>
+          {hasFilters && <span className="sr-only">{S.filtersApplied}</span>}
+        </>
+      )}
 
-          <div className="flex items-center gap-1.5">
-            <label htmlFor="all-rfqs-end-date" className="text-xs font-bold text-slate-600 dark:text-gray-300 whitespace-nowrap">
-              {S.endDateLabel}
-            </label>
-            <input
-              id="all-rfqs-end-date"
-              type="date"
-              value={endDate}
-              onChange={(e) => setEndDate(e.target.value)}
-              aria-label={S.endDateLabel}
-              placeholder={S.endDatePlaceholder}
-              className="h-9 rounded-lg border border-slate-200 bg-white px-2 py-1 text-xs font-medium text-slate-700 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250"
-            />
-          </div>
-
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            disabled={loading || filtered.length === 0}
-            aria-label={S.exportCsvAria}
-            data-testid="all-rfqs-export-csv"
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-indigo-600 disabled:cursor-not-allowed disabled:opacity-50 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900"
-          >
-            <Download size={13} className="shrink-0" />
-            <span>{S.exportCsv}</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={createBooleanSetterHandler(setShowAllRfqsColumnSettings, true)}
-            data-testid="all-rfqs-column-settings-btn"
-            aria-label="Column Settings"
-            title="Column Settings"
-            className="flex items-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 py-2 text-xs font-bold text-slate-700 shadow-2xs hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900"
-          >
-            <Settings size={13} className="shrink-0" />
-            <span>Column Settings</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => void load()}
-            disabled={loading}
-            aria-label={S.retryAction}
-            data-testid="all-rfqs-refresh"
-            className="btn-ghost flex items-center gap-1.5 rounded-lg border border-slate-200 px-3 py-2 text-xs font-bold text-slate-700 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:text-gray-250"
-          >
-            <RefreshCw size={13} className={loading ? 'animate-spin' : ''} /> {S.retryAction}
-          </button>
-        </div>
-      </div>
-
-      <section
-        aria-label={S.filtersLabel}
-        className="space-y-4 rounded-2xl border border-slate-200 bg-white/80 p-4 shadow-sm dark:border-slate-800 dark:bg-gray-950/50 sm:p-5"
-      >
-        <div className="grid grid-cols-1 items-end gap-3 sm:grid-cols-2 lg:grid-cols-[minmax(0,1fr)_minmax(180px,220px)_minmax(180px,240px)_auto]">
-          <div className="min-w-0 sm:col-span-2 lg:col-span-1">
-            <label htmlFor="all-rfqs-search" className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-gray-300">
-              {S.searchLabel}
-            </label>
-            <div className="relative">
-              <Search size={16} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+      {/* Single-Line Compact Spreadsheet Toolbar */}
+      <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-2xs dark:border-slate-800 dark:bg-gray-950">
+        <div className="flex items-center justify-between gap-2.5 flex-nowrap w-full overflow-x-auto whitespace-nowrap">
+          {/* Left section: Search, Start Date, End Date, Status dropdown */}
+          <div className="flex items-center gap-2 flex-1 min-w-0">
+            {/* Search input */}
+            <div className="relative flex-1 min-w-[200px] max-w-sm">
+              <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
               <input
                 id="all-rfqs-search"
                 type="text"
@@ -356,30 +360,83 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 onChange={(e) => setSearch(e.target.value)}
                 aria-label={S.searchLabel}
                 placeholder={S.searchPlaceholder}
-                className={`input has-leading-icon h-11 w-full rounded-xl border-slate-200 bg-slate-50 text-sm text-slate-800 placeholder:text-slate-400 focus:border-indigo-400 focus:bg-white dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 dark:focus:bg-gray-900 ${search ? 'has-trailing-icon' : ''}`}
+                className={`h-9 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-8 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 ${search ? 'pr-8' : ''}`}
               />
               {search && (
                 <button
                   type="button"
                   onClick={() => setSearch('')}
                   aria-label={S.clearSearch}
-                  className="absolute right-2 top-1/2 inline-flex h-7 w-7 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 dark:hover:bg-slate-800 dark:hover:text-gray-200"
+                  className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 cursor-pointer"
                 >
-                  <X size={15} />
+                  <X size={14} />
                 </button>
               )}
             </div>
-          </div>
-          <div className="min-w-0">
-            <label htmlFor="all-rfqs-status" className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-gray-300">
-              {S.statusFilterLabel}
-            </label>
+
+            {/* Start Date button/field */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={openStartDatePicker}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openStartDatePicker();
+                }
+              }}
+              className="relative flex items-center justify-between h-9 min-w-[125px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+            >
+              <span className={startDate ? 'font-semibold text-slate-800 dark:text-gray-200' : 'text-slate-500 dark:text-gray-400'}>
+                {startDate || S.startDateLabel}
+              </span>
+              <Calendar size={14} className="text-slate-400 shrink-0 ml-2 pointer-events-none" />
+              <input
+                ref={startDateInputRef}
+                id="all-rfqs-start-date"
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                aria-label={S.startDateLabel}
+                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+              />
+            </div>
+
+            {/* End Date button/field */}
+            <div
+              role="button"
+              tabIndex={0}
+              onClick={openEndDatePicker}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  e.preventDefault();
+                  openEndDatePicker();
+                }
+              }}
+              className="relative flex items-center justify-between h-9 min-w-[125px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+            >
+              <span className={endDate ? 'font-semibold text-slate-800 dark:text-gray-200' : 'text-slate-500 dark:text-gray-400'}>
+                {endDate || S.endDateLabel}
+              </span>
+              <Calendar size={14} className="text-slate-400 shrink-0 ml-2 pointer-events-none" />
+              <input
+                ref={endDateInputRef}
+                id="all-rfqs-end-date"
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                aria-label={S.endDateLabel}
+                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+              />
+            </div>
+
+            {/* Status dropdown */}
             <select
               id="all-rfqs-status"
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
               aria-label={S.statusFilterLabel}
-              className="select h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200"
+              className="h-9 min-w-[130px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
             >
               <option value="all">{S.allStatuses}</option>
               {ALL_STATUSES.map((s) => (
@@ -388,50 +445,60 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 </option>
               ))}
             </select>
-          </div>
-          <div className="min-w-0">
-            <label htmlFor="all-rfqs-buyer" className="mb-1.5 block text-xs font-bold text-slate-600 dark:text-gray-300">
-              {S.buyerFilterLabel}
-            </label>
-            <select
-              id="all-rfqs-buyer"
-              value={buyerFilter}
-              onChange={(e) => setBuyerFilter(e.target.value)}
-              aria-label={S.buyerFilterLabel}
-              className="select h-11 w-full rounded-xl border-slate-200 bg-slate-50 px-3 text-sm font-semibold text-slate-800 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200"
-            >
-              <option value="all">{S.allBuyers}</option>
-              {buyerNames.map((b) => (
-                <option key={b} value={b}>
-                  {b}
-                </option>
-              ))}
-            </select>
-          </div>
-          {hasFilters && (
-            <button
-              type="button"
-              onClick={clearFilters}
-              className="inline-flex h-11 items-center justify-center gap-1.5 rounded-xl border border-slate-200 px-3 text-xs font-bold text-slate-600 transition hover:border-slate-300 hover:bg-slate-50 hover:text-slate-900 focus-visible:outline focus-visible:outline-2 focus-visible:outline-indigo-500 dark:border-slate-800 dark:text-gray-300 dark:hover:bg-gray-900 dark:hover:text-white"
-            >
-              <X size={14} />
-              {S.clearFilters}
-            </button>
-          )}
-        </div>
-        {!loading && !error && (
-          <div className="flex flex-wrap items-center justify-between gap-2 border-t border-slate-100 pt-3 dark:border-slate-800">
-            <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
-              {formatString(S.resultCount, { shown: filtered.length, total: rfqs.length })}
-            </p>
+
+            {/* Clear filters button */}
             {hasFilters && (
-              <span className="rounded-full bg-indigo-50 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 dark:bg-indigo-950/60 dark:text-indigo-300">
-                {S.filtersApplied}
-              </span>
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-gray-300 dark:hover:bg-gray-900 cursor-pointer"
+                title={S.clearFilters}
+              >
+                <X size={13} />
+                <span>{S.clearFilters}</span>
+              </button>
             )}
           </div>
-        )}
-      </section>
+
+          {/* Right section: Green Export button, Gear (icon-only), Retry (icon-only) */}
+          <div className="flex items-center gap-2 shrink-0 ml-auto">
+            <button
+              type="button"
+              onClick={handleExportCsv}
+              disabled={loading || filtered.length === 0}
+              aria-label={S.exportCsvAria}
+              data-testid="all-rfqs-export-csv"
+              className="inline-flex items-center gap-1.5 h-9 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 px-3.5 text-xs font-bold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            >
+              <Download size={14} className="shrink-0" />
+              <span>Export</span>
+            </button>
+
+            <button
+              type="button"
+              onClick={createBooleanSetterHandler(setShowAllRfqsColumnSettings, true)}
+              data-testid="all-rfqs-column-settings-btn"
+              aria-label="Column Settings"
+              title="Column Settings"
+              className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
+            >
+              <Settings size={15} />
+            </button>
+
+            <button
+              type="button"
+              onClick={() => void load()}
+              disabled={loading}
+              aria-label={S.retryAction}
+              title={S.retryAction}
+              data-testid="all-rfqs-refresh"
+              className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
+            >
+              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+            </button>
+          </div>
+        </div>
+      </div>
 
       {loading && <p className="text-sm text-slate-500 dark:text-gray-450 py-10 text-center">{S.loading}</p>}
 
@@ -442,7 +509,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
           <button
             type="button"
             onClick={() => void load()}
-            className="btn-primary text-xs font-bold px-4 py-1.5 rounded-lg bg-indigo-600 text-white"
+            className="btn-primary text-xs font-bold px-4 py-1.5 rounded-lg bg-indigo-600 text-white cursor-pointer"
           >
             {S.retryAction}
           </button>
@@ -457,7 +524,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         <div className="flex flex-col items-center gap-3 rounded-2xl border border-dashed border-slate-300 px-6 py-12 text-center dark:border-slate-700">
           <Search size={24} aria-hidden="true" className="text-slate-400" />
           <p className="text-sm text-slate-500 dark:text-gray-450">{S.noMatches}</p>
-          <button type="button" onClick={clearFilters} className="text-xs font-bold text-indigo-600 hover:underline dark:text-indigo-400">
+          <button type="button" onClick={clearFilters} className="text-xs font-bold text-indigo-600 hover:underline dark:text-indigo-400 cursor-pointer">
             {S.clearFilters}
           </button>
         </div>
@@ -472,17 +539,18 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
         title="Column Settings"
       />
 
+      {/* 1-Line Excel-Style Spreadsheet Table */}
       {!loading && !error && filtered.length > 0 && (
-        <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white dark:border-slate-850 dark:bg-gray-950/40">
-          <table className="w-full min-w-[1850px] table-fixed text-xs">
+        <div className="overflow-x-auto w-full rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-gray-950">
+          <table className="w-full min-w-max table-auto text-xs">
             <caption className="sr-only">{S.subtitle}</caption>
             <thead>
-              <tr className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase tracking-wider text-slate-500 dark:text-gray-450">
+              <tr className="h-10 border-b border-slate-200 bg-slate-50/90 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-gray-900/90 dark:text-gray-400 select-none whitespace-nowrap">
                 <th
                   scope="col"
                   onClick={createColumnSortClickHandler('rfqNumber', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'rfqNumber')}
-                  className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colRfqNumber} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'rfqNumber')}</span></span>
                 </th>
@@ -490,7 +558,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('title', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'title')}
-                  className={getTableColumnClass(allRfqsColumns, 'title', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'title', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colTitle} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'title')}</span></span>
                 </th>
@@ -498,7 +566,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('category', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'category')}
-                  className={getTableColumnClass(allRfqsColumns, 'category', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'category', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colCategory} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'category')}</span></span>
                 </th>
@@ -506,7 +574,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('buyerAccountName', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'buyerAccountName')}
-                  className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colBuyer} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'buyerAccountName')}</span></span>
                 </th>
@@ -514,7 +582,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('status', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'status')}
-                  className={getTableColumnClass(allRfqsColumns, 'status', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'status', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colStatus} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'status')}</span></span>
                 </th>
@@ -522,17 +590,17 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('quotesCount', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'quotesCount')}
-                  className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-2.5 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-3 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center justify-end gap-1">{S.colQuotes} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'quotesCount')}</span></span>
                 </th>
-                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colInvitedVendors}</th>
-                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colVendors}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-3 py-2 text-left font-bold whitespace-nowrap')}>{S.colInvitedVendors}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-3 py-2 text-left font-bold whitespace-nowrap')}>{S.colVendors}</th>
                 <th
                   scope="col"
                   onClick={createColumnSortClickHandler('budget', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'budget')}
-                  className={getTableColumnClass(allRfqsColumns, 'budget', 'px-2.5 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'budget', 'px-3 py-2 text-right font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center justify-end gap-1">{S.colBudget} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'budget')}</span></span>
                 </th>
@@ -540,12 +608,12 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                   scope="col"
                   onClick={createColumnSortClickHandler('createdAt', setAllRfqsSort)}
                   aria-sort={getTableAriaSort(allRfqsSort, 'createdAt')}
-                  className={getTableColumnClass(allRfqsColumns, 'createdAt', 'px-2.5 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-900')}
+                  className={getTableColumnClass(allRfqsColumns, 'createdAt', 'px-3 py-2 text-left font-bold cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                 >
                   <span className="inline-flex items-center gap-1">{S.colCreated} <span aria-hidden="true">{getSortIndicatorSymbol(allRfqsSort, 'createdAt')}</span></span>
                 </th>
-                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-2.5 py-2 text-left font-bold whitespace-nowrap')}>{S.colLatestQuote}</th>
-                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'actions', 'px-2.5 py-2 text-right font-bold whitespace-nowrap')}>{S.colActions}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-3 py-2 text-left font-bold whitespace-nowrap')}>{S.colLatestQuote}</th>
+                <th scope="col" className={getTableColumnClass(allRfqsColumns, 'actions', 'px-3 py-2 text-right font-bold whitespace-nowrap')}>{S.colActions}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
@@ -557,195 +625,265 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
                 const needsAssignment = Boolean(rfq.needsCategoryManagerAssignment || isUncategorizedV0);
 
                 return (
-                <tr key={rfq.id} className="align-middle transition-colors hover:bg-slate-50 dark:hover:bg-gray-900/60">
-                  <td className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-2.5 py-2 font-mono text-xs font-bold text-slate-800 dark:text-gray-200 whitespace-nowrap')}>{rfq.rfqNumber}</td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'title', 'px-2.5 py-2 max-w-[220px]')}>
-                    <div className="truncate font-bold text-slate-800 dark:text-gray-200" title={rfq.title}>{rfq.title}</div>
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'category', 'px-2.5 py-2 max-w-[160px]')}>
-                    <div className="truncate text-[11px] text-slate-500 dark:text-gray-450" title={rfq.category || undefined}>{rfq.category || '—'}</div>
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'break-words px-2.5 py-2 text-slate-700 dark:text-gray-300')}>
-                    {rfq.buyerAccountName ? (
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setSelectedBuyerInfo({
-                            name: rfq.buyerAccountName || null,
-                            id: rfq.buyerAccountId || null,
-                            rfq,
-                          })
-                        }
-                        className="inline-flex items-center gap-1.5 text-left font-bold text-slate-800 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors group cursor-pointer"
-                        title={`Click to view full buyer details for ${rfq.buyerAccountName}`}
-                      >
-                        <Building2 size={13} className="text-slate-400 group-hover:text-indigo-500 shrink-0 transition-colors" />
-                        <span className="truncate max-w-[160px]">{rfq.buyerAccountName}</span>
-                      </button>
-                    ) : (
-                      <span className="italic text-slate-400">{S.buyerUnknown}</span>
-                    )}
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'status', 'px-2.5 py-2')}>
-                    <div className="flex flex-col items-start gap-1">
-                      <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-1 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
-                        {rfq.status}
-                      </span>
-                      {needsAssignment && (
-                        <span className="inline-flex whitespace-nowrap rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-bold">
-                          Pending CM Assignment
-                        </span>
+                  <tr
+                    key={rfq.id}
+                    className="h-10 border-b border-slate-100 dark:border-slate-850 hover:bg-sky-50/50 dark:hover:bg-gray-900/60 whitespace-nowrap transition-colors"
+                  >
+                    <td className={getTableColumnClass(allRfqsColumns, 'rfqNumber', 'px-3 py-1.5 font-mono text-xs font-bold text-slate-800 dark:text-gray-200 whitespace-nowrap')}>{rfq.rfqNumber}</td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'title', 'px-3 py-1.5 max-w-[200px] whitespace-nowrap')}>
+                      <div className="truncate font-bold text-slate-800 dark:text-gray-200" title={rfq.title}>{rfq.title}</div>
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'category', 'px-3 py-1.5 max-w-[140px] whitespace-nowrap')}>
+                      <div className="truncate text-[11px] text-slate-500 dark:text-gray-450" title={rfq.category || undefined}>{rfq.category || '—'}</div>
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'buyerAccountName', 'px-3 py-1.5 max-w-[160px] whitespace-nowrap')}>
+                      {rfq.buyerAccountName ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setSelectedBuyerInfo({
+                              name: rfq.buyerAccountName || null,
+                              id: rfq.buyerAccountId || null,
+                              rfq,
+                            })
+                          }
+                          className="inline-flex items-center gap-1.5 text-left font-bold text-slate-800 dark:text-gray-200 hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline transition-colors group cursor-pointer max-w-full"
+                          title={`Click to view full buyer details for ${rfq.buyerAccountName}`}
+                        >
+                          <Building2 size={13} className="text-slate-400 group-hover:text-indigo-500 shrink-0 transition-colors" />
+                          <span className="truncate">{rfq.buyerAccountName}</span>
+                        </button>
+                      ) : (
+                        <span className="italic text-slate-400">{S.buyerUnknown}</span>
                       )}
-                    </div>
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-2.5 py-2 text-right font-mono text-slate-700 dark:text-gray-300')}>{rfq.quotesCount}</td>
-                  {/* Invited Vendors column */}
-                  <td className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-2.5 py-2')}>
-                    {rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
-                      <div className="flex flex-col items-start gap-1 max-w-full">
-                        <span className="text-[9px] uppercase font-bold tracking-wider text-slate-400 dark:text-gray-500">
-                          Invited ({rfq.assignedVendors.length})
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'status', 'px-3 py-1.5 whitespace-nowrap')}>
+                      <div className="flex items-center gap-1 whitespace-nowrap">
+                        <span className={`inline-flex whitespace-nowrap rounded-md px-2 py-0.5 text-[10px] font-bold ${STATUS_TONE[rfq.status]}`}>
+                          {rfq.status}
                         </span>
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {rfq.assignedVendors.slice(0, 2).map((av, idx) => {
-                            const identity = invitedVendorIdentity(av);
+                        {needsAssignment && (
+                          <span className="inline-flex whitespace-nowrap rounded-md bg-amber-100 text-amber-800 dark:bg-amber-950/70 dark:text-amber-300 px-1.5 py-0.5 text-[9px] font-bold">
+                            Pending CM Assignment
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'quotesCount', 'px-3 py-1.5 text-right font-mono text-slate-700 dark:text-gray-300 whitespace-nowrap')}>{rfq.quotesCount}</td>
+                    
+                    {/* Invited Vendors column: show single vendor on the row, floating popover on hover */}
+                    <td
+                      className={getTableColumnClass(allRfqsColumns, 'invitedVendors', 'px-3 py-1.5 whitespace-nowrap')}
+                      onMouseEnter={(e) => handleCellMouseEnter(rfq, e.currentTarget)}
+                      onMouseLeave={handleCellMouseLeave}
+                    >
+                      {rfq.assignedVendors && rfq.assignedVendors.length > 0 ? (
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                          <span className="sr-only">Invited ({rfq.assignedVendors.length})</span>
+                          {(() => {
+                            const firstAv = rfq.assignedVendors[0];
+                            const identity = invitedVendorIdentity(firstAv);
                             const vName = identity.name ?? EMPTY_VALUE;
                             const vId = identity.id;
+                            const total = rfq.assignedVendors.length;
+
                             return (
-                              <button
-                                key={vId || idx}
-                                type="button"
-                                onClick={() =>
-                                  setSelectedVendorInfo({
-                                    name: vName,
-                                    id: vId,
-                                    assignedVendor: av,
-                                    rfq,
-                                  })
-                                }
-                                className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors max-w-[125px] truncate cursor-pointer"
-                                title={`Invited vendor: ${vName}. Click to view details.`}
-                              >
-                                <Store size={10} className="text-slate-400 shrink-0" />
-                                <span className="truncate">{vName}</span>
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedVendorInfo({
+                                      name: vName,
+                                      id: vId,
+                                      assignedVendor: firstAv,
+                                      rfq,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-300 text-xs font-medium hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors max-w-[130px] truncate cursor-pointer"
+                                  title={`Invited vendor: ${vName}. Click to view details.`}
+                                >
+                                  <Store size={10} className="text-slate-400 shrink-0" />
+                                  <span className="truncate">{vName}</span>
+                                </button>
+                                {total > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setVendorListModalData({ rfq, mode: 'assigned' })}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition border border-indigo-200 dark:border-indigo-800 cursor-pointer shrink-0"
+                                    title="Click to view all invited vendors"
+                                  >
+                                    +{total - 1} more
+                                  </button>
+                                )}
+                              </>
                             );
-                          })}
-                          {rfq.assignedVendors.length > 2 && (
-                            <button
-                              type="button"
-                              onClick={() => setVendorListModalData({ rfq, mode: 'assigned' })}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-950/60 hover:bg-indigo-100 dark:hover:bg-indigo-900 transition border border-indigo-200 dark:border-indigo-800 cursor-pointer"
-                              title="Click to view all invited vendors"
-                            >
-                              +{rfq.assignedVendors.length - 2} more
-                            </button>
-                          )}
+                          })()}
                         </div>
-                      </div>
-                    ) : (
-                      <span className="italic text-slate-400 text-xs">{S.colInvitedVendorsNone}</span>
-                    )}
-                  </td>
-                  {/* Quoted Vendors column */}
-                  <td className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-2.5 py-2')}>
-                    {rfq.quotes && rfq.quotes.length > 0 ? (
-                      <div className="flex flex-col items-start gap-1 max-w-full">
-                        <div className="flex flex-wrap items-center gap-1.5">
-                          {rfq.quotes.slice(0, 2).map((q, idx) => (
-                            <button
-                              key={q.vendorId || `${q.vendorName}-${idx}`}
-                              type="button"
-                              onClick={() =>
-                                setSelectedVendorInfo({
-                                  name: q.vendorName,
-                                  id: q.vendorId,
-                                  quote: q,
-                                  rfq,
-                                })
-                              }
-                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors max-w-[135px] truncate cursor-pointer shadow-2xs group"
-                              title={`Quoted vendor: ${q.vendorName}. Click to view quotation details.`}
-                            >
-                              <Store size={11} className="text-teal-600 dark:text-teal-400 shrink-0" />
-                              <span className="truncate">{q.vendorName}</span>
-                              {q.isBestPrice && (
-                                <span className="shrink-0 px-1 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
-                                  L1
-                                </span>
-                              )}
-                            </button>
-                          ))}
-                          {rfq.quotes.length > 2 && (
-                            <button
-                              type="button"
-                              onClick={() => setVendorListModalData({ rfq, mode: 'quotes' })}
-                              className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900 transition border border-teal-200 dark:border-teal-800 cursor-pointer"
-                              title="Click to view all quoted vendors"
-                            >
-                              +{rfq.quotes.length - 2} more
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ) : (
-                      <span className="italic text-slate-400 text-xs">{S.colVendorsNone}</span>
-                    )}
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'budget', 'px-2.5 py-2 text-right font-mono text-xs text-slate-700 dark:text-gray-300')}>
-                    {rfq.budget > 0 ? formatCurrency(rfq.budget) : <span className="text-slate-400">{S.budgetUnset}</span>}
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'createdAt', 'whitespace-nowrap px-2.5 py-2 text-[11px] text-slate-500 dark:text-gray-450')}>
-                    {rfq.createdAt ? new Date(rfq.createdAt).toLocaleDateString() : '—'}
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-2.5 py-2 text-[11px] text-slate-600 dark:text-gray-300')} data-testid="all-rfqs-latest-quote">
-                    {(() => {
-                      const latest = latestQuoteSubmittedAt(rfq);
-                      return latest ? (
-                        <span className="whitespace-nowrap font-semibold">{formatIndianDateTime(latest)}</span>
                       ) : (
-                        <span className="italic text-slate-400">{S.latestQuoteNone}</span>
-                      );
-                    })()}
-                  </td>
-                  <td className={getTableColumnClass(allRfqsColumns, 'actions', 'px-2.5 py-2')}>
-                    <div className="flex flex-nowrap items-center justify-end gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setInviteTargetRfq(rfq)}
-                        aria-label={formatString(S.inviteVendorsAria, { rfqNumber: rfq.rfqNumber })}
-                        className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold hover:underline ${
-                          needsAssignment ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : 'text-slate-600 dark:text-gray-300'
-                        }`}
-                      >
-                        <UserPlus size={13} /> {needsAssignment ? 'Assign Vendors' : S.inviteVendorsAction}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onViewDetails?.(rfq)}
-                        aria-label={formatString(S.viewDetailsAria, { rfqNumber: rfq.rfqNumber })}
-                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold text-slate-600 hover:underline dark:text-gray-300"
-                      >
-                        <FileText size={13} /> {S.viewDetailsAction}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => onNavigateToMatrix?.(rfq)}
-                        aria-label={formatString(S.viewMatrixAria, { rfqNumber: rfq.rfqNumber })}
-                        className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold text-indigo-600 hover:underline dark:text-indigo-400"
-                      >
-                        {S.viewMatrixAction} <ChevronRight size={13} />
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              );
+                        <span className="italic text-slate-400 text-xs">{S.colInvitedVendorsNone}</span>
+                      )}
+                    </td>
+
+                    {/* Quoted Vendors column: 1 line single quoted vendor */}
+                    <td className={getTableColumnClass(allRfqsColumns, 'quotedVendors', 'px-3 py-1.5 whitespace-nowrap')}>
+                      {rfq.quotes && rfq.quotes.length > 0 ? (
+                        <div className="flex items-center gap-1.5 whitespace-nowrap">
+                          {(() => {
+                            const q = rfq.quotes[0];
+                            const total = rfq.quotes.length;
+                            return (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setSelectedVendorInfo({
+                                      name: q.vendorName,
+                                      id: q.vendorId,
+                                      quote: q,
+                                      rfq,
+                                    })
+                                  }
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-50 dark:bg-teal-950/70 border border-teal-200 dark:border-teal-800 text-teal-800 dark:text-teal-200 text-xs font-semibold hover:bg-teal-100 dark:hover:bg-teal-900 transition-colors max-w-[135px] truncate cursor-pointer shadow-2xs group"
+                                  title={`Quoted vendor: ${q.vendorName}. Click to view quotation details.`}
+                                >
+                                  <Store size={11} className="text-teal-600 dark:text-teal-400 shrink-0" />
+                                  <span className="truncate">{q.vendorName}</span>
+                                  {q.isBestPrice && (
+                                    <span className="shrink-0 px-1 py-0.2 rounded text-[9px] font-black bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">
+                                      L1
+                                    </span>
+                                  )}
+                                </button>
+                                {total > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => setVendorListModalData({ rfq, mode: 'quotes' })}
+                                    className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold text-teal-700 dark:text-teal-300 bg-teal-50 dark:bg-teal-950/60 hover:bg-teal-100 dark:hover:bg-teal-900 transition border border-teal-200 dark:border-teal-800 cursor-pointer shrink-0"
+                                    title="Click to view all quoted vendors"
+                                  >
+                                    +{total - 1} more
+                                  </button>
+                                )}
+                              </>
+                            );
+                          })()}
+                        </div>
+                      ) : (
+                        <span className="italic text-slate-400 text-xs">{S.colVendorsNone}</span>
+                      )}
+                    </td>
+
+                    <td className={getTableColumnClass(allRfqsColumns, 'budget', 'px-3 py-1.5 text-right font-mono text-xs text-slate-700 dark:text-gray-300 whitespace-nowrap')}>
+                      {rfq.budget > 0 ? formatCurrency(rfq.budget) : <span className="text-slate-400">{S.budgetUnset}</span>}
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'createdAt', 'whitespace-nowrap px-3 py-1.5 text-[11px] text-slate-500 dark:text-gray-450')}>
+                      {rfq.createdAt ? new Date(rfq.createdAt).toLocaleDateString() : '—'}
+                    </td>
+                    <td className={getTableColumnClass(allRfqsColumns, 'latestQuote', 'px-3 py-1.5 text-[11px] text-slate-600 dark:text-gray-300 whitespace-nowrap')} data-testid="all-rfqs-latest-quote">
+                      {(() => {
+                        const latest = latestQuoteSubmittedAt(rfq);
+                        return latest ? (
+                          <span className="whitespace-nowrap font-semibold">{formatIndianDateTime(latest)}</span>
+                        ) : (
+                          <span className="italic text-slate-400">{S.latestQuoteNone}</span>
+                        );
+                      })()}
+                    </td>
+
+                    {/* Actions: Invite Vendors, Details, Quote Matrix horizontally side-by-side on 1 line */}
+                    <td className={getTableColumnClass(allRfqsColumns, 'actions', 'px-3 py-1.5 whitespace-nowrap text-right')}>
+                      <div className="flex items-center justify-end gap-3 whitespace-nowrap">
+                        <button
+                          type="button"
+                          onClick={() => setInviteTargetRfq(rfq)}
+                          aria-label={formatString(S.inviteVendorsAria, { rfqNumber: rfq.rfqNumber })}
+                          className={`inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold hover:underline ${
+                            needsAssignment ? 'text-indigo-600 dark:text-indigo-400 font-extrabold' : 'text-slate-600 dark:text-gray-300'
+                          }`}
+                        >
+                          <UserPlus size={13} /> <span>{needsAssignment ? 'Assign Vendors' : S.inviteVendorsAction}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onViewDetails?.(rfq)}
+                          aria-label={formatString(S.viewDetailsAria, { rfqNumber: rfq.rfqNumber })}
+                          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold text-slate-600 hover:underline dark:text-gray-300"
+                        >
+                          <FileText size={13} /> <span>{S.viewDetailsAction}</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onNavigateToMatrix?.(rfq)}
+                          aria-label={formatString(S.viewMatrixAria, { rfqNumber: rfq.rfqNumber })}
+                          className="inline-flex shrink-0 items-center gap-1 whitespace-nowrap text-xs font-bold text-indigo-600 hover:underline dark:text-indigo-400"
+                        >
+                          <span>{S.viewMatrixAction}</span> <ChevronRight size={13} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                );
               })}
             </tbody>
           </table>
         </div>
       )}
 
+      {/* Floating Hover Popover Tooltip for Invited Vendors */}
+      {hoveredInvitedRfq && (
+        <div
+          role="tooltip"
+          className="fixed z-50 w-72 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-2xl p-3 text-xs animate-in fade-in zoom-in-95 duration-100"
+          style={{ top: hoveredInvitedRfq.rect.top, left: hoveredInvitedRfq.rect.left }}
+          onMouseEnter={handlePopoverMouseEnter}
+          onMouseLeave={handlePopoverMouseLeave}
+        >
+          <div className="font-bold text-[10px] text-slate-400 dark:text-gray-400 uppercase tracking-wider mb-2">
+            INVITED ({hoveredInvitedRfq.rfq.assignedVendors?.length || 0})
+          </div>
+          <div className="space-y-1.5 max-h-56 overflow-y-auto">
+            {hoveredInvitedRfq.rfq.assignedVendors?.map((av, idx) => {
+              const identity = invitedVendorIdentity(av);
+              const vName = identity.name ?? EMPTY_VALUE;
+              const vId = identity.id;
+              return (
+                <button
+                  key={vId || idx}
+                  type="button"
+                  onClick={() => {
+                    setSelectedVendorInfo({
+                      name: vName,
+                      id: vId,
+                      assignedVendor: av,
+                      rfq: hoveredInvitedRfq.rfq,
+                    });
+                    setHoveredInvitedRfq(null);
+                  }}
+                  className="w-full flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-left text-slate-800 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-gray-800 transition group cursor-pointer"
+                >
+                  <Store size={13} className="text-slate-400 group-hover:text-indigo-500 shrink-0" />
+                  <span className="truncate flex-1 font-medium">{vName}</span>
+                </button>
+              );
+            })}
+          </div>
+          {(hoveredInvitedRfq.rfq.assignedVendors?.length || 0) > 3 && (
+            <button
+              type="button"
+              onClick={() => {
+                const rfq = hoveredInvitedRfq.rfq;
+                setHoveredInvitedRfq(null);
+                setVendorListModalData({ rfq, mode: 'assigned' });
+              }}
+              className="mt-2 w-full text-center py-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950/60 text-indigo-600 dark:text-indigo-400 font-bold text-xs hover:bg-indigo-100 dark:hover:bg-indigo-900 transition cursor-pointer"
+            >
+              +{(hoveredInvitedRfq.rfq.assignedVendors?.length || 0) - 3} more
+            </button>
+          )}
+        </div>
+      )}
+
+      {/* Modals & Drawers: 100% existing components and handlers */}
       <InviteVendorsModal
         isOpen={inviteTargetRfq !== null}
         rfq={inviteTargetRfq}
@@ -804,7 +942,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               <button
                 type="button"
                 onClick={() => setVendorListModalData(null)}
-                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 transition"
+                className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 transition cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -896,7 +1034,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               <button
                 type="button"
                 onClick={() => setVendorListModalData(null)}
-                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition"
+                className="px-4 py-1.5 rounded-lg text-xs font-bold bg-slate-200 dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-300 dark:hover:bg-slate-700 transition cursor-pointer"
               >
                 Close
               </button>

@@ -735,8 +735,7 @@ async function getCreditHistory(req, res, next) {
     try {
       transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
     } catch (dbErr) {
-      logger.warn('Failed to load credit transactions from database, falling back to empty list', { buyerId: buyer.id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
-      transactions = [];
+      logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
     }
 
     let totalAllocated = 0;

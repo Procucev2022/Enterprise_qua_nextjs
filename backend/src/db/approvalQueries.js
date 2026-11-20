@@ -510,6 +510,12 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
   }
 
   if (!verified) {
+    if (trimmedOtp) {
+      const otpError = new Error(APPROVAL_MESSAGES.OTP_INVALID);
+      otpError.code = 'APPROVER_OTP_INVALID';
+      otpError.statusCode = 401;
+      throw otpError;
+    }
     if (!isApproverPasswordConfigured(approverName)) {
       const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
       configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';

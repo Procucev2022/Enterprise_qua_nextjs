@@ -372,25 +372,6 @@ export default function SupplierDossierDrawer({
     handleTrialDateChange(trialStartDate, val);
   };
 
-  const handleTrialDaysChange = (days: number) => {
-    setTrialDays(days);
-    if (trialStartDate && trialEndDate) {
-      const calcDays = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
-      if (calcDays > 0 && days !== calcDays) {
-        setTrialDateError(
-          formatString(trialPeriodStrings.validationDaysMismatch, {
-            trialDays: days,
-            calculatedDays: calcDays,
-          })
-        );
-      } else if (calcDays <= 0) {
-        setTrialDateError(trialPeriodStrings.validationEndBeforeStart);
-      } else {
-        setTrialDateError(null);
-      }
-    }
-  };
-
   // Offline Payment Workflow state
   const [offlinePaymentDate, setOfflinePaymentDate] = useState<string>('');
   const [offlinePaymentType, setOfflinePaymentType] = useState<OfflinePaymentType>('NEFT / RTGS');
@@ -418,10 +399,10 @@ export default function SupplierDossierDrawer({
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
-  const creditApprovalStrings = UI_STRINGS.buyerDirectory.dossier?.creditApproval;
-  const discountStrings = creditApprovalStrings?.discountWorkflow;
-  const trialPeriodStrings = creditApprovalStrings?.trialPeriodWorkflow;
-  const offlinePaymentStrings = creditApprovalStrings?.offlinePaymentWorkflow;
+  const creditApprovalStrings = UI_STRINGS.buyerDirectory.dossier.creditApproval;
+  const discountStrings = creditApprovalStrings.discountWorkflow;
+  const trialPeriodStrings = creditApprovalStrings.trialPeriodWorkflow;
+  const offlinePaymentStrings = creditApprovalStrings.offlinePaymentWorkflow;
 
   // Active Communications Sub-Tab
   const [commSubTab, setCommSubTab] = useState<'all' | 'email' | 'sms' | 'whatsapp' | 'call'>('all');
@@ -822,12 +803,12 @@ export default function SupplierDossierDrawer({
       showToast(offlinePaymentStrings.validationAmountRequired, 'error');
       return;
     }
-    const effectiveInitiator = offlineInitiatorName.trim() || quoteCreditInitiator;
+    const effectiveInitiator = offlineInitiatorName.trim();
     if (!effectiveInitiator) {
       showToast(offlinePaymentStrings.validationInitiatorRequired, 'error');
       return;
     }
-    const effectiveApprover = offlineApproverName.trim() || quoteCreditApprover.trim();
+    const effectiveApprover = offlineApproverName.trim();
     if (!effectiveApprover) {
       showToast(offlinePaymentStrings.validationApproverRequired, 'error');
       return;
@@ -1037,38 +1018,27 @@ export default function SupplierDossierDrawer({
   }, [assignees]);
 
   const sellerInitiatorSelectOptions = useMemo(() => {
-    const list: string[] = [...internalTaskUserOptions];
-    const extras = ['Session Initiator', 'Category Manager'];
+    const primaryOrder = ['Govardhan', 'Chandan', 'Krishna Chaitanya', 'Sudheer'];
+    const list: string[] = [...primaryOrder];
+    const extras = [
+      ...internalTaskUserOptions,
+      'Session Initiator',
+      'Category Manager',
+    ];
+    if (quoteCreditInitiator) extras.push(quoteCreditInitiator);
+    if (offlineInitiatorName) extras.push(offlineInitiatorName);
+
     for (const item of extras) {
       if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
         list.push(item);
       }
     }
-    if (quoteCreditInitiator && !list.some((u) => u.toLowerCase() === quoteCreditInitiator.toLowerCase())) {
-      list.push(quoteCreditInitiator);
-    }
-    if (offlineInitiatorName && !list.some((u) => u.toLowerCase() === offlineInitiatorName.toLowerCase())) {
-      list.push(offlineInitiatorName);
-    }
     return list;
   }, [internalTaskUserOptions, quoteCreditInitiator, offlineInitiatorName]);
 
   const sellerApproverSelectOptions = useMemo(() => {
-    const list: string[] = [...CREDIT_APPROVAL_APPROVERS];
-    const extras = ['Test Approver', 'VP Procurement'];
-    for (const item of extras) {
-      if (!list.some((a) => a.toLowerCase() === item.toLowerCase())) {
-        list.push(item);
-      }
-    }
-    if (quoteCreditApprover && !list.some((a) => a.toLowerCase() === quoteCreditApprover.toLowerCase())) {
-      list.push(quoteCreditApprover);
-    }
-    if (offlineApproverName && !list.some((a) => a.toLowerCase() === offlineApproverName.toLowerCase())) {
-      list.push(offlineApproverName);
-    }
-    return list;
-  }, [quoteCreditApprover, offlineApproverName]);
+    return ['Srinu Sir', 'Rao Sir', 'Sudheer Sir'];
+  }, []);
   const [majorCategoryOptions, setMajorCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [majorCategoryError, setMajorCategoryError] = useState<string | null>(null);
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
@@ -1476,7 +1446,7 @@ export default function SupplierDossierDrawer({
                               setTrialDateError(null);
                               setQuoteCreditsReason('');
                             } else if (type === 'Offline Payments') {
-                              setOfflinePaymentDate(new Date().toISOString().split('T')[0]);
+                              setOfflinePaymentDate('');
                               setOfflinePaymentType('NEFT / RTGS');
                               setOfflineTransactionId('');
                               setOfflinePaymentAmount(0);
@@ -3450,23 +3420,19 @@ export default function SupplierDossierDrawer({
         >
           <div
             className={`w-full ${
-              selectedRequestType === 'Discount' || selectedRequestType === 'Discounts'
-                ? discountStep === 3
-                  ? 'max-w-xl'
-                  : 'max-w-lg'
-                : selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods'
-                ? 'max-w-lg'
+              (selectedRequestType === 'Discount' || selectedRequestType === 'Discounts') && discountStep === 3
+                ? 'max-w-2xl'
                 : selectedRequestType === 'Offline Payments'
-                ? 'max-w-lg'
-                : 'max-w-md'
-            } bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto`}
+                ? 'max-w-2xl'
+                : 'max-w-lg'
+            } bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 sm:p-5 space-y-3 max-h-[90vh] overflow-y-auto`}
           >
             {selectedRequestType === 'Discount' || selectedRequestType === 'Discounts' ? (
               <>
                 {/* Step 1: Select Sourcing Mode (Connect Model & Select Model ONLY) */}
                 {discountStep === 1 && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step1Title}
@@ -3499,7 +3465,7 @@ export default function SupplierDossierDrawer({
                               setSelectedDiscountMode(mode.label);
                               setDiscountStep(2);
                             }}
-                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                            className={`p-3 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
                               selectedDiscountMode === mode.label
                                 ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
                                 : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
@@ -3536,8 +3502,8 @@ export default function SupplierDossierDrawer({
 
                 {/* Step 2: Select Billing Duration */}
                 {discountStep === 2 && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step2Title}
@@ -3572,7 +3538,7 @@ export default function SupplierDossierDrawer({
                               setSelectedBillingDuration(dur.label);
                               setDiscountStep(3);
                             }}
-                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                            className={`p-3 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
                               selectedBillingDuration === dur.label
                                 ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
                                 : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
@@ -3617,8 +3583,8 @@ export default function SupplierDossierDrawer({
 
                 {/* Step 3: Enter Discount Percentage & Review Price Breakdown */}
                 {discountStep === 3 && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step3Title}
@@ -3637,197 +3603,203 @@ export default function SupplierDossierDrawer({
                       </button>
                     </div>
 
-                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-                      {/* Seller Name (Read-Only) */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          Seller Name
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={displayName}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
-                      </div>
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                        {/* Form Inputs (Left Column on Desktop) */}
+                        <div className="space-y-2.5">
+                          {/* Seller Name (Read-Only) */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              Seller Name
+                            </label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={displayName}
+                              className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                            />
+                          </div>
 
-                      {/* Selected Mode & Billing Duration (Read-Only) */}
-                      <div className="grid grid-cols-2 gap-3">
-                        <div>
-                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {discountStrings.selectedModeLabel}
-                          </label>
-                          <input
-                            type="text"
-                            readOnly
-                            value={selectedDiscountMode}
-                            className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                          />
+                          {/* Selected Mode & Billing Duration (Read-Only) */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.selectedModeLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedDiscountMode}
+                                className="w-full px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed truncate"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.billingDurationLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedBillingDuration}
+                                className="w-full px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Original Plan Price & Discount Percentage */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.originalPlanPriceLabel}
+                              </label>
+                              <div className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold">
+                                ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                            <div>
+                              <label htmlFor="seller-discount-percentage" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.discountPercentageLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                id="seller-discount-percentage"
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="any"
+                                value={discountPercentage}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  setDiscountPercentage(isNaN(val) ? 0 : val);
+                                }}
+                                placeholder="0"
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          {/* Initiated By & Assigned Approver */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="discount-initiator"
+                                value={quoteCreditInitiator}
+                                onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                                required
+                              >
+                                <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                                {sellerInitiatorSelectOptions.map((user) => (
+                                  <option key={user} value={user}>
+                                    {user}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="quote-credit-approver"
+                                value={quoteCreditApprover}
+                                onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                                required
+                              >
+                                <option value="">{discountStrings.approverPlaceholder}</option>
+                                {sellerApproverSelectOptions.map((appr) => (
+                                  <option key={appr} value={appr}>
+                                    {appr}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Request Reason / Justification */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {discountStrings.reasonLabel}
+                            </label>
+                            <textarea
+                              rows={1.5}
+                              value={quoteCreditsReason}
+                              onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                              placeholder={discountStrings.reasonPlaceholder}
+                              className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            />
+                          </div>
                         </div>
-                        <div>
-                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {discountStrings.billingDurationLabel}
-                          </label>
-                          <input
-                            type="text"
-                            readOnly
-                            value={selectedBillingDuration}
-                            className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                          />
-                        </div>
-                      </div>
 
-                      {/* Original Plan Price (Read-Only) */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {discountStrings.originalPlanPriceLabel}
-                        </label>
-                        <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold">
-                          ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
-                        </div>
-                      </div>
-
-                      {/* Discount Percentage (%) - Editable */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {discountStrings.discountPercentageLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <input
-                          type="number"
-                          min="0"
-                          max="100"
-                          step="any"
-                          value={discountPercentage}
-                          onChange={(e) => {
-                            const val = parseFloat(e.target.value);
-                            setDiscountPercentage(isNaN(val) ? 0 : val);
-                          }}
-                          placeholder="0"
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                          required
-                        />
-                      </div>
-
-                      {/* Initiated By */}
-                      <div>
-                        <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <select
-                          id="discount-initiator"
-                          value={quoteCreditInitiator}
-                          onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                          required
-                        >
-                          <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
-                          {sellerInitiatorSelectOptions.map((user) => (
-                            <option key={user} value={user}>
-                              {user}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Assigned Approver */}
-                      <div>
-                        <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <select
-                          id="quote-credit-approver"
-                          value={quoteCreditApprover}
-                          onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                          required
-                        >
-                          <option value="">{discountStrings.approverPlaceholder || 'Select Authorized Approver...'}</option>
-                          {sellerApproverSelectOptions.map((appr) => (
-                            <option key={appr} value={appr}>
-                              {appr}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* Request Reason / Justification */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {discountStrings.reasonLabel}
-                        </label>
-                        <textarea
-                          rows={2}
-                          value={quoteCreditsReason}
-                          onChange={(e) => setQuoteCreditsReason(e.target.value)}
-                          placeholder={discountStrings.reasonPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                        />
-                      </div>
-
-                      {/* Price Breakdown Table */}
-                      <div className="space-y-1.5 pt-2">
-                        <span className="block font-semibold text-slate-700 dark:text-slate-300">
-                          {discountStrings.priceBreakdownHeading}
-                        </span>
-                        <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/60 dark:bg-slate-800/40">
-                          <table className="w-full text-xs">
-                            <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
-                              <tr>
-                                <th className="px-3 py-2 text-left">{discountStrings.colDescription}</th>
-                                <th className="px-3 py-2 text-right">{discountStrings.colAmount}</th>
-                              </tr>
-                            </thead>
-                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                              <tr>
-                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
-                                  {discountStrings.rowOriginalPrice}
-                                </td>
-                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
-                                  ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
-                                  {discountStrings.rowDiscountPercent}
-                                </td>
-                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
-                                  {discountBreakdown.discountPercentage}%
-                                </td>
-                              </tr>
-                              <tr>
-                                <td className="px-3 py-1.5 text-rose-600 dark:text-rose-400 font-medium">
-                                  {discountStrings.rowDiscountAmount}
-                                </td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-rose-600 dark:text-rose-400">
-                                  −₹{discountBreakdown.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
-                                  {discountStrings.rowRemainingAmount}
-                                </td>
-                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
-                                  ₹{discountBreakdown.remainingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                              <tr>
-                                <td className="px-3 py-1.5 text-indigo-600 dark:text-indigo-400 font-medium">
-                                  {discountStrings.rowGst}
-                                </td>
-                                <td className="px-3 py-1.5 text-right font-semibold text-indigo-600 dark:text-indigo-400">
-                                  +₹{discountBreakdown.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                              <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
-                                <td className="px-3 py-2 text-emerald-900 dark:text-emerald-100">
-                                  {discountStrings.rowFinalPayable}
-                                </td>
-                                <td className="px-3 py-2 text-right text-emerald-700 dark:text-emerald-300 text-sm font-extrabold">
-                                  ₹{discountBreakdown.finalPayableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
-                                </td>
-                              </tr>
-                            </tbody>
-                          </table>
+                        {/* Price Breakdown Table (Right Column on Desktop) */}
+                        <div className="space-y-1.5">
+                          <span className="block font-semibold text-slate-700 dark:text-slate-300">
+                            {discountStrings.priceBreakdownHeading}
+                          </span>
+                          <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/60 dark:bg-slate-800/40">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                                <tr>
+                                  <th className="px-3 py-1.5 text-left">{discountStrings.colDescription}</th>
+                                  <th className="px-3 py-1.5 text-right">{discountStrings.colAmount}</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowOriginalPrice}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowDiscountPercent}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    {discountBreakdown.discountPercentage}%
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-rose-600 dark:text-rose-400 font-medium">
+                                    {discountStrings.rowDiscountAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-rose-600 dark:text-rose-400">
+                                    −₹{discountBreakdown.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowRemainingAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{discountBreakdown.remainingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-indigo-600 dark:text-indigo-400 font-medium">
+                                    {discountStrings.rowGst}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-indigo-600 dark:text-indigo-400">
+                                    +₹{discountBreakdown.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
+                                  <td className="px-3 py-1.5 text-emerald-900 dark:text-emerald-100">
+                                    {discountStrings.rowFinalPayable}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-emerald-700 dark:text-emerald-300 font-extrabold">
+                                    ₹{discountBreakdown.finalPayableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
                         </div>
                       </div>
 
@@ -3941,12 +3913,15 @@ export default function SupplierDossierDrawer({
                 )}
 
                 {trialPeriodStep === 2 && (
-                  <div className="space-y-4">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                       <div>
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {trialPeriodStrings.step2Title}
                         </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {trialPeriodStrings.step2Subtitle}
+                        </p>
                       </div>
                       <button
                         type="button"
@@ -3961,35 +3936,35 @@ export default function SupplierDossierDrawer({
                       </button>
                     </div>
 
-                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-                      {/* 1. Seller Name (Read-Only) */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          Seller Name
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={displayName}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
-                      </div>
-
-                      {/* 2. Selected Mode (Read-Only) */}
-                      <div>
-                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {trialPeriodStrings.selectedModeLabel}
-                        </label>
-                        <input
-                          type="text"
-                          readOnly
-                          value={selectedTrialMode}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3 text-xs">
+                      {/* 1. Seller Name & Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Name
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={displayName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.selectedModeLabel}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={selectedTrialMode}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
                       </div>
 
                       {/* Starting Date & Ending Date */}
-                      <div className="grid grid-cols-2 gap-3">
+                      <div className="grid grid-cols-2 gap-2.5">
                         <div>
                           <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                             {trialPeriodStrings.startDateLabel}
@@ -3999,7 +3974,7 @@ export default function SupplierDossierDrawer({
                             type="date"
                             value={trialStartDate}
                             onChange={(e) => handleTrialStartDateChange(e.target.value)}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
                           />
                         </div>
                         <div>
@@ -4011,71 +3986,71 @@ export default function SupplierDossierDrawer({
                             type="date"
                             value={trialEndDate}
                             onChange={(e) => handleTrialEndDateChange(e.target.value)}
-                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
                           />
                         </div>
                       </div>
 
                       {trialDateError && (
-                        <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs">
+                        <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs">
                           {trialDateError}
                         </div>
                       )}
 
-                      {/* 6. Initiated By User */}
-                      <div>
-                        <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <select
-                          id="trial-initiator"
-                          value={quoteCreditInitiator}
-                          onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                          required
-                        >
-                          <option value="">{trialPeriodStrings.selectUserPlaceholder || 'Select Initiator...'}</option>
-                          {sellerInitiatorSelectOptions.map((user) => (
-                            <option key={user} value={user}>
-                              {user}
-                            </option>
-                          ))}
-                        </select>
+                      {/* Initiated By & Assigned Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="trial-initiator"
+                            value={quoteCreditInitiator}
+                            onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{trialPeriodStrings.selectUserPlaceholder}</option>
+                            {sellerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="quote-credit-approver"
+                            value={quoteCreditApprover}
+                            onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{trialPeriodStrings.selectApproverPlaceholder}</option>
+                            {sellerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
                       </div>
 
-                      {/* 7. Assigned Approver */}
-                      <div>
-                        <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <select
-                          id="quote-credit-approver"
-                          value={quoteCreditApprover}
-                          onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                          required
-                        >
-                          <option value="">{trialPeriodStrings.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
-                          {sellerApproverSelectOptions.map((appr) => (
-                            <option key={appr} value={appr}>
-                              {appr}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-
-                      {/* 8. Request Reason / Remarks */}
+                      {/* Remarks */}
                       <div>
                         <label htmlFor="trial-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {trialPeriodStrings.reasonLabel}
                         </label>
                         <textarea
                           id="trial-remarks"
-                          rows={2}
+                          rows={1.5}
                           value={quoteCreditsReason}
                           onChange={(e) => setQuoteCreditsReason(e.target.value)}
                           placeholder={trialPeriodStrings.reasonPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
                         />
                       </div>
 
@@ -4117,8 +4092,8 @@ export default function SupplierDossierDrawer({
               </>
             ) : selectedRequestType === 'Offline Payments' ? (
               // Dedicated Offline Payment Approval Form
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {offlinePaymentStrings.modalTitle}
@@ -4137,223 +4112,232 @@ export default function SupplierDossierDrawer({
                   </button>
                 </div>
 
-                <form onSubmit={handleConfirmOfflinePayment} className="space-y-3.5 text-xs">
-                  {/* Seller Name (Read-Only) */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Seller Name
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={displayName}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                    />
-                  </div>
-
-                  {/* Seller Sourcing Mode */}
-                  <div>
-                    <label htmlFor="offline-sourcing-mode-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Seller Sourcing Mode
-                    </label>
-                    <select
-                      id="offline-sourcing-mode-select"
-                      value={offlineSellerSourceMode}
-                      onChange={(e) => setOfflineSellerSourceMode(e.target.value)}
-                      className="w-full px-3 py-2 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    >
-                      <option value="Connect Model">Connect Model</option>
-                      <option value="Select Model">Select Model</option>
-                    </select>
-                  </div>
-
-                  {/* Payment Date */}
-                  <div>
-                    <label htmlFor="offline-payment-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.paymentDateLabel} <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="offline-payment-date"
-                      type="date"
-                      value={offlinePaymentDate}
-                      onChange={(e) => setOfflinePaymentDate(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      required
-                    />
-                  </div>
-
-                  {/* Payment Type */}
-                  <div>
-                    <label htmlFor="offline-payment-type" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.paymentTypeLabel} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="offline-payment-type-select"
-                      data-testid="offline-payment-type-select"
-                      value={offlinePaymentType}
-                      onChange={(e) => setOfflinePaymentType(e.target.value as OfflinePaymentType)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      required
-                    >
-                      {OFFLINE_PAYMENT_TYPES.map((type) => (
-                        <option key={type} value={type}>{type}</option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Transaction ID: Display for NEFT/RTGS, Cheque, UPI; HIDE when Cash is selected */}
-                  {offlinePaymentType !== 'Cash' && (
-                    <div>
-                      <label htmlFor="offline-transaction-id" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {offlinePaymentStrings.transactionIdLabel} <span className="text-rose-500">*</span>
-                      </label>
-                      <input
-                        id="offline-transaction-id"
-                        type="text"
-                        value={offlineTransactionId}
-                        onChange={(e) => setOfflineTransactionId(e.target.value)}
-                        placeholder={offlinePaymentStrings.transactionIdPlaceholder}
-                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                        required
-                      />
-                    </div>
-                  )}
-
-                  {/* Payment Amount */}
-                  <div>
-                    <label htmlFor="offline-payment-amount" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.paymentAmountLabel} <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="offline-payment-amount"
-                      type="number"
-                      min="1"
-                      step="any"
-                      value={offlinePaymentAmount || ''}
-                      onChange={(e) => {
-                        const val = parseFloat(e.target.value);
-                        setOfflinePaymentAmount(isNaN(val) ? 0 : val);
-                      }}
-                      placeholder={offlinePaymentStrings.paymentAmountPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      required
-                    />
-                  </div>
-
-                  {/* Payment Image Proof Upload */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.paymentProofLabel}
-                    </label>
-                    <input
-                      ref={offlineFileInputRef}
-                      type="file"
-                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
-                      onChange={handleOfflineProofFileSelect}
-                      className="hidden"
-                      id="seller-offline-proof-file-input"
-                      data-testid="offline-proof-file-input"
-                    />
-
-                    {offlineProofPreviewUrl ? (
-                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2">
-                        <div className="flex items-center justify-between">
-                          <span className="font-medium text-slate-700 dark:text-slate-300 truncate max-w-[200px]" title={offlineProofFileName}>
-                            {offlineProofFileName}
-                          </span>
-                          <button
-                            type="button"
-                            onClick={handleRemoveOfflineProof}
-                            className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition cursor-pointer"
-                            title="Remove attachment"
-                          >
-                            <X size={14} />
-                          </button>
+                <form onSubmit={handleConfirmOfflinePayment} className="space-y-3 text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                    {/* Left Column: Payment Details */}
+                    <div className="space-y-2.5">
+                      {/* Seller Name & Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Name
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={displayName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
                         </div>
-                        {/* eslint-disable-next-line @next/next/no-img-element */}
-                        <img
-                          src={offlineProofPreviewUrl}
-                          alt="Proof preview"
-                          className="max-h-36 w-auto rounded border border-slate-200 dark:border-slate-700 object-contain mx-auto"
+
+                        <div>
+                          <label htmlFor="offline-sourcing-mode-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Sourcing Mode
+                          </label>
+                          <select
+                            id="offline-sourcing-mode-select"
+                            value={offlineSellerSourceMode}
+                            onChange={(e) => setOfflineSellerSourceMode(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          >
+                            <option value="Connect Model">Connect Model</option>
+                            <option value="Select Model">Select Model</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Payment Date & Type (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-payment-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentDateLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-payment-date"
+                            type="date"
+                            value={offlinePaymentDate}
+                            onChange={(e) => setOfflinePaymentDate(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-payment-type-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentTypeLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-payment-type-select"
+                            data-testid="offline-payment-type-select"
+                            value={offlinePaymentType}
+                            onChange={(e) => setOfflinePaymentType(e.target.value as OfflinePaymentType)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          >
+                            {OFFLINE_PAYMENT_TYPES.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Transaction ID */}
+                      {offlinePaymentType !== 'Cash' && (
+                        <div>
+                          <label htmlFor="offline-transaction-id" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.transactionIdLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-transaction-id"
+                            type="text"
+                            value={offlineTransactionId}
+                            onChange={(e) => setOfflineTransactionId(e.target.value)}
+                            placeholder={offlinePaymentStrings.transactionIdPlaceholder}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Payment Amount */}
+                      <div>
+                        <label htmlFor="offline-payment-amount" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentAmountLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="offline-payment-amount"
+                          type="number"
+                          min="1"
+                          step="any"
+                          value={offlinePaymentAmount || ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setOfflinePaymentAmount(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder={offlinePaymentStrings.paymentAmountPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          required
                         />
                       </div>
-                    ) : (
-                      <button
-                        type="button"
-                        onClick={() => offlineFileInputRef.current?.click()}
-                        className="w-full py-4 px-3 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl bg-slate-50/50 dark:bg-slate-800/30 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5"
-                      >
-                        <Upload className="w-5 h-5 text-slate-400" />
-                        <span className="text-slate-600 dark:text-slate-300 font-medium">
-                          {offlinePaymentStrings.paymentProofHelp}
-                        </span>
-                      </button>
-                    )}
-                  </div>
+                    </div>
 
-                  {/* Initiated By */}
-                  <div>
-                    <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="offline-initiator"
-                      value={offlineInitiatorName || quoteCreditInitiator}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setOfflineInitiatorName(val);
-                        setQuoteCreditInitiator(val);
-                      }}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder || 'Select Registered User...'}</option>
-                      {sellerInitiatorSelectOptions.map((user) => (
-                        <option key={user} value={user}>
-                          {user}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    {/* Right Column: Upload Proof, Initiator, Approver, Remarks */}
+                    <div className="space-y-2.5">
+                      {/* Payment Image Proof Upload */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentProofLabel}
+                        </label>
+                        <input
+                          ref={offlineFileInputRef}
+                          type="file"
+                          accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                          onChange={handleOfflineProofFileSelect}
+                          className="hidden"
+                          id="seller-offline-proof-file-input"
+                          data-testid="offline-proof-file-input"
+                        />
 
-                  {/* Assigned Approver */}
-                  <div>
-                    <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="offline-approver"
-                      value={offlineApproverName || quoteCreditApprover}
-                      onChange={(e) => {
-                        const val = e.target.value;
-                        setOfflineApproverName(val);
-                        setQuoteCreditApprover(val);
-                      }}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{offlinePaymentStrings.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
-                      {sellerApproverSelectOptions.map((appr) => (
-                        <option key={appr} value={appr}>
-                          {appr}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                        {offlineProofPreviewUrl ? (
+                          <div className="p-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-slate-700 dark:text-slate-300 truncate max-w-[200px]" title={offlineProofFileName}>
+                                {offlineProofFileName}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleRemoveOfflineProof}
+                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition cursor-pointer"
+                                title="Remove attachment"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={offlineProofPreviewUrl}
+                              alt="Proof preview"
+                              className="max-h-24 w-auto rounded border border-slate-200 dark:border-slate-700 object-contain mx-auto"
+                            />
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => offlineFileInputRef.current?.click()}
+                            className="w-full py-2.5 px-3 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl bg-slate-50/50 dark:bg-slate-800/30 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1"
+                          >
+                            <Upload className="w-4 h-4 text-slate-400" />
+                            <span className="text-slate-600 dark:text-slate-300 font-medium text-[11px]">
+                              {offlinePaymentStrings.paymentProofHelp}
+                            </span>
+                          </button>
+                        )}
+                      </div>
 
-                  {/* Remarks */}
-                  <div>
-                    <label htmlFor="offline-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {offlinePaymentStrings.reasonLabel}
-                    </label>
-                    <textarea
-                      id="offline-remarks"
-                      rows={2}
-                      value={offlineRemarks}
-                      onChange={(e) => setOfflineRemarks(e.target.value)}
-                      placeholder={offlinePaymentStrings.reasonPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
+                      {/* Initiated By & Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-initiator"
+                            value={offlineInitiatorName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOfflineInitiatorName(val);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder}</option>
+                            {sellerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-approver"
+                            value={offlineApproverName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOfflineApproverName(val);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectApproverPlaceholder}</option>
+                            {sellerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Remarks */}
+                      <div>
+                        <label htmlFor="offline-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          id="offline-remarks"
+                          rows={1.5}
+                          value={offlineRemarks}
+                          onChange={(e) => setOfflineRemarks(e.target.value)}
+                          placeholder={offlinePaymentStrings.reasonPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        />
+                      </div>
+                    </div>
                   </div>
 
                   {/* Actions */}
@@ -4370,7 +4354,7 @@ export default function SupplierDossierDrawer({
                     </button>
                     <button
                       type="submit"
-                      disabled={isSubmittingQuoteCredits || offlinePaymentAmount <= 0}
+                      disabled={isSubmittingQuoteCredits}
                       className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
                     >
                       {isSubmittingQuoteCredits
@@ -4382,8 +4366,8 @@ export default function SupplierDossierDrawer({
               </div>
             ) : selectedRequestType === 'Seller Credit Deletion' ? (
               // Seller Credit Deletion Modal
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       Request Seller Credit Deletion
@@ -4396,107 +4380,111 @@ export default function SupplierDossierDrawer({
                       setIsAddCreditModalOpen(false);
                     }}
                     className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
                   >
                     <X size={18} />
                   </button>
                 </div>
 
-                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-                  {/* Seller Name (Read-Only) */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={displayName}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                    />
-                  </div>
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-2.5 text-xs">
+                  {/* Row 1: Seller Name & Available Credits (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={displayName}
+                        className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                      />
+                    </div>
 
-                  {/* Current Available Credits (Read-Only) */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
-                    </label>
-                    <div className="px-3 py-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-lg text-rose-700 dark:text-rose-300 font-bold">
-                      {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits Available
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                      </label>
+                      <div className="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-lg text-rose-700 dark:text-rose-300 font-bold text-xs">
+                        {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits Available
+                      </div>
                     </div>
                   </div>
 
-                  {/* Requested Deduction Credits */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      Credits to Deduct <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="quote-credits-requested"
-                      type="number"
-                      min="1"
-                      max={creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 1000}
-                      value={requestedQuoteCredits}
-                      onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                      placeholder="0"
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
-                      required
-                    />
+                  {/* Row 2: Deduction Credits & Initiated By (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Credits to Deduct <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id="quote-credits-requested"
+                        type="number"
+                        min="1"
+                        max={creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 1000}
+                        value={requestedQuoteCredits}
+                        onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                        placeholder="0"
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-initiator"
+                        value={quoteCreditInitiator}
+                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {sellerInitiatorSelectOptions.map((user) => (
+                          <option key={user} value={user}>
+                            {user}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  {/* Initiated By Select */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="quote-credit-initiator"
-                      value={quoteCreditInitiator}
-                      onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
-                      {sellerInitiatorSelectOptions.map((user) => (
-                        <option key={user} value={user}>
-                          {user}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Row 3: Assigned Approver & Remarks (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-approver"
+                        value={quoteCreditApprover}
+                        onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}</option>
+                        {sellerApproverSelectOptions.map((appr) => (
+                          <option key={appr} value={appr}>
+                            {appr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                  {/* Assigned Approver */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="quote-credit-approver"
-                      value={quoteCreditApprover}
-                      onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder || 'Select Authorized Approver...'}</option>
-                      {sellerApproverSelectOptions.map((appr) => (
-                        <option key={appr} value={appr}>
-                          {appr}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Reason / Remarks */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={quoteCreditsReason}
-                      onChange={(e) => setQuoteCreditsReason(e.target.value)}
-                      placeholder="Reason for credit deletion..."
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
-                    />
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                      </label>
+                      <textarea
+                        rows={1.5}
+                        value={quoteCreditsReason}
+                        onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                        placeholder="Reason for credit deletion..."
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-xs"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -4506,14 +4494,14 @@ export default function SupplierDossierDrawer({
                         setIsAddQuoteCreditsModalOpen(false);
                         setIsAddCreditModalOpen(false);
                       }}
-                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
-                      className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
                     >
                       {isSubmittingQuoteCredits
                         ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
@@ -4524,8 +4512,8 @@ export default function SupplierDossierDrawer({
               </div>
             ) : (
               // Default: Seller Credit Addition Modal
-              <div className="space-y-4">
-                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
                   <div>
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
@@ -4538,106 +4526,110 @@ export default function SupplierDossierDrawer({
                       setIsAddCreditModalOpen(false);
                     }}
                     className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
                   >
                     <X size={18} />
                   </button>
                 </div>
 
-                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-                  {/* Seller Name (Read-Only) */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
-                    </label>
-                    <input
-                      type="text"
-                      readOnly
-                      value={displayName}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                    />
-                  </div>
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-2.5 text-xs">
+                  {/* Row 1: Seller Name & Current Available Credits (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={displayName}
+                        className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                      />
+                    </div>
 
-                  {/* Current Available Credits (Read-Only) */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
-                    </label>
-                    <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                      {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                      </label>
+                      <div className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold text-xs">
+                        {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+                      </div>
                     </div>
                   </div>
 
-                  {/* Requested Credits */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
-                    </label>
-                    <input
-                      id="quote-credits-requested"
-                      type="number"
-                      min="1"
-                      max="1000"
-                      value={requestedQuoteCredits}
-                      onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                      required
-                    />
+                  {/* Row 2: Requested Credits & Initiated By (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id="quote-credits-requested"
+                        type="number"
+                        min="1"
+                        max="1000"
+                        value={requestedQuoteCredits}
+                        onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-initiator"
+                        value={quoteCreditInitiator}
+                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {sellerInitiatorSelectOptions.map((user) => (
+                          <option key={user} value={user}>
+                            {user}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
                   </div>
 
-                  {/* Initiated By Select */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="quote-credit-initiator"
-                      value={quoteCreditInitiator}
-                      onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
-                      {sellerInitiatorSelectOptions.map((user) => (
-                        <option key={user} value={user}>
-                          {user}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                  {/* Row 3: Assigned Approver & Remarks (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-approver"
+                        value={quoteCreditApprover}
+                        onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}</option>
+                        {sellerApproverSelectOptions.map((appr) => (
+                          <option key={appr} value={appr}>
+                            {appr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
 
-                  {/* Assigned Approver Select */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
-                    </label>
-                    <select
-                      id="quote-credit-approver"
-                      value={quoteCreditApprover}
-                      onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                      required
-                    >
-                      <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder || 'Select Authorized Approver...'}</option>
-                      {sellerApproverSelectOptions.map((appr) => (
-                        <option key={appr} value={appr}>
-                          {appr}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  {/* Reason / Remarks */}
-                  <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
-                    </label>
-                    <textarea
-                      rows={2}
-                      value={quoteCreditsReason}
-                      onChange={(e) => setQuoteCreditsReason(e.target.value)}
-                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                      </label>
+                      <textarea
+                        rows={1.5}
+                        value={quoteCreditsReason}
+                        onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                        placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                      />
+                    </div>
                   </div>
 
                   <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
@@ -4647,18 +4639,18 @@ export default function SupplierDossierDrawer({
                         setIsAddQuoteCreditsModalOpen(false);
                         setIsAddCreditModalOpen(false);
                       }}
-                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
-                      className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
                     >
                       {isSubmittingQuoteCredits
                         ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
-                        : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
+                        : 'Submit for Approval'}
                     </button>
                   </div>
                 </form>
