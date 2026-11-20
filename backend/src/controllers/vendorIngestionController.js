@@ -461,11 +461,15 @@ async function getJobById(req, res, next) {
 
 async function cancelIngestionJob(req, res, next) {
   try {
-    const success = await largeFileIngestionService.cancelJob(
-      req.user,
-      req.params.sessionId,
-      req.body?.jobId || null
-    );
+    const hasOptions = Boolean(req.body?.discardVendorMaster || req.body?.discardIncomplete);
+    const args = [req.user, req.params.sessionId, req.body?.jobId || null];
+    if (hasOptions) {
+      args.push({
+        discardVendorMaster: Boolean(req.body?.discardVendorMaster),
+        discardIncomplete: Boolean(req.body?.discardIncomplete),
+      });
+    }
+    const success = await largeFileIngestionService.cancelJob(...args);
     return res.json({ success: true, data: { cancelled: success } });
   } catch (err) {
     return respondWithError(err, res, next, 'Failed to cancel ingestion job');

@@ -477,6 +477,7 @@ export default function InitialSetupModal() {
   const [isParsingVendor, setIsParsingVendor] = useState<boolean>(false);
   const [isEditingVendorTable, setIsEditingVendorTable] = useState<boolean>(false);
   const vendorDedupeSummaryRef = useRef<VendorDedupeSummary | null>(null);
+  const currentUploadBatchIdRef = useRef<string | null>(null);
 
   const [poLineItems, setPoLineItems] = useState<PurchaseOrderLineItemRecord[]>([]);
   const [existingOrgPoRecords, setExistingOrgPoRecords] = useState<ExistingPoDedupeCandidate[]>([]);
@@ -788,16 +789,53 @@ export default function InitialSetupModal() {
   }, [sessionId, aiJob]);
 
   const handleCloseModal = async () => {
-    if (sessionId && (vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING')) {
+    const hasUnconfirmedUpload = !poDataUploaded && Boolean(vendorFileName || currentUploadBatchIdRef.current || vendorMasterUploaded);
+    const hasProcessingJob = vendorJob?.status === 'PROCESSING' || poJob?.status === 'PROCESSING';
+
+    if (sessionId && (hasProcessingJob || hasUnconfirmedUpload)) {
       try {
         await fetch(`/api/vendor-ingestion/${sessionId}/jobs/cancel`, {
           method: 'POST',
-          headers: authFetchHeaders(),
+          headers: {
+            ...authFetchHeaders(),
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            discardVendorMaster: hasUnconfirmedUpload,
+            discardIncomplete: hasUnconfirmedUpload,
+          }),
         });
       } catch (e) {
         logger.log('WARN', 'Could not cancel background ingestion job when closing setup', { error: e }, 'VENDOR_INGESTION');
       }
     }
+
+    if (hasUnconfirmedUpload) {
+      try {
+        const historyRaw = localStorage.getItem('procucev_vendor_upload_history');
+        const historyList = historyRaw ? JSON.parse(historyRaw) : [];
+        if (Array.isArray(historyList)) {
+          const activeBatchId = currentUploadBatchIdRef.current;
+          const activeFileName = vendorFileName;
+          const filteredHistory = historyList.filter(
+            (entry: any) =>
+              entry &&
+              (!activeBatchId || entry.id !== activeBatchId) &&
+              (!activeFileName || entry.fileName !== activeFileName)
+          );
+          localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(filteredHistory));
+          window.dispatchEvent(new Event('vendor_upload_history_updated'));
+          window.dispatchEvent(new Event('storage'));
+        }
+      } catch {}
+      currentUploadBatchIdRef.current = null;
+      setStoredVendors([]);
+      setVendorMasterUploaded(false);
+      setVendorFileName('');
+      setVendorUploadError(null);
+      setSkippedDuplicateVendors([]);
+    }
+
     setVendorJob(null);
     setPoJob(null);
     setAiJob(null);
@@ -822,6 +860,7 @@ export default function InitialSetupModal() {
     setSkippedDuplicateVendors([]);
     setSkippedDuplicatePoRows([]);
     poDedupeSummaryRef.current = null;
+    currentUploadBatchIdRef.current = null;
 
     const initSession = async () => {
       try {
@@ -1198,6 +1237,7 @@ export default function InitialSetupModal() {
               ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
               records: [],
             };
+            currentUploadBatchIdRef.current = historyEntry.id;
             const updatedHistory = [
               historyEntry,
               ...existingHistory.filter((x: { fileName?: string }) => x.fileName !== file.name),
@@ -1320,6 +1360,7 @@ export default function InitialSetupModal() {
               };
             }),
           };
+          currentUploadBatchIdRef.current = historyEntry.id;
           const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
           localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
         } catch { }

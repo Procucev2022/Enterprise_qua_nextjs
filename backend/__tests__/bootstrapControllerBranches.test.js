@@ -583,4 +583,22 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resOrgWide, jest.fn());
     expect(resOrgWide.data.data.vendors.map((v) => v.id)).toEqual(['v-master-rec-org-wide-1']);
   });
+
+  test('returns empty fallback vendors when latest session status is DRAFT or VENDOR_MASTER_STORED', async () => {
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-1',
+      status: 'VENDOR_MASTER_STORED',
+    });
+    const resDraft = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft, jest.fn());
+    expect(resDraft.data.data.vendors).toEqual([]);
+
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-2',
+      status: 'DRAFT',
+    });
+    const resDraft2 = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft2, jest.fn());
+    expect(resDraft2.data.data.vendors).toEqual([]);
+  });
 });

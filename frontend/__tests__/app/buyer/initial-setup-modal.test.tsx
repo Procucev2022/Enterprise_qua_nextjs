@@ -5691,5 +5691,157 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       global.fetch = origFetch;
     }
   });
+
+  it('discards unconfirmed vendor master upload from localStorage when modal is closed without PO dump', async () => {
+    const origFetch = global.fetch;
+    let cancelBody: any = null;
+    let cancelCalled = false;
+    let updateEventFired = false;
+    let storageEventFired = false;
+
+    const onUpdate = () => { updateEventFired = true; };
+    const onStorage = () => { storageEventFired = true; };
+    window.addEventListener('vendor_upload_history_updated', onUpdate);
+    window.addEventListener('storage', onStorage);
+
+    localStorage.setItem(
+      'procucev_vendor_upload_history',
+      JSON.stringify([
+        { id: 'batch-unconfirmed', fileName: 'unconfirmed.csv', records: [{ name: 'Unconfirmed Vendor' }] },
+        { id: 'batch-prior', fileName: 'prior.xlsx', records: [{ name: 'Prior Vendor' }] },
+      ])
+    );
+
+    global.fetch = jest.fn().mockImplementation((url: string, options?: any) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                session: {
+                  id: 'sess-discard-test',
+                  vendorMasterFileName: 'unconfirmed.csv',
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/cancel')) {
+        cancelCalled = true;
+        cancelBody = options?.body ? JSON.parse(options.body) : null;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { cancelled: true } }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const fileInput = container.querySelector('input[type="file"]');
+      if (fileInput) {
+        const csvContent = 'Vendor Code,Company Name,Email\nV-1,Unconfirmed Vendor,unconfirmed@test.com';
+        const csvFile = new File([csvContent], 'unconfirmed.csv', { type: 'text/csv' });
+        await act(async () => {
+          fireEvent.change(fileInput, { target: { files: [csvFile] } });
+          await new Promise((r) => setTimeout(r, 60));
+        });
+      }
+
+      const closeBtn = container.querySelector('button[title="Dismiss setup (you can resume from the blinking corner badge)"]');
+      expect(closeBtn).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(closeBtn!);
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(cancelCalled).toBe(true);
+      expect(cancelBody).toEqual({
+        discardVendorMaster: true,
+        discardIncomplete: true,
+      });
+
+      const remainingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+      expect(remainingHistory.some((x: any) => x.fileName === 'unconfirmed.csv')).toBe(false);
+      expect(remainingHistory.some((x: any) => x.id === 'batch-prior')).toBe(true);
+      expect(updateEventFired).toBe(true);
+      expect(storageEventFired).toBe(true);
+    } finally {
+      window.removeEventListener('vendor_upload_history_updated', onUpdate);
+      window.removeEventListener('storage', onStorage);
+      global.fetch = origFetch;
+      localStorage.removeItem('procucev_vendor_upload_history');
+    }
+  });
+
+  it('handles cancel fetch error and corrupt localStorage gracefully on close without PO dump', async () => {
+    const origFetch = global.fetch;
+    localStorage.setItem('procucev_vendor_upload_history', '{invalid-json');
+
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                session: {
+                  id: 'sess-err-test',
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/cancel')) {
+        return Promise.reject(new Error('Network offline'));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const fileInput = container.querySelector('input[type="file"]');
+      if (fileInput) {
+        const csvContent = 'Vendor Code,Company Name,Email\nV-1,Unconfirmed Vendor,unconfirmed@test.com';
+        const csvFile = new File([csvContent], 'unconfirmed.csv', { type: 'text/csv' });
+        await act(async () => {
+          fireEvent.change(fileInput, { target: { files: [csvFile] } });
+          await new Promise((r) => setTimeout(r, 60));
+        });
+      }
+
+      const closeBtn = container.querySelector('button[title="Dismiss setup (you can resume from the blinking corner badge)"]');
+      expect(closeBtn).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(closeBtn!);
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+    } finally {
+      global.fetch = origFetch;
+      localStorage.removeItem('procucev_vendor_upload_history');
+    }
+  });
 });
 

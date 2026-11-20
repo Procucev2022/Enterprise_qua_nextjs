@@ -39,6 +39,9 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     if (!orgId) return [];
 
     const session = await vendorIngestionQueries.findLatestSession(orgId);
+    if (session && (session.status === 'DRAFT' || session.status === 'VENDOR_MASTER_STORED')) {
+      return [];
+    }
     const orgRecords =
       typeof vendorIngestionQueries.findOrganizationVendorMasterRecords === 'function'
         ? await vendorIngestionQueries.findOrganizationVendorMasterRecords(orgId, 500)
