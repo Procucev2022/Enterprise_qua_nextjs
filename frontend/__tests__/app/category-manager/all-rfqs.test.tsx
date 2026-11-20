@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
 import AllRFQsConsole from '@/app/category-manager/all-rfqs';
 import CategoryManagerAllRFQsPage from '@/app/category-manager/all-rfqs/page';
 import * as rfqClient from '@/lib/rfqClient';
@@ -136,7 +136,6 @@ describe('AllRFQsConsole', () => {
 
     expect(screen.getByLabelText(S.searchLabel)).toHaveValue('');
     expect(screen.getByLabelText(S.statusFilterLabel)).toHaveValue('all');
-    expect(screen.getByLabelText(S.buyerFilterLabel)).toHaveValue('all');
     expect(screen.getByText('Copper Cable')).toBeInTheDocument();
     expect(screen.getByText('Showing 3 of 3 RFQs')).toBeInTheDocument();
   });
@@ -165,11 +164,13 @@ describe('AllRFQsConsole', () => {
     expect(screen.queryByText('Copper Cable')).not.toBeInTheDocument();
   });
 
-  it('filters by buyer', async () => {
+  it('filters by buyer via search and verifies buyer dropdown is removed from UI', async () => {
     render(<AllRFQsConsole />);
     await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
 
-    fireEvent.change(screen.getByLabelText(S.buyerFilterLabel), { target: { value: 'Alpha Buyer Co' } });
+    expect(screen.queryByLabelText(S.buyerFilterLabel)).not.toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(S.searchLabel), { target: { value: 'Alpha Buyer Co' } });
 
     expect(screen.getByText('Copper Cable')).toBeInTheDocument();
     expect(screen.queryByText('Steel Pumps')).not.toBeInTheDocument();
@@ -396,7 +397,7 @@ describe('AllRFQsConsole', () => {
     render(<AllRFQsConsole />);
     await waitFor(() => expect(screen.getByText('Power Cables')).toBeInTheDocument());
 
-    const moreBtn = screen.getByRole('button', { name: /\+1 more/i });
+    const moreBtn = screen.getByRole('button', { name: /\+2 more/i });
     expect(moreBtn).toBeInTheDocument();
     fireEvent.click(moreBtn);
 
@@ -756,6 +757,119 @@ describe('AllRFQsConsole', () => {
         expect.any(Array),
         expect.stringMatching(/all_to_2026-12-31$/)
       );
+    });
+  });
+
+  describe('Start Date and End Date Control Interactions', () => {
+    it('triggers showPicker or focus when clicking or pressing keys on start/end date controls', async () => {
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: ROWS });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Copper Cable')).toBeInTheDocument());
+
+      const startDateInput = screen.getByLabelText(S.startDateLabel) as HTMLInputElement;
+      const endDateInput = screen.getByLabelText(S.endDateLabel) as HTMLInputElement;
+
+      const startDateBox = startDateInput.parentElement!;
+      const endDateBox = endDateInput.parentElement!;
+
+      // Click when showPicker throws or does not exist (fallback to focus)
+      const focusSpyStart = jest.spyOn(startDateInput, 'focus');
+      fireEvent.click(startDateBox);
+      expect(focusSpyStart).toHaveBeenCalled();
+
+      // Click when showPicker exists
+      startDateInput.showPicker = jest.fn();
+      fireEvent.click(startDateBox);
+      expect(startDateInput.showPicker).toHaveBeenCalled();
+
+      // onKeyDown Enter / Space
+      fireEvent.keyDown(startDateBox, { key: 'Enter' });
+      fireEvent.keyDown(startDateBox, { key: ' ' });
+      fireEvent.keyDown(startDateBox, { key: 'ArrowDown' });
+
+      // End date box
+      const focusSpyEnd = jest.spyOn(endDateInput, 'focus');
+      fireEvent.click(endDateBox);
+      expect(focusSpyEnd).toHaveBeenCalled();
+
+      endDateInput.showPicker = jest.fn();
+      fireEvent.click(endDateBox);
+      expect(endDateInput.showPicker).toHaveBeenCalled();
+
+      fireEvent.keyDown(endDateBox, { key: 'Enter' });
+      fireEvent.keyDown(endDateBox, { key: ' ' });
+      fireEvent.keyDown(endDateBox, { key: 'Escape' });
+    });
+  });
+
+  describe('Invited Vendors Hover Tooltip Popover Interactions', () => {
+    it('displays popover on cell hover and handles vendor click, +more click, and mouse leave', async () => {
+      jest.useFakeTimers();
+      const rfqWithMany = makeRfq({
+        id: 'many-assigned-popover',
+        title: 'Popover RFQ',
+        assignedVendors: [
+          { id: 'v-1', name: 'Vendor One' } as any,
+          { id: 'v-2', name: 'Vendor Two' } as any,
+          { id: 'v-3', name: 'Vendor Three' } as any,
+          { id: 'v-4', name: 'Vendor Four' } as any,
+        ],
+      });
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: [rfqWithMany] });
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Popover RFQ')).toBeInTheDocument());
+
+      const chip = screen.getByText('Vendor One');
+      const cell = chip.closest('td')!;
+
+      // Mock getBoundingClientRect
+      cell.getBoundingClientRect = jest.fn().mockReturnValue({ bottom: 100, left: 50, top: 80, right: 200, width: 150, height: 20 });
+
+      // Hover cell -> tooltip opens
+      fireEvent.mouseEnter(cell);
+      const tooltip = screen.getByRole('tooltip');
+      expect(tooltip).toBeInTheDocument();
+      expect(within(tooltip).getByText(/INVITED \(4\)/i)).toBeInTheDocument();
+
+      // Hover over popover itself -> keeps open
+      fireEvent.mouseEnter(tooltip);
+
+      // Click vendor inside tooltip -> opens VendorDetailsModal
+      const vendorTwoBtn = within(tooltip).getByRole('button', { name: /Vendor Two/i });
+      fireEvent.click(vendorTwoBtn);
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      // Close modal
+      fireEvent.click(screen.getByRole('button', { name: /Close modal/i }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      // Hover cell again and click +more inside tooltip
+      fireEvent.mouseEnter(cell);
+      const tooltip2 = screen.getByRole('tooltip');
+      const moreBtn = within(tooltip2).getByRole('button', { name: /\+1 more/i });
+      fireEvent.click(moreBtn);
+
+      // VendorListModal opens
+      expect(screen.getByText(/Invited Vendors \(4\)/i)).toBeInTheDocument();
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+      // Mouse leave cell with timeout
+      fireEvent.mouseEnter(cell);
+      expect(screen.getByRole('tooltip')).toBeInTheDocument();
+      fireEvent.mouseLeave(cell);
+      act(() => {
+        jest.advanceTimersByTime(250);
+      });
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+      // Mouse leave tooltip directly
+      fireEvent.mouseEnter(cell);
+      const tooltip3 = screen.getByRole('tooltip');
+      fireEvent.mouseLeave(tooltip3);
+      expect(screen.queryByRole('tooltip')).not.toBeInTheDocument();
+
+      jest.useRealTimers();
     });
   });
 });
