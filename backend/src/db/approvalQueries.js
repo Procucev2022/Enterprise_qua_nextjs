@@ -12,7 +12,14 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
-const { APPROVAL_MESSAGES, isApproverPasswordConfigured, verifyApproverPassword } = require('../config/constants');
+const {
+  APPROVAL_MESSAGES,
+  isApproverPasswordConfigured,
+  verifyApproverPassword,
+  buildApprovalOtpKey,
+  APPROVER_CONFIG,
+} = require('../config/constants');
+const authSessionQueries = require('./authSessionQueries');
 
 const APPROVAL_QUERY_ERRORS = Object.freeze({
   STORAGE_UNAVAILABLE: 'Management approval storage is not configured. No approval data is available.',
@@ -466,7 +473,7 @@ async function createApproval(data, actor = {}) {
  * Process approval or rejection action.
  * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '' }, actor = {}) {
+async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '', otp = '' }, actor = {}) {
   const actorId = actor.uuid || actor.id || null;
   const actorName = actor.name || actor.fullName || actor.email || null;
   const actorEmail = actor.email || null;
@@ -474,13 +481,41 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
 
   if (!pool.hasStorage()) throw storageUnavailable('process-approval-action');
 
-  if (!isApproverPasswordConfigured(approverName)) {
-    const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
-    configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
-    configurationError.statusCode = 503;
-    throw configurationError;
+  const cleanApprover = String(approverName || '').trim().toLowerCase();
+  const approverMatch = APPROVER_CONFIG.find(
+    (a) => a.name.toLowerCase() === cleanApprover || a.id === cleanApprover
+  );
+  let verified = false;
+
+  const trimmedPassword = typeof password === 'string' ? password.trim() : '';
+  const trimmedOtp = typeof otp === 'string' ? otp.trim() : '';
+
+  if (isApproverPasswordConfigured(approverName)) {
+    if ((trimmedPassword && verifyApproverPassword(approverName, trimmedPassword)) ||
+        (trimmedOtp && verifyApproverPassword(approverName, trimmedOtp))) {
+      verified = true;
+    }
   }
-  if (!verifyApproverPassword(approverName, password)) {
+
+  if (!verified && approverMatch) {
+    const otpKey = buildApprovalOtpKey(approverMatch.id);
+    const storedOtp = await authSessionQueries.findOtp(otpKey);
+    if (storedOtp && storedOtp.expiresAt > Date.now()) {
+      if ((trimmedOtp && storedOtp.code === trimmedOtp) ||
+          (trimmedPassword && storedOtp.code === trimmedPassword)) {
+        verified = true;
+        await authSessionQueries.deleteOtp(otpKey);
+      }
+    }
+  }
+
+  if (!verified) {
+    if (!isApproverPasswordConfigured(approverName)) {
+      const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
+      configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
+      configurationError.statusCode = 503;
+      throw configurationError;
+    }
     const passwordError = new Error(APPROVAL_MESSAGES.PASSWORD_INVALID);
     passwordError.code = 'APPROVER_PASSWORD_INVALID';
     passwordError.statusCode = 401;

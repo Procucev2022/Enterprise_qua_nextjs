@@ -526,6 +526,17 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     /^\/api\/vendors\/[^/]+\/payment-links$/,
     /^\/api\/vendors\/[^/]+\/payment-links\/[^/]+\/invoice$/,
     /^\/api\/vendors\/bulk-import\/[^/]+$/,
+    /^\/api\/buyer-accounts\/[^/]+\/credit-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/communications$/,
+    /^\/api\/buyer-accounts\/[^/]+\/payment-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/uploaded-vendors$/,
+    /^\/api\/buyer-accounts\/[^/]+\/documents$/,
+    /^\/api\/vendors\/[^/]+\/credit-history$/,
+    /^\/api\/vendors\/[^/]+\/communications$/,
+    /^\/api\/vendors\/[^/]+\/payment-history$/,
+    /^\/api\/vendors\/[^/]+\/buyer-uploads$/,
+    /^\/api\/vendors\/[^/]+\/active-rfqs$/,
+    /^\/api\/vendors\/[^/]+\/documents$/,
   ]),
   UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
 });
@@ -676,6 +687,9 @@ const APPROVAL_MESSAGES = Object.freeze({
   ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
   PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
   PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
+  OTP_SENT: 'Verification OTP sent to the approver email.',
+  OTP_INVALID: 'Invalid or expired OTP code. Please request a new OTP.',
+  APPROVER_EMAIL_NOT_CONFIGURED: 'No email address is configured for this approver.',
 });
 
 const REGISTRATION_MESSAGES = Object.freeze({
@@ -3846,6 +3860,14 @@ const DEFAULT_INTERNAL_ASSIGNEES = Object.freeze([
   'Sudheer',
 ]);
 
+const INTERNAL_TASK_USERS = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+  'Srinu Sir',
+]);
+
 const DEMO_STATUSES = Object.freeze([
   'Scheduled',
   'Completed',
@@ -4054,6 +4076,24 @@ function verifyApproverPassword(approverName, submittedPassword) {
   const expectedHash = crypto.createHash('sha256').update(expectedPassword, 'utf8').digest();
   const submittedHash = crypto.createHash('sha256').update(submittedPassword, 'utf8').digest();
   return crypto.timingSafeEqual(expectedHash, submittedHash);
+}
+
+const DEFAULT_APPROVER_EMAILS = Object.freeze({
+  srinu_sir: 'srinivas.mukku@procucev.com',
+  rao_sir: 'mnrao@procucev.com',
+  sudheer_sir: 'sudheer.kangala@procucev.com',
+});
+
+function resolveApproverEmail(approverName) {
+  const approver = findApproverConfig(approverName);
+  if (!approver) return null;
+  const envVar = approver.passwordEnvironmentVariable.replace('_PASSWORD', '_EMAIL');
+  return process.env[envVar] || approver.email || DEFAULT_APPROVER_EMAILS[approver.id] || null;
+}
+
+function buildApprovalOtpKey(approverId) {
+  const clean = String(approverId || '').toLowerCase().trim();
+  return `approval_otp:${clean}`;
 }
 
 // ==============================================================================
@@ -4316,6 +4356,10 @@ module.exports = {
   TICKET_CREATE_FIELD_ALIASES,
   REQUEST_ID_CONFIG,
   APPROVER_CONFIG,
+  DEFAULT_APPROVER_EMAILS,
+  findApproverConfig,
+  resolveApproverEmail,
+  buildApprovalOtpKey,
   isApproverPasswordConfigured,
   verifyApproverPassword,
   DAILY_RFQ_REPORT_CONFIG,
@@ -4337,6 +4381,7 @@ module.exports = {
   INTERNAL_TASK_STATUSES,
   INTERNAL_TASK_PRIORITIES,
   DEFAULT_INTERNAL_ASSIGNEES,
+  INTERNAL_TASK_USERS,
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,

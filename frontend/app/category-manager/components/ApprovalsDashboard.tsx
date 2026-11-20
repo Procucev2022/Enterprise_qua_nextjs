@@ -29,6 +29,7 @@ import {
   fetchApprovalSummary,
   fetchApprovals,
   processApprovalAction,
+  sendApprovalOtp,
 } from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import type {
@@ -39,7 +40,7 @@ import type {
   ApprovalTabKey,
   ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
-import { APPROVAL_REQUEST_TYPES, DEFAULT_APPROVAL_COLUMNS } from '@/lib/constants';
+import { APPROVAL_REQUEST_TYPES, DEFAULT_APPROVAL_COLUMNS, APPROVER_CONFIG } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
@@ -89,6 +90,19 @@ export function ApprovalsDashboard() {
   const [actionPassword, setActionPassword] = useState<string>('');
   const [passwordError, setPasswordError] = useState<string>('');
   const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [authMode, setAuthMode] = useState<'password' | 'otp'>('password');
+  const [isSendingOtp, setIsSendingOtp] = useState<boolean>(false);
+  const [otpSentMessage, setOtpSentMessage] = useState<string>('');
+  const [otpCountdown, setOtpCountdown] = useState<number>(0);
+
+  // OTP Countdown timer effect
+  useEffect(() => {
+    if (otpCountdown <= 0) return;
+    const timer = setTimeout(() => {
+      setOtpCountdown((prev) => prev - 1);
+    }, 1000);
+    return () => clearTimeout(timer);
+  }, [otpCountdown]);
 
   // Summary Card Modal State
   const [summaryModalState, setSummaryModalState] = useState<{
@@ -122,6 +136,9 @@ export function ApprovalsDashboard() {
     setActionPassword('');
     setPasswordError('');
     setActionApprover('');
+    setAuthMode('password');
+    setOtpSentMessage('');
+    setOtpCountdown(0);
   }, []);
 
   // Open Action Modal
@@ -132,7 +149,37 @@ export function ApprovalsDashboard() {
     setActionPassword('');
     setPasswordError('');
     setActionApprover(req.assigned_approver || '');
+    setAuthMode('password');
+    setOtpSentMessage('');
+    setOtpCountdown(0);
   }, []);
+
+  // Send OTP handler
+  const handleSendOtp = async () => {
+    if (!actionApprover.trim()) {
+      setPasswordError(strings.approverRequired);
+      return;
+    }
+    setPasswordError('');
+    setIsSendingOtp(true);
+    try {
+      const res = await sendApprovalOtp(actionApprover.trim(), selectedRequest?.id);
+      if (res.success) {
+        setOtpSentMessage(
+          res.email
+            ? formatString(strings.otpSentSuccess, { email: res.email })
+            : res.message || strings.otpSentSuccess
+        );
+        setOtpCountdown(60);
+      } else {
+        setPasswordError(res.error || strings.invalidPasswordError);
+      }
+    } catch {
+      setPasswordError(strings.databaseSyncError);
+    } finally {
+      setIsSendingOtp(false);
+    }
+  };
 
   // Restore column preferences from localStorage
   useEffect(() => {
@@ -305,19 +352,30 @@ export function ApprovalsDashboard() {
     }
 
     if (!actionPassword.trim()) {
-      setPasswordError(strings.passwordRequiredError);
+      setPasswordError(
+        authMode === 'otp' ? strings.otpRequiredError : strings.passwordRequiredError
+      );
       return;
     }
     setPasswordError('');
 
     setIsProcessing(true);
-    const res = await processApprovalAction(
-      selectedRequest.id,
-      pendingAction,
-      actionRemarks,
-      actionPassword,
-      actionApprover.trim()
-    );
+    const res = await (authMode === 'otp'
+      ? processApprovalAction(
+          selectedRequest.id,
+          pendingAction,
+          actionRemarks,
+          actionPassword.trim(),
+          actionApprover.trim(),
+          'otp'
+        )
+      : processApprovalAction(
+          selectedRequest.id,
+          pendingAction,
+          actionRemarks,
+          actionPassword.trim(),
+          actionApprover.trim()
+        ));
     setIsProcessing(false);
 
     if (res.success) {
@@ -1662,36 +1720,168 @@ export function ApprovalsDashboard() {
             </div>
 
             <div>
-              <label htmlFor="approval-approver-name" className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
-                {strings.approverLabel}
-              </label>
-              {/* No approver list is served by the API. The backend checks the name against its configured approvers. */}
+              <div className="flex items-center justify-between mb-1">
+                <label htmlFor="approval-approver-name" className="block text-slate-700 dark:text-slate-300 font-semibold text-xs">
+                  {strings.approverLabel}
+                </label>
+                {(() => {
+                  const approverMatch = APPROVER_CONFIG.find(
+                    (a) => a.name.toLowerCase() === actionApprover.trim().toLowerCase() || a.id === actionApprover.trim().toLowerCase()
+                  );
+                  return approverMatch?.email ? (
+                    <span className="text-[11px] text-indigo-600 dark:text-indigo-400 font-mono">
+                      {approverMatch.email}
+                    </span>
+                  ) : null;
+                })()}
+              </div>
               <input
                 id="approval-approver-name"
                 type="text"
+                list="approval-approvers-list"
                 value={actionApprover}
-                onChange={(e) => setActionApprover(e.target.value)}
+                onChange={(e) => {
+                  setActionApprover(e.target.value);
+                  setOtpSentMessage('');
+                  if (passwordError) setPasswordError('');
+                }}
                 placeholder={strings.approverInputPlaceholder}
                 className="w-full p-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-medium focus:outline-none focus:ring-1 focus:ring-indigo-500"
               />
+              <datalist id="approval-approvers-list">
+                {APPROVER_CONFIG.map((a) => (
+                  <option key={a.id} value={a.name}>
+                    {a.name} ({a.email})
+                  </option>
+                ))}
+              </datalist>
+
+              {/* Quick select approver buttons */}
+              <div className="flex items-center gap-1.5 mt-1.5">
+                {APPROVER_CONFIG.map((a) => (
+                  <button
+                    key={a.id}
+                    type="button"
+                    onClick={() => {
+                      setActionApprover(a.name);
+                      setOtpSentMessage('');
+                      if (passwordError) setPasswordError('');
+                    }}
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
+                      actionApprover.trim().toLowerCase() === a.name.toLowerCase()
+                        ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 font-semibold'
+                        : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
+                    }`}
+                  >
+                    {a.name}
+                  </button>
+                ))}
+              </div>
             </div>
 
-            <div>
-              <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs mb-1">
-                {strings.passwordLabel} <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="password"
-                value={actionPassword}
-                onChange={(e) => {
-                  setActionPassword(e.target.value);
-                  if (passwordError) setPasswordError('');
-                }}
-                placeholder={strings.passwordPlaceholder}
-                className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
-                  passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-                } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
-              />
+            {/* Verification Method & Password / OTP Field */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <label className="block text-slate-700 dark:text-slate-300 font-semibold text-xs">
+                  {authMode === 'password' ? strings.passwordLabel : strings.otpInputLabel} <span className="text-rose-500">*</span>
+                </label>
+                <div className="flex items-center bg-slate-100 dark:bg-slate-800 p-0.5 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px]">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('password');
+                      setActionPassword('');
+                      setPasswordError('');
+                    }}
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${
+                      authMode === 'password'
+                        ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-2xs font-semibold'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                    }`}
+                  >
+                    {strings.authModePassword}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthMode('otp');
+                      setActionPassword('');
+                      setPasswordError('');
+                    }}
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${
+                      authMode === 'otp'
+                        ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-2xs font-semibold'
+                        : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
+                    }`}
+                  >
+                    {strings.authModeOtp}
+                  </button>
+                </div>
+              </div>
+
+              {authMode === 'otp' ? (
+                <div className="space-y-2">
+                  <div className="flex items-center justify-between p-2 rounded-lg bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 text-[11px]">
+                    <div className="truncate mr-2">
+                      <span className="text-slate-400">{strings.recipientLabel}: </span>
+                      <span className="font-semibold text-slate-800 dark:text-slate-200">
+                        {(() => {
+                          const match = APPROVER_CONFIG.find(
+                            (a) => a.name.toLowerCase() === actionApprover.trim().toLowerCase() || a.id === actionApprover.trim().toLowerCase()
+                          );
+                          return match?.email || strings.selectApproverFirst;
+                        })()}
+                      </span>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isSendingOtp || otpCountdown > 0 || !actionApprover.trim()}
+                      onClick={handleSendOtp}
+                      className="px-2.5 py-1 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 dark:disabled:bg-slate-700 text-white rounded text-[11px] font-semibold transition-colors shrink-0"
+                    >
+                      {isSendingOtp
+                        ? strings.processing
+                        : otpCountdown > 0
+                        ? formatString(strings.resendOtpBtn, { seconds: otpCountdown })
+                        : strings.sendOtpBtn}
+                    </button>
+                  </div>
+
+                  <input
+                    type="text"
+                    maxLength={6}
+                    value={actionPassword}
+                    onChange={(e) => {
+                      setActionPassword(e.target.value);
+                      if (passwordError) setPasswordError('');
+                    }}
+                    placeholder={strings.otpPlaceholder}
+                    className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
+                      passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                    } rounded-lg text-xs font-mono tracking-widest text-center focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                  />
+
+                  {otpSentMessage && !passwordError && (
+                    <p className="text-[11px] text-emerald-600 dark:text-emerald-400 font-medium">
+                      {otpSentMessage}
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <input
+                  type="password"
+                  value={actionPassword}
+                  onChange={(e) => {
+                    setActionPassword(e.target.value);
+                    if (passwordError) setPasswordError('');
+                  }}
+                  placeholder={strings.passwordPlaceholder}
+                  className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
+                    passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                  } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                />
+              )}
+
               {passwordError && (
                 <p className="text-[11px] text-rose-500 mt-1 font-medium">{passwordError}</p>
               )}

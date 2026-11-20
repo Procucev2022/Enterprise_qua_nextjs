@@ -451,6 +451,10 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
     password: { required: true, minLength: 1, message: 'Approver password is required.' },
   },
 
+  approvalSendOtpForm: {
+    approverName: { required: true, minLength: 1, message: 'Approver name is required.' },
+  },
+
   registrationActionForm: {
     action: { required: true, message: 'Action is required.' },
   },
