@@ -1553,14 +1553,15 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
     }, { persist: false });
-  } else if (accountType === 'BUYER' && storeService.updateBuyerAccount) {
-    if (task.task_type === 'Discounts' || task.raw?.request_type === 'Discounts') {
+  }
+  if ((accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') && storeService.updateBuyerAccount) {
+    if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
       storeService.updateBuyerAccount(accountId, {
         discountPercentage: discountPct,
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
-    } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods') {
+    } else if (task.task_type === 'Trial Periods' || task.task_type === 'Trial Period' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
       const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
       storeService.updateBuyerAccount(accountId, {
         subscriptionTier: 'Free_trial',
@@ -1572,13 +1573,16 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         lastPaymentStatus: 'VERIFIED',
       }, { persist: false });
     }
-  } else if (updatedVendorInfo && storeService.updateVendor) {
+  }
+
+  if (updatedVendorInfo && storeService.updateVendor) {
     storeService.updateVendor(updatedVendorInfo.vendorId, {
       freeQuotationCredits: updatedVendorInfo.updatedBal,
       freeRfqDownloadCredits: updatedVendorInfo.updatedBal,
       credits: updatedVendorInfo.updatedBal,
     }, { persist: false });
-  } else if ((accountType === 'SELLER' || accountType === 'VENDOR') && storeService.updateVendor) {
+  }
+  if ((accountType === 'SELLER' || accountType === 'VENDOR') && storeService.updateVendor) {
     if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
       storeService.updateVendor(accountId, {

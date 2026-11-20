@@ -1075,6 +1075,75 @@ describe('internalTaskQueries', () => {
       }
     });
 
+    test('approves a vendor discount, trial period, and offline payment on postgres path', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const updateVendorSpy = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+      const originalPool = pool.pool;
+
+      try {
+        // 1. Discount
+        const taskRowDisc = creditTaskRow({
+          id: 'tsk_v_disc',
+          task_type: 'Discount',
+          credit_account_type: 'SELLER',
+          credit_account_id: 'ven_c',
+          raw: JSON.stringify({ request_type: 'Discount', discount_percentage: 15, selected_mode: 'Connect Model' }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientDisc = creditClient({ lockedRow: [taskRowDisc] });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientDisc) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowDisc] });
+        await queries.approveCreditTask('tsk_v_disc', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateVendorSpy).toHaveBeenCalledWith('ven_c', expect.objectContaining({
+          discountPercentage: 15,
+          subscriptionDiscount: '15%',
+          discountMode: 'Connect Model',
+        }), { persist: false });
+
+        // 2. Trial Period
+        const taskRowTrial = creditTaskRow({
+          id: 'tsk_v_trial',
+          task_type: 'Trial Period',
+          credit_account_type: 'SELLER',
+          credit_account_id: 'ven_c',
+          raw: JSON.stringify({ request_type: 'Trial Period', duration_days: 90, selected_mode: 'Select Model', start_date: '2026-01-01', end_date: '2026-04-01' }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientTrial = creditClient({ lockedRow: [taskRowTrial] });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientTrial) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowTrial] });
+        await queries.approveCreditTask('tsk_v_trial', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateVendorSpy).toHaveBeenCalledWith('ven_c', expect.objectContaining({
+          trialPeriodDays: 90,
+          trialTier: 'Select Model',
+          isTrialActive: true,
+        }), { persist: false });
+
+        // 3. Offline Payment
+        const taskRowOffline = creditTaskRow({
+          id: 'tsk_v_offline',
+          task_type: 'Offline Payments',
+          credit_account_type: 'SELLER',
+          credit_account_id: 'ven_c',
+          raw: JSON.stringify({ request_type: 'Offline Payments' }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientOffline = creditClient({ lockedRow: [taskRowOffline] });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientOffline) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowOffline] });
+        await queries.approveCreditTask('tsk_v_offline', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateVendorSpy).toHaveBeenCalledWith('ven_c', expect.objectContaining({
+          offlinePaymentStatus: 'VERIFIED',
+          lastPaymentStatus: 'VERIFIED',
+        }), { persist: false });
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
     test('returns the task unchanged when the locked row is already approved', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const client = creditClient({ lockedRow: [{ id: 'tsk_done', status: 'Completed', approval_status: 'APPROVED' }] });

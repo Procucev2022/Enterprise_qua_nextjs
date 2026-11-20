@@ -1194,6 +1194,25 @@ describe('Account Documents & Credit Workflows API', () => {
           message: 'Fallback SMS',
         }
       }, resComm, jest.fn());
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager', email: 'cm@test.com' },
+        body: {
+          channel: 'PHONE',
+          recipient: '9876543210',
+          subject: 'Discussion call',
+          message: 'Call completed successfully',
+          callOutcome: 'Connected',
+          duration: '10 mins',
+          notes: 'Customer agreed on terms',
+          nextFollowupDate: '2026-12-01',
+          followupPriority: 'High',
+          followupAssigneeId: 'usr-1',
+          followupAssigneeName: 'Krishna',
+          followupNotes: 'Follow up about contract',
+        }
+      }, resComm, jest.fn());
     });
 
     
