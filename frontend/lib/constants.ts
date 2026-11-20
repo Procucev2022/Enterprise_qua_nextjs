@@ -2217,7 +2217,12 @@ export function reconcileBuyerVendorsWithUploadHistory(
     return [...buyerVendors];
   }
 
-  const activeBuyerKeys = [activeBuyerAccount?.id, activeBuyerAccount?.corporateEmail]
+  const activeBuyerKeys = [
+    activeBuyerAccount?.id,
+    activeBuyerAccount?.corporateEmail,
+    (activeBuyerAccount as any)?.organizationId,
+    (activeBuyerAccount as any)?.organizationName,
+  ]
     .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
     .map((val) => val.trim().toLowerCase());
 
@@ -2236,7 +2241,10 @@ export function reconcileBuyerVendorsWithUploadHistory(
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
-    const batchOwnerKeys = [batch?.buyerId, batch?.buyerEmail]
+    if (batch?.status && (batch.status === 'FAILED' || batch.status === 'CANCELLED' || batch.status === 'DISCARDED')) {
+      return;
+    }
+    const batchOwnerKeys = [batch?.buyerId, batch?.buyerEmail, (batch as any)?.organizationId]
       .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
       .map((val) => val.trim().toLowerCase());
     if (

@@ -72,8 +72,8 @@ async function buildBuyerOwnershipContext(user) {
   );
   const sId = buyerId ? String(buyerId).toLowerCase() : '';
   const uEmail = user.email ? String(user.email).toLowerCase() : '';
-  const orgName = String(buyerAccount?.organizationName || user.orgName || '').trim().toLowerCase();
   const buyerCompany = buyerAccount?.organizationName || user.orgName || user.name || 'Buyer';
+  const orgName = String(buyerCompany).trim().toLowerCase();
   return {
     buyerAccount,
     resolvedOrgId,
@@ -1785,47 +1785,56 @@ async function resolveFallbackVendorRecord({
   }
 
   const sanitizedVendorEmail = String(bodyData.vendorEmail || updates?.email || bodyData.email || '').trim().toLowerCase();
+  const checkForeignOwnership = (foreign) => {
+    return checkVendorOwnershipWithContext(user, foreign, {
+      scopeSet: new Set(buyerScope.map((s) => String(s).toLowerCase())),
+      sId: String(resolvedOrgId || '').toLowerCase(),
+      uEmail: String(user.email || '').toLowerCase(),
+      orgName: String(buyerCompany).trim().toLowerCase(),
+    });
+  };
+
   if (sanitizedVendorEmail) {
     vendor = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, buyerScope, { fresh: true });
     if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
     // Trigger cross-buyer DB sync without exposing foreign buyer record in buyerScope
     const foreignCheck = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, 'all', { fresh: true });
-    if (foreignCheck) return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    if (foreignCheck) {
+      if (checkForeignOwnership(foreignCheck)) return { vendor: foreignCheck, missingEmail: false, missingCategory: false, promoted: false };
+      return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    }
   }
 
   if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && typeof vendorIngestionQueries.findVendorMasterRecord === 'function') {
     const rawMasterId = id.slice(SYNTHETIC_MASTER_PREFIX.length);
-    const candidateOrgIds = [
-      resolvedOrgId,
-      user?.orgId,
-      user?.organizationId,
-      buyerAccount?.organizationId,
-      buyerAccount?.id,
-    ].filter(Boolean);
+    const candidateOrgIds = buyerScope;
     let masterRec = null;
     for (const orgCandidate of candidateOrgIds) {
       masterRec = await vendorIngestionQueries.findVendorMasterRecord(rawMasterId, orgCandidate).catch(() => null);
       if (masterRec) break;
     }
+    if (!masterRec && typeof vendorIngestionQueries.findVendorMasterRecordById === 'function') {
+      masterRec = await vendorIngestionQueries.findVendorMasterRecordById(rawMasterId).catch(() => null);
+    }
     if (!masterRec && user?.role === 'buyer' && (updates?.name || bodyData.vendorName || bodyData.name)) {
       const fallbackMasterName = updates?.name || bodyData.vendorName || bodyData.name;
-      const fallbackGstin = String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null;
+      const fallbackGstin = String(updates?.gstin || updates?.gst || bodyData.gstin || '').trim().toUpperCase() || null;
       const payloadCategories = resolveValidVendorCategories({ ...bodyData, ...(updates || {}) });
       masterRec = {
         id: rawMasterId,
         masterRecordId: rawMasterId,
         companyName: fallbackMasterName,
-        email: sanitizedVendorEmail || null,
-        contactPerson: updates?.contactPerson || bodyData.contactPerson || null,
-        phone: updates?.phone || bodyData.phone || null,
-        location: updates?.location || bodyData.location || null,
-        city: updates?.city || bodyData.city || null,
-        state: updates?.state || bodyData.state || null,
-        pincode: updates?.pincode || bodyData.pincode || null,
+        email: sanitizedVendorEmail,
+        contactPerson: updates?.contactPerson || bodyData.contactPerson,
+        phone: updates?.phone || bodyData.phone,
+        location: updates?.location || bodyData.location,
+        city: updates?.city || bodyData.city,
+        state: updates?.state || bodyData.state,
+        pincode: updates?.pincode || bodyData.pincode,
         gstin: fallbackGstin,
         gst: fallbackGstin,
-        vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
-        majorCategory: payloadCategories.majorCategory || '',
+        vendorCode: updates?.vendorCode || bodyData.vendorCode,
+        majorCategory: payloadCategories.majorCategory,
         minorCategories: payloadCategories.minorCategories,
         source: 'vendor_master_ingestion',
       };
@@ -1837,7 +1846,10 @@ async function resolveFallbackVendorRecord({
         vendor = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
         if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
         const foreignMasterMatch = await storeService.getVendorByIdWithDBFallback(candidateEmail, 'all', { fresh: true });
-        if (foreignMasterMatch) return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+        if (foreignMasterMatch) {
+          if (checkForeignOwnership(foreignMasterMatch)) return { vendor: foreignMasterMatch, missingEmail: false, missingCategory: false, promoted: false };
+          return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+        }
       }
       const mapping =
         masterRec.sessionId && typeof vendorIngestionQueries.findCategoryMappingByVendorRecord === 'function'

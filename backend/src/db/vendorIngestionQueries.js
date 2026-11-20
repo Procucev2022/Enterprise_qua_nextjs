@@ -752,6 +752,17 @@ async function findVendorMasterRecord(recordId, organizationId) {
   return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
 }
 
+/** One vendor-master row by record id alone (unscoped). */
+async function findVendorMasterRecordById(recordId) {
+  if (!pool.hasStorage() || !recordId) return null;
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where id = $1 limit 1`,
+    [recordId],
+    { d1: true }
+  );
+  return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
+}
+
 /** Persist active/inactive lifecycle metadata onto an org-scoped vendor-master record. */
 async function updateVendorMasterRecordActiveStatus(recordId, organizationId, statusUpdates = {}) {
   if (!pool.hasStorage() || !recordId || !organizationId) return null;
@@ -2543,6 +2554,7 @@ module.exports = {
   findVendorMasterRecords,
   findOrganizationVendorMasterRecords,
   findVendorMasterRecord,
+  findVendorMasterRecordById,
   updateVendorMasterRecordActiveStatus,
   countVendorMasterRecords,
   deleteVendorMasterRecords,

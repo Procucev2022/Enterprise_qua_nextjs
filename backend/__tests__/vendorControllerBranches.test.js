@@ -1184,5 +1184,79 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
     });
   });
+
+  describe('vendor self-service, buyer locked fields and bulk import role gating', () => {
+    test('vendor role updates only self-editable fields', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const vendorUser = { role: 'vendor', email: 'vendor@edit.test', id: 'v-vendor-edit-1' };
+      const existingVendor = { id: 'v-vendor-edit-1', email: 'vendor@edit.test', name: 'Original Name' };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(existingVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => ({ ...existingVendor, ...updates }));
+
+      await vendorController.updateVendor(
+        {
+          params: { id: 'v-vendor-edit-1' },
+          user: vendorUser,
+          body: {
+            name: 'Updated Name',
+            rating: 5.0,
+            city: 'Mumbai',
+          },
+        },
+        res,
+        next
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ name: 'Updated Name', city: 'Mumbai' }),
+        })
+      );
+    });
+
+    test('buyer role drops locked statutory fields on updateVendor', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'buyer@lock.test', id: 'b-1', orgName: 'Buyer Org' };
+      const existingVendor = { id: 'v-buyer-lock-1', email: 'vendor@lock.test', addedByBuyerCompany: 'Buyer Org', majorCategory: 'IT', minorCategories: ['Hardware'] };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'ba-lock', organizationName: 'Buyer Org' });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(existingVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => ({ ...existingVendor, ...updates }));
+
+      await vendorController.updateVendor(
+        {
+          params: { id: 'v-buyer-lock-1' },
+          user: buyerUser,
+          body: {
+            pan: 'LOCKEDPAN1',
+            gstin: 'LOCKEDGST1',
+            name: 'Allowed Name Change',
+            majorCategory: 'IT',
+            minorCategories: ['Hardware'],
+          },
+        },
+        res,
+        next
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ name: 'Allowed Name Change' }),
+        })
+      );
+    });
+
+    test('bulkImportVendors rejects unauthorized role with 403', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      await vendorController.bulkImportVendors(
+        { user: { role: 'vendor', email: 'v@bad.test' }, body: {} },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+  });
 });
 

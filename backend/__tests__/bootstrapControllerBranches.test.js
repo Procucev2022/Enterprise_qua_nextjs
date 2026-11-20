@@ -601,4 +601,41 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft2, jest.fn());
     expect(resDraft2.data.data.vendors).toEqual([]);
   });
+
+  test('recognizes buyer-owned vendors matching organizationName, addedByBuyerCompany, or buyer source', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({
+      id: 'ba-org-match',
+      organizationId: 'org-123',
+      organizationName: 'Procucev Solutions',
+      corporateEmail: 'sudheer@procucev.com',
+    });
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValueOnce({
+      buyerAccounts: [],
+      vendors: [
+        {
+          id: 'v-comp-match',
+          name: 'Company Match Vendor',
+          addedByBuyerCompany: 'Procucev Solutions',
+          source: 'vendor_master_ingestion',
+        },
+        {
+          id: 'v-source-match',
+          name: 'Source Match Vendor',
+          source: 'buyer_uploaded',
+        },
+      ],
+      evaluations: [],
+      auditLogs: [],
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce(null);
+    jest.spyOn(vendorIngestionQueries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([]);
+    const res = mockRes();
+    await bootstrapController.getBootstrap(
+      { user: { role: 'buyer', sub: 'usr-buyer-org', email: 'sudheer@procucev.com', orgName: 'Procucev Solutions' } },
+      res,
+      jest.fn()
+    );
+    expect(res.data.data.vendors).toHaveLength(2);
+    expect(res.data.data.vendors.map((v) => v.id)).toEqual(['v-comp-match', 'v-source-match']);
+  });
 });
