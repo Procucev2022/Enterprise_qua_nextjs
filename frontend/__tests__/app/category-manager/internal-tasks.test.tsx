@@ -3226,4 +3226,247 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
+  test('covers offline payments, trial period drawer details, sorting with missing values, and status filtering', async () => {
+    const tasksWithDetails = [
+      {
+        id: 'tsk_offline_pay',
+        task_number: 'TSK-OFFLINE-1',
+        title: '',
+        category: 'CREDIT',
+        task_category: 'CREDIT_MANAGEMENT',
+        task_type: 'Offline Payments',
+        recipient_phone: '',
+        priority: 'UnknownPriority',
+        status: 'Pending',
+        assigned_to_name: '',
+        due_date: null,
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-pay',
+        raw: {
+          buyer_source_mode: 'Annual',
+          payment_date: '2026-11-01',
+          payment_type: 'NEFT',
+          transaction_id: 'TXN123456',
+          payment_amount: 50000,
+          proof_file_name: 'receipt.pdf',
+          proof_file_url: 'https://example.com/receipt.pdf',
+        },
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_trial_period',
+        task_number: 'TSK-TRIAL-1',
+        title: 'Trial setup',
+        category: 'CREDIT',
+        task_category: 'CREDIT_MANAGEMENT',
+        task_type: 'Trial Periods',
+        priority: 'Critical',
+        status: 'Open',
+        assigned_to_name: 'Priya',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-trial',
+        raw: {
+          selected_mode: 'Full Sourcing',
+          trial_days: 30,
+          start_date: '2026-11-01',
+          end_date: '2026-12-01',
+        },
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_fallback_modules',
+        task_number: 'TSK-FALLBACK-1',
+        title: 'Fallback module task',
+        category: 'DEMO',
+        task_category: 'DEMO_SCHEDULE',
+        task_type: 'Demo',
+        priority: 'Medium',
+        status: 'New',
+        assigned_to_name: 'Chandan',
+        due_date: '2026-11-28T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-fb',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_bd_fallback',
+        task_number: 'TSK-BD-1',
+        title: 'BD Task',
+        category: 'BUSINESS_DEVELOPMENT',
+        task_category: 'BUSINESS_DEVELOPMENT',
+        task_type: 'Proposal',
+        priority: 'Low',
+        status: 'Closed',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-bd',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_onboarding_fallback',
+        task_number: 'TSK-ONBOARD-1',
+        title: 'Onboarding Task',
+        category: 'ONBOARDING',
+        task_category: 'ONBOARDING',
+        task_type: 'Client Onboarding',
+        priority: 'High',
+        status: 'Pending Approval',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-onboard',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_comm_followup',
+        task_number: 'TSK-COMM-1',
+        title: 'Communication task',
+        category: 'COMMUNICATION',
+        task_category: 'COMMUNICATION',
+        task_type: 'WhatsApp Follow-up',
+        recipient_phone: '+91 9876543210',
+        priority: 'High',
+        status: 'In Progress',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-comm',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+    ];
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: tasksWithDetails,
+      total: 6,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockImplementation(async (id: string) => {
+      return tasksWithDetails.find((t) => t.id === id) || null;
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TSK-OFFLINE-1')).toBeInTheDocument();
+    });
+
+    // Test sorting with null/undefined values in both directions
+    const table = screen.getByRole('table');
+    const sortHeaders = within(table).getAllByRole('columnheader');
+    for (const th of sortHeaders) {
+      fireEvent.click(th);
+      fireEvent.click(th);
+    }
+
+    // Open Offline Payment drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_offline_pay'));
+    await waitFor(() => {
+      expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+      expect(screen.getByText('TXN123456')).toBeInTheDocument();
+      expect(screen.getByText('receipt.pdf')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Trial Period drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_trial_period'));
+    await waitFor(() => {
+      expect(screen.getByText('Trial Period Details:')).toBeInTheDocument();
+      expect(screen.getAllByText('Full Sourcing').length).toBeGreaterThanOrEqual(1);
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Fallback modules drawer (Demo without demo_status / demo_date)
+    fireEvent.click(screen.getByTestId('task-row-tsk_fallback_modules'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-demo-status-badge')).toHaveTextContent('Scheduled');
+      expect(screen.getByTestId('drawer-demo-date')).toHaveTextContent('Not set');
+      expect(screen.getByTestId('drawer-demo-time')).toHaveTextContent('Not set');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open BD Fallback drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_bd_fallback'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-proposal-status-badge')).toHaveTextContent('Draft');
+      expect(screen.getByTestId('drawer-proposal-value')).toHaveTextContent('—');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Onboarding Fallback drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_onboarding_fallback'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-onboarding-stage-badge')).toHaveTextContent('Stage 1 of 5');
+    });
+
+    // Test Credit Approval & Rejection Handlers while drawer is open
+    (internalTaskClient.approveCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      task: { ...tasksWithDetails[3], approval_status: 'APPROVED', status: 'In Progress' },
+      message: 'Credit request approved and balances updated.',
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open pending approval task
+    fireEvent.click(screen.getByTestId('task-row-tsk_onboarding_fallback'));
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Test Communication drawer completion workflow
+    fireEvent.click(screen.getByTestId('task-row-tsk_comm_followup'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-open-whatsapp-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-schedule-followup-btn')).toBeInTheDocument();
+    });
+
+    // Click mark complete in drawer
+    fireEvent.click(screen.getByTestId('drawer-mark-complete-btn'));
+    expect(screen.getByTestId('confirm-complete-task-btn')).toBeInTheDocument();
+
+    // Try completing communication task without checkbox -> error toast
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    // Check confirmation checkbox and complete
+    fireEvent.click(screen.getByTestId('communication-confirm-checkbox'));
+    fireEvent.change(screen.getByTestId('completion-remarks-input'), {
+      target: { value: 'Followup completed with buyer' },
+    });
+    (internalTaskClient.completeInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...tasksWithDetails[5],
+      status: 'Completed',
+      completed_at: '2026-11-20T10:00:00Z',
+    });
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    await waitFor(() => {
+      expect(internalTaskClient.completeInternalTask).toHaveBeenCalled();
+    });
+
+    // Add activity note
+    (internalTaskClient.addTaskActivity as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      activity: { id: 'act-new-1', actor_name: 'Navin', comment: 'Added progress update note', created_at: '2026-11-20T10:30:00Z' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-add-activity-input'), {
+      target: { value: 'New progress update' },
+    });
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.addTaskActivity).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
 });
