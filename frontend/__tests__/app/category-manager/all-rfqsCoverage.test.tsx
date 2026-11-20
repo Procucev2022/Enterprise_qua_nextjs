@@ -173,11 +173,11 @@ function cellOf(rfq: RFQItem, column: number): HTMLElement {
   return within(rowOf(rfq)).getAllByRole('cell')[column];
 }
 
-/** Renders a row with four invited vendors and opens its "+2 more" roster. */
+/** Renders a row with four invited vendors and opens its roster modal. */
 async function openInvitedVendorList(): Promise<{ rfq: RFQItem; dialog: HTMLElement }> {
   const rfq = makeRfq({ id: 'il01', title: 'Invited Roster', assignedVendors: INVITED_FOUR });
   await renderLoaded([rfq]);
-  fireEvent.click(within(cellOf(rfq, COL.invitedVendors)).getByRole('button', { name: '+2 more' }));
+  fireEvent.click(within(cellOf(rfq, COL.invitedVendors)).getByRole('button', { name: /\+\d+ more/ }));
   return { rfq, dialog: screen.getByRole('dialog') };
 }
 
@@ -442,8 +442,7 @@ describe('AllRFQsConsole invited vendors column', () => {
     const vendorsCell = cellOf(invited, COL.invitedVendors);
     expect(within(vendorsCell).getByText('Invited (2)')).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Alpha Supplies' })).toBeInTheDocument();
-    expect(within(vendorsCell).getByRole('button', { name: 'Legacy Traders' })).toBeInTheDocument();
-    expect(within(vendorsCell).queryByRole('button', { name: /more/ })).not.toBeInTheDocument();
+    expect(within(vendorsCell).getByRole('button', { name: '+1 more' })).toBeInTheDocument();
     expect(within(vendorsCell).queryByText(S.colVendorsNone)).not.toBeInTheDocument();
   });
 
@@ -478,16 +477,21 @@ describe('AllRFQsConsole invited vendors column', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
   });
 
-  it('shows only the first two invited vendors and a +N more control for the rest', async () => {
+  it('shows only the first invited vendor on the row line and a +N more control for the rest', async () => {
     const many = makeRfq({ id: 'iv04', title: 'Invited Many', assignedVendors: INVITED_FOUR });
     await renderLoaded([many]);
 
     const vendorsCell = cellOf(many, COL.invitedVendors);
     expect(within(vendorsCell).getByText('Invited (4)')).toBeInTheDocument();
     expect(within(vendorsCell).getByRole('button', { name: 'Alpha Supplies' })).toBeInTheDocument();
-    expect(within(vendorsCell).getByRole('button', { name: 'Legacy Traders' })).toBeInTheDocument();
+    expect(within(vendorsCell).queryByRole('button', { name: 'Legacy Traders' })).not.toBeInTheDocument();
     expect(within(vendorsCell).queryByRole('button', { name: 'Delta Fabricators' })).not.toBeInTheDocument();
-    expect(within(vendorsCell).getByRole('button', { name: '+2 more' })).toBeInTheDocument();
+    expect(within(vendorsCell).getByRole('button', { name: '+3 more' })).toBeInTheDocument();
+
+    fireEvent.mouseEnter(vendorsCell);
+    const tooltip = screen.getByRole('tooltip');
+    expect(within(tooltip).getByRole('button', { name: /Legacy Traders/ })).toBeInTheDocument();
+    expect(within(tooltip).getByRole('button', { name: /Delta Fabricators/ })).toBeInTheDocument();
   });
 });
 
@@ -579,7 +583,7 @@ describe('AllRFQsConsole quoted vendors roster', () => {
     expect(within(vendorsCell).getAllByText('L1')).toHaveLength(1);
     expect(within(vendorsCell).queryByRole('button', { name: /Anon Three/ })).not.toBeInTheDocument();
 
-    fireEvent.click(within(vendorsCell).getByRole('button', { name: '+1 more' }));
+    fireEvent.click(within(vendorsCell).getByRole('button', { name: /\+\d+ more/ }));
 
     const dialog = screen.getByRole('dialog');
     expect(within(dialog).getByRole('heading', { name: 'Quoted Vendors (3)' })).toBeInTheDocument();
@@ -666,7 +670,7 @@ describe('AllRFQsConsole search', () => {
 });
 
 describe('AllRFQsConsole filters', () => {
-  it('offers each buyer once in alphabetical order and filters to the chosen buyer', async () => {
+  it('confirms buyer dropdown is removed from UI and filters buyers via search input', async () => {
     const rows = [
       makeRfq({ id: 'bf01', title: 'Zeta One', buyerAccountName: 'Zeta Co' }),
       makeRfq({ id: 'bf02', title: 'Zeta Two', buyerAccountName: 'Zeta Co' }),
@@ -676,25 +680,21 @@ describe('AllRFQsConsole filters', () => {
     await renderLoaded(rows);
 
     expect(screen.getByTestId('all-rfqs-count')).toHaveTextContent(formatString(S.countSummary, { count: 4, buyers: 2 }));
-    const buyerSelect = screen.getByLabelText(S.buyerFilterLabel);
-    expect(within(buyerSelect).getAllByRole('option').map((option) => option.textContent)).toEqual([
-      S.allBuyers,
-      'Alpha Co',
-      'Zeta Co',
-    ]);
+    expect(screen.queryByLabelText(S.buyerFilterLabel)).not.toBeInTheDocument();
 
-    fireEvent.change(buyerSelect, { target: { value: 'Zeta Co' } });
+    const searchInput = screen.getByLabelText(S.searchLabel);
+    fireEvent.change(searchInput, { target: { value: 'Zeta Co' } });
     expect(screen.getByText(formatString(S.resultCount, { shown: 2, total: 4 }))).toBeInTheDocument();
     expect(screen.getByText('Zeta One')).toBeInTheDocument();
     expect(screen.getByText('Zeta Two')).toBeInTheDocument();
     expect(screen.queryByText('Nobody Owns This')).not.toBeInTheDocument();
     expect(screen.getByText(S.filtersApplied)).toBeInTheDocument();
 
-    fireEvent.change(buyerSelect, { target: { value: 'Alpha Co' } });
+    fireEvent.change(searchInput, { target: { value: 'Alpha Co' } });
     expect(screen.getByText(formatString(S.resultCount, { shown: 1, total: 4 }))).toBeInTheDocument();
     expect(screen.getByText('Alpha One')).toBeInTheDocument();
 
-    fireEvent.change(buyerSelect, { target: { value: 'all' } });
+    fireEvent.change(searchInput, { target: { value: '' } });
     expect(screen.getByText(formatString(S.resultCount, { shown: 4, total: 4 }))).toBeInTheDocument();
     expect(screen.queryByText(S.filtersApplied)).not.toBeInTheDocument();
   });
@@ -718,7 +718,7 @@ describe('AllRFQsConsole filters', () => {
     });
   });
 
-  it('narrows by status, buyer and search together and reports the filtered count', async () => {
+  it('narrows by status and search together and reports the filtered count', async () => {
     const rows = [
       makeRfq({ id: 'cf01', title: 'Alpha Open Cable', status: 'Quotes Pending', buyerAccountName: 'Alpha Buyer Co' }),
       makeRfq({ id: 'cf02', title: 'Alpha Closed Cable', status: 'Closed', buyerAccountName: 'Alpha Buyer Co' }),
@@ -730,7 +730,7 @@ describe('AllRFQsConsole filters', () => {
     expect(screen.getByText(formatString(S.resultCount, { shown: 2, total: 3 }))).toBeInTheDocument();
     expect(screen.getByText(S.filtersApplied)).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(S.buyerFilterLabel), { target: { value: 'Alpha Buyer Co' } });
+    fireEvent.change(screen.getByLabelText(S.searchLabel), { target: { value: 'Alpha' } });
     expect(screen.getByText(formatString(S.resultCount, { shown: 1, total: 3 }))).toBeInTheDocument();
     expect(screen.getByText('Alpha Open Cable')).toBeInTheDocument();
 

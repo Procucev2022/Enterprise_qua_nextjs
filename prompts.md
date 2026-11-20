@@ -6711,3 +6711,50 @@ create the pr and merge in test-v3
 ```
 
 ---
+
+
+### Prompt 285
+
+**Timestamp**: 2026-11-20T13:28:54+05:30
+
+```text
+Refactor ONLY the UI layout and styling of the "All RFQs" section (`/category-manager/all-rfqs`) to match this compact, single-line spreadsheet design while **reusing 100% of the existing code, functionality, methods, state, hooks, and button click handlers**.
+
+### 1. Strict Code & Functionality Reuse Rule (CRITICAL)
+- **Do NOT rewrite, replace, or duplicate any existing functions, methods, custom hooks, services, API calls, or state variables.**
+- Every button, input, dropdown, column header, and row action in the new UI **must call the exact same `onClick`, `onChange`, `onSort`, modal triggers, drawers, and navigation functions that currently work in the existing component**:
+  - **Search input**: bind directly to the existing search state and `onChange` / filter handler.
+  - **Start Date & End Date controls**: bind directly to the existing `startDate` / `endDate` state and change handlers. Clicking anywhere on the button/field opens the calendar picker (`inputRef.current?.showPicker()` or existing date picker trigger) and updates the exact same date filter logic.
+  - **Status dropdown**: bind directly to the existing `status` filter state, options list, and `onChange` handler.
+  - **Export button**: call the exact existing CSV export function (`onClick={handleExport...}`).
+  - **Gear icon button (Column Settings)**: trigger the exact existing Column Settings modal/popover/menu handler (`onClick={...}`).
+  - **Retry icon button**: call the exact existing retry/refetch function (`onClick={...}`).
+  - **Table headers**: preserve all existing sort handlers (`onClick` sort methods) and column visibility checks from Column Settings.
+  - **Row actions (`Invite Vendors`, `Details`, `Quote Matrix`)**: wire each button/link directly to the exact existing click handlers, modals, or route navigation methods currently used on each row.
+- If a helper function, custom hook, or sub-component already exists in the codebase (such as from the Action Center / Directory toolbar), import and reuse it directly rather than writing new logic.
+
+### 2. Remove Top Headings & Build a Single-Line Top Toolbar
+- Remove the `ALL RFQ` heading and summary count texts (`100 RFQs across 18 buyers`, `Showing X of Y RFQs`) so the toolbar sits cleanly at the top with minimal margin.
+- Remove the `All Buyers` dropdown from the UI (without breaking any underlying filter state defaults).
+- Place all remaining controls on **one single horizontal line** (`flex items-center justify-between gap-2 whitespace-nowrap`) with no stacked two-line labels above inputs:
+  - **Search input** (`RFQ number, title, category or buyer...`) with search icon.
+  - **Start Date button/field**: shows `"Start Date"` text inside when empty (or the selected date when chosen) + calendar icon; clicking anywhere on the control opens the calendar.
+  - **End Date button/field**: shows `"End Date"` text inside when empty (or the selected date when chosen) + calendar icon; clicking anywhere on the control opens the calendar.
+  - **Status dropdown** (`All Statuses` and existing status options).
+  - **Right-aligned buttons on the same single line**:
+    - Green `Export` / `Export CSV` button.
+    - Icon-only **Gear** button (`aria-label="Column Settings"`, `title="Column Settings"`) — **no visible text label**.
+    - Icon-only **Retry/Refresh** button (`aria-label="Retry"`, `title="Retry"`) — **no visible text label**.
+
+### 3. Strict 1-Line Excel-Style Table Rows & Horizontal Scroll
+- Wrap the table in a horizontal scroll container (`overflow-x-auto w-full`) with `min-w-max` so columns scroll horizontally instead of wrapping onto 2 or 3 vertical lines.
+- Lock every row to **1 single line tall** (`h-10` / `py-1.5` / `whitespace-nowrap`) across all columns (`RFQ NUMBER`, `TITLE`, `CATEGORY`, `BUYER`, `STATUS`, `QUOTES`, `INVITED VENDORS`, `QUOTED VENDORS`, `BUDGET`, `RAISED`, `LATEST QUOTE`, `ACTIONS`).
+- Truncate long cell text on 1 line (`truncate`) and show full text on hover (`title` or tooltip) without increasing row height.
+- **INVITED VENDORS**: show **only one vendor** on the single row line; when hovering (`onMouseEnter` / focus) over the cell, display a floating popover/tooltip listing `INVITED (N)` and all invited vendor details without expanding row height (use a portal or high `z-index` so `overflow-x-auto` does not clip it).
+- **ACTIONS**: render `Invite Vendors`, `Details`, and `Quote Matrix` **side-by-side horizontally on one single line** (`flex items-center gap-3 whitespace-nowrap`) so all three buttons are clearly visible and clickable on every row.
+
+
+After implement this run locally i have to see the page then  raise pr to test-v3
+```
+
+---
