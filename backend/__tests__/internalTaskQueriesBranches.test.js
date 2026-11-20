@@ -465,6 +465,59 @@ describe('approveCreditTask fallbacks and deductions on the D1 path', () => {
       storeService.updateVendor = original;
     }
   });
+
+  test('updates vendor record for SELLER / VENDOR discounts, trial periods, and offline payments', async () => {
+    const updateSpy = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+
+    // 1. Discounts
+    taskRow = baseTaskRow({
+      task_type: 'Discounts',
+      credit_account_type: 'VENDOR',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'VENDOR',
+      raw: JSON.stringify({ discount_percentage: 25, selected_mode: 'Connect Model' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Approved discount');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      discountPercentage: 25,
+      subscriptionDiscount: '25%',
+      discountMode: 'Connect Model',
+    }), { persist: false });
+
+    // 2. Trial Periods
+    taskRow = baseTaskRow({
+      task_type: 'Trial Periods',
+      credit_account_type: 'SELLER',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'SELLER',
+      raw: JSON.stringify({ duration_days: 60, selected_mode: 'Select Model', start_date: '2026-01-01', end_date: '2026-03-01' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Approved trial');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      trialPeriodDays: 60,
+      trialTier: 'Select Model',
+      isTrialActive: true,
+    }), { persist: false });
+
+    // 3. Offline Payments
+    taskRow = baseTaskRow({
+      task_type: 'Offline Payments',
+      credit_account_type: 'SELLER',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'SELLER',
+      raw: JSON.stringify({ request_type: 'Offline Payments' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Verified payment');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      offlinePaymentStatus: 'VERIFIED',
+      lastPaymentStatus: 'VERIFIED',
+    }), { persist: false });
+
+    updateSpy.mockRestore();
+  });
 });
 
 describe('storage outage errors carry a 503 status', () => {

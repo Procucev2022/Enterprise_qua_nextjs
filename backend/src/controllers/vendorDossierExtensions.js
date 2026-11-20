@@ -733,12 +733,6 @@ async function requestCreditApproval(req, res, next) {
     const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
 
     if (requestType === 'Seller Credit Deletion') {
-      if (numAmount <= 0) {
-        return res.status(400).json({
-          success: false,
-          error: 'A positive credit amount is required for Seller Credit Deletion.',
-        });
-      }
       if (balance !== null && numAmount > balance) {
         return res.status(400).json({
           success: false,

@@ -758,7 +758,7 @@ async function getCreditHistory(req, res, next) {
       }
     }
 
-    if (totalAllocated === 0 && remainingFree !== null) {
+    if (transactions.length > 0 && totalAllocated === 0 && remainingFree !== null) {
       totalAllocated = remainingFree + totalConsumed;
     }
 

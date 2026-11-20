@@ -349,4 +349,5 @@ module.exports = {
   extractActor,
   findBuyerSafe,
   findVendorSafe,
+  sendAccountDocumentError,
 };

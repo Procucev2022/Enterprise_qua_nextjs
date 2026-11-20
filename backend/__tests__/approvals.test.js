@@ -603,6 +603,47 @@ describe('Approvals API & Controller', () => {
         .toEqual({ uuid: null, name: 'Only Name', email: null, role: null });
       expect(approvalController.extractActor({ headers: { 'x-user-name': 'Spoofed' } })).toBeNull();
     });
+
+    it('getApprovers returns the configured approvers and handles errors', async () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.getApprovers({}, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, approvers: expect.any(Array) }));
+
+      // error branch when res.json throws
+      const resErr = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('Serialization failed');
+        }),
+      };
+      await approvalController.getApprovers({}, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+    });
+
+    it('getUsers returns assignees from internalTaskQueries and handles errors', async () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const assigneesSpy = jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValueOnce([{ id: 'u1', name: 'User 1' }]);
+      await approvalController.getUsers({}, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, users: expect.any(Array) }));
+
+      // error branch
+      const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockRejectedValueOnce(new Error('Users fail'));
+      await approvalController.getUsers({}, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+      assigneesSpy.mockRestore();
+    });
+
+    it('processAction rejects requests when actor cannot be extracted', async () => {
+      const req = {
+        params: { id: 'appr-dummy' },
+        body: { action: 'APPROVE', remarks: 'Valid remarks', password: 'Procucev@2026', approverName: 'Sudheer Sir' },
+        user: null,
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.processAction(req, res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
   });
 
   describe('HTTP routes', () => {

@@ -636,7 +636,7 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       !isDomainOrSenderRestricted &&
       !message?.automatedReason &&
       !isSystemOrAutomatedSender(senderAddress) &&
-      (!config?.isVendorMailbox || config?.autoRegisterUnregisteredBuyers !== false) &&
+      !config?.isVendorMailbox &&
       config?.autoRegisterUnregisteredBuyers !== false;
 
     if (!isUnregisteredSender) {
