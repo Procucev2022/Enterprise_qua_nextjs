@@ -361,6 +361,26 @@ describe('buyerAccountController branches', () => {
       expect(body.summary.totalCreditsAllocated).toBe(0);
       expect(body.historyAvailable).toBe(true);
     });
+
+    test('catches DB failure, logs warning, and treats transaction history as empty', async () => {
+      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockRejectedValue(new Error('DB connection failure'));
+      const warnSpy = jest.spyOn(logger, 'warn').mockImplementation(() => {});
+      const res = mockRes();
+
+      await buyerAccountController.getCreditHistory({ user: { role: 'admin' }, params: { id: 'ba-1' } }, res, jest.fn());
+
+      expect(warnSpy).toHaveBeenCalledWith(
+        expect.stringContaining('Failed to fetch buyer credit transactions from DB'),
+        expect.objectContaining({ error: 'DB connection failure' }),
+        'BUYER_ACCOUNT_CONTROLLER'
+      );
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        transactions: [],
+        historyAvailable: false,
+      }));
+      warnSpy.mockRestore();
+    });
   });
 
   describe('requestCreditApproval', () => {
