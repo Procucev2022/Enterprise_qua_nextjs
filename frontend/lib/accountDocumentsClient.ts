@@ -2,6 +2,7 @@ import { authClient } from './authClient';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type { AccountDocument } from './types';
+import type { BuyerProfileRequestType, SellerProfileRequestType } from './constants';
 
 const ACCOUNT_DOCS_LOG_CATEGORY = 'ACCOUNT_DOCS_CLIENT';
 const RESOURCES = UI_STRINGS.dataLoad.resources;
@@ -31,8 +32,6 @@ export interface UploadAccountDocumentPayload {
   fileUrl?: string;
   file?: File;
 }
-
-import type { BuyerProfileRequestType } from '@/lib/constants';
 
 export interface RequestBuyerCreditApprovalPayload {
   amount?: number;
@@ -73,8 +72,30 @@ export interface RequestSellerQuoteCreditApprovalPayload {
   approverId?: string;
   initiatorName: string;
   initiatorId?: string;
-  requestType?: 'Seller Credit Addition' | 'Seller Credit Deletion';
+  startDate?: string;
+  endDate?: string;
   idempotencyKey?: string;
+  requestType?: SellerProfileRequestType | string;
+  discountPercentage?: number;
+  durationDays?: number;
+  paymentReference?: string;
+  selectedMode?: string;
+  billingDuration?: string;
+  originalPrice?: number;
+  discountAmount?: number;
+  remainingAmount?: number;
+  gstAmount?: number;
+  finalPayableAmount?: number;
+  paymentDate?: string;
+  paymentType?: string;
+  transactionId?: string;
+  sellerSourceMode?: string;
+  buyerSourceMode?: string;
+  paymentAmount?: number;
+  proofFileName?: string;
+  proofFileUrl?: string;
+  proofFileType?: string;
+  proofFileSize?: number;
 }
 
 /** Result of loading an account's documents. `error` is set when the list could not be loaded. */

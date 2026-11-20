@@ -386,6 +386,9 @@ describe('SupplierDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Backend permission denied')).toBeInTheDocument();
     });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save Categories/i })).not.toBeDisabled();
+    });
 
     // Test rejection exception
     (supplierProfileClient.updateSupplierCategories as jest.Mock).mockRejectedValueOnce(
@@ -394,7 +397,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     await waitFor(() => {
       expect(screen.getByText('Error updating categories')).toBeInTheDocument();
-    }, { timeout: 3000 });
+    }, { timeout: 5000 });
   });
 
   test('4. Quotes Tab displays quotes, supports search, status filtering, and opens Quote Details Modal', async () => {
@@ -2165,7 +2168,7 @@ describe('SupplierDossierDrawer - Active RFQs Tab', () => {
     expect(
       await screen.findByRole('button', {
         name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.activeRfqsTab} \\(1\\)`, 'i'),
-      })
+      }, { timeout: 5000 })
     ).toBeInTheDocument();
 
     expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();

@@ -791,7 +791,7 @@ describe('config/constants.js environment-only configuration', () => {
   test('ships no built-in mailbox, approver, or recipient addresses', () => {
     const constants = loadConstants();
     expect(constants.getCreditApproverEmail()).toBeNull();
-    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual([null, null]);
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual([null, null, null]);
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('PROD_RECIPIENTS');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEV_RECIPIENTS');
@@ -824,14 +824,15 @@ describe('config/constants.js environment-only configuration', () => {
   test('reads approver emails, credit approver, recipients, and mailboxes from the environment', () => {
     const constants = loadConstants({
       SRINU_APPROVER_EMAIL: 'director@corp.test',
+      RAO_APPROVER_EMAIL: 'management@corp.test',
       SUDHEER_APPROVER_EMAIL: 'manager@corp.test',
       CREDIT_APPROVER_EMAIL: 'credit@corp.test',
       DAILY_RFQ_REPORT_EMAILS: 'ops@corp.test, lead@corp.test',
       EMAIL_GATEWAY_ADDRESS: 'buyer-intake@corp.test',
       VENDOR_EMAIL_GATEWAY_ADDRESS: 'vendor-intake@corp.test',
     });
-    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual(['director@corp.test', 'manager@corp.test']);
-    expect(constants.CREDIT_APPROVAL_APPROVERS).toEqual(['Srinu Sir', 'Sudheer Sir']);
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual(['director@corp.test', 'management@corp.test', 'manager@corp.test']);
+    expect(constants.CREDIT_APPROVAL_APPROVERS).toEqual(['Srinu Sir', 'Rao Sir', 'Sudheer Sir']);
     expect(constants.getCreditApproverEmail()).toBe('credit@corp.test');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
     expect(constants.EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('buyer-intake@corp.test');

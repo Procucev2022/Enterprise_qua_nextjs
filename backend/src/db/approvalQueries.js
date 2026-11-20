@@ -172,12 +172,12 @@ function getModuleFilterVariants(requestType) {
     variants.push('seller_credit_addition', 'seller credit', 'quote credit addition', 'quote_credit_addition', 'vendor credit addition');
   } else if (normalized === 'seller credit deletion') {
     variants.push('seller_credit_deletion', 'seller credit deduction', 'seller_credit_deduction', 'quote credit deduction', 'quote_credit_deduction', 'vendor credit deduction');
-  } else if (normalized === 'discounts') {
-    variants.push('discount');
-  } else if (normalized === 'trial periods') {
-    variants.push('trial period', 'trial_periods', 'trial_period');
-  } else if (normalized === 'offline payments') {
-    variants.push('offline payment', 'offline_payments', 'offline_payment');
+  } else if (normalized === 'discounts' || normalized === 'discount') {
+    variants.push('discount', 'discounts');
+  } else if (normalized === 'trial periods' || normalized === 'trial period') {
+    variants.push('trial period', 'trial_periods', 'trial_period', 'trial periods');
+  } else if (normalized === 'offline payments' || normalized === 'offline payment') {
+    variants.push('offline payment', 'offline_payments', 'offline_payment', 'offline payments');
   }
   return Array.from(new Set(variants));
 }

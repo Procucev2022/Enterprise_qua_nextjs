@@ -19,6 +19,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
+  Percent,
   CheckCircle2,
   Clock,
   AlertTriangle,
@@ -67,9 +69,21 @@ import {
   getVendorCreditBalance,
   VENDOR_PLAN_RFQ_QUOTA,
   SELLER_QUOTE_CREDITS_ALLOWED,
+  SELLER_PROFILE_REQUEST_TYPES,
+  APPROVER_CONFIG,
+  SELLER_DISCOUNT_MODES,
+  SELLER_TRIAL_PERIOD_MODES,
+  DISCOUNT_BILLING_DURATIONS,
+  OFFLINE_PAYMENT_TYPES,
+  calculateDiscountBreakdown,
+  calculateTrialDaysFromDates,
+  getStandardDiscountPlanPrice,
+  type SellerProfileRequestType,
+  type OfflinePaymentType,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { usablePan } from '@/lib/validationSchemas';
+import { usablePan, OFFLINE_PAYMENT_UPLOAD_SCHEMA } from '@/lib/validationSchemas';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import {
   fetchSupplierCreditHistory,
   updateSupplierCategories,
@@ -88,6 +102,7 @@ import {
   addSellerQuoteCredits,
   createCreditApprovalIdempotencyKey,
   requestSellerQuoteCreditApproval,
+  type RequestSellerQuoteCreditApprovalPayload,
 } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
@@ -241,6 +256,11 @@ export default function SupplierDossierDrawer({
   }, [activeRfqs, activeRfqSearch]);
   const [docCount, setDocCount] = useState<number>(0);
   const [isAddQuoteCreditsModalOpen, setIsAddQuoteCreditsModalOpen] = useState<boolean>(false);
+  const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
+  const [selectedRequestType, setSelectedRequestType] = useState<SellerProfileRequestType>('Seller Credit Addition');
+  const [isRequestTypeDropdownOpen, setIsRequestTypeDropdownOpen] = useState<boolean>(false);
+  const requestTypeDropdownRef = useRef<HTMLDivElement>(null);
+
   const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(0);
   const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(0);
   // The initiator is the signed-in user. The name comes from the session, never from a list.
@@ -248,6 +268,148 @@ export default function SupplierDossierDrawer({
   const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>('');
   const [quoteCreditsReason, setQuoteCreditsReason] = useState<string>('');
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
+
+  // Discount Workflow state
+  const [discountStep, setDiscountStep] = useState<1 | 2 | 3>(1);
+  const [selectedDiscountMode, setSelectedDiscountMode] = useState<string>('Connect Model');
+  const [selectedBillingDuration, setSelectedBillingDuration] = useState<string>('12 Months');
+  const [discountPercentage, setDiscountPercentage] = useState<number>(0);
+  const [pricingConfig, setPricingConfig] = useState<SubscriptionPricingResponse | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchSubscriptionPricing().then((config) => {
+      if (isMounted && config) {
+        setPricingConfig(config);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const discountPlanId = useMemo(() => {
+    if (selectedDiscountMode === 'Select Model' || selectedDiscountMode === 'select') return 'select';
+    return 'connect';
+  }, [selectedDiscountMode]);
+
+  const discountDurationId = useMemo(() => {
+    return selectedBillingDuration === '6 Months' ? '6_months' : '12_months';
+  }, [selectedBillingDuration]);
+
+  const originalDiscountPlanPrice = useMemo(() => {
+    return getStandardDiscountPlanPrice(pricingConfig, discountPlanId, discountDurationId);
+  }, [pricingConfig, discountPlanId, discountDurationId]);
+
+  const discountBreakdown = useMemo(() => {
+    return calculateDiscountBreakdown(originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate ?? 0.18);
+  }, [originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate]);
+
+  // Trial Period Workflow state
+  const [trialPeriodStep, setTrialPeriodStep] = useState<1 | 2>(1);
+  const [selectedTrialMode, setSelectedTrialMode] = useState<string>('Connect Model');
+  const [trialStartDate, setTrialStartDate] = useState<string>('');
+  const [trialEndDate, setTrialEndDate] = useState<string>('');
+  const [trialDays, setTrialDays] = useState<number>(0);
+  const [trialDateError, setTrialDateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (trialStartDate && trialEndDate) {
+      const days = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+      if (days < 0) {
+        setTrialDateError('End date cannot be earlier than start date.');
+        setTrialDays(0);
+      } else if (days === 0) {
+        setTrialDateError('Trial period must be at least 1 day.');
+        setTrialDays(0);
+      } else if (days > 365) {
+        setTrialDateError('Trial extension cannot exceed 365 days.');
+        setTrialDays(days);
+      } else {
+        setTrialDateError(null);
+        setTrialDays(days);
+      }
+    } else {
+      setTrialDateError(null);
+    }
+  }, [trialStartDate, trialEndDate]);
+
+  const handleTrialDateChange = (start: string, end: string) => {
+    setTrialStartDate(start);
+    setTrialEndDate(end);
+    if (!start || !end) {
+      setTrialDateError(null);
+      return;
+    }
+    const days = calculateTrialDaysFromDates(start, end);
+    if (days <= 0) {
+      setTrialDateError(trialPeriodStrings.validationEndBeforeStart);
+    } else {
+      setTrialDateError(null);
+      setTrialDays(days);
+    }
+  };
+
+  const handleTrialStartDateChange = (val: string) => {
+    setTrialStartDate(val);
+    handleTrialDateChange(val, trialEndDate);
+  };
+
+  const handleTrialEndDateChange = (val: string) => {
+    setTrialEndDate(val);
+    handleTrialDateChange(trialStartDate, val);
+  };
+
+  const handleTrialDaysChange = (days: number) => {
+    setTrialDays(days);
+    if (trialStartDate && trialEndDate) {
+      const calcDays = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+      if (calcDays > 0 && days !== calcDays) {
+        setTrialDateError(
+          formatString(trialPeriodStrings.validationDaysMismatch, {
+            trialDays: days,
+            calculatedDays: calcDays,
+          })
+        );
+      } else if (calcDays <= 0) {
+        setTrialDateError(trialPeriodStrings.validationEndBeforeStart);
+      } else {
+        setTrialDateError(null);
+      }
+    }
+  };
+
+  // Offline Payment Workflow state
+  const [offlinePaymentDate, setOfflinePaymentDate] = useState<string>('');
+  const [offlinePaymentType, setOfflinePaymentType] = useState<OfflinePaymentType>('NEFT / RTGS');
+  const [offlineTransactionId, setOfflineTransactionId] = useState<string>('');
+  const [offlinePaymentAmount, setOfflinePaymentAmount] = useState<number>(0);
+  const [offlineSellerSourceMode, setOfflineSellerSourceMode] = useState<string>('Connect Model');
+  const [offlineRemarks, setOfflineRemarks] = useState<string>('');
+  const [offlineProofFile, setOfflineProofFile] = useState<File | null>(null);
+  const [offlineProofFileName, setOfflineProofFileName] = useState<string>('');
+  const [offlineProofFileDataUrl, setOfflineProofFileDataUrl] = useState<string>('');
+  const [offlineProofFileSize, setOfflineProofFileSize] = useState<number>(0);
+  const [offlineProofFileType, setOfflineProofFileType] = useState<string>('');
+  const [offlineProofPreviewUrl, setOfflineProofPreviewUrl] = useState<string | null>(null);
+  const offlineFileInputRef = useRef<HTMLInputElement>(null);
+  const [offlineInitiatorName, setOfflineInitiatorName] = useState<string>('');
+  const [offlineApproverName, setOfflineApproverName] = useState<string>('Srinu Sir');
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (requestTypeDropdownRef.current && !requestTypeDropdownRef.current.contains(e.target as Node)) {
+        setIsRequestTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const creditApprovalStrings = UI_STRINGS.buyerDirectory.dossier?.creditApproval;
+  const discountStrings = creditApprovalStrings?.discountWorkflow;
+  const trialPeriodStrings = creditApprovalStrings?.trialPeriodWorkflow;
+  const offlinePaymentStrings = creditApprovalStrings?.offlinePaymentWorkflow;
 
   // Active Communications Sub-Tab
   const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
@@ -343,11 +505,14 @@ export default function SupplierDossierDrawer({
       if (e.key === 'Escape') {
         if (selectedQuoteForModal) setSelectedQuoteForModal(null);
         if (isCategoryModalOpen) setIsCategoryModalOpen(false);
+        if (isAddQuoteCreditsModalOpen) setIsAddQuoteCreditsModalOpen(false);
+        if (isAddCreditModalOpen) setIsAddCreditModalOpen(false);
+        if (isRequestTypeDropdownOpen) setIsRequestTypeDropdownOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedQuoteForModal, isCategoryModalOpen]);
+  }, [selectedQuoteForModal, isCategoryModalOpen, isAddQuoteCreditsModalOpen, isAddCreditModalOpen, isRequestTypeDropdownOpen]);
 
   const supplierQuotesList = useMemo(() => {
     const list: Array<{ rfq: RFQItem; quote?: any }> = [];
@@ -404,20 +569,68 @@ export default function SupplierDossierDrawer({
 
   const handleAddQuoteCreditsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
-    if (amount <= 0) {
-      showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
-      return;
+    if (isSubmittingQuoteCredits) return;
+
+    const isDiscount = selectedRequestType === 'Discount' || selectedRequestType === 'Discounts';
+    const isTrial = selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods';
+    const isDeletion = selectedRequestType === 'Seller Credit Deletion';
+
+    const currentBalance = creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 0;
+
+    if (isDiscount) {
+      if (isNaN(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) {
+        showToast(discountStrings.validationInvalidDiscount, 'error');
+        return;
+      }
+    } else if (isTrial) {
+      if (trialDays <= 0 || trialDays > 365) {
+        showToast('Please enter a valid trial extension period (1-365 days).', 'error');
+        return;
+      }
+      if (trialStartDate && trialEndDate) {
+        const days = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+        if (days <= 0 || days > 365) {
+          showToast(trialDateError || 'End date must be after start date and not exceed 365 days.', 'error');
+          return;
+        }
+      }
+    } else if (isDeletion) {
+      const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
+      if (amount <= 0) {
+        showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
+        return;
+      }
+      if (amount > currentBalance) {
+        showToast(`Cannot delete ${amount} credits: ${displayName} only has ${currentBalance} credits available.`, 'error');
+        return;
+      }
+    } else {
+      const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
+      if (amount <= 0) {
+        showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
+        return;
+      }
     }
+
     if (!quoteCreditApprover.trim() || !quoteCreditInitiator) {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired, 'error');
       return;
     }
+
     setIsSubmittingQuoteCredits(true);
+    const amountVal = isDiscount ? discountPercentage : (isTrial ? trialDays : (requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits));
+
     const requestFingerprint = JSON.stringify([
       seller.id,
       seller.name,
-      amount,
+      selectedRequestType,
+      amountVal,
+      selectedDiscountMode,
+      selectedBillingDuration,
+      selectedTrialMode,
+      trialStartDate,
+      trialEndDate,
+      trialDays,
       quoteCreditsReason,
       quoteCreditApprover,
       quoteCreditInitiator,
@@ -427,28 +640,62 @@ export default function SupplierDossierDrawer({
       creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
     }
     try {
-      const res = await requestSellerQuoteCreditApproval(seller.id, {
-        amount,
+      const payload: RequestSellerQuoteCreditApprovalPayload = {
+        amount: amountVal,
         reason: quoteCreditsReason.trim(),
         approverName: quoteCreditApprover.trim(),
         initiatorName: quoteCreditInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
-      });
+        ...(selectedRequestType !== 'Seller Credit Addition' ? { requestType: selectedRequestType } : {}),
+        discountPercentage: isDiscount ? discountPercentage : undefined,
+        durationDays: isTrial ? trialDays : undefined,
+        startDate: isTrial ? trialStartDate : undefined,
+        endDate: isTrial ? trialEndDate : undefined,
+        selectedMode: isDiscount ? selectedDiscountMode : (isTrial ? selectedTrialMode : undefined),
+        billingDuration: isDiscount ? selectedBillingDuration : undefined,
+        originalPrice: isDiscount ? discountBreakdown.originalPlanPrice : undefined,
+        discountAmount: isDiscount ? discountBreakdown.discountAmount : undefined,
+        remainingAmount: isDiscount ? discountBreakdown.remainingAmount : undefined,
+        gstAmount: isDiscount ? discountBreakdown.gstAmount : undefined,
+        finalPayableAmount: isDiscount ? discountBreakdown.finalPayableAmount : undefined,
+      };
+
+      const res = await requestSellerQuoteCreditApproval(seller.id, payload);
       if (res.success) {
         creditApprovalRequestKey.current = '';
         creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
-            formatString(
-              UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess ||
-                'Quote credit request submitted for approval to {approverName}. Status: Pending Approval.',
-              { approverName: quoteCreditApprover }
-            ),
+            (isDiscount
+              ? formatString(discountStrings.toastSuccess, {
+                  approverName: quoteCreditApprover,
+                })
+              : isTrial
+              ? formatString(trialPeriodStrings.toastSuccess, {
+                  approverName: quoteCreditApprover,
+                })
+              : isDeletion
+              ? formatString('Credit deduction request submitted for approval to {approverName}. Status: Pending Approval.', {
+                  approverName: quoteCreditApprover,
+                })
+              : formatString(
+                  UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess ||
+                    'Quote credit request submitted for approval to {approverName}. Status: Pending Approval.',
+                  { approverName: quoteCreditApprover }
+                )),
           'success'
         );
         setIsAddQuoteCreditsModalOpen(false);
+        setIsAddCreditModalOpen(false);
         setRequestedQuoteCredits(0);
         setSelectedQuoteCredits(0);
+        setDiscountPercentage(0);
+        setDiscountStep(1);
+        setTrialPeriodStep(1);
+        setTrialStartDate('');
+        setTrialEndDate('');
+        setTrialDays(0);
+        setTrialDateError(null);
         setQuoteCreditsReason('');
         loadCreditHistory();
       } else {
@@ -456,6 +703,161 @@ export default function SupplierDossierDrawer({
       }
     } catch {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastError, 'error');
+    } finally {
+      setIsSubmittingQuoteCredits(false);
+    }
+  };
+
+  const handleOfflineProofFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isValidFormat =
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedExtensions.some((ext) => lowerName.endsWith(ext)) ||
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedMimeTypes.includes(file.type as 'image/jpeg' | 'image/png' | 'image/jpg');
+    if (!isValidFormat) {
+      showToast(offlinePaymentStrings.validationProofFormat, 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > OFFLINE_PAYMENT_UPLOAD_SCHEMA.maxFileSize) {
+      showToast(offlinePaymentStrings.validationProofSize, 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    setOfflineProofFile(file);
+    setOfflineProofFileName(file.name);
+    setOfflineProofFileSize(file.size);
+    setOfflineProofFileType(file.type || 'image/jpeg');
+    setOfflineProofPreviewUrl('data:image/png;base64,placeholder');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      setOfflineProofPreviewUrl(result);
+      setOfflineProofFileDataUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveOfflineProof = () => {
+    setOfflineProofFile(null);
+    setOfflineProofPreviewUrl(null);
+    setOfflineProofFileName('');
+    setOfflineProofFileDataUrl('');
+    setOfflineProofFileSize(0);
+    setOfflineProofFileType('');
+    if (offlineFileInputRef.current) {
+      offlineFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmOfflinePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingQuoteCredits) return;
+    if (!offlinePaymentDate) {
+      showToast(offlinePaymentStrings.validationPaymentDateRequired, 'error');
+      return;
+    }
+    if (!offlinePaymentType) {
+      showToast(offlinePaymentStrings.validationPaymentTypeRequired, 'error');
+      return;
+    }
+    if (offlinePaymentType !== 'Cash' && !offlineTransactionId.trim()) {
+      showToast(
+        formatString(offlinePaymentStrings.validationTransactionIdRequired, {
+          paymentType: offlinePaymentType,
+        }),
+        'error'
+      );
+      return;
+    }
+    if (offlinePaymentAmount <= 0) {
+      showToast(offlinePaymentStrings.validationAmountRequired, 'error');
+      return;
+    }
+    const effectiveInitiator = offlineInitiatorName.trim() || quoteCreditInitiator;
+    if (!effectiveInitiator) {
+      showToast(offlinePaymentStrings.validationInitiatorRequired, 'error');
+      return;
+    }
+    const effectiveApprover = offlineApproverName.trim() || quoteCreditApprover.trim();
+    if (!effectiveApprover) {
+      showToast(offlinePaymentStrings.validationApproverRequired, 'error');
+      return;
+    }
+
+    setIsSubmittingQuoteCredits(true);
+    const requestFingerprint = JSON.stringify([
+      seller.id,
+      seller.name,
+      'Offline Payments',
+      offlinePaymentAmount,
+      offlinePaymentDate,
+      offlinePaymentType,
+      offlineTransactionId,
+      offlineSellerSourceMode,
+      offlineProofFileName,
+      offlineRemarks,
+      effectiveApprover,
+      effectiveInitiator,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
+    try {
+      const payload: RequestSellerQuoteCreditApprovalPayload = {
+        requestType: 'Offline Payments',
+        amount: offlinePaymentAmount,
+        paymentAmount: offlinePaymentAmount,
+        paymentDate: offlinePaymentDate,
+        paymentType: offlinePaymentType,
+        transactionId: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        paymentReference: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        sellerSourceMode: offlineSellerSourceMode,
+        selectedMode: offlineSellerSourceMode,
+        proofFileName: offlineProofFileName || undefined,
+        proofFileUrl: offlineProofFileDataUrl || undefined,
+        proofFileType: offlineProofFileType || undefined,
+        proofFileSize: offlineProofFileSize || undefined,
+        reason: offlineRemarks.trim(),
+        approverName: effectiveApprover,
+        initiatorName: effectiveInitiator,
+        idempotencyKey: creditApprovalRequestKey.current,
+      };
+
+      const res = await requestSellerQuoteCreditApproval(seller.id, payload);
+      if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
+        showToast(
+          res.message ||
+            formatString(offlinePaymentStrings.toastSuccess, {
+              approverName: effectiveApprover,
+            }),
+          'success'
+        );
+        setIsAddCreditModalOpen(false);
+        setIsAddQuoteCreditsModalOpen(false);
+        setOfflinePaymentAmount(0);
+        setOfflineTransactionId('');
+        handleRemoveOfflineProof();
+        setOfflineRemarks('');
+      } else {
+        showToast(
+          res.error || offlinePaymentStrings.toastError,
+          'error'
+        );
+      }
+    } catch {
+      showToast(
+        offlinePaymentStrings.toastError,
+        'error'
+      );
     } finally {
       setIsSubmittingQuoteCredits(false);
     }
@@ -950,13 +1352,80 @@ export default function SupplierDossierDrawer({
                 </span>
                 <button
                   type="button"
-                  onClick={() => setIsAddQuoteCreditsModalOpen(true)}
+                  onClick={() => {
+                    setSelectedRequestType('Seller Credit Addition');
+                    setIsAddQuoteCreditsModalOpen(true);
+                  }}
                   className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
                   title="Add Quote Credits (1-5)"
                 >
                   <Plus className="w-3 h-3" />
                   <span>{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn}</span>
                 </button>
+                <div className="relative inline-block text-left" ref={requestTypeDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestTypeDropdownOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
+                    title={UI_STRINGS.buyerDirectory.dossier.requestTypeTitle}
+                    aria-label={UI_STRINGS.buyerDirectory.dossier.requestTypeTitle}
+                    aria-haspopup="true"
+                    aria-expanded={isRequestTypeDropdownOpen}
+                    data-testid="request-type-dropdown-btn"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{UI_STRINGS.buyerDirectory.dossier.requestTypeDropdown}</span>
+                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                  </button>
+
+                  {isRequestTypeDropdownOpen && (
+                    <div
+                      role="menu"
+                      aria-orientation="vertical"
+                      className="absolute left-0 mt-1 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 py-1 text-xs divide-y divide-slate-100 dark:divide-slate-800"
+                    >
+                      {SELLER_PROFILE_REQUEST_TYPES.map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setSelectedRequestType(type);
+                            setIsRequestTypeDropdownOpen(false);
+                            if (type === 'Discount' || (type as string) === 'Discounts') {
+                              setDiscountStep(1);
+                              setSelectedDiscountMode('Connect Model');
+                              setSelectedBillingDuration('12 Months');
+                              setDiscountPercentage(0);
+                            } else if (type === 'Trial Period' || (type as string) === 'Trial Periods') {
+                              setTrialPeriodStep(1);
+                              setSelectedTrialMode('Connect Model');
+                              setTrialStartDate('');
+                              setTrialEndDate('');
+                              setTrialDays(0);
+                              setTrialDateError(null);
+                              setQuoteCreditsReason('');
+                            } else if (type === 'Offline Payments') {
+                              setOfflinePaymentDate(new Date().toISOString().split('T')[0]);
+                              setOfflinePaymentType('NEFT / RTGS');
+                              setOfflineTransactionId('');
+                              setOfflinePaymentAmount(0);
+                              setOfflineSellerSourceMode('Connect Model');
+                              handleRemoveOfflineProof();
+                              setOfflineRemarks('');
+                              setOfflineInitiatorName(quoteCreditInitiator);
+                              setOfflineApproverName(APPROVER_CONFIG[0]?.name || 'Srinu Sir');
+                            }
+                            setIsAddQuoteCreditsModalOpen(true);
+                          }}
+                          className="w-full text-left px-3.5 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition cursor-pointer flex items-center justify-between"
+                        >
+                          <span>{type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                 {formatString(strings.registered, { date: regDate ? formatIndianDateTime(regDate) : EMPTY_VALUE })}
@@ -2785,140 +3254,1241 @@ export default function SupplierDossierDrawer({
       )}
 
       {/* =================================================================== */}
-      {/* MODAL: REQUEST SELLER QUOTE CREDIT APPROVAL                         */}
+      {/* MODAL: REQUEST SELLER APPROVAL WORKFLOWS                            */}
       {/* =================================================================== */}
-      {isAddQuoteCreditsModalOpen && (
+      {(isAddQuoteCreditsModalOpen || isAddCreditModalOpen) && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddQuoteCreditsModalOpen(false);
+            if (e.target === e.currentTarget) {
+              setIsAddQuoteCreditsModalOpen(false);
+              setIsAddCreditModalOpen(false);
+            }
           }}
         >
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalSubtitle}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAddQuoteCreditsModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X size={18} />
-              </button>
-            </div>
+          <div
+            className={`w-full ${
+              selectedRequestType === 'Discount' || selectedRequestType === 'Discounts'
+                ? discountStep === 3
+                  ? 'max-w-xl'
+                  : 'max-w-lg'
+                : selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods'
+                ? 'max-w-lg'
+                : selectedRequestType === 'Offline Payments'
+                ? 'max-w-lg'
+                : 'max-w-md'
+            } bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 max-h-[92vh] overflow-y-auto`}
+          >
+            {selectedRequestType === 'Discount' || selectedRequestType === 'Discounts' ? (
+              <>
+                {/* Step 1: Select Sourcing Mode (Connect Model & Select Model ONLY) */}
+                {discountStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step1Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {discountStrings.step1Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
 
-            <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-              {/* Seller Name (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
-                </label>
-                <input
-                  type="text"
-                  readOnly
-                  value={displayName}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                />
-              </div>
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {discountStrings.step1SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {SELLER_DISCOUNT_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDiscountMode(mode.label);
+                              setDiscountStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedDiscountMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {mode.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-              {/* Current Available Credits (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
-                </label>
-                <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {discountStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Select Billing Duration */}
+                {discountStep === 2 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step2Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {formatString(discountStrings.step2Subtitle, {
+                            mode: selectedDiscountMode,
+                          })}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {discountStrings.step2SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {DISCOUNT_BILLING_DURATIONS.map((dur) => (
+                          <button
+                            key={dur.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedBillingDuration(dur.label);
+                              setDiscountStep(3);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedBillingDuration === dur.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {dur.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {dur.months} Months
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setDiscountStep(1)}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        <ArrowLeft size={14} />
+                        {discountStrings.backBtn}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {discountStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 3: Enter Discount Percentage & Review Price Breakdown */}
+                {discountStep === 3 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step3Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {discountStrings.step3Subtitle.replace('buyer', 'seller')}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
+                      {/* Seller Name (Read-Only) */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Seller Name
+                        </label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={displayName}
+                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* Selected Mode & Billing Duration (Read-Only) */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {discountStrings.selectedModeLabel}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={selectedDiscountMode}
+                            className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {discountStrings.billingDurationLabel}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={selectedBillingDuration}
+                            className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Original Plan Price (Read-Only) */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {discountStrings.originalPlanPriceLabel}
+                        </label>
+                        <div className="px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold">
+                          ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                        </div>
+                      </div>
+
+                      {/* Discount Percentage (%) - Editable */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {discountStrings.discountPercentageLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          type="number"
+                          min="0"
+                          max="100"
+                          step="any"
+                          value={discountPercentage}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setDiscountPercentage(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder="0"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          required
+                        />
+                      </div>
+
+                      {/* Initiated By */}
+                      <div>
+                        <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="discount-initiator"
+                          type="text"
+                          readOnly
+                          value={quoteCreditInitiator || 'Category Manager'}
+                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* Assigned Approver */}
+                      <div>
+                        <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="quote-credit-approver"
+                          type="text"
+                          list="seller-discount-approvers-list"
+                          value={quoteCreditApprover}
+                          onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                          placeholder={discountStrings.approverPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          required
+                        />
+                        <datalist id="seller-discount-approvers-list">
+                          {APPROVER_CONFIG.map((appr) => (
+                            <option key={appr.id} value={appr.name}>
+                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+
+                      {/* Request Reason / Justification */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {discountStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          rows={2}
+                          value={quoteCreditsReason}
+                          onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                          placeholder={discountStrings.reasonPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        />
+                      </div>
+
+                      {/* Price Breakdown Table */}
+                      <div className="space-y-1.5 pt-2">
+                        <span className="block font-semibold text-slate-700 dark:text-slate-300">
+                          {discountStrings.priceBreakdownHeading}
+                        </span>
+                        <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/60 dark:bg-slate-800/40">
+                          <table className="w-full text-xs">
+                            <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                              <tr>
+                                <th className="px-3 py-2 text-left">{discountStrings.colDescription}</th>
+                                <th className="px-3 py-2 text-right">{discountStrings.colAmount}</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                              <tr>
+                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
+                                  {discountStrings.rowOriginalPrice}
+                                </td>
+                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                                  ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
+                                  {discountStrings.rowDiscountPercent}
+                                </td>
+                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                                  {discountBreakdown.discountPercentage}%
+                                </td>
+                              </tr>
+                              <tr>
+                                <td className="px-3 py-1.5 text-rose-600 dark:text-rose-400 font-medium">
+                                  {discountStrings.rowDiscountAmount}
+                                </td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-rose-600 dark:text-rose-400">
+                                  −₹{discountBreakdown.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td className="px-3 py-1.5 text-slate-700 dark:text-slate-300 font-medium">
+                                  {discountStrings.rowRemainingAmount}
+                                </td>
+                                <td className="px-3 py-1.5 text-right font-medium text-slate-900 dark:text-white">
+                                  ₹{discountBreakdown.remainingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                              <tr>
+                                <td className="px-3 py-1.5 text-indigo-600 dark:text-indigo-400 font-medium">
+                                  {discountStrings.rowGst}
+                                </td>
+                                <td className="px-3 py-1.5 text-right font-semibold text-indigo-600 dark:text-indigo-400">
+                                  +₹{discountBreakdown.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                              <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
+                                <td className="px-3 py-2 text-emerald-900 dark:text-emerald-100">
+                                  {discountStrings.rowFinalPayable}
+                                </td>
+                                <td className="px-3 py-2 text-right text-emerald-700 dark:text-emerald-300 text-sm font-extrabold">
+                                  ₹{discountBreakdown.finalPayableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                </td>
+                              </tr>
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+
+                      {/* Controls */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountStep(2)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                        >
+                          <ArrowLeft size={14} />
+                          {discountStrings.backBtn}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddQuoteCreditsModalOpen(false);
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          >
+                            {discountStrings.cancelBtn}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingQuoteCredits || discountPercentage < 0 || discountPercentage > 100 || !quoteCreditApprover.trim()}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingQuoteCredits
+                              ? (discountStrings.submittingBtn)
+                              : (discountStrings.submitBtn)}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods' ? (
+              // Trial Period 2-Step Workflow (Connect Model & Select Model ONLY)
+              <>
+                {trialPeriodStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {trialPeriodStrings.step1Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {trialPeriodStrings.step1Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {trialPeriodStrings.step1SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {SELLER_TRIAL_PERIOD_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTrialMode(mode.label);
+                              setTrialPeriodStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedTrialMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {mode.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {trialPeriodStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {trialPeriodStep === 2 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {trialPeriodStrings.step2Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {trialPeriodStrings.step2Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
+                      {/* 1. Seller Name (Read-Only) */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          Seller Name
+                        </label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={displayName}
+                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* 2. Selected Mode (Read-Only) */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.selectedModeLabel}
+                        </label>
+                        <input
+                          type="text"
+                          readOnly
+                          value={selectedTrialMode}
+                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* 3. Number of Trial Days */}
+                      <div>
+                        <label htmlFor="trial-days-input" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.trialDaysLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="trial-days-input"
+                          type="number"
+                          value={trialDays || ''}
+                          onChange={(e) => {
+                            const val = parseInt(e.target.value, 10);
+                            handleTrialDaysChange(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder={trialPeriodStrings.trialDaysPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        />
+                      </div>
+
+                      {/* 4. Starting Date & 5. Ending Date */}
+                      <div className="grid grid-cols-2 gap-3">
+                        <div>
+                          <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.startDateLabel}
+                          </label>
+                          <input
+                            id="trial-start-date"
+                            type="date"
+                            value={trialStartDate}
+                            onChange={(e) => handleTrialStartDateChange(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="trial-end-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.endDateLabel}
+                          </label>
+                          <input
+                            id="trial-end-date"
+                            type="date"
+                            value={trialEndDate}
+                            onChange={(e) => handleTrialEndDateChange(e.target.value)}
+                            className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          />
+                        </div>
+                      </div>
+
+                      {trialDateError && (
+                        <div className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs">
+                          {trialDateError}
+                        </div>
+                      )}
+
+                      {/* 6. Initiated By User */}
+                      <div>
+                        <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="trial-initiator"
+                          type="text"
+                          readOnly
+                          value={quoteCreditInitiator}
+                          placeholder={trialPeriodStrings.selectUserPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                        />
+                      </div>
+
+                      {/* 7. Assigned Approver */}
+                      <div>
+                        <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="quote-credit-approver"
+                          type="text"
+                          list="seller-trial-approvers-list"
+                          value={quoteCreditApprover}
+                          onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                          placeholder={trialPeriodStrings.selectApproverPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          required
+                        />
+                        <datalist id="seller-trial-approvers-list">
+                          {APPROVER_CONFIG.map((appr) => (
+                            <option key={appr.id} value={appr.name}>
+                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                            </option>
+                          ))}
+                        </datalist>
+                      </div>
+
+                      {/* 8. Request Reason / Remarks */}
+                      <div>
+                        <label htmlFor="trial-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          id="trial-remarks"
+                          rows={2}
+                          value={quoteCreditsReason}
+                          onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                          placeholder={trialPeriodStrings.reasonPlaceholder}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        />
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setTrialPeriodStep(1)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                        >
+                          <ArrowLeft size={14} />
+                          {trialPeriodStrings.backBtn}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddQuoteCreditsModalOpen(false);
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          >
+                            {trialPeriodStrings.cancelBtn}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingQuoteCredits || trialDays <= 0 || !quoteCreditApprover.trim() || !quoteCreditInitiator.trim() || Boolean(trialDateError)}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingQuoteCredits
+                              ? (trialPeriodStrings.submittingBtn)
+                              : (trialPeriodStrings.submitBtn)}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Offline Payments' ? (
+              // Dedicated Offline Payment Approval Form
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {offlinePaymentStrings.modalTitle}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {offlinePaymentStrings.modalSubtitle}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
                 </div>
-              </div>
 
-              {/* Requested Credits */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={requestedQuoteCredits}
-                  onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  required
-                />
-              </div>
+                <form onSubmit={handleConfirmOfflinePayment} className="space-y-3.5 text-xs">
+                  {/* Seller Name (Read-Only) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Seller Name
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={displayName}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                    />
+                  </div>
 
-              {/* Initiated By Select */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  id="quote-credit-initiator"
-                  type="text"
-                  readOnly
-                  value={quoteCreditInitiator}
-                  placeholder={UI_STRINGS.dataLoad.emptyCell}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
-                />
-              </div>
+                  {/* Seller Sourcing Mode */}
+                  <div>
+                    <label htmlFor="offline-sourcing-mode-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Seller Sourcing Mode
+                    </label>
+                    <select
+                      id="offline-sourcing-mode-select"
+                      value={offlineSellerSourceMode}
+                      onChange={(e) => setOfflineSellerSourceMode(e.target.value)}
+                      className="w-full px-3 py-2 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    >
+                      <option value="Connect Model">Connect Model</option>
+                      <option value="Select Model">Select Model</option>
+                    </select>
+                  </div>
 
-              {/* Assigned Approver Select */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
-                </label>
-                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
-                <input
-                  id="quote-credit-approver"
-                  type="text"
-                  value={quoteCreditApprover}
-                  onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                  placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
-              </div>
+                  {/* Payment Date */}
+                  <div>
+                    <label htmlFor="offline-payment-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.paymentDateLabel} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="offline-payment-date"
+                      type="date"
+                      value={offlinePaymentDate}
+                      onChange={(e) => setOfflinePaymentDate(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      required
+                    />
+                  </div>
 
-              {/* Reason / Remarks */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
-                </label>
-                <textarea
-                  rows={2}
-                  value={quoteCreditsReason}
-                  onChange={(e) => setQuoteCreditsReason(e.target.value)}
-                  placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
-              </div>
+                  {/* Payment Type */}
+                  <div>
+                    <label htmlFor="offline-payment-type" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.paymentTypeLabel} <span className="text-rose-500">*</span>
+                    </label>
+                    <select
+                      id="offline-payment-type-select"
+                      data-testid="offline-payment-type-select"
+                      value={offlinePaymentType}
+                      onChange={(e) => setOfflinePaymentType(e.target.value as OfflinePaymentType)}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      required
+                    >
+                      {OFFLINE_PAYMENT_TYPES.map((type) => (
+                        <option key={type} value={type}>{type}</option>
+                      ))}
+                    </select>
+                  </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsAddQuoteCreditsModalOpen(false)}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
-                >
-                  {isSubmittingQuoteCredits
-                    ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
-                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
-                </button>
+                  {/* Transaction ID: Display for NEFT/RTGS, Cheque, UPI; HIDE when Cash is selected */}
+                  {offlinePaymentType !== 'Cash' && (
+                    <div>
+                      <label htmlFor="offline-transaction-id" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {offlinePaymentStrings.transactionIdLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id="offline-transaction-id"
+                        type="text"
+                        value={offlineTransactionId}
+                        onChange={(e) => setOfflineTransactionId(e.target.value)}
+                        placeholder={offlinePaymentStrings.transactionIdPlaceholder}
+                        className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                        required
+                      />
+                    </div>
+                  )}
+
+                  {/* Payment Amount */}
+                  <div>
+                    <label htmlFor="offline-payment-amount" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.paymentAmountLabel} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="offline-payment-amount"
+                      type="number"
+                      min="1"
+                      step="any"
+                      value={offlinePaymentAmount || ''}
+                      onChange={(e) => {
+                        const val = parseFloat(e.target.value);
+                        setOfflinePaymentAmount(isNaN(val) ? 0 : val);
+                      }}
+                      placeholder={offlinePaymentStrings.paymentAmountPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+
+                  {/* Payment Image Proof Upload */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.paymentProofLabel}
+                    </label>
+                    <input
+                      ref={offlineFileInputRef}
+                      type="file"
+                      accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                      onChange={handleOfflineProofFileSelect}
+                      className="hidden"
+                      id="seller-offline-proof-file-input"
+                      data-testid="offline-proof-file-input"
+                    />
+
+                    {offlineProofPreviewUrl ? (
+                      <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="font-medium text-slate-700 dark:text-slate-300 truncate max-w-[200px]" title={offlineProofFileName}>
+                            {offlineProofFileName}
+                          </span>
+                          <button
+                            type="button"
+                            onClick={handleRemoveOfflineProof}
+                            className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition cursor-pointer"
+                            title="Remove attachment"
+                          >
+                            <X size={14} />
+                          </button>
+                        </div>
+                        {/* eslint-disable-next-line @next/next/no-img-element */}
+                        <img
+                          src={offlineProofPreviewUrl}
+                          alt="Proof preview"
+                          className="max-h-36 w-auto rounded border border-slate-200 dark:border-slate-700 object-contain mx-auto"
+                        />
+                      </div>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => offlineFileInputRef.current?.click()}
+                        className="w-full py-4 px-3 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl bg-slate-50/50 dark:bg-slate-800/30 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1.5"
+                      >
+                        <Upload className="w-5 h-5 text-slate-400" />
+                        <span className="text-slate-600 dark:text-slate-300 font-medium">
+                          {offlinePaymentStrings.paymentProofHelp}
+                        </span>
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Initiated By */}
+                  <div>
+                    <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="offline-initiator"
+                      type="text"
+                      readOnly
+                      value={offlineInitiatorName || quoteCreditInitiator}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* Assigned Approver */}
+                  <div>
+                    <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="offline-approver"
+                      type="text"
+                      list="seller-offline-approvers-list"
+                      value={offlineApproverName}
+                      onChange={(e) => setOfflineApproverName(e.target.value)}
+                      placeholder={offlinePaymentStrings.selectApproverPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      required
+                    />
+                    <datalist id="seller-offline-approvers-list">
+                      {APPROVER_CONFIG.map((appr) => (
+                        <option key={appr.id} value={appr.name}>
+                          {appr.name} {appr.title ? `(${appr.title})` : ''}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+
+                  {/* Remarks */}
+                  <div>
+                    <label htmlFor="offline-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {offlinePaymentStrings.reasonLabel}
+                    </label>
+                    <textarea
+                      id="offline-remarks"
+                      rows={2}
+                      value={offlineRemarks}
+                      onChange={(e) => setOfflineRemarks(e.target.value)}
+                      placeholder={offlinePaymentStrings.reasonPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      {offlinePaymentStrings.cancelBtn}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits || offlinePaymentAmount <= 0}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? (offlinePaymentStrings.submittingBtn)
+                        : (offlinePaymentStrings.submitBtn)}
+                    </button>
+                  </div>
+                </form>
               </div>
-            </form>
+            ) : selectedRequestType === 'Seller Credit Deletion' ? (
+              // Seller Credit Deletion Modal
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Request Seller Credit Deletion
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Submit request to deduct credits from seller account.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
+                  {/* Seller Name (Read-Only) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={displayName}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* Current Available Credits (Read-Only) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                    </label>
+                    <div className="px-3 py-2 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-lg text-rose-700 dark:text-rose-300 font-bold">
+                      {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits Available
+                    </div>
+                  </div>
+
+                  {/* Requested Deduction Credits */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      Credits to Deduct <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credits-requested"
+                      type="number"
+                      min="1"
+                      max={creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 1000}
+                      value={requestedQuoteCredits}
+                      onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                      placeholder="0"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                      required
+                    />
+                  </div>
+
+                  {/* Initiated By Select */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credit-initiator"
+                      type="text"
+                      readOnly
+                      value={quoteCreditInitiator}
+                      placeholder={UI_STRINGS.dataLoad.emptyCell}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* Assigned Approver */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credit-approver"
+                      type="text"
+                      list="seller-credit-approvers-list"
+                      value={quoteCreditApprover}
+                      onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                      required
+                    />
+                    <datalist id="seller-credit-approvers-list">
+                      {APPROVER_CONFIG.map((appr) => (
+                        <option key={appr.id} value={appr.name}>
+                          {appr.name} {appr.title ? `(${appr.title})` : ''}
+                        </option>
+                      ))}
+                    </datalist>
+                  </div>
+
+                  {/* Reason / Remarks */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={quoteCreditsReason}
+                      onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                      placeholder="Reason for credit deletion..."
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
+                        : 'Submit for Approval'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : (
+              // Default: Seller Credit Addition Modal
+              <div className="space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalSubtitle}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
+                  {/* Seller Name (Read-Only) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                    </label>
+                    <input
+                      type="text"
+                      readOnly
+                      value={displayName}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                    />
+                  </div>
+
+                  {/* Current Available Credits (Read-Only) */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                    </label>
+                    <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
+                      {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+                    </div>
+                  </div>
+
+                  {/* Requested Credits */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credits-requested"
+                      type="number"
+                      min="1"
+                      max="1000"
+                      value={requestedQuoteCredits}
+                      onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      required
+                    />
+                  </div>
+
+                  {/* Initiated By Select */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credit-initiator"
+                      type="text"
+                      readOnly
+                      value={quoteCreditInitiator}
+                      placeholder={UI_STRINGS.dataLoad.emptyCell}
+                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
+                    />
+                  </div>
+
+                  {/* Assigned Approver Select */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      id="quote-credit-approver"
+                      type="text"
+                      value={quoteCreditApprover}
+                      onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    />
+                  </div>
+
+                  {/* Reason / Remarks */}
+                  <div>
+                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                    </label>
+                    <textarea
+                      rows={2}
+                      value={quoteCreditsReason}
+                      onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                    />
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
+                        : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
           </div>
         </div>
       )}
