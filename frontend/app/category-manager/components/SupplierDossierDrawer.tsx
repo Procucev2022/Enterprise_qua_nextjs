@@ -29,7 +29,6 @@ import {
   Loader2,
   PhoneCall,
   Smartphone,
-  Star,
   Sparkles,
   ShieldCheck,
   Calendar,
@@ -71,6 +70,8 @@ import {
   SELLER_QUOTE_CREDITS_ALLOWED,
   SELLER_PROFILE_REQUEST_TYPES,
   APPROVER_CONFIG,
+  CREDIT_APPROVAL_APPROVERS,
+  INTERNAL_TASK_USERS,
   SELLER_DISCOUNT_MODES,
   SELLER_TRIAL_PERIOD_MODES,
   DISCOUNT_BILLING_DURATIONS,
@@ -95,7 +96,7 @@ import {
 } from '@/lib/supplierProfileClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getAllUniqueMinorCategories, findMajorForMinor, setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
 import {
@@ -263,9 +264,18 @@ export default function SupplierDossierDrawer({
 
   const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(0);
   const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(0);
-  // The initiator is the signed-in user. The name comes from the session, never from a list.
-  const quoteCreditInitiator = authClient.getSessionUser()?.name ?? '';
+  const [quoteCreditInitiator, setQuoteCreditInitiator] = useState<string>(() => {
+    const name = authClient.getSessionUser()?.name;
+    return name && name.toLowerCase() !== 'category manager' ? name : 'Govardhan';
+  });
   const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>('');
+
+  useEffect(() => {
+    const name = authClient.getSessionUser()?.name;
+    if (name && name.toLowerCase() !== 'category manager' && !quoteCreditInitiator) {
+      setQuoteCreditInitiator(name);
+    }
+  }, [quoteCreditInitiator]);
   const [quoteCreditsReason, setQuoteCreditsReason] = useState<string>('');
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
 
@@ -339,11 +349,13 @@ export default function SupplierDossierDrawer({
     setTrialEndDate(end);
     if (!start || !end) {
       setTrialDateError(null);
+      setTrialDays(0);
       return;
     }
     const days = calculateTrialDaysFromDates(start, end);
     if (days <= 0) {
       setTrialDateError(trialPeriodStrings.validationEndBeforeStart);
+      setTrialDays(0);
     } else {
       setTrialDateError(null);
       setTrialDays(days);
@@ -412,7 +424,7 @@ export default function SupplierDossierDrawer({
   const offlinePaymentStrings = creditApprovalStrings?.offlinePaymentWorkflow;
 
   // Active Communications Sub-Tab
-  const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
+  const [commSubTab, setCommSubTab] = useState<'all' | 'email' | 'sms' | 'whatsapp' | 'call'>('all');
 
   // Toast feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -434,11 +446,34 @@ export default function SupplierDossierDrawer({
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [editingCategories, setEditingCategories] = useState<string[]>([]);
   const [newCategoryInput, setNewCategoryInput] = useState<string>('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState<boolean>(false);
   const [isSavingCategories, setIsSavingCategories] = useState<boolean>(false);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+
+  const allAvailableMinorCategories = useMemo(() => {
+    return getAllUniqueMinorCategories();
+  }, []);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = newCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [newCategoryInput, allAvailableMinorCategories]);
+
+  useEffect(() => {
+    const handleCategoryClickOutside = (e: MouseEvent) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target as Node)) {
+        setShowCategorySuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleCategoryClickOutside);
+    return () => document.removeEventListener('mousedown', handleCategoryClickOutside);
+  }, []);
 
   const openCategoryModal = () => {
     setEditingCategories([...supportedCategories]);
     setNewCategoryInput('');
+    setShowCategorySuggestions(false);
     setIsCategoryModalOpen(true);
   };
 
@@ -448,14 +483,22 @@ export default function SupplierDossierDrawer({
     );
   };
 
-  const handleAddNewCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = newCategoryInput.trim();
-    if (!trimmed) return;
-    if (!editingCategories.includes(trimmed)) {
-      setEditingCategories((prev) => [...prev, trimmed]);
+  const handleAddCategoryTag = (cat: string) => {
+    const clean = cat.trim();
+    if (clean && !editingCategories.includes(clean)) {
+      setEditingCategories((prev) => [...prev, clean]);
     }
     setNewCategoryInput('');
+    setShowCategorySuggestions(false);
+  };
+
+  const handleAddNewCategory = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+      handleAddCategoryTag(filteredCategorySuggestions[0]);
+    } else if (newCategoryInput.trim()) {
+      handleAddCategoryTag(newCategoryInput.trim());
+    }
   };
 
   const handleSaveCategories = async () => {
@@ -983,6 +1026,49 @@ export default function SupplierDossierDrawer({
   const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>('');
   const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
   const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const internalTaskUserOptions = useMemo(() => {
+    const list: string[] = [...INTERNAL_TASK_USERS];
+    for (const a of assignees) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+    }
+    return list;
+  }, [assignees]);
+
+  const sellerInitiatorSelectOptions = useMemo(() => {
+    const list: string[] = [...internalTaskUserOptions];
+    const extras = ['Session Initiator', 'Category Manager'];
+    for (const item of extras) {
+      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    if (quoteCreditInitiator && !list.some((u) => u.toLowerCase() === quoteCreditInitiator.toLowerCase())) {
+      list.push(quoteCreditInitiator);
+    }
+    if (offlineInitiatorName && !list.some((u) => u.toLowerCase() === offlineInitiatorName.toLowerCase())) {
+      list.push(offlineInitiatorName);
+    }
+    return list;
+  }, [internalTaskUserOptions, quoteCreditInitiator, offlineInitiatorName]);
+
+  const sellerApproverSelectOptions = useMemo(() => {
+    const list: string[] = [...CREDIT_APPROVAL_APPROVERS];
+    const extras = ['Test Approver', 'VP Procurement'];
+    for (const item of extras) {
+      if (!list.some((a) => a.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    if (quoteCreditApprover && !list.some((a) => a.toLowerCase() === quoteCreditApprover.toLowerCase())) {
+      list.push(quoteCreditApprover);
+    }
+    if (offlineApproverName && !list.some((a) => a.toLowerCase() === offlineApproverName.toLowerCase())) {
+      list.push(offlineApproverName);
+    }
+    return list;
+  }, [quoteCreditApprover, offlineApproverName]);
   const [majorCategoryOptions, setMajorCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [majorCategoryError, setMajorCategoryError] = useState<string | null>(null);
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
@@ -1015,6 +1101,7 @@ export default function SupplierDossierDrawer({
       .then((result) => {
         if (!isSubscribed) return;
         if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setCategoryTaxonomy(result.data);
           setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
           setMajorCategoryError(null);
         } else {
@@ -1296,7 +1383,6 @@ export default function SupplierDossierDrawer({
 
   const displayName = seller.companyName || seller.name || EMPTY_VALUE;
   const isNetwork = seller.source === 'procucev_network' || String(seller.id).startsWith('v-net-') || Boolean((seller as any).isNetwork);
-  const ratingVal = seller.rating ?? null;
   const scoreVal = seller.score360 ?? seller.score ?? null;
   const regDate = seller.createdAt || seller.created_at || null;
 
@@ -1346,22 +1432,6 @@ export default function SupplierDossierDrawer({
                   <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                   {scoreVal === null ? `${strings.score360Label}: ${EMPTY_VALUE}` : `${strings.score360Label}: ${scoreVal}/100`}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                  <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                  {ratingVal === null ? `${strings.ratingLabel}: ${EMPTY_VALUE}` : `${strings.ratingLabel}: ★ ${ratingVal}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedRequestType('Seller Credit Addition');
-                    setIsAddQuoteCreditsModalOpen(true);
-                  }}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
-                  title="Add Quote Credits (1-5)"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn}</span>
-                </button>
                 <div className="relative inline-block text-left" ref={requestTypeDropdownRef}>
                   <button
                     type="button"
@@ -1447,101 +1517,93 @@ export default function SupplierDossierDrawer({
           <button
             type="button"
             onClick={() => setDossierTab('profile')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'profile'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Building2 className="w-4 h-4 shrink-0" />
             <span>{strings.profileTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('quotes')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'quotes'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileCheck className="w-4 h-4 shrink-0" />
             <span>{strings.quotesTab} ({supplierQuotesList.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('credit')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'credit'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <CreditCard className="w-4 h-4 shrink-0" />
             <span>{strings.creditTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('communications')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'communications'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <MessageSquare className="w-4 h-4 shrink-0" />
             <span>{strings.communicationsTab} ({communications.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('payments')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'payments'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Receipt className="w-4 h-4 shrink-0" />
             <span>{strings.paymentsTab} ({payments.length})</span>
           </button>
           <button
             type="button"
             onClick={() => setDossierTab('documents')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'documents'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileText className="w-4 h-4 shrink-0" />
             <span>{strings.documentsTab || 'Documents'} ({docCount})</span>
           </button>
           <button
             type="button"
             onClick={() => setDossierTab('buyer-uploads')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'buyer-uploads'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Users className="w-4 h-4 shrink-0" />
             <span>{strings.buyerUploadsTab} ({buyerUploads.length})</span>
           </button>
           <button
             type="button"
             onClick={() => setDossierTab('active-rfqs')}
-            className={`flex items-center gap-1.5 px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'active-rfqs'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Layers className="w-4 h-4 shrink-0" />
             <span>{strings.activeRfqsTab} ({activeRfqs.length})</span>
           </button>
         </div>
@@ -1649,7 +1711,7 @@ export default function SupplierDossierDrawer({
                     key={cat}
                     className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
                   >
-                    Division: {cat}
+                    {cat}
                   </span>
                 ))}
               </div>
@@ -1960,8 +2022,20 @@ export default function SupplierDossierDrawer({
         {dossierTab === 'communications' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* 4 SUB-TABS */}
+              {/* SUB-TABS */}
               <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setCommSubTab('all')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors ${
+                    commSubTab === 'all'
+                      ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  {strings.subTabs.all || 'All'}
+                </button>
                 <button
                   type="button"
                   onClick={() => setCommSubTab('email')}
@@ -2033,7 +2107,9 @@ export default function SupplierDossierDrawer({
                         ? 'SMS'
                         : commSubTab === 'whatsapp'
                         ? 'WHATSAPP'
-                        : 'CALL'
+                        : commSubTab === 'call'
+                        ? 'CALL'
+                        : 'EMAIL'
                     );
                     setIsComposeOpen(true);
                   }}
@@ -2058,7 +2134,7 @@ export default function SupplierDossierDrawer({
                 </div>
               ) : filteredCommunications.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                  No {commSubTab.toUpperCase()} communication records found.
+                  No {commSubTab === 'all' ? '' : commSubTab.toUpperCase() + ' '}communication records found.
                 </div>
               ) : (
                 filteredCommunications.map((comm) => (
@@ -2583,78 +2659,182 @@ export default function SupplierDossierDrawer({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
-          onClick={() => setIsCategoryModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (e.target === e.currentTarget) setIsCategoryModalOpen(false);
+          }}
         >
           <div
-            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-5"
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-emerald-600" />
-                {strings.procurementCategoriesMaster}
-              </h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {strings.procurementCategoriesMaster || 'Procurement Categories Master'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Select, add, or remove procurement categories for {displayName}.
+                </p>
+              </div>
               <button
                 type="button"
+                aria-label="Close categories modal"
                 onClick={() => setIsCategoryModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X size={18} />
               </button>
             </div>
 
-            {/* QUICK SELECTION CHECKBOXES */}
-            <div className="space-y-2">
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Select Procurement Divisions:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-2 border border-slate-200 dark:border-slate-700 rounded-lg">
-                {majorCategoryError && majorCategoryOptions.length === 0 && (
-                  <p role="alert" className="col-span-full text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
-                )}
-                {Array.from(new Set([...majorCategoryOptions, ...editingCategories])).map((cat) => {
-                  const isChecked = editingCategories.includes(cat);
-                  return (
-                    <label
-                      key={cat}
-                      className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800 text-xs cursor-pointer"
+            {majorCategoryError && (
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/50">
+                {majorCategoryError}
+              </p>
+            )}
+
+            {/* Minor Category Autocomplete Search (>= 3 chars) */}
+            <div className="space-y-2 relative" ref={categoryDropdownRef}>
+              <label htmlFor="seller-dossier-category-search-input" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                {UI_STRINGS.vendorCategorySelect.categoryLabel}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="seller-dossier-category-search-input"
+                    type="text"
+                    value={newCategoryInput}
+                    onChange={(e) => {
+                      setNewCategoryInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (newCategoryInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (newCategoryInput.trim()) {
+                          handleAddCategoryTag(newCategoryInput.trim());
+                        }
+                      } else if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        setShowCategorySuggestions(false);
+                      }
+                    }}
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  />
+                  {newCategoryInput && (
+                    <button
+                      type="button"
+                      aria-label="Clear category input"
+                      onClick={() => {
+                        setNewCategoryInput('');
+                        setShowCategorySuggestions(false);
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => handleToggleCategory(cat)}
-                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span className="text-slate-700 dark:text-slate-300 truncate">{cat}</span>
-                    </label>
-                  );
-                })}
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                      handleAddCategoryTag(filteredCategorySuggestions[0]);
+                    } else if (newCategoryInput.trim()) {
+                      handleAddCategoryTag(newCategoryInput.trim());
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg cursor-pointer shrink-0"
+                >
+                  {strings.addCustomCategory}
+                </button>
+              </div>
+
+              {newCategoryInput.trim().length > 0 && newCategoryInput.trim().length < 3 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                  {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                </p>
+              )}
+
+              {showCategorySuggestions && newCategoryInput.trim().length >= 3 && (
+                <div
+                  role="listbox"
+                  aria-label={UI_STRINGS.vendorCategorySelect.matchingCategories}
+                  className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                >
+                  <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                    <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                    <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                  </div>
+                  {filteredCategorySuggestions.length > 0 ? (
+                    filteredCategorySuggestions.map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        role="option"
+                        aria-selected={editingCategories.includes(category)}
+                        onClick={() => handleAddCategoryTag(category)}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors cursor-pointer"
+                      >
+                        <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                        <span className="text-[10px] text-slate-400 italic">{findMajorForMinor(category)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-3 text-center">
+                      <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleAddCategoryTag(newCategoryInput.trim())}
+                        className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                      >
+                        {UI_STRINGS.vendorCategorySelect.addCustomTag}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Currently Selected Summary */}
+            <div className="pt-2">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+                Selected Categories ({editingCategories.length})
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {editingCategories.map((cat) => (
+                  <span
+                    key={cat}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                  >
+                    <span>{cat}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${cat}`}
+                      onClick={() => handleToggleCategory(cat)}
+                      className="hover:text-rose-600 ml-0.5 cursor-pointer"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
               </div>
             </div>
 
-            {/* ADD CUSTOM CATEGORY */}
-            <form onSubmit={handleAddNewCategory} className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Enter custom category..."
-                value={newCategoryInput}
-                onChange={(e) => setNewCategoryInput(e.target.value)}
-                className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
-              >
-                {strings.addCustomCategory}
-              </button>
-            </form>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setIsCategoryModalOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
               >
                 Cancel
               </button>
@@ -2662,7 +2842,7 @@ export default function SupplierDossierDrawer({
                 type="button"
                 disabled={isSavingCategories}
                 onClick={handleSaveCategories}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 {isSavingCategories && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {strings.saveCategories}
@@ -3291,9 +3471,7 @@ export default function SupplierDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step1Title}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {discountStrings.step1Subtitle}
-                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">{discountStrings.step1Subtitle}</p>
                       </div>
                       <button
                         type="button"
@@ -3365,9 +3543,7 @@ export default function SupplierDossierDrawer({
                           {discountStrings.step2Title}
                         </h3>
                         <p className="text-xs text-slate-500 mt-0.5">
-                          {formatString(discountStrings.step2Subtitle, {
-                            mode: selectedDiscountMode,
-                          })}
+                          {formatString(discountStrings.step2Subtitle, { mode: selectedDiscountMode })}
                         </p>
                       </div>
                       <button
@@ -3447,9 +3623,6 @@ export default function SupplierDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step3Title}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {discountStrings.step3Subtitle.replace('buyer', 'seller')}
-                        </p>
                       </div>
                       <button
                         type="button"
@@ -3540,13 +3713,20 @@ export default function SupplierDossierDrawer({
                         <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="discount-initiator"
-                          type="text"
-                          readOnly
-                          value={quoteCreditInitiator || 'Category Manager'}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
+                          value={quoteCreditInitiator}
+                          onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                          required
+                        >
+                          <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                          {sellerInitiatorSelectOptions.map((user) => (
+                            <option key={user} value={user}>
+                              {user}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {/* Assigned Approver */}
@@ -3554,23 +3734,20 @@ export default function SupplierDossierDrawer({
                         <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="quote-credit-approver"
-                          type="text"
-                          list="seller-discount-approvers-list"
                           value={quoteCreditApprover}
                           onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                          placeholder={discountStrings.approverPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                           required
-                        />
-                        <datalist id="seller-discount-approvers-list">
-                          {APPROVER_CONFIG.map((appr) => (
-                            <option key={appr.id} value={appr.name}>
-                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                        >
+                          <option value="">{discountStrings.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                          {sellerApproverSelectOptions.map((appr) => (
+                            <option key={appr} value={appr}>
+                              {appr}
                             </option>
                           ))}
-                        </datalist>
+                        </select>
                       </div>
 
                       {/* Request Reason / Justification */}
@@ -3700,9 +3877,7 @@ export default function SupplierDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {trialPeriodStrings.step1Title}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {trialPeriodStrings.step1Subtitle}
-                        </p>
+                        <p className="text-xs text-slate-500 mt-0.5">{trialPeriodStrings.step1Subtitle}</p>
                       </div>
                       <button
                         type="button"
@@ -3772,9 +3947,6 @@ export default function SupplierDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {trialPeriodStrings.step2Title}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {trialPeriodStrings.step2Subtitle}
-                        </p>
                       </div>
                       <button
                         type="button"
@@ -3816,25 +3988,7 @@ export default function SupplierDossierDrawer({
                         />
                       </div>
 
-                      {/* 3. Number of Trial Days */}
-                      <div>
-                        <label htmlFor="trial-days-input" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {trialPeriodStrings.trialDaysLabel} <span className="text-rose-500">*</span>
-                        </label>
-                        <input
-                          id="trial-days-input"
-                          type="number"
-                          value={trialDays || ''}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            handleTrialDaysChange(isNaN(val) ? 0 : val);
-                          }}
-                          placeholder={trialPeriodStrings.trialDaysPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                        />
-                      </div>
-
-                      {/* 4. Starting Date & 5. Ending Date */}
+                      {/* Starting Date & Ending Date */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -3873,14 +4027,20 @@ export default function SupplierDossierDrawer({
                         <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="trial-initiator"
-                          type="text"
-                          readOnly
                           value={quoteCreditInitiator}
-                          placeholder={trialPeriodStrings.selectUserPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
+                          onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                          required
+                        >
+                          <option value="">{trialPeriodStrings.selectUserPlaceholder || 'Select Initiator...'}</option>
+                          {sellerInitiatorSelectOptions.map((user) => (
+                            <option key={user} value={user}>
+                              {user}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {/* 7. Assigned Approver */}
@@ -3888,23 +4048,20 @@ export default function SupplierDossierDrawer({
                         <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="quote-credit-approver"
-                          type="text"
-                          list="seller-trial-approvers-list"
                           value={quoteCreditApprover}
                           onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                          placeholder={trialPeriodStrings.selectApproverPlaceholder}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                           required
-                        />
-                        <datalist id="seller-trial-approvers-list">
-                          {APPROVER_CONFIG.map((appr) => (
-                            <option key={appr.id} value={appr.name}>
-                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                        >
+                          <option value="">{trialPeriodStrings.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
+                          {sellerApproverSelectOptions.map((appr) => (
+                            <option key={appr} value={appr}>
+                              {appr}
                             </option>
                           ))}
-                        </datalist>
+                        </select>
                       </div>
 
                       {/* 8. Request Reason / Remarks */}
@@ -3966,9 +4123,6 @@ export default function SupplierDossierDrawer({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {offlinePaymentStrings.modalTitle}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {offlinePaymentStrings.modalSubtitle}
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -4142,13 +4296,24 @@ export default function SupplierDossierDrawer({
                     <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="offline-initiator"
-                      type="text"
-                      readOnly
                       value={offlineInitiatorName || quoteCreditInitiator}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                    />
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setOfflineInitiatorName(val);
+                        setQuoteCreditInitiator(val);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder || 'Select Registered User...'}</option>
+                      {sellerInitiatorSelectOptions.map((user) => (
+                        <option key={user} value={user}>
+                          {user}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Assigned Approver */}
@@ -4156,23 +4321,24 @@ export default function SupplierDossierDrawer({
                     <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="offline-approver"
-                      type="text"
-                      list="seller-offline-approvers-list"
-                      value={offlineApproverName}
-                      onChange={(e) => setOfflineApproverName(e.target.value)}
-                      placeholder={offlinePaymentStrings.selectApproverPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                      value={offlineApproverName || quoteCreditApprover}
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        setOfflineApproverName(val);
+                        setQuoteCreditApprover(val);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                       required
-                    />
-                    <datalist id="seller-offline-approvers-list">
-                      {APPROVER_CONFIG.map((appr) => (
-                        <option key={appr.id} value={appr.name}>
-                          {appr.name} {appr.title ? `(${appr.title})` : ''}
+                    >
+                      <option value="">{offlinePaymentStrings.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
+                      {sellerApproverSelectOptions.map((appr) => (
+                        <option key={appr} value={appr}>
+                          {appr}
                         </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
 
                   {/* Remarks */}
@@ -4222,9 +4388,6 @@ export default function SupplierDossierDrawer({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       Request Seller Credit Deletion
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      Submit request to deduct credits from seller account.
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -4285,14 +4448,20 @@ export default function SupplierDossierDrawer({
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="quote-credit-initiator"
-                      type="text"
-                      readOnly
                       value={quoteCreditInitiator}
-                      placeholder={UI_STRINGS.dataLoad.emptyCell}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium cursor-not-allowed"
-                    />
+                      onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                      {sellerInitiatorSelectOptions.map((user) => (
+                        <option key={user} value={user}>
+                          {user}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Assigned Approver */}
@@ -4300,23 +4469,20 @@ export default function SupplierDossierDrawer({
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="quote-credit-approver"
-                      type="text"
-                      list="seller-credit-approvers-list"
                       value={quoteCreditApprover}
                       onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500"
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer"
                       required
-                    />
-                    <datalist id="seller-credit-approvers-list">
-                      {APPROVER_CONFIG.map((appr) => (
-                        <option key={appr.id} value={appr.name}>
-                          {appr.name} {appr.title ? `(${appr.title})` : ''}
+                    >
+                      <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                      {sellerApproverSelectOptions.map((appr) => (
+                        <option key={appr} value={appr}>
+                          {appr}
                         </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
 
                   {/* Reason / Remarks */}
@@ -4364,9 +4530,6 @@ export default function SupplierDossierDrawer({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalSubtitle}
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -4426,14 +4589,20 @@ export default function SupplierDossierDrawer({
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="quote-credit-initiator"
-                      type="text"
-                      readOnly
                       value={quoteCreditInitiator}
-                      placeholder={UI_STRINGS.dataLoad.emptyCell}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
-                    />
+                      onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                      {sellerInitiatorSelectOptions.map((user) => (
+                        <option key={user} value={user}>
+                          {user}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Assigned Approver Select */}
@@ -4441,14 +4610,20 @@ export default function SupplierDossierDrawer({
                     <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="quote-credit-approver"
-                      type="text"
                       value={quoteCreditApprover}
                       onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                      placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                      {sellerApproverSelectOptions.map((appr) => (
+                        <option key={appr} value={appr}>
+                          {appr}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Reason / Remarks */}

@@ -5,9 +5,19 @@
 // verifications, trial extensions, discounts) in the Action Center.
 // ==============================================================================
 
+const crypto = require('crypto');
 const approvalQueries = require('../db/approvalQueries');
+const authSessionQueries = require('../db/authSessionQueries');
+const mailerService = require('../services/mailerService');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
-const { APPROVAL_MESSAGES, AUTH_MESSAGES } = require('../config/constants');
+const {
+  APPROVAL_MESSAGES,
+  AUTH_MESSAGES,
+  APPROVER_CONFIG,
+  findApproverConfig,
+  resolveApproverEmail,
+  buildApprovalOtpKey,
+} = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
 function sendApprovalError(res, error, fallbackMessage) {
@@ -133,17 +143,73 @@ async function processAction(req, res) {
  */
 async function getApprovers(req, res) {
   try {
-    const { APPROVER_CONFIG } = require('../config/constants');
     const approvers = APPROVER_CONFIG.map((a) => ({
       id: a.id,
       name: a.name,
       title: a.title || 'Management Authority',
-      email: a.email || null,
+      email: resolveApproverEmail(a.name),
     }));
     return res.json({ success: true, approvers });
   } catch (err) {
     logger.error('Failed to retrieve approvers list', err, 'APPROVAL_CONTROLLER');
     return res.status(500).json({ success: false, error: 'Failed to retrieve approvers list.' });
+  }
+}
+
+/**
+ * POST /api/approvals/send-otp
+ * POST /api/approvals/:id/send-otp
+ */
+async function sendApprovalOtp(req, res) {
+  try {
+    const actor = extractActor(req);
+    if (!actor) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
+
+    const { approverName, id } = req.body || {};
+    if (!approverName || typeof approverName !== 'string' || !approverName.trim()) {
+      return res.status(400).json({ success: false, error: 'Approver name is required to send verification OTP.' });
+    }
+
+    const approver = findApproverConfig(approverName.trim());
+    if (!approver) {
+      return res.status(400).json({ success: false, error: `Approver "${approverName}" is not recognized.` });
+    }
+
+    const email = resolveApproverEmail(approver.name);
+    if (!email) {
+      return res.status(400).json({ success: false, error: APPROVAL_MESSAGES.APPROVER_EMAIL_NOT_CONFIGURED });
+    }
+
+    const code = String(crypto.randomInt(100000, 1000000));
+    const expiresInSeconds = 600; // 10 minutes
+    const expiresAt = Date.now() + expiresInSeconds * 1000;
+    const otpKey = buildApprovalOtpKey(approver.id);
+
+    await authSessionQueries.saveOtp(otpKey, code, expiresAt, email);
+
+    try {
+      await mailerService.sendOtpEmail(email, code, expiresInSeconds, {
+        purpose: 'Management Approval Verification',
+        approverName: approver.name,
+        approvalId: id || req.params?.id || 'pending',
+      });
+    } catch (mailErr) {
+      logger.warn('Failed to deliver approval OTP email', { error: mailErr, email }, 'APPROVAL_CONTROLLER');
+    }
+
+    logger.info('Approval OTP issued', { approver: approver.name, email, actor: actor.email }, 'APPROVAL_CONTROLLER');
+
+    return res.json({
+      success: true,
+      message: `Verification code sent to ${email}.`,
+      email,
+      expiresInSeconds,
+    });
+  } catch (err) {
+    logger.error('Failed to send approval OTP', err, 'APPROVAL_CONTROLLER');
+    return res.status(500).json({ success: false, error: 'Failed to send approval OTP.' });
   }
 }
 
@@ -167,5 +233,6 @@ module.exports = {
   getApprovers,
   getUsers,
   processAction,
+  sendApprovalOtp,
   extractActor,
 };

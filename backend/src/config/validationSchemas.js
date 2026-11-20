@@ -1557,6 +1557,20 @@ const VALIDATION_SCHEMAS = {
       },
       message: 'Select the approver whose password you are confirming.',
     },
+    verificationType: { type: 'string', required: false, enum: ['password', 'otp'] },
+    otp: { type: 'string', required: false, maxLength: 20 },
+  },
+
+  approvalSendOtp: {
+    approverName: {
+      type: 'string',
+      required: true,
+      get enum() {
+        return getCreditApproverNames();
+      },
+      message: 'Select the approver whose email OTP is to be requested.',
+    },
+    id: { type: 'string', required: false, maxLength: 100 },
   },
 
   registrationList: {

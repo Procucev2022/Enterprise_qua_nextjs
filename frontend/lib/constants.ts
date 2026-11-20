@@ -2584,6 +2584,16 @@ export const DEFAULT_INTERNAL_ASSIGNEES = [
   'Sudheer',
 ] as const;
 
+export const INTERNAL_TASK_USERS = [
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+  'Srinu Sir',
+] as const;
+
+export type InternalTaskUser = (typeof INTERNAL_TASK_USERS)[number];
+
 export const DEMO_STATUSES = [
   'Scheduled',
   'Completed',
@@ -2674,7 +2684,7 @@ export const APPROVER_CONFIG = [
   {
     id: 'rao_sir',
     name: 'Rao Sir',
-    email: 'rao@procucev.com',
+    email: 'mnrao@procucev.com',
     title: 'Management Authority',
   },
   {

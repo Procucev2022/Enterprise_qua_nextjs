@@ -1189,10 +1189,9 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                 <button
                                   type="button"
                                   onClick={() => setActiveSeller(seller)}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center gap-1 border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
                                 >
                                   <span>{strings.dossierAction}</span>
-                                  <ChevronRight className="w-3.5 h-3.5" />
                                 </button>
                               </td>
                             );

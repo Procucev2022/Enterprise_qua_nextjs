@@ -6711,3 +6711,487 @@ create the pr and merge in test-v3
 ```
 
 ---
+
+### Prompt 311
+
+**Timestamp**: 2026-11-19T14:31:45+05:30
+
+```text
+All done?
+if it completed then raise the pr and merge in the test-v3 and pass the all the covergaes and gemini pr check
+```
+
+---
+
+
+### Prompt 312
+
+**Timestamp**: 2026-11-19T14:33:10+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 313
+
+**Timestamp**: 2026-11-19T14:35:20+05:30
+
+```text
+give me the pr link and all the deatils of this pr
+```
+
+---
+
+### Prompt 314
+
+**Timestamp**: 2026-11-19T14:37:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 315
+
+**Timestamp**: 2026-11-19T14:45:02+05:30
+
+```text
+All done?
+if it completed then raise the pr and merge in the test-v3 and pass the all the covergaes and gemini pr check
+```
+
+---
+
+### Prompt 316
+
+**Timestamp**: 2026-11-19T14:48:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 317
+
+**Timestamp**: 2026-11-19T14:52:00+05:30
+
+```text
+give me the pr link and all the deatils of this pr
+```
+
+---
+
+### Prompt 318
+
+**Timestamp**: 2026-11-19T14:55:00+05:30
+
+```text
+All done?
+if it completed then raise the pr and merge in the test-v3 and pass the all the covergaes and gemini pr check
+```
+
+---
+
+### Prompt 319
+
+**Timestamp**: 2026-11-19T15:36:51+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 320
+
+**Timestamp**: 2026-11-19T17:28:55+05:30
+
+```text
+raise the pr merge the done in test-v3 very fast
+```
+
+---
+
+
+### Prompt 319
+
+**Timestamp**: 2026-11-19T15:17:31+05:30
+
+```text
+give me the pr link and all the deatils of this pr
+```
+
+---
+
+
+### Prompt 320
+
+**Timestamp**: 2026-11-19T15:33:00+05:30
+
+```text
+All done?
+if it completed then raise the pr and merge in the test-v3 and pass the all the covergaes and gemini pr check
+```
+
+---
+
+
+### Prompt 320
+
+**Timestamp**: 2026-11-19T15:36:58+05:30
+
+```text
+continue
+```
+
+---
+
+
+### Prompt 321
+
+**Timestamp**: 2026-11-19T15:37:09+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 318
+
+**Timestamp**: 2026-11-19T15:37:17+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 315
+
+**Timestamp**: 2026-11-19T15:37:25+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 316
+
+**Timestamp**: 2026-11-19T15:43:01+05:30
+
+```text
+All done>
+```
+
+---
+
+
+### Prompt 321
+
+**Timestamp**: 2026-11-19T15:43:10+05:30
+
+```text
+All done?
+```
+
+---
+
+
+### Prompt 322
+
+**Timestamp**: 2026-11-19T15:56:47+05:30
+
+```text
+check the feature is done or not if done raise the pr to test-v3 and merge
+```
+
+---
+
+### Prompt 323
+
+**Timestamp**: 2026-11-19T16:16:39+05:30
+
+```text
+check the feature is done or not if done raise the pr to test-v3 and merge
+```
+
+---
+
+
+### Prompt 324
+
+**Timestamp**: 2026-11-19T16:56:10+05:30
+
+```text
+check the feature is done or not if done raise the pr to test-v3 and merge
+```
+
+---
+
+
+### Prompt 325
+
+**Timestamp**: 2026-11-19T17:27:46+05:30
+
+```text
+it is still running foe 12 hr please raise the pr and merge in test-v3  complete as soon as possible with very fast
+```
+
+---
+
+
+### Prompt 325
+
+**Timestamp**: 2026-11-19T17:28:17+05:30
+
+```text
+it is still running foe 12 hr please raise the pr and merge in test-v3 very fast
+```
+
+---
+
+### Prompt 318
+
+**Timestamp**: 2026-11-19T17:33:54+05:30
+
+```text
+please raise the pr and merge in test-v3 it is still running for 12 hr please do fast
+```
+
+---
+
+### Prompt 326
+
+**Timestamp**: 2026-11-19T18:04:10+05:30
+
+```text
+please raise the pr and merge in test-v3 it is still running for 12 hr please do fast
+```
+
+---
+### Prompt 285
+**Timestamp**: 2026-11-19T14:10:18+05:30
+```text
+@[c:\Users\procu\Desktop\Code\work\Enterprise_qua_nextjs\logs-2026-11-19T08_39_21.011Z.csv] 
+
+
+Please check the logs, & fix all errors if any is still pending to be fixed.
+```
+---
+
+### Prompt 327
+
+**Timestamp**: 2026-11-19T17:28:55+05:30
+
+```text
+raise the pr merge the done in test-v3 very fast
+```
+
+---
+
+### Prompt 328
+
+**Timestamp**: 2026-11-19T19:57:58+05:30
+
+```text
+remove the icon of all the feilds in buyer 360 roaster like profile , rfq , credit and all....
+rechange the names to Total spend , Total RFQ .
+Remove the major category all enter 3 characters and popup appear of minor catgory only already there in buyer portal reuse the functionality
+credits are showing error identify the root cause and fix it
+documnets also showing error identify the root cause and fix it
+```
+
+---
+
+### Prompt 329
+
+**Timestamp**: 2026-11-19T21:22:36+05:30
+
+```text
+All done?
+```
+
+---
+
+### Prompt 330
+
+**Timestamp**: 2026-11-19T22:44:53+05:30
+
+```text
+create the pr and merge in test-v3 pass all the coverages and gemini pr check
+```
+
+---
+
+### Prompt 331
+
+**Timestamp**: 2026-11-20T10:36:24+05:30
+
+```text
+In this remove the text  below heading in all request types 
+example:"Submit credit addition for authorization by the approver you select below."
+And initatied by now the category manager it should display the drop down of all users in internal task
+And Assigned Approval all give the dropdown of Srinu sir , Rao sir , Sudheer sir
+change in all request type in buyer directory and seller directory
+```
+
+---
+
+### Prompt 331
+
+**Timestamp**: 2026-11-20T11:05:19+05:30
+
+\\\	ext
+re use the existing code and functionalty and methods already internal task and approval dashboard is there don't create any duplicate code again
+\\\
+
+---
+
+### Prompt 333
+
+**Timestamp**: 2026-11-20T11:30:23+05:30
+
+```text
+Please implement the following changes in the Seller Directory:
+
+1. Remove the **+ Add Quote Credit** button.
+2. Remove ratings and icons from all action buttons, including Profile, Quote, Credit, and other related actions.
+3. Update the Category field to work exactly like the Buyer Directory. Do not display categories by default. Once the user enters at least 3 characters, display matching category suggestions in a popup.
+4. Remove category icons like buyer side only now the icon showing profile , quote , credit etc, . Display only category names.
+5. Implement the same popup behaviour as the Buyer Directory: clicking outside the popup should automatically close it, while clicking inside should keep it open.
+
+Please reuse the existing Buyer Directory code, components, and functionality wherever possible instead of creating duplicate logic. Ensure these changes are implemented only in the Seller Directory without affecting the existing Buyer Directory functionality.
+
+Please prioritize these changes and verify the functionality after implementation.
+```
+
+---
+
+### Prompt 334
+
+**Timestamp**: 2026-11-20T11:36:33+05:30
+
+```text
+Add the approval password is : Procucev@2026 or half part ask email otp in that password feild for srinu sir :srinivas.mukku@procucev.com 
+for Rao sir :mnrao@procucev.com 
+for sudheer sir :sudheer.kangala@procucev.com 
+ add the password in wrang file and if they select  otp based on the person the email is come and approval / reject the request 
+reuse the existing code and functionality for otp and all
+```
+
+---
+
+### Prompt 335
+
+**Timestamp**: 2026-11-20T11:50:35+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 336
+
+**Timestamp**: 2026-11-20T11:50:17+05:30
+
+```text
+In trial period remove the number of days feilds and check the root of the communication and credit hiistory not showing
+and add the ALL buttton to show the all the communications in buyer and seller directory 
+Reuse the exisiting code and functionaliy , methods
+```
+
+---
+
+### Prompt 337
+
+**Timestamp**: 2026-11-20T11:50:49+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 338
+
+**Timestamp**: 2026-11-20T12:11:43+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 339
+
+**Timestamp**: 2026-11-20T12:38:11+05:30
+
+```text
+All done?
+```
+
+---
+
+### Prompt 340
+
+**Timestamp**: 2026-11-20T13:21:43+05:30
+
+```text
+Create branch and raise the pr and pass the all the coverages and merge in test-v3 very fast 
+```
+
+---
+
+
+### Prompt 341
+
+**Timestamp**: 2026-11-20T13:28:54+05:30
+
+```text
+Refactor ONLY the UI layout and styling of the "All RFQs" section (`/category-manager/all-rfqs`) to match this compact, single-line spreadsheet design while **reusing 100% of the existing code, functionality, methods, state, hooks, and button click handlers**.
+
+### 1. Strict Code & Functionality Reuse Rule (CRITICAL)
+- **Do NOT rewrite, replace, or duplicate any existing functions, methods, custom hooks, services, API calls, or state variables.**
+- Every button, input, dropdown, column header, and row action in the new UI **must call the exact same `onClick`, `onChange`, `onSort`, modal triggers, drawers, and navigation functions that currently work in the existing component**:
+  - **Search input**: bind directly to the existing search state and `onChange` / filter handler.
+  - **Start Date & End Date controls**: bind directly to the existing `startDate` / `endDate` state and change handlers. Clicking anywhere on the button/field opens the calendar picker (`inputRef.current?.showPicker()` or existing date picker trigger) and updates the exact same date filter logic.
+  - **Status dropdown**: bind directly to the existing `status` filter state, options list, and `onChange` handler.
+  - **Export button**: call the exact existing CSV export function (`onClick={handleExport...}`).
+  - **Gear icon button (Column Settings)**: trigger the exact existing Column Settings modal/popover/menu handler (`onClick={...}`).
+  - **Retry icon button**: call the exact existing retry/refetch function (`onClick={...}`).
+  - **Table headers**: preserve all existing sort handlers (`onClick` sort methods) and column visibility checks from Column Settings.
+  - **Row actions (`Invite Vendors`, `Details`, `Quote Matrix`)**: wire each button/link directly to the exact existing click handlers, modals, or route navigation methods currently used on each row.
+- If a helper function, custom hook, or sub-component already exists in the codebase (such as from the Action Center / Directory toolbar), import and reuse it directly rather than writing new logic.
+
+### 2. Remove Top Headings & Build a Single-Line Top Toolbar
+- Remove the `ALL RFQ` heading and summary count texts (`100 RFQs across 18 buyers`, `Showing X of Y RFQs`) so the toolbar sits cleanly at the top with minimal margin.
+- Remove the `All Buyers` dropdown from the UI (without breaking any underlying filter state defaults).
+- Place all remaining controls on **one single horizontal line** (`flex items-center justify-between gap-2 whitespace-nowrap`) with no stacked two-line labels above inputs:
+  - **Search input** (`RFQ number, title, category or buyer...`) with search icon.
+  - **Start Date button/field**: shows `"Start Date"` text inside when empty (or the selected date when chosen) + calendar icon; clicking anywhere on the control opens the calendar.
+  - **End Date button/field**: shows `"End Date"` text inside when empty (or the selected date when chosen) + calendar icon; clicking anywhere on the control opens the calendar.
+  - **Status dropdown** (`All Statuses` and existing status options).
+  - **Right-aligned buttons on the same single line**:
+    - Green `Export` / `Export CSV` button.
+    - Icon-only **Gear** button (`aria-label="Column Settings"`, `title="Column Settings"`) — **no visible text label**.
+    - Icon-only **Retry/Refresh** button (`aria-label="Retry"`, `title="Retry"`) — **no visible text label**.
+
+### 3. Strict 1-Line Excel-Style Table Rows & Horizontal Scroll
+- Wrap the table in a horizontal scroll container (`overflow-x-auto w-full`) with `min-w-max` so columns scroll horizontally instead of wrapping onto 2 or 3 vertical lines.
+- Lock every row to **1 single line tall** (`h-10` / `py-1.5` / `whitespace-nowrap`) across all columns (`RFQ NUMBER`, `TITLE`, `CATEGORY`, `BUYER`, `STATUS`, `QUOTES`, `INVITED VENDORS`, `QUOTED VENDORS`, `BUDGET`, `RAISED`, `LATEST QUOTE`, `ACTIONS`).
+- Truncate long cell text on 1 line (`truncate`) and show full text on hover (`title` or tooltip) without increasing row height.
+- **INVITED VENDORS**: show **only one vendor** on the single row line; when hovering (`onMouseEnter` / focus) over the cell, display a floating popover/tooltip listing `INVITED (N)` and all invited vendor details without expanding row height (use a portal or high `z-index` so `overflow-x-auto` does not clip it).
+- **ACTIONS**: render `Invite Vendors`, `Details`, and `Quote Matrix` **side-by-side horizontally on one single line** (`flex items-center gap-3 whitespace-nowrap`) so all three buttons are clearly visible and clickable on every row.
+
+
+After implement this run locally i have to see the page then  raise pr to test-v3
+```
+
+---

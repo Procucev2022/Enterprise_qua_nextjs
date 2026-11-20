@@ -2307,18 +2307,10 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       const endDateInput = document.getElementById('trial-end-date') as HTMLInputElement;
       fireEvent.change(startDateInput, { target: { value: '2026-11-01' } });
       fireEvent.change(endDateInput, { target: { value: '2026-12-16' } });
-      const amountInput = screen.getByRole('spinbutton');
       const submitBtn = screen.getByRole('button', { name: /Submit for Approval/i });
 
-      // Mismatch between days and date range
-      fireEvent.change(amountInput, { target: { value: '500' } });
+      // Valid trial automatically calculated from dates: 45 days
       const form = submitBtn.closest('form') as HTMLFormElement;
-      fireEvent.submit(form);
-      const alerts = await screen.findAllByText(/The entered number of days \(500\) does not match the selected date range/i);
-      expect(alerts.length).toBeGreaterThan(0);
-
-      // Valid trial: 45 days
-      fireEvent.change(amountInput, { target: { value: '45' } });
       fireEvent.submit(form);
 
       await waitFor(() => {
@@ -2515,18 +2507,18 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
       fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
       fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
-      expect(screen.getByText('Submit discount authorization for this buyer account.')).toBeInTheDocument();
+      expect(screen.getByText(/Discount Percentage/i)).toBeInTheDocument();
 
       const closeBtnStep3 = screen.getByRole('button', { name: 'Close' });
       fireEvent.click(closeBtnStep3);
-      expect(screen.queryByText('Submit discount authorization for this buyer account.')).toBeNull();
+      expect(screen.queryByText(/Discount Percentage/i)).toBeNull();
 
       fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
       fireEvent.click(screen.getByRole('menuitem', { name: 'Discounts' }));
       fireEvent.click(screen.getByRole('button', { name: /Mode 3/i }));
       fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
       fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-      expect(screen.queryByText('Submit discount authorization for this buyer account.')).toBeNull();
+      expect(screen.queryByText(/Discount Percentage/i)).toBeNull();
 
       // Reopen and test error response
       (accountDocsClient.requestBuyerCreditApproval as jest.Mock).mockResolvedValueOnce({

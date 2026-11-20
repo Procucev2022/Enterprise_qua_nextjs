@@ -88,7 +88,13 @@ async function getCreditHistory(req, res, next) {
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const creditInfo = storeService.getVendorRfqCredits(vendor.id);
-    let transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
+    let transactions = [];
+    try {
+      transactions = (await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load vendor credit transactions from database', { vendorId: vendor.id, error: dbErr.message }, 'VENDOR_CONTROLLER');
+      transactions = [];
+    }
 
     // The seeded allocation is the vendor's recorded allocation. No recorded allocation seeds 0.
     const alloc = Number(creditInfo.freeCreditsAllocated ?? 0);
@@ -214,7 +220,13 @@ async function getVendorCommunications(req, res, next) {
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
-    const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
+    let comms = [];
+    try {
+      comms = (await paymentDuesQueries.getCommunicationHistory(vendor.id)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load vendor communication history from database', { vendorId: vendor.id, error: dbErr.message }, 'VENDOR_CONTROLLER');
+      comms = [];
+    }
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');

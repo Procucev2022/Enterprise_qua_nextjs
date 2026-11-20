@@ -4,6 +4,7 @@ import {
   processApprovalAction,
   fetchApprovalApprovers,
   fetchApprovalUsers,
+  sendApprovalOtp,
 } from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -364,6 +365,53 @@ describe('approvalClient', () => {
       global.fetch = jest.fn().mockRejectedValue(new Error('fail'));
       const res = await fetchApprovalUsers();
       expect(res.users.some(u => u.name === 'Govardhan')).toBe(true);
+    });
+
+    describe('sendApprovalOtp', () => {
+      it('sends OTP request successfully', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            success: true,
+            message: 'OTP sent successfully',
+            email: 'srinivas.mukku@procucev.com',
+            expiresInSeconds: 600,
+          }),
+        });
+
+        const res = await sendApprovalOtp('Srinu Sir', 'req-1');
+        expect(res).toEqual({
+          success: true,
+          message: 'OTP sent successfully',
+          email: 'srinivas.mukku@procucev.com',
+          expiresInSeconds: 600,
+        });
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/approvals/send-otp',
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ approverName: 'Srinu Sir', id: 'req-1' }),
+          })
+        );
+      });
+
+      it('handles server error response', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'Invalid approver' }),
+        });
+
+        const res = await sendApprovalOtp('Unknown');
+        expect(res).toEqual({ success: false, error: 'Invalid approver' });
+      });
+
+      it('handles network failure', async () => {
+        global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+        const res = await sendApprovalOtp('Srinu Sir');
+        expect(res).toEqual({ success: false, error: 'Network offline' });
+      });
     });
   });
 });

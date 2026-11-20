@@ -72,6 +72,8 @@ import {
   APPROVER_CONFIG,
   TRIAL_PERIOD_SOURCING_MODES,
   calculateTrialDaysFromDates,
+  CREDIT_APPROVAL_APPROVERS,
+  INTERNAL_TASK_USERS,
 } from '@/lib/constants';
 import {
   fetchApprovalApprovers,
@@ -181,7 +183,7 @@ export default function BuyerDossierDrawer({
   }, [uploadedVendors, uploadedVendorSearch, uploadedVendorStatusFilter]);
 
   // Active Communications Sub-Tab
-  const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
+  const [commSubTab, setCommSubTab] = useState<'all' | 'email' | 'sms' | 'whatsapp' | 'call'>('all');
   const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
   const [composeChannel, setComposeChannel] = useState<'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL'>('EMAIL');
   const [composeSubject, setComposeSubject] = useState<string>('');
@@ -470,11 +472,32 @@ export default function BuyerDossierDrawer({
     { id: 'appr-test', name: 'Test Approver', title: 'Approver' },
     { id: 'appr-vp', name: 'VP Procurement', title: 'VP Procurement' },
   ]);
-  const [creditApprover, setCreditApprover] = useState<string>('');
-  const [creditApproverId, setCreditApproverId] = useState<string>('');
-  // The initiator is the signed-in user. The name comes from the session, never from a list.
-  const creditInitiator = authClient.getSessionUser()?.name ?? '';
-  const creditInitiatorId = authClient.getSessionUser()?.id ?? '';
+  const [creditApprover, setCreditApprover] = useState<string>('Srinu Sir');
+  const [creditApproverId, setCreditApproverId] = useState<string>('appr-srinu');
+  const [creditInitiator, setCreditInitiator] = useState<string>(() => {
+    const session = authClient.getSessionUser();
+    if (!session) return '';
+    return (session.name && session.name.toLowerCase() !== 'category manager') ? session.name : 'Govardhan';
+  });
+  const [creditInitiatorId, setCreditInitiatorId] = useState<string>(() => authClient.getSessionUser()?.id ?? '');
+
+  useEffect(() => {
+    const session = authClient.getSessionUser();
+    if (session?.name && session.name.toLowerCase() !== 'category manager' && !creditInitiator) {
+      setCreditInitiator(session.name);
+      setCreditInitiatorId(session.id || '');
+    }
+  }, [creditInitiator]);
+
+  const internalTaskUserOptions = useMemo(() => {
+    const list: string[] = [...INTERNAL_TASK_USERS];
+    for (const a of assignees) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+    }
+    return list;
+  }, [assignees]);
   const [addCreditAmount, setAddCreditAmount] = useState<number>(0);
   const [paymentReference, setPaymentReference] = useState<string>('');
   const [addCreditReason, setAddCreditReason] = useState<string>('');
@@ -524,11 +547,13 @@ export default function BuyerDossierDrawer({
     setTrialEndDate(end);
     if (!start || !end) {
       setTrialDateError(null);
+      setTrialDays(0);
       return;
     }
     const days = calculateTrialDaysFromDates(start, end);
     if (days <= 0) {
       setTrialDateError(strings.creditApproval?.trialPeriodWorkflow?.validationEndBeforeStart || 'Ending date cannot be earlier than starting date.');
+      setTrialDays(0);
     } else {
       setTrialDateError(null);
       setTrialDays(days);
@@ -572,6 +597,72 @@ export default function BuyerDossierDrawer({
   const [offlineApproverId, setOfflineApproverId] = useState<string>(APPROVER_CONFIG[0]?.id || 'srinu_sir');
   const [offlineRemarks, setOfflineRemarks] = useState<string>('');
   const offlineFileInputRef = useRef<HTMLInputElement>(null);
+
+  const buyerInitiatorSelectOptions = useMemo(() => {
+    const list: string[] = [...internalTaskUserOptions];
+    const extras = ['Session Initiator', 'Category Manager'];
+    for (const item of extras) {
+      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    for (const u of applicationUsers) {
+      if (u?.name && !list.some((name) => name.toLowerCase() === u.name.toLowerCase())) {
+        list.push(u.name);
+      }
+      if (u?.id && !list.includes(u.id)) {
+        list.push(u.id);
+      }
+    }
+    for (const a of assignees) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+      if (a?.id && !list.includes(a.id)) {
+        list.push(a.id);
+      }
+    }
+    if (creditInitiator && !list.some((u) => u.toLowerCase() === creditInitiator.toLowerCase())) {
+      list.push(creditInitiator);
+    }
+    if (offlineInitiatorName && !list.some((u) => u.toLowerCase() === offlineInitiatorName.toLowerCase())) {
+      list.push(offlineInitiatorName);
+    }
+    return list;
+  }, [internalTaskUserOptions, applicationUsers, assignees, creditInitiator, offlineInitiatorName]);
+
+  const buyerApproverSelectOptions = useMemo(() => {
+    const list: string[] = [...CREDIT_APPROVAL_APPROVERS];
+    const extras = ['Test Approver', 'VP Procurement'];
+    for (const item of extras) {
+      if (!list.some((a) => a.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    for (const a of authorizedApprovers) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+      if (a?.id && !list.includes(a.id)) {
+        list.push(a.id);
+      }
+    }
+    for (const a of APPROVER_CONFIG) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+      if (a?.id && !list.includes(a.id)) {
+        list.push(a.id);
+      }
+    }
+    if (creditApprover && !list.some((a) => a.toLowerCase() === creditApprover.toLowerCase())) {
+      list.push(creditApprover);
+    }
+    if (offlineApproverName && !list.some((a) => a.toLowerCase() === offlineApproverName.toLowerCase())) {
+      list.push(offlineApproverName);
+    }
+    return list;
+  }, [authorizedApprovers, creditApprover, offlineApproverName]);
 
   useEffect(() => {
     if (assignees.length > 0) {
@@ -715,7 +806,7 @@ export default function BuyerDossierDrawer({
       }
     }
 
-    const effectiveInitiator = selectedRequestType === 'Discounts' ? 'Category Manager' : creditInitiator;
+    const effectiveInitiator = creditInitiator;
     if (!creditApprover.trim() || !effectiveInitiator.trim()) {
       showToast(
         selectedRequestType === 'Discounts'
@@ -1083,7 +1174,9 @@ export default function BuyerDossierDrawer({
     return list.filter((item) => {
       // Match active sub-tab
       let matchChannel = false;
-      if (commSubTab === 'email') {
+      if (commSubTab === 'all') {
+        matchChannel = true;
+      } else if (commSubTab === 'email') {
         matchChannel = item.channel === 'EMAIL' || item.channel === 'SYSTEM_NOTIFICATION';
       } else if (commSubTab === 'sms') {
         matchChannel = item.channel === 'SMS';
@@ -1828,9 +1921,10 @@ export default function BuyerDossierDrawer({
           {/* TAB 4: COMMUNICATIONS TAB (EMAIL, SMS, WHATSAPP, CALL LOGS) */}
           {dossierTab === 'communications' && (
             <div className="space-y-4">
-              {/* 4 Compact Sub-tabs in one horizontal row */}
+              {/* Compact Sub-tabs in one horizontal row */}
               <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
                 {[
+                  { id: 'all', label: strings.subTabs.all || 'All', icon: Layers },
                   { id: 'email', label: strings.subTabs.email, icon: Mail },
                   { id: 'sms', label: strings.subTabs.sms, icon: Smartphone },
                   { id: 'whatsapp', label: strings.subTabs.whatsapp, icon: MessageSquare },
@@ -1875,7 +1969,7 @@ export default function BuyerDossierDrawer({
                     type="text"
                     value={commSearch}
                     onChange={(e) => setCommSearch(e.target.value)}
-                    placeholder={`Search ${commSubTab} communications...`}
+                    placeholder={commSubTab === 'all' ? 'Search communications...' : `Search ${commSubTab} communications...`}
                     className="w-full pl-9 pr-3 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg"
                   />
                 </div>
@@ -1900,7 +1994,7 @@ export default function BuyerDossierDrawer({
                 </div>
               ) : filteredCommunications.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                  <p className="text-xs font-medium">No recorded {commSubTab.toUpperCase()} communications found for this buyer.</p>
+                  <p className="text-xs font-medium">No recorded {commSubTab === 'all' ? '' : commSubTab.toUpperCase() + ' '}communications found for this buyer.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -2487,9 +2581,6 @@ export default function BuyerDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings?.step3Title || 'Request Discount Approval'}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {discountStrings?.step3Subtitle || 'Submit discount authorization for this buyer account.'}
-                        </p>
                       </div>
                       <button
                         type="button"
@@ -2575,18 +2666,32 @@ export default function BuyerDossierDrawer({
                         />
                       </div>
 
-                      {/* Initiated By - Select from application users */}
+                      {/* Initiated By - Select from internal task users */}
                       <div>
                         <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {discountStrings?.initiatedByLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="discount-initiator"
-                          type="text"
-                          readOnly
-                          value="Category Manager"
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
+                          value={creditInitiator}
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const match = applicationUsers.find((u) => u.id === val || u.name === val) || assignees.find((a) => a.id === val || a.name === val);
+                            const resolvedName = match ? match.name : val;
+                            const resolvedId = match ? (match.id || '') : '';
+                            setCreditInitiator(resolvedName);
+                            setCreditInitiatorId(resolvedId);
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                          required
+                        >
+                          <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                          {buyerInitiatorSelectOptions.map((user) => (
+                            <option key={user} value={user}>
+                              {user}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {/* Assigned Approver */}
@@ -2594,23 +2699,27 @@ export default function BuyerDossierDrawer({
                         <label htmlFor="discount-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {discountStrings?.assignedApproverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="discount-approver"
-                          type="text"
-                          list="discount-approvers-list"
                           value={creditApprover}
-                          onChange={(e) => setCreditApprover(e.target.value)}
-                          placeholder={discountStrings?.approverPlaceholder || 'Enter the approver name'}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const match = authorizedApprovers.find((a) => a.id === val || a.name === val) || APPROVER_CONFIG.find((a) => a.id === val || a.name === val);
+                            const resolvedName = match ? match.name : val;
+                            const resolvedId = match ? (match.id || '') : '';
+                            setCreditApprover(resolvedName);
+                            setCreditApproverId(resolvedId);
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                           required
-                        />
-                        <datalist id="discount-approvers-list">
-                          {APPROVER_CONFIG.map((appr) => (
-                            <option key={appr.id} value={appr.name}>
-                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                        >
+                          <option value="">{discountStrings?.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                          {buyerApproverSelectOptions.map((appr) => (
+                            <option key={appr} value={appr}>
+                              {appr}
                             </option>
                           ))}
-                        </datalist>
+                        </select>
                       </div>
 
                       {/* Request Reason / Justification - Optional Text */}
@@ -2812,9 +2921,6 @@ export default function BuyerDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {strings.creditApproval?.trialPeriodWorkflow?.step2Title || 'Request Trial Period Approval'}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">
-                          {strings.creditApproval?.trialPeriodWorkflow?.step2Subtitle || 'Submit trial period extension for authorization by the approver you select below.'}
-                        </p>
                       </div>
                       <button
                         type="button"
@@ -2856,25 +2962,7 @@ export default function BuyerDossierDrawer({
                         />
                       </div>
 
-                      {/* 3. Number of Trial Days */}
-                      <div>
-                        <label htmlFor="trial-days-input" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                          {strings.creditApproval?.trialPeriodWorkflow?.trialDaysLabel || 'Number of Trial Days'} <span className="text-rose-500">*</span>
-                        </label>
-                        <input
-                          id="trial-days-input"
-                          type="number"
-                          value={trialDays || ''}
-                          onChange={(e) => {
-                            const val = parseInt(e.target.value, 10);
-                            handleTrialDaysChange(isNaN(val) ? 0 : val);
-                          }}
-                          placeholder={strings.creditApproval?.trialPeriodWorkflow?.trialDaysPlaceholder || 'e.g. 30'}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                        />
-                      </div>
-
-                      {/* 4. Starting Date & 5. Ending Date */}
+                      {/* Starting Date & Ending Date */}
                       <div className="grid grid-cols-2 gap-3">
                         <div>
                           <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -2915,14 +3003,27 @@ export default function BuyerDossierDrawer({
                         <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                           {strings.creditApproval?.trialPeriodWorkflow?.initiatedByLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                         </label>
-                        <input
+                        <select
                           id="trial-initiator"
-                          type="text"
-                          readOnly
                           value={creditInitiator}
-                          placeholder={strings.creditApproval?.trialPeriodWorkflow?.selectUserPlaceholder || 'Initiated By User'}
-                          className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                        />
+                          onChange={(e) => {
+                            const val = e.target.value;
+                            const match = applicationUsers.find((u) => u.id === val || u.name === val) || assignees.find((a) => a.id === val || a.name === val);
+                            const resolvedName = match ? match.name : val;
+                            const resolvedId = match ? (match.id || '') : '';
+                            setCreditInitiator(resolvedName);
+                            setCreditInitiatorId(resolvedId);
+                          }}
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                          required
+                        >
+                          <option value="">{strings.creditApproval?.trialPeriodWorkflow?.selectUserPlaceholder || 'Select Initiator...'}</option>
+                          {buyerInitiatorSelectOptions.map((user) => (
+                            <option key={user} value={user}>
+                              {user}
+                            </option>
+                          ))}
+                        </select>
                       </div>
 
                       {/* 7. Assigned Approver Select */}
@@ -2935,24 +3036,19 @@ export default function BuyerDossierDrawer({
                           value={creditApprover}
                           onChange={(e) => {
                             const val = e.target.value;
-                            const a = authorizedApprovers.find((x) => x.id === val || x.name === val);
-                            if (a) {
-                              setCreditApprover(a.name);
-                              setCreditApproverId(a.id);
-                            } else {
-                              setCreditApprover(val);
-                            }
+                            const match = authorizedApprovers.find((a) => a.id === val || a.name === val) || APPROVER_CONFIG.find((a) => a.id === val || a.name === val);
+                            const resolvedName = match ? match.name : val;
+                            const resolvedId = match ? (match.id || '') : '';
+                            setCreditApprover(resolvedName);
+                            setCreditApproverId(resolvedId);
                           }}
-                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                          className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
                           required
                         >
                           <option value="">{strings.creditApproval?.trialPeriodWorkflow?.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
-                          {creditApprover && !authorizedApprovers.some((a) => a.name === creditApprover) && (
-                            <option value={creditApprover}>{creditApprover}</option>
-                          )}
-                          {authorizedApprovers.map((appr) => (
-                            <option key={appr.id} value={appr.name}>
-                              {appr.name} {appr.title ? `(${appr.title})` : ''}
+                          {buyerApproverSelectOptions.map((appr) => (
+                            <option key={appr} value={appr}>
+                              {appr}
                             </option>
                           ))}
                         </select>
@@ -3017,9 +3113,6 @@ export default function BuyerDossierDrawer({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {offlinePaymentStrings?.modalTitle || 'Request Offline Payment Approval'}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {offlinePaymentStrings?.modalSubtitle || 'Submit offline payment verification and credit authorization.'}
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -3214,27 +3307,27 @@ export default function BuyerDossierDrawer({
                     <label htmlFor="offline-initiator-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {offlinePaymentStrings?.initiatedByLabel || 'Initiated By'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="offline-initiator-select"
-                      type="text"
-                      list="offline-initiators-list"
                       value={offlineInitiatorName}
                       onChange={(e) => {
-                        const name = e.target.value;
-                        setOfflineInitiatorName(name);
-                        const found = assignees.find((a) => a.name === name || a.id === name);
-                        setOfflineInitiatorId(found?.id || '');
+                        const val = e.target.value;
+                        const match = applicationUsers.find((u) => u.id === val || u.name === val) || assignees.find((a) => a.id === val || a.name === val);
+                        const resolvedName = match ? match.name : val;
+                        const resolvedId = match ? (match.id || '') : '';
+                        setOfflineInitiatorName(resolvedName);
+                        setOfflineInitiatorId(resolvedId);
                       }}
-                      placeholder={offlinePaymentStrings?.selectInitiatorPlaceholder || 'Select Registered User...'}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
-                    <datalist id="offline-initiators-list">
-                      {assignees.map((user) => (
-                        <option key={user.id || user.name} value={user.name}>
-                          {user.name} {user.role ? `(${user.role})` : ''}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{offlinePaymentStrings?.selectInitiatorPlaceholder || 'Select Registered User...'}</option>
+                      {buyerInitiatorSelectOptions.map((user) => (
+                        <option key={user} value={user}>
+                          {user}
                         </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
 
                   {/* Assigned Approver Select */}
@@ -3242,27 +3335,27 @@ export default function BuyerDossierDrawer({
                     <label htmlFor="offline-approver-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {offlinePaymentStrings?.assignedApproverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="offline-approver-select"
-                      type="text"
-                      list="offline-approvers-list"
                       value={offlineApproverName}
                       onChange={(e) => {
-                        const name = e.target.value;
-                        setOfflineApproverName(name);
-                        const found = APPROVER_CONFIG.find((a) => a.name === name) || authorizedApprovers.find((a) => a.name === name);
-                        setOfflineApproverId(found?.id || '');
+                        const val = e.target.value;
+                        const match = authorizedApprovers.find((a) => a.id === val || a.name === val) || APPROVER_CONFIG.find((a) => a.id === val || a.name === val);
+                        const resolvedName = match ? match.name : val;
+                        const resolvedId = match ? (match.id || '') : '';
+                        setOfflineApproverName(resolvedName);
+                        setOfflineApproverId(resolvedId);
                       }}
-                      placeholder={offlinePaymentStrings?.selectApproverPlaceholder || 'Select Authorized Approver...'}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
-                    <datalist id="offline-approvers-list">
-                      {authorizedApprovers.map((approver) => (
-                        <option key={approver.id} value={approver.name}>
-                          {approver.name} {approver.title ? `(${approver.title})` : ''}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{offlinePaymentStrings?.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
+                      {buyerApproverSelectOptions.map((appr) => (
+                        <option key={appr} value={appr}>
+                          {appr}
                         </option>
                       ))}
-                    </datalist>
+                    </select>
                   </div>
 
                   {/* Request Reason / Remarks */}
@@ -3311,9 +3404,6 @@ export default function BuyerDossierDrawer({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                       {strings.creditApproval?.types?.[selectedRequestType]?.title || strings.creditApproval?.modalTitle || 'Request Buyer Credit Approval'}
                     </h3>
-                    <p className="text-xs text-slate-500 mt-0.5">
-                      {strings.creditApproval?.types?.[selectedRequestType]?.subtitle || strings.creditApproval?.modalSubtitle || 'Submit request for authorization by the approver you select below.'}
-                    </p>
                   </div>
                   <button
                     type="button"
@@ -3372,17 +3462,30 @@ export default function BuyerDossierDrawer({
 
                   {/* Initiated By */}
                   <div>
-                    <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                    <label htmlFor="credit-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {strings.creditApproval.initiatorLabel} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="credit-initiator"
-                      type="text"
-                      readOnly
                       value={creditInitiator}
-                      placeholder={UI_STRINGS.dataLoad.emptyCell}
-                      className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
-                    />
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const match = applicationUsers.find((u) => u.id === val || u.name === val) || assignees.find((a) => a.id === val || a.name === val);
+                        const resolvedName = match ? match.name : val;
+                        const resolvedId = match ? (match.id || '') : '';
+                        setCreditInitiator(resolvedName);
+                        setCreditInitiatorId(resolvedId);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                      {buyerInitiatorSelectOptions.map((user) => (
+                        <option key={user} value={user}>
+                          {user}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Assigned Approver Select */}
@@ -3390,14 +3493,27 @@ export default function BuyerDossierDrawer({
                     <label htmlFor="credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                       {strings.creditApproval?.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
                     </label>
-                    <input
+                    <select
                       id="credit-approver"
-                      type="text"
                       value={creditApprover}
-                      onChange={(e) => setCreditApprover(e.target.value)}
-                      placeholder={strings.creditApproval.approverPlaceholder}
-                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                    />
+                      onChange={(e) => {
+                        const val = e.target.value;
+                        const match = authorizedApprovers.find((a) => a.id === val || a.name === val) || APPROVER_CONFIG.find((a) => a.id === val || a.name === val);
+                        const resolvedName = match ? match.name : val;
+                        const resolvedId = match ? (match.id || '') : '';
+                        setCreditApprover(resolvedName);
+                        setCreditApproverId(resolvedId);
+                      }}
+                      className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                      required
+                    >
+                      <option value="">{strings.creditApproval.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                      {buyerApproverSelectOptions.map((appr) => (
+                        <option key={appr} value={appr}>
+                          {appr}
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   {/* Reason / Remarks */}
