@@ -46,6 +46,7 @@ interface AllRFQsConsoleProps {
 }
 
 const S = UI_STRINGS.allRfqs;
+const PAGE_SIZE = 100;
 // Shown wherever a value is not recorded on the RFQ or quote.
 const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
@@ -137,6 +138,8 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [buyerFilter, setBuyerFilter] = useState<string>('all');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
+  const [currentPage, setCurrentPage] = useState<number>(1);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
   const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
   const [allRfqsSort, setAllRfqsSort] = useState<TableSortState>({ key: null, dir: 'asc' });
   const [allRfqsColumns, setAllRfqsColumns] = useState<TableColumnOption[]>(() =>
@@ -299,7 +302,55 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     setBuyerFilter('all');
     setStartDate('');
     setEndDate('');
+    setCurrentPage(1);
   };
+
+  // Reset to Page 1 whenever search, status, buyer or date filters change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [search, statusFilter, buyerFilter, startDate, endDate]);
+
+  const sortedRfqs = useMemo(() => {
+    return sortTableRows(filtered, allRfqsSort);
+  }, [filtered, allRfqsSort]);
+
+  const totalPages = Math.max(1, Math.ceil(sortedRfqs.length / PAGE_SIZE));
+
+  const paginatedRfqs = useMemo(() => {
+    const start = (currentPage - 1) * PAGE_SIZE;
+    return sortedRfqs.slice(start, start + PAGE_SIZE);
+  }, [sortedRfqs, currentPage]);
+
+  const handlePageChange = (newPage: number) => {
+    const targetPage = Math.max(1, Math.min(totalPages, newPage));
+    setCurrentPage(targetPage);
+    if (typeof tableContainerRef.current?.scrollTo === 'function') {
+      tableContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+  };
+
+  const pageNumbers = useMemo(() => {
+    if (totalPages <= 7) {
+      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    }
+    const pages: (number | string)[] = [];
+    if (currentPage <= 4) {
+      for (let i = 1; i <= 5; i++) pages.push(i);
+      pages.push('...');
+      pages.push(totalPages);
+    } else if (currentPage >= totalPages - 3) {
+      pages.push(1);
+      pages.push('...');
+      for (let i = totalPages - 4; i <= totalPages; i++) pages.push(i);
+    } else {
+      pages.push(1);
+      pages.push('...');
+      for (let i = currentPage - 1; i <= currentPage + 1; i++) pages.push(i);
+      pages.push('...');
+      pages.push(totalPages);
+    }
+    return pages;
+  }, [totalPages, currentPage]);
 
   const handleExportCsv = () => {
     const rows = filtered.map((rfq) => {
@@ -551,8 +602,9 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
       {/* 1-Line Excel-Style Spreadsheet Table */}
       {!loading && !error && filtered.length > 0 && (
-        <div className="overflow-x-auto w-full rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-gray-950">
-          <table className="w-full min-w-max table-auto text-xs">
+        <div className="w-full rounded-xl border border-slate-200 bg-white shadow-2xs dark:border-slate-800 dark:bg-gray-950 overflow-hidden">
+          <div ref={tableContainerRef} className="overflow-x-auto w-full">
+            <table className="w-full min-w-max table-auto text-xs">
             <caption className="sr-only">{S.subtitle}</caption>
             <thead>
               <tr className="h-10 border-b border-slate-200 bg-slate-50/90 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:border-slate-800 dark:bg-gray-900/90 dark:text-gray-400 select-none whitespace-nowrap">
@@ -627,7 +679,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
-              {sortTableRows(filtered, allRfqsSort).map((rfq) => {
+              {paginatedRfqs.map((rfq) => {
                 const isUncategorizedV0 =
                   (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as string) === 'v0') &&
                   !rfqHasCategorySignal(rfq) &&
@@ -836,6 +888,59 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               })}
             </tbody>
           </table>
+          </div>
+
+          {/* Pagination Bar */}
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-950">
+            <span className="text-xs text-slate-500 dark:text-gray-400 font-medium">
+              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length} RFQs
+            </span>
+            <div className="flex items-center gap-1.5 select-none">
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage - 1)}
+                disabled={currentPage <= 1}
+                aria-label="Previous page"
+                className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                &lt; Previous
+              </button>
+              {pageNumbers.map((p, idx) => {
+                if (typeof p === 'string') {
+                  return (
+                    <span key={`ellipsis-${idx}`} className="px-2 text-xs text-slate-400 select-none">
+                      {p}
+                    </span>
+                  );
+                }
+                return (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => handlePageChange(p)}
+                    aria-label={`Page ${p}`}
+                    aria-current={p === currentPage ? 'page' : undefined}
+                    className={`h-8 min-w-8 px-2 rounded-lg flex items-center justify-center text-xs font-bold transition-colors cursor-pointer ${
+                      p === currentPage
+                        ? 'bg-[#009688] text-white border border-[#009688] shadow-xs'
+                        : 'border border-slate-200 dark:border-slate-700 bg-white dark:bg-gray-900 text-slate-700 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 font-semibold'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                );
+              })}
+              <button
+                type="button"
+                onClick={() => handlePageChange(currentPage + 1)}
+                disabled={currentPage >= totalPages}
+                aria-label="Next page"
+                className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
+              >
+                Next &gt;
+              </button>
+            </div>
+          </div>
         </div>
       )}
 
