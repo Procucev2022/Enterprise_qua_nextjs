@@ -149,17 +149,30 @@ describe('Buyer profile service', () => {
       );
     });
 
-    test('accepts unlimited major categories without artificial cap', () => {
-      const manyMajors = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((major) => ({ major, minor: 'x' }));
-      expect(buyerProfileService.normalizeCategories(manyMajors)).toHaveLength(8);
+    test('accepts up to the 5-division cap and rejects a 6th distinct major', () => {
+      const atCap = ['A', 'B', 'C', 'D', 'E'].map((major) => ({ major, minor: 'x' }));
+      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(5);
+
+      const overCap = ['A', 'B', 'C', 'D', 'E', 'F'].map((major, i) => ({ major, minor: `x${i}` }));
+      expect(() => buyerProfileService.normalizeCategories(overCap)).toThrow(
+        'You can select at most 5 major procurement categories. Clear one before adding another.'
+      );
     });
 
-    test('accepts unlimited minor categories without artificial cap', () => {
-      const manyMinors = Array.from({ length: 25 }, (_, i) => ({
-        major: 'IT',
-        minor: `minor-${i}`,
-      }));
-      expect(buyerProfileService.normalizeCategories(manyMinors)).toHaveLength(25);
+    test('accepts up to the 10-minor-category cap and rejects an 11th', () => {
+      const atCap = Array.from({ length: 10 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(10);
+
+      const overCap = Array.from({ length: 11 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(() => buyerProfileService.normalizeCategories(overCap)).toThrow(
+        'You can select at most 10 minor procurement categories in total. Clear one before adding another.'
+      );
+    });
+
+    test('the minor-category cap is checked against the de-duplicated set, so a repeated pair cannot exhaust it', () => {
+      const nineUnique = Array.from({ length: 9 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      const withARepeat = [...nineUnique, nineUnique[0], { major: 'IT', minor: 'minor-9' }];
+      expect(buyerProfileService.normalizeCategories(withARepeat)).toHaveLength(10);
     });
   });
 

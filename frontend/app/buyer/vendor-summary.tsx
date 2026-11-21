@@ -20,6 +20,7 @@ import {
   isProcucevNetworkVendor,
   isVendorActive,
   isVendorInactive,
+  resolveVendorDisplayName,
   loadVendorUploadHistoryFromStorage,
   setVendorsActiveStateInStorage,
   normalizeVendorCategoryList,
@@ -2192,20 +2193,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
-            {UI_STRINGS.vendorSummaryStats.preferredStatusLabel}
+            {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
           </div>
-          <div className="text-xl sm:text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
-            {buyerFilteredVendors.filter(
-              (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
-            ).length}
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+            {buyerFilteredVendors.filter((v) => isVendorActive(v)).length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
-            {UI_STRINGS.vendorSummaryStats.selectedSuppliersLabel}
+            {UI_STRINGS.vendorSummaryStats.inactiveVendorLabel}
           </div>
-          <div className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-0.5">
-            {selectedVendorIds.length}
+          <div className="text-xl sm:text-2xl font-black text-rose-600 dark:text-rose-400 mt-0.5">
+            {buyerFilteredVendors.filter((v) => isVendorInactive(v)).length}
           </div>
         </div>
       </div>
@@ -3547,7 +3546,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       ? UI_STRINGS.vendorStatusControl.singleEnableDescription
                       : UI_STRINGS.vendorStatusControl.singleDisableDescription,
                     {
-                      vendorName: selectedVendorForCrud.name,
+                      vendorName: resolveVendorDisplayName(
+                        selectedVendorForCrud,
+                        UI_STRINGS.vendorStatusControl.genericVendorLabel
+                      ),
                     }
                   )}
                 </p>

@@ -833,8 +833,8 @@ export const BUYER_PROFILE_LIMITS: {
   MAX_MAJOR_CATEGORIES: number | null;
   MAX_MINOR_CATEGORIES: number | null;
 } = {
-  MAX_MAJOR_CATEGORIES: null,
-  MAX_MINOR_CATEGORIES: null,
+  MAX_MAJOR_CATEGORIES: 5,
+  MAX_MINOR_CATEGORIES: 10,
 };
 
 /**
@@ -1881,6 +1881,32 @@ export function isVendorInactive(v: Partial<VendorEntry> | null | undefined): bo
 
 export function isVendorActive(v: Partial<VendorEntry> | null | undefined): boolean {
   return Boolean(v) && !isVendorInactive(v);
+}
+
+/**
+ * A vendor's name to show in a confirmation prompt, audit log line, or toast.
+ *
+ * Upstream record-creation paths (vendor master promotion, bulk vendor
+ * ingestion) fall back to the vendor's code, or to its raw record id, as a
+ * last resort so a vendor is never persisted with a genuinely blank name.
+ * That is a reasonable default for data integrity, but showing that code or
+ * id as if it were the vendor's name in user-facing copy reads as a bug
+ * ("mark V-00142 as inactive?") rather than a sensible fallback. Any
+ * candidate that equals the vendor's own code or id is treated the same as a
+ * missing name here, and a generic placeholder is used instead.
+ */
+export function resolveVendorDisplayName(
+  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id'>> | null | undefined,
+  genericLabel: string,
+  ...fallbackCandidates: Array<string | null | undefined>
+): string {
+  const codeOrId = [vendor?.vendorCode, vendor?.id].map((v) => String(v || '').trim()).filter(Boolean);
+  const candidates = [vendor?.name, ...fallbackCandidates];
+  for (const candidate of candidates) {
+    const trimmed = String(candidate || '').trim();
+    if (trimmed && !codeOrId.includes(trimmed)) return trimmed;
+  }
+  return genericLabel;
 }
 
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */

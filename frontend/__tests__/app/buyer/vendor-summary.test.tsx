@@ -2369,7 +2369,6 @@ describe('app/buyer/vendor-summary.tsx', () => {
       const selectAll = screen.getByTestId('select-all-vendors-checkbox');
       // Select all
       fireEvent.click(selectAll);
-      expect(screen.getByText(/Selected Suppliers/i)).toBeInTheDocument();
       expect(screen.getByRole('button', { name: /Export Selected/i })).toBeInTheDocument();
 
       // Export Selected click
