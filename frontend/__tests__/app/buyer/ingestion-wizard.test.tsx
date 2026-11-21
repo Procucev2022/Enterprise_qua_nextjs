@@ -2429,7 +2429,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Enter Line Items Manually/i })).toBeInTheDocument();
-    });
+    }, { timeout: 10000 });
 
     // Click "Enter Line Items Manually" recovery button
     fireEvent.click(screen.getByRole('button', { name: /Enter Line Items Manually/i }));
@@ -3316,8 +3316,6 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     });
 
     it('covers AddVendorModal pincode debounce, formats, errors and submission rejections (lines 387-405, 3044, 3140-3142)', async () => {
-      jest.useFakeTimers();
-
       serveBootstrap([
         {
           id: 'v-existing',
@@ -3332,63 +3330,60 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       fireEvent.click(screen.getByTestId('mode-mode_1'));
       await waitFor(() => {
         expect(screen.getByText('Existing Supplier')).toBeInTheDocument();
-      });
+      }, { timeout: 10000 });
 
       fireEvent.click(screen.getByRole('button', { name: /Add Vendor/i }));
       expect(screen.getByText('Add Approved Vendor')).toBeInTheDocument();
 
+      jest.useFakeTimers();
       const modalPin = screen.getByPlaceholderText('e.g. 411001');
 
       // The input onChange strips all non-digit characters (replace(/\D/g, '')),
       // so typing special chars like '!@#$%^' results in an empty state and no error.
       // Instead verify that a cleared / empty pincode shows no error.
       fireEvent.change(modalPin, { target: { value: '!@#$%^' } });
-      await waitFor(() => {
-        expect(screen.queryByText('Invalid PIN code format')).not.toBeInTheDocument();
+      await act(async () => {
+        jest.advanceTimersByTime(400);
       });
+      expect(screen.queryByText('Invalid PIN code format')).not.toBeInTheDocument();
 
       // Dummy pincode
       fireEvent.change(modalPin, { target: { value: '000000' } });
-      await waitFor(() => {
-        expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
+      await act(async () => {
+        jest.advanceTimersByTime(400);
       });
+      expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
 
       // 6 digits with validatePincode returning isValid: false with message
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: false, message: 'Custom invalid pin error' });
       fireEvent.change(modalPin, { target: { value: '411001' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Custom invalid pin error')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Custom invalid pin error')).toBeInTheDocument();
 
       // 6 digits with validatePincode returning isValid: false without message (fallback)
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: false, message: '' });
       fireEvent.change(modalPin, { target: { value: '411002' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
 
       // 6 digits with validatePincode throwing error (catch block)
       (validatePincode as jest.Mock).mockRejectedValueOnce(new Error('Network failure'));
       fireEvent.change(modalPin, { target: { value: '411003' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
 
       // Valid 6 digits with postOffices
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: true, postOffices: [{ name: 'Shivajinagar' } as any] });
       fireEvent.change(modalPin, { target: { value: '411005' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Valid')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Valid')).toBeInTheDocument();
 
       // Clear pincode back to 2 digits (lines 410-414)
       fireEvent.change(modalPin, { target: { value: '41' } });

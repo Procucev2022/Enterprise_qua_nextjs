@@ -2075,7 +2075,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
           <button
             type="button"
-            onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+            onClick={() => {
+              const matrixRoute = (currentRole === 'category_manager' || currentRole === 'admin')
+                ? `/category-manager/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`
+                : `/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              router.push(matrixRoute);
+            }}
             className="btn btn-emerald btn-xs px-3.5 py-1.5 font-bold shrink-0 inline-flex items-center gap-1.5"
           >
             <Sparkles size={12} /> View Finalised Matrix &amp; PO ↗
@@ -2998,7 +3003,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <Download size={12} /> Download Quotes (Excel)
               </button>
               <button
-                onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+                onClick={() => {
+                  const matrixRoute = (currentRole === 'category_manager' || currentRole === 'admin')
+                    ? `/category-manager/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`
+                    : `/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                  router.push(matrixRoute);
+                }}
                 className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
               >
                 <Sparkles size={12} />{' '}

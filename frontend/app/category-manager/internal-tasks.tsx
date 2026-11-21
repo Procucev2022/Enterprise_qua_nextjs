@@ -91,6 +91,7 @@ import type {
   CreditAccountType,
   DemoStatus,
   ActionCenterSummaryPopupColumn,
+  RFQItem,
 } from '@/lib/types';
 
 import ActionCenterSubNav, { type ActionCenterTabKey } from './components/ActionCenterSubNav';
@@ -584,7 +585,7 @@ export default function InternalTasksDashboard() {
       label: 'Task ID',
       render: (t) => (
         <span className="font-mono font-bold text-blue-600 dark:text-blue-400">
-          {t.task_number || t.id.slice(0, 8)}
+          {t.task_number || (t.id ? t.id.slice(0, 8) : 'Task')}
         </span>
       ),
     },

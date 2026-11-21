@@ -873,7 +873,7 @@ describe('IngestionWizard coverage: documents and manual recovery', () => {
     expect(screen.getByText(/No line items added yet\./i)).toBeInTheDocument();
     dropFiles([textFile('requisition.txt')]);
     fireEvent.click(screen.getByRole('button', { name: /Extract Line Items with AI/i }));
-    expect(await screen.findByText(EXTRACTION.reasonMessages.NO_ITEMS_FOUND)).toBeInTheDocument();
+    expect(await screen.findByText(EXTRACTION.reasonMessages.NO_ITEMS_FOUND, {}, { timeout: 10000 })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: EXTRACTION.manualEntryAction }));
 

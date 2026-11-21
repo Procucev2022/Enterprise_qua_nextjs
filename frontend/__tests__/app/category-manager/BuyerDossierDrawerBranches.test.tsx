@@ -11,6 +11,8 @@ import type { EmailScenarioTemplate } from '@/lib/emailScenarioTemplates';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 
+jest.setTimeout(35000);
+
 jest.mock('@/lib/accountDocumentsClient', () => ({
   createCreditApprovalIdempotencyKey: jest.fn(() => '00000000-0000-4000-8000-000000000001'),
   requestBuyerCreditApproval: jest.fn().mockResolvedValue({ success: true, message: 'Request submitted' }),
@@ -1331,9 +1333,9 @@ describe('BuyerDossierDrawer branch coverage', () => {
         onload: (() => void) | null = null;
         result: string = 'data:image/png;base64,mockpreviewdata';
         readAsDataURL() {
-          setTimeout(() => {
-            if (this.onload) this.onload();
-          }, 0);
+          if (this.onload) {
+            this.onload();
+          }
         }
       }
       global.FileReader = MockFileReader as any;

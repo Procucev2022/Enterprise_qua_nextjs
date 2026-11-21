@@ -333,7 +333,7 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-center gap-3">
                     <div className={`w-10 h-10 rounded-full ${b.avatarColor} font-bold text-xs flex items-center justify-center`}>
-                      {b.name.split(' ').map((n) => n[0]).join('')}
+                      {(b.name || 'Buyer').split(' ').map((n) => n[0]).join('')}
                     </div>
                     <div>
                       <h4 className="font-bold text-slate-900 dark:text-white text-xs">{b.name}</h4>
