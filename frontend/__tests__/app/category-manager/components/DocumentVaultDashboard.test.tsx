@@ -872,7 +872,7 @@ describe('DocumentVaultDashboard', () => {
     expect(dialog).toBeInTheDocument();
 
     // Click inside should not close
-    fireEvent.click(screen.getByText('Upload New Document'));
+    fireEvent.click(dialog.querySelector('h2')!);
     expect(dialog).toBeInTheDocument();
 
     // Escape closes upload modal

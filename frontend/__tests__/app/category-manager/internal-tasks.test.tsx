@@ -3477,12 +3477,12 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
 
     // 1. Create task modal Escape & backdrop click
-    fireEvent.click(screen.getByRole('button', { name: /\+ New Task/i }));
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
     let dialog = screen.getByRole('dialog');
     expect(dialog).toBeInTheDocument();
 
     // Click inside does not close
-    fireEvent.click(screen.getByText('Create Internal Task'));
+    fireEvent.click(within(dialog).getByText('Create Internal Task'));
     expect(dialog).toBeInTheDocument();
 
     // Escape closes modal
@@ -3490,7 +3490,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     // Reopen and backdrop click closes
-    fireEvent.click(screen.getByRole('button', { name: /\+ New Task/i }));
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
     dialog = screen.getByRole('dialog');
     fireEvent.click(dialog);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();

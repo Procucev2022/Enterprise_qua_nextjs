@@ -967,12 +967,12 @@ describe('TicketsDashboard', () => {
     });
 
     // 1. Create Ticket modal Escape and backdrop click
-    fireEvent.click(screen.getByRole('button', { name: /New Ticket/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create Ticket/i }));
     let dialog = screen.getByRole('dialog');
     expect(dialog).toBeInTheDocument();
 
     // Click inside does not close
-    fireEvent.click(within(dialog).getByText('Create Support Ticket'));
+    fireEvent.click(within(dialog).getByRole('heading', { level: 3 }));
     expect(dialog).toBeInTheDocument();
 
     // Escape closes modal
@@ -980,7 +980,7 @@ describe('TicketsDashboard', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     // Reopen and backdrop click closes
-    fireEvent.click(screen.getByRole('button', { name: /New Ticket/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Create Ticket/i }));
     dialog = screen.getByRole('dialog');
     fireEvent.click(dialog);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
@@ -992,7 +992,7 @@ describe('TicketsDashboard', () => {
     expect(dialog).toBeInTheDocument();
 
     // Click inside does not close
-    fireEvent.click(within(dialog).getByText('Escalate Ticket'));
+    fireEvent.click(within(dialog).getByRole('heading', { level: 3 }));
     expect(dialog).toBeInTheDocument();
 
     // Escape closes modal

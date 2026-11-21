@@ -1618,13 +1618,13 @@ describe('Summary Cards Click and Modal Popup', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
 
     // 2. Column settings Escape & backdrop click
-    const gearBtn = screen.getByTitle('Column Settings');
+    const gearBtn = screen.getByTitle('Customize Columns');
     fireEvent.click(gearBtn);
     dialog = screen.getByRole('dialog');
     expect(dialog).toBeInTheDocument();
 
     // Click inside does not close
-    fireEvent.click(screen.getByText('Customize Columns'));
+    fireEvent.click(dialog.querySelector('h3')!);
     expect(dialog).toBeInTheDocument();
 
     // Escape closes modal
