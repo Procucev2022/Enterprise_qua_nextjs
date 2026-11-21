@@ -397,6 +397,7 @@ async function insertBuyerAccount({
   createdBy = 'enterprise-workspace',
   resetPasswordRequired = false,
   verificationStatus = IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+  sourceType = IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
 }) {
   if (!pool.hasStorage()) {
     throw new Error(pool.NOT_CONFIGURED_MESSAGE);
@@ -533,12 +534,12 @@ async function insertBuyerAccount({
                  (uuid, username, email, password, full_name, first_name, phone,
                   organization_name, org_uuid, role_uuid,
                   is_active, is_approved, self_client, reset_password,
-                  verification_status, created_ts, last_modified_ts)
+                  verification_status, source_type, created_ts, last_modified_ts)
                select $1, $2, $3, $4, $5, $6, $7, $8,
                       (select uuid from organization
                         where organization_name = $8 COLLATE NOCASE and org_type_uuid = $12
                         order by created_ts, uuid limit 1),
-                      $9, 1, 1, 0, $10, $11,
+                      $9, 1, 1, 0, $10, $11, $13,
                       strftime('%Y-%m-%dT%H:%M:%fZ','now'), strftime('%Y-%m-%dT%H:%M:%fZ','now')
                 where exists (select 1 from organization where organization_name = $8 COLLATE NOCASE and org_type_uuid = $12)
                   and not exists (select 1 from "user" where lower(username) = lower($2))
@@ -556,6 +557,7 @@ async function insertBuyerAccount({
           resetPasswordRequired ? 1 : 0,
           verificationStatus,
           orgTypeUuid,
+          sourceType,
         ],
       });
 
@@ -610,6 +612,7 @@ async function insertBuyerAccount({
         status: 'ACTIVE',
         resetPasswordRequired: Boolean(resetPasswordRequired),
         verificationStatus,
+        sourceType,
       },
       organizationReused,
     };
@@ -650,7 +653,7 @@ async function insertBuyerAccount({
           taxPan,
           orgTypeUuid,
           statusUuid,
-          IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+          sourceType,
           buildCompanyId(orgName),
           IDENTITY_MASTER_DATA.DEFAULT_GMT_PLAN,
           IDENTITY_MASTER_DATA.DEFAULT_BFS_PLAN,
@@ -717,7 +720,7 @@ async function insertBuyerAccount({
         statusUuid,
         buildUniqueId(),
         Boolean(resetPasswordRequired),
-        IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
+        sourceType,
         verificationStatus,
         createdBy,
         createdBy,
@@ -739,6 +742,7 @@ async function insertBuyerAccount({
         status: 'ACTIVE',
         resetPasswordRequired: Boolean(resetPasswordRequired),
         verificationStatus,
+        sourceType,
       },
       organizationReused,
     };

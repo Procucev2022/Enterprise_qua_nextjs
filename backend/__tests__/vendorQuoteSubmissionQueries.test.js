@@ -707,4 +707,72 @@ describe('atomic vendor quote submission queries', () => {
 
     expect(result).toMatchObject({ vendor: savedVendor, rfq: savedRFQ, creditCharged: 1 });
   });
+
+  test('rejects incomplete PostgreSQL outbox and comparison intents', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+    const mockClient = () => ({
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ raw: vendor() }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'ledger-1' }] }),
+    });
+
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(mockClient()));
+    await expect(queries.submitVendorQuoteInDB(baseOptions({ quoteNotificationEventId: 'ev-1' }))).rejects.toMatchObject({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' });
+
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(mockClient()));
+    await expect(queries.submitVendorQuoteInDB(baseOptions({ buyerProfileReminderEventId: 'ev-2' }))).rejects.toMatchObject({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' });
+
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(mockClient()));
+    await expect(queries.submitVendorQuoteInDB(baseOptions({ vendorQuoteAcknowledgementEventId: 'ev-3' }))).rejects.toMatchObject({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' });
+
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(mockClient()));
+    await expect(queries.submitVendorQuoteInDB(baseOptions({ autoClosureEmailEventId: 'ev-4' }))).rejects.toMatchObject({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' });
+
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(mockClient()));
+    await expect(queries.submitVendorQuoteInDB(baseOptions({ autoClosureComparisonJobId: 'job-1' }))).rejects.toMatchObject({ code: 'INVALID_VENDOR_QUOTE_SUBMISSION' });
+  });
+
+  test('handles subscriber quote submission in D1 and PostgreSQL with unlock markers', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue(null);
+    jest.spyOn(d1Bridge, 'getD1HttpClient').mockReturnValue(null);
+
+    // 1. Connect subscriber without unlock: charges 1 credit
+    const subVendor = vendor({ subscriptionPlan: 'connect', rfqDownloadsUsed: 10, unlockedRfqIds: [] });
+    const subOpts = baseOptions({ expectedVendor: subVendor });
+    const client1 = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ raw: subVendor }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ raw: { ...subVendor, rfqDownloadsUsed: 11 } }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'ledger-sub' }] }),
+    };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(client1));
+    const res1 = await queries.submitVendorQuoteInDB(subOpts);
+    expect(res1.creditCharged).toBe(1);
+
+    // 2. Connect subscriber with unlock by rfqNumber: charges 0 credits
+    const unlockedSubVendor = vendor({ subscriptionPlan: 'connect', rfqDownloadsUsed: 10, unlockedRfqIds: ['RFQ-ATOMIC-QUOTE'] });
+    const unlockedOpts = baseOptions({ expectedVendor: unlockedSubVendor });
+    const client2 = {
+      query: jest.fn()
+        .mockResolvedValueOnce({ rows: [{ raw: unlockedSubVendor }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [] })
+        .mockResolvedValueOnce({ rows: [{ raw: unlockedSubVendor }] })
+        .mockResolvedValueOnce({ rows: [{ raw: rfq() }] })
+        .mockResolvedValueOnce({ rows: [{ id: 'ledger-sub-0' }] }),
+    };
+    jest.spyOn(pool, 'withTransaction').mockImplementation((cb) => cb(client2));
+    const res2 = await queries.submitVendorQuoteInDB(unlockedOpts);
+    expect(res2.creditCharged).toBe(0);
+  });
 });

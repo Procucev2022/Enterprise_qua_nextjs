@@ -271,6 +271,22 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       });
   }, [isOpen, rfq]);
 
+  // Escape key support to close modals
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting && !creatingVendor) {
+        if (showAddVendorModal) {
+          setShowAddVendorModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, submitting, creatingVendor, showAddVendorModal, onClose]);
+
   // Track known vendors for displaying chip names across searches and filters
   useEffect(() => {
     candidates.forEach((c) => {
@@ -825,7 +841,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       aria-labelledby="invite-vendors-modal-title"
       data-testid="invite-vendors-modal"
     >
-      <div className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+      >
         {/* Header */}
         <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
           <div>
@@ -1315,7 +1334,10 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
           aria-labelledby="add-new-vendor-title"
           data-testid="add-vendor-modal"
         >
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up"
+          >
             <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">

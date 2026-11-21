@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
@@ -132,6 +132,16 @@ export default function KanbanBoard({
     totalVendorsInvited > 0 ? Math.min(100, Math.round((quotesOnInvitedRfqs / totalVendorsInvited) * 100)) : null;
 
   const [summaryFilterModal, setSummaryFilterModal] = useState<'pipeline' | 'quotes' | 'awaiting' | null>(null);
+
+  // Close summary filter modal on Escape key
+  useEffect(() => {
+    if (!summaryFilterModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSummaryFilterModal(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [summaryFilterModal]);
 
   const summaryCards = [
     {
@@ -534,8 +544,14 @@ export default function KanbanBoard({
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           role="dialog"
           aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSummaryFilterModal(null);
+          }}
         >
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-3">

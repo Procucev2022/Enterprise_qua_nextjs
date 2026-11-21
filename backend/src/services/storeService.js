@@ -2983,28 +2983,58 @@ class StoreService {
     const hasUnlimitedQuotes = hasUnlimitedQuoteAccess(vendor);
     const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
 
-    const freeCredits = vendor.freeQuotationCredits !== undefined
-      ? Number(vendor.freeQuotationCredits)
-      : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
-
-    const isSubscribed = Boolean(
-      vendor.subscriptionPlan === 'connect' ||
-      vendor.subscriptionPlan === 'select' ||
+    const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+    const planQuota = hasUnlimitedQuotes ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+    const isGenericSubscribed = Boolean(
       vendor.isSubscribed === true ||
       vendor.subscriptionStatus === 'active' ||
       hasUnlimitedQuotes
     );
+    const isSubscribed = Boolean(
+      plan === 'connect' ||
+      plan === 'select' ||
+      isGenericSubscribed
+    );
 
-    // If buyer-mapped for this respective buyer's RFQ or has unlimited quotes: unlimited quotations, no subscription needed.
-    const eligible = hasUnlimitedQuotes || isBuyerMapped || freeCredits > 0 || isSubscribed;
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [];
+    const quotedList = Array.isArray(vendor.quotedRfqIds) ? vendor.quotedRfqIds : [];
+    const rfqIdStr = rfq?.id ? String(rfq.id) : null;
+    const rfqNumStr = rfq?.rfqNumber ? String(rfq.rfqNumber) : null;
+    const isAlreadyUnlockedOrQuoted = Boolean(
+      (rfqIdStr && (unlockedList.includes(rfqIdStr) || quotedList.includes(rfqIdStr))) ||
+      (rfqNumStr && (unlockedList.includes(rfqNumStr) || quotedList.includes(rfqNumStr)))
+    );
+
+    let remainingCredits;
+    let eligible;
+
+    if (hasUnlimitedQuotes) {
+      remainingCredits = 999999;
+      eligible = true;
+    } else if (planQuota !== undefined) {
+      const planUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+      remainingCredits = Math.max(0, planQuota - planUsed);
+      eligible = isBuyerMapped || isAlreadyUnlockedOrQuoted || remainingCredits > 0;
+    } else if (isGenericSubscribed) {
+      remainingCredits = 999999;
+      eligible = true;
+    } else {
+      const freeCredits = vendor.freeQuotationCredits !== undefined
+        ? Number(vendor.freeQuotationCredits)
+        : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
+      remainingCredits = Math.max(0, freeCredits);
+      eligible = isBuyerMapped || remainingCredits > 0;
+    }
 
     return {
       eligible,
-      freeCreditsRemaining: hasUnlimitedQuotes ? 999999 : Math.max(0, freeCredits),
+      freeCreditsRemaining: remainingCredits,
       isSubscribed: isSubscribed || isBuyerMapped || hasUnlimitedQuotes,
       isBuyerMapped,
       hasUnlimitedQuotes,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
+      planQuota,
+      rfqDownloadsUsed: Math.max(0, Number(vendor.rfqDownloadsUsed) || 0),
     };
   }
 
@@ -3418,13 +3448,37 @@ class StoreService {
       (rfqId && quotedRfqIds.includes(String(rfqId).trim()))
     );
 
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
+    const alreadyUnlocked = Boolean(
+      (canonicalId && unlockedList.includes(canonicalId)) ||
+      (canonicalRfqNumber && unlockedList.includes(canonicalRfqNumber))
+    );
+
+    const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+    const planQuota = eligibility.hasUnlimitedQuotes ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+    const shouldDeductCredit = planQuota !== undefined
+      ? (!alreadyQuoted && !alreadyUnlocked && !isBuyerMapped && !eligibility.hasUnlimitedQuotes)
+      : (!alreadyQuoted && !isBuyerMapped && !eligibility.hasUnlimitedQuotes);
+
+    let nextDownloadsUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+    let newCredits = eligibility.freeCreditsRemaining;
+
+    if (shouldDeductCredit) {
+      if (planQuota !== undefined) {
+        nextDownloadsUsed += 1;
+        newCredits = Math.max(0, planQuota - nextDownloadsUsed);
+      } else {
+        nextDownloadsUsed += 1;
+        newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
+      }
+    }
+
     if (!alreadyQuoted) {
       if (canonicalId) quotedRfqIds.push(canonicalId);
       if (canonicalRfqNumber && canonicalRfqNumber !== canonicalId) quotedRfqIds.push(canonicalRfqNumber);
     }
 
     // Also ensure RFQ is marked in unlockedRfqIds
-    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
     if (canonicalId && !unlockedList.includes(canonicalId)) {
       unlockedList.push(canonicalId);
     }
@@ -3432,22 +3486,27 @@ class StoreService {
       unlockedList.push(canonicalRfqNumber);
     }
 
-    let newCredits = eligibility.freeCreditsRemaining;
-    if (!alreadyQuoted && !eligibility.isSubscribed && !isBuyerMapped) {
-      newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
-    }
-
-    vendor.freeQuotationCredits = newCredits;
-    vendor.freeRfqDownloadCredits = newCredits;
     vendor.quotedRfqIds = quotedRfqIds;
     vendor.unlockedRfqIds = unlockedList;
+    vendor.rfqDownloadsUsed = nextDownloadsUsed;
 
-    const updated = this.updateVendor(vendor.id, {
-      freeQuotationCredits: newCredits,
-      freeRfqDownloadCredits: newCredits,
+    const updates = {
       quotedRfqIds,
       unlockedRfqIds: unlockedList,
-    });
+      rfqDownloadsUsed: nextDownloadsUsed,
+    };
+    if (planQuota === undefined) {
+      vendor.freeQuotationCredits = newCredits;
+      vendor.freeRfqDownloadCredits = newCredits;
+      updates.freeQuotationCredits = newCredits;
+      updates.freeRfqDownloadCredits = newCredits;
+      if (shouldDeductCredit) {
+        vendor.freeCreditsUsed = (Number(vendor.freeCreditsUsed) || 0) + 1;
+        updates.freeCreditsUsed = vendor.freeCreditsUsed;
+      }
+    }
+
+    const updated = this.updateVendor(vendor.id, updates);
 
     logger.info(
       `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed}, buyerMapped: ${isBuyerMapped})`,

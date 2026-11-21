@@ -934,6 +934,7 @@ async function getOrCreateBuyerAccount(email) {
         resetPasswordRequired: true,
         verificationStatus: 'PENDING_ONBOARDING',
         createdBy: 'email-gateway-autonomous',
+        sourceType: 'Email',
       });
     } catch (dbErr) {
       logger.error('Failed to create identity user for unregistered buyer', {
@@ -997,6 +998,8 @@ async function getOrCreateBuyerAccount(email) {
         phoneVerified: false,
         tempPasswordRequired: true,
         isAutoRegistered: true,
+        sourceType: 'Email',
+        accountSource: 'Email',
       });
     } catch (accountError) {
       logger.error('Buyer identity exists but its buyer-account mirror could not be persisted', {

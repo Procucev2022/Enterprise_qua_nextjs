@@ -2411,7 +2411,7 @@ export function parseSearchTokens(search?: string | null): string[] {
 
 
 export const REGISTRATION_CLIENT_TYPES = [
-  { id: 'all', label: 'All (Buyers & Sellers)' },
+  { id: 'all', label: 'All Users' },
   { id: 'buyer', label: 'Buyers' },
   { id: 'seller', label: 'Sellers' },
 ] as const;

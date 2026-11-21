@@ -24,6 +24,10 @@ const { RFQ_MODES, RFQ_MODE_LABELS } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 
 describe('Reports Controller & Endpoints Suite', () => {
+  beforeAll(async () => {
+    await request(app).get('/health');
+  });
+
   beforeEach(() => {
     storeService.reset();
   });

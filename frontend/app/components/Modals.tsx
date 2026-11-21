@@ -202,6 +202,15 @@ export function PurchaseOrderModal({
   const [approverNotes, setApproverNotes] = useState('');
   const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   // Buyer Details Mapping (strictly real content, no substitute values)
   const buyerOrg = buyerAccount?.organizationName || (buyerAccount as any)?.name || rfq?.buyerAccountName || rfq?.buyerCompany || '';
   const buyerContactPerson = buyerAccount?.contactPerson || rfq?.buyerName || (rfq as any)?.buyerContactPerson || '';
@@ -533,8 +542,18 @@ export function PurchaseOrderModal({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-3xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-3xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
@@ -1540,11 +1559,30 @@ interface SurveyModalProps {
  * nothing and records no audit entry. It states that the survey is not connected.
  */
 export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-purple-50 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-500/30">
@@ -1605,6 +1643,15 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !processing) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, processing]);
+
   if (!isOpen) return null;
 
   const handlePay = async () => {
@@ -1620,8 +1667,18 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !processing) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
@@ -1692,12 +1749,32 @@ interface EvaluationSummaryModalProps {
 
 export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: EvaluationSummaryModalProps) {
   const { selectedVendorEvaluation } = useApp();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   const evalRecord = record || selectedVendorEvaluation;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-5xl p-6 max-h-[92vh] overflow-y-auto relative animate-scale-up">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-5xl p-6 max-h-[92vh] overflow-y-auto relative animate-scale-up"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex justify-end mb-2">
           <button
             onClick={onClose}
