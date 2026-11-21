@@ -452,7 +452,13 @@ const CANONICAL_UNITS_MAP = {
 
 const DIMENSION_EXCLUSIONS = new Set([
   'inch', 'inches', 'in', 'mm', 'cm', 'gauge', 'thk', 'thick', 'od', 'id', 'dia', 'diameter',
-  'volt', 'volts', 'v', 'kv', 'amp', 'amps', 'a', 'hz', 'rpm', 'hp', 'kw', 'w', 'watt', 'watts', 'bar', 'psi'
+  'volt', 'volts', 'v', 'kv', 'amp', 'amps', 'a', 'hz', 'rpm', 'hp', 'kw', 'w', 'watt', 'watts', 'bar', 'psi',
+  // Digital storage/memory and clock-speed tokens from a spec like "Intel Core i5, 16GB,
+  // 512GB SSD, 2.5GHz" — these describe the product, not the purchase unit of measure, so
+  // "16GB" must never be read as a quantity of 16 "GB". Previously unlisted here, a model
+  // output of "GB" for the unit field (or the code's own itemName/spec regex fallback
+  // matching "16GB") passed straight through as a valid unit.
+  'gb', 'gbs', 'mb', 'mbs', 'tb', 'tbs', 'kb', 'kbs', 'ghz', 'mhz', 'ram', 'rom',
 ]);
 
 /**
@@ -593,9 +599,16 @@ function toRawLineItems(parsed) {
           }
         }
 
+        // The model's own "unit" field is not trusted blindly: a spec token like
+        // "16GB" or "2.5GHz" is sometimes echoed into "unit" instead of left in the
+        // specification, and that is a product attribute, not a purchase unit of
+        // measure. normalizeUnit() rejects DIMENSION_EXCLUSIONS (GB, GHz, mm, V, ...),
+        // so a rejected value is discarded here rather than kept as-is.
+        if (unit) unit = normalizeUnit(unit) || '';
+
         if (!unit) {
           const extracted = extractUnitFromText(rawQty) || extractUnitFromText(itemName) || extractUnitFromText(rawSpec) || '';
-          unit = normalizeUnit(extracted) || extracted;
+          unit = normalizeUnit(extracted) || '';
         }
 
         const row = {
@@ -634,9 +647,14 @@ function toRawLineItems(parsed) {
         }
       }
 
+      // Same rule as the compact-array branch above: do not trust the model's own
+      // "unit" value as-is — reject a spec/dimension token (e.g. "GB", "GHz") that
+      // was echoed into it instead of a real unit of measure.
+      if (unit) unit = normalizeUnit(unit) || '';
+
       if (!unit) {
         const extracted = extractUnitFromText(rawItemQty) || extractUnitFromText(itemName) || extractUnitFromText(item?.specification || item?.technicalSpecs || item?.specs) || '';
-        unit = normalizeUnit(extracted) || extracted;
+        unit = normalizeUnit(extracted) || '';
       }
 
       const row = {

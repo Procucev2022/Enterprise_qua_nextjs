@@ -1378,6 +1378,102 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       });
     });
 
+    describe('buildBuyerOwnershipContext: ownership across multiple buyer_accounts rows for one email', () => {
+      // A buyer can end up with more than one buyer_accounts row sharing the
+      // same corporate_email (re-registration, org re-provisioning), and
+      // is_active is a single pointer rather than a per-user flag, so
+      // getBuyerAccountByEmail resolves only the current active/most-recently
+      // touched row. A vendor imported while an *older* row of this buyer's
+      // own was active still carries that older row's id as buyerId, and the
+      // buyer must still be able to edit it after the active row changes.
+      const buyerUser = { role: 'buyer', email: 'multi@buyer.test', sub: 'buyer-sub-multi' };
+
+      test('updateVendor saves category changes for a vendor whose buyerId belongs to a now-inactive row sharing this buyer\'s email', async () => {
+        const olderRow = { id: 'buyer-row-older', corporateEmail: 'multi@buyer.test' };
+        const activeRow = { id: 'buyer-row-active', corporateEmail: 'multi@buyer.test' };
+        const vendor = {
+          id: 'v-hist-123-older',
+          email: 'vendor@supplier.test',
+          source: 'historical_purchase_dump',
+          buyerId: olderRow.id,
+          buyerAccountId: olderRow.id,
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Cables'],
+        };
+
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendor);
+        jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(activeRow);
+        jest.spyOn(domainQueries, 'getBuyerAccountsByEmailFromDB').mockResolvedValue([activeRow, olderRow]);
+        jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ ...vendor, minorCategories: ['Cables', 'Pumps'] });
+
+        const res = mockRes();
+        const next = jest.fn();
+        await vendorController.updateVendor(
+          { params: { id: vendor.id }, user: buyerUser, body: { minorCategories: ['Cables', 'Pumps'] } },
+          res,
+          next
+        );
+
+        expect(res.status).not.toHaveBeenCalledWith(403);
+        expect(res.json).toHaveBeenCalledWith(
+          expect.objectContaining({ success: true, data: expect.objectContaining({ minorCategories: ['Cables', 'Pumps'] }) })
+        );
+      });
+
+      test('still denies a vendor genuinely owned by a different buyer email entirely', async () => {
+        const vendor = {
+          id: 'v-hist-999-foreign',
+          email: 'vendor2@supplier.test',
+          source: 'historical_purchase_dump',
+          buyerId: 'buyer-row-foreign',
+          buyerAccountId: 'buyer-row-foreign',
+          buyerEmail: 'other-buyer@elsewhere.test',
+        };
+
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendor);
+        jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'buyer-row-active', corporateEmail: 'multi@buyer.test' });
+        jest.spyOn(domainQueries, 'getBuyerAccountsByEmailFromDB').mockResolvedValue([{ id: 'buyer-row-active', corporateEmail: 'multi@buyer.test' }]);
+
+        const res = mockRes();
+        const next = jest.fn();
+        await vendorController.updateVendor(
+          { params: { id: vendor.id }, user: buyerUser, body: { minorCategories: ['Cables'] } },
+          res,
+          next
+        );
+
+        expect(res.status).toHaveBeenCalledWith(403);
+      });
+
+      test('fails closed (403, not a crash) when getBuyerAccountsByEmailFromDB rejects', async () => {
+        const olderRow = { id: 'buyer-row-older', corporateEmail: 'multi@buyer.test' };
+        const vendor = {
+          id: 'v-hist-321-err',
+          email: 'vendor3@supplier.test',
+          source: 'historical_purchase_dump',
+          buyerId: olderRow.id,
+          buyerAccountId: olderRow.id,
+        };
+
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendor);
+        jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'buyer-row-active', corporateEmail: 'multi@buyer.test' });
+        jest.spyOn(domainQueries, 'getBuyerAccountsByEmailFromDB').mockRejectedValue(new Error('DB unavailable'));
+
+        const res = mockRes();
+        const next = jest.fn();
+        await vendorController.updateVendor(
+          { params: { id: vendor.id }, user: buyerUser, body: { minorCategories: ['Cables'] } },
+          res,
+          next
+        );
+
+        // The multi-account widening is best-effort: when it fails, ownership
+        // falls back to the single currently-active row (pre-fix behavior) and
+        // denies rather than throwing or silently granting access.
+        expect(res.status).toHaveBeenCalledWith(403);
+      });
+    });
+
     describe('empanelFallbackVendorForEvaluation branch coverage', () => {
       const buyerUser = { role: 'buyer', email: 'owner@buyer.test', sub: 'buyer-sub-1' };
       const buyerAccount = { id: 'ba-owner', organizationName: 'Owner Corp' };

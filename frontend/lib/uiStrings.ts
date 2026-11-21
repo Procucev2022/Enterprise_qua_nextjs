@@ -2027,6 +2027,7 @@ export const UI_STRINGS = {
     registeredMobileNumberLabel: 'Registered Mobile Number',
     registeredMobileReadOnlyHint:
       'This number is used to verify your account and cannot be changed in the organization profile.',
+    saveCategoryButton: 'Save Category',
 
     // Success
     savedMessage: 'Organization details and {categoryCount} procurement categories updated.',

@@ -1481,6 +1481,26 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getBuyerAccountByEmailFromDB('nobody@x.com')).resolves.toBeNull();
     });
 
+    test('getBuyerAccountsByEmailFromDB returns every row sharing the email, not just the active one', async () => {
+      const active = { id: 'buyer-active', corporateEmail: 'multi@lt.com' };
+      const inactive = { id: 'buyer-older', corporateEmail: 'multi@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: active }, { raw: JSON.stringify(inactive) }] }) };
+
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('multi@lt.com')).resolves.toEqual([active, inactive]);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE lower(corporate_email) = lower($1)'),
+        ['multi@lt.com']
+      );
+    });
+
+    test('getBuyerAccountsByEmailFromDB returns an empty array when nothing matched, not configured, or no email given', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('nobody@x.com')).resolves.toEqual([]);
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('')).resolves.toEqual([]);
+      pool.pool = null;
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('x@y.com')).resolves.toEqual([]);
+    });
+
     test('buyer account fresh lookups bypass cached records for email and id', async () => {
       pool.pool = {};
       const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: { id: 'buyer-fresh' } }] });

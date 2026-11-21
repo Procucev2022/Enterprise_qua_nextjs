@@ -65,8 +65,28 @@ async function buildBuyerOwnershipContext(user) {
   const resolvedOrgId = await resolveBuyerOrgIdForScope(user, buyerAccount);
   const buyerScope = buyerScopeIdsFor(user, buyerAccount, resolvedOrgId);
   const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+  // A buyer can have more than one buyer_accounts row under the same
+  // corporate_email (re-registration, org re-provisioning, etc.), and
+  // `is_active` is a single global pointer rather than a per-user flag —
+  // getBuyerAccountByEmail above only ever resolves the current active (or
+  // most recently touched) row. A vendor imported while a different one of
+  // the buyer's own rows was active still carries that other row's id as its
+  // buyerId/buyerAccountId, so scope must include every row sharing this
+  // email, not just the one currently resolved, or the buyer gets locked out
+  // of editing their own historical vendors the moment the active row changes.
+  let allOwnAccountIds = [];
+  if (typeof domainQueries.getBuyerAccountsByEmailFromDB === 'function' && user?.email) {
+    try {
+      const ownAccounts = await domainQueries.getBuyerAccountsByEmailFromDB(user.email);
+      allOwnAccountIds = ownAccounts.flatMap((acc) => [acc?.id, acc?.corporateEmail, acc?.organizationId]);
+    } catch (err) {
+      logger.warn('Failed to load all buyer accounts for ownership scope; continuing with the single resolved account', {
+        error: err,
+      }, 'VENDOR_CONTROLLER');
+    }
+  }
   const scopeSet = new Set(
-    [...buyerScope, buyerAccount?.email]
+    [...buyerScope, buyerAccount?.email, ...allOwnAccountIds]
       .map((id) => String(id || '').trim().toLowerCase())
       .filter(Boolean)
   );
