@@ -239,12 +239,12 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     if (!isColumnSettingsOpen && !isEmailModalOpen && !isMessageModalOpen && !isWhatsAppModalOpen && !isAckModalOpen && !isHistoryModalOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isColumnSettingsOpen) setIsColumnSettingsOpen(false);
-        if (isEmailModalOpen) setIsEmailModalOpen(false);
-        if (isMessageModalOpen) setIsMessageModalOpen(false);
-        if (isWhatsAppModalOpen) setIsWhatsAppModalOpen(false);
-        if (isAckModalOpen) setIsAckModalOpen(false);
-        if (isHistoryModalOpen) setIsHistoryModalOpen(false);
+        setIsColumnSettingsOpen(false);
+        setIsEmailModalOpen(false);
+        setIsMessageModalOpen(false);
+        setIsWhatsAppModalOpen(false);
+        setIsAckModalOpen(false);
+        setIsHistoryModalOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -1292,11 +1292,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           role="dialog"
           aria-modal="true"
           aria-label="Customize Columns"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setIsColumnSettingsOpen(false);
-            }
-          }}
+          onClick={() => setIsColumnSettingsOpen(false)}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
         >
           <div
@@ -1564,9 +1560,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         <div
           role="dialog"
           aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsEmailModalOpen(false);
-          }}
+          onClick={() => setIsEmailModalOpen(false)}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
         >
           <div
@@ -1678,9 +1672,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         <div
           role="dialog"
           aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsMessageModalOpen(false);
-          }}
+          onClick={() => setIsMessageModalOpen(false)}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
         >
           <div
@@ -1777,9 +1769,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         <div
           role="dialog"
           aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsWhatsAppModalOpen(false);
-          }}
+          onClick={() => setIsWhatsAppModalOpen(false)}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
         >
           <div
@@ -1878,9 +1868,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         <div
           role="dialog"
           aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAckModalOpen(false);
-          }}
+          onClick={() => setIsAckModalOpen(false)}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
         >
           <div
@@ -1972,9 +1960,7 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
         <div
           role="dialog"
           aria-modal="true"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) setIsHistoryModalOpen(false);
-          }}
+          onClick={() => setIsHistoryModalOpen(false)}
           className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
         >
           <div
