@@ -7,6 +7,7 @@ const storeService = require('../src/services/storeService');
 const domainQueries = require('../src/db/domainQueries');
 const identityQueries = require('../src/db/identityQueries');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const directoryKPIQueries = require('../src/db/directoryKPIQueries');
 const paymentDuesQueries = require('../src/db/paymentDuesQueries');
 const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
@@ -1401,6 +1402,30 @@ describe('buyerAccountController branches', () => {
         },
       }, mockRes(), next);
       expect(next).toHaveBeenCalledWith(conflictErr);
+    });
+  });
+
+  describe('getBuyerDirectoryKPIStats', () => {
+    test('refuses access to non-admin/non-category-manager role', async () => {
+      const res = mockRes();
+      await buyerAccountController.getBuyerDirectoryKPIStats({ user: { role: 'vendor' } }, res, jest.fn());
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    test('returns exact DB stats when caller is authorized', async () => {
+      const mockStats = { totalBuyers: 1250, verifiedBuyers: 900, subscriptionBuyers: 450, modeCounts: { mode_1: 700 } };
+      jest.spyOn(directoryKPIQueries, 'getBuyerDirectoryKPIStatsFromDB').mockResolvedValueOnce(mockStats);
+      const res = mockRes();
+      await buyerAccountController.getBuyerDirectoryKPIStats({ user: { role: 'admin' } }, res, jest.fn());
+      expect(res.json).toHaveBeenCalledWith({ success: true, ...mockStats });
+    });
+
+    test('delegates error to next when query throws', async () => {
+      const err = new Error('DB timeout');
+      jest.spyOn(directoryKPIQueries, 'getBuyerDirectoryKPIStatsFromDB').mockRejectedValueOnce(err);
+      const next = jest.fn();
+      await buyerAccountController.getBuyerDirectoryKPIStats({ user: { role: 'category_manager' } }, mockRes(), next);
+      expect(next).toHaveBeenCalledWith(err);
     });
   });
 });

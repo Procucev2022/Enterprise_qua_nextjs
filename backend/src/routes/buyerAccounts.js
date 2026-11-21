@@ -10,6 +10,8 @@ router.post('/', authenticate, buyerAccountController.createBuyerAccount);
 // Authenticated: this resolves the caller's own organisation from the identity
 // schema, so it needs a session to know whose account to return.
 router.get('/active', authenticate, buyerAccountController.getActiveAccount);
+router.get('/kpi-stats', authenticate, requireRole('admin', 'category_manager'), buyerAccountController.getBuyerDirectoryKPIStats);
+router.get('/analytics', authenticate, requireRole('admin', 'category_manager'), buyerAccountController.getBuyerDirectoryKPIStats);
 router.post('/historical-data', authenticate, buyerAccountController.ingestHistoricalData);
 router.post('/ai-cross-match', authenticate, buyerAccountController.aiCrossMatch);
 router.put('/:id', authenticate, buyerAccountController.updateBuyerAccount);

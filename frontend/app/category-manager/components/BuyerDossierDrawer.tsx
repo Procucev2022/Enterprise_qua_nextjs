@@ -99,6 +99,8 @@ import { getMajorCategories, getAllUniqueMinorCategories, findMajorForMinor, set
 import { authClient } from '@/lib/authClient';
 import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval, type RequestBuyerCreditApprovalPayload } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
+import InitiatorSelectField from './InitiatorSelectField';
+import { useOptionalApp } from '@/lib/store';
 
 interface BuyerDossierDrawerProps {
   buyer: BuyerAccount;
@@ -143,6 +145,8 @@ export default function BuyerDossierDrawer({
   const creditApprovalStrings = strings.creditApproval || DEFAULT_CREDIT_APPROVAL;
   const discountStrings = creditApprovalStrings.discountWorkflow || DEFAULT_DISCOUNT_WORKFLOW;
   const offlinePaymentStrings = creditApprovalStrings.offlinePaymentWorkflow || DEFAULT_OFFLINE_PAYMENT_WORKFLOW;
+  const appContext = useOptionalApp();
+  const canonicalBuyerId = buyer?.id || (buyer as any)?.userId || (buyer as any)?.organizationId || '';
 
   // Active Main Tab with context preservation
   const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>(initialTab);
@@ -161,11 +165,11 @@ export default function BuyerDossierDrawer({
   const [selectedVendorForModal, setSelectedVendorForModal] = useState<BuyerUploadedVendorItem | null>(null);
 
   const loadUploadedVendors = useCallback(async () => {
-    if (!buyer?.id) return;
+    if (!canonicalBuyerId) return;
     setLoadingUploadedVendors(true);
     setUploadedVendorsError(null);
     try {
-      const res = await fetchBuyerUploadedVendors(buyer.id);
+      const res = await fetchBuyerUploadedVendors(canonicalBuyerId);
       if (res.success && Array.isArray(res.data)) {
         setUploadedVendors(res.data);
       } else {
@@ -176,7 +180,7 @@ export default function BuyerDossierDrawer({
     } finally {
       setLoadingUploadedVendors(false);
     }
-  }, [buyer?.id, strings.uploadedVendors.loadError]);
+  }, [canonicalBuyerId, strings.uploadedVendors.loadError]);
 
   useEffect(() => {
     void loadUploadedVendors();
@@ -426,7 +430,7 @@ export default function BuyerDossierDrawer({
   const handleSaveCategories = async () => {
     setIsSubmittingCategories(true);
     try {
-      const res = await updateBuyerCategories(buyer.id, selectedCategoriesDraft);
+      const res = await updateBuyerCategories(canonicalBuyerId, selectedCategoriesDraft);
       if (res.success) {
         setCurrentCategories(selectedCategoriesDraft);
         setIsEditCategoriesOpen(false);
@@ -614,33 +618,6 @@ export default function BuyerDossierDrawer({
   const [offlineRemarks, setOfflineRemarks] = useState<string>('');
   const offlineFileInputRef = useRef<HTMLInputElement>(null);
 
-  const buyerInitiatorSelectOptions = useMemo(() => {
-    const primaryOrder = ['Govardhan', 'Chandan', 'Krishna Chaitanya', 'Sudheer'];
-    const list: string[] = [...primaryOrder];
-    const extras = [
-      ...internalTaskUserOptions,
-      'Session Initiator',
-      'Category Manager',
-    ];
-    for (const u of applicationUsers) {
-      if (u?.name) extras.push(u.name);
-      if (u?.id) extras.push(u.id);
-    }
-    for (const a of assignees) {
-      if (a?.name) extras.push(a.name);
-      if (a?.id) extras.push(a.id);
-    }
-    if (creditInitiator) extras.push(creditInitiator);
-    if (offlineInitiatorName) extras.push(offlineInitiatorName);
-
-    for (const item of extras) {
-      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
-        list.push(item);
-      }
-    }
-    return list;
-  }, [internalTaskUserOptions, applicationUsers, assignees, creditInitiator, offlineInitiatorName]);
-
   const buyerApproverSelectOptions = useMemo(() => {
     return ['Srinu Sir', 'Rao Sir', 'Sudheer Sir'];
   }, []);
@@ -705,25 +682,32 @@ export default function BuyerDossierDrawer({
     setLoadingCredit(true);
     setCreditHistoryError(null);
     try {
-      const res = await fetchBuyerCreditHistory(buyer.id);
+      const res = await fetchBuyerCreditHistory(canonicalBuyerId);
       if (res.success) {
         setCreditSummary(res.summary || null);
         setCreditTransactions(res.transactions || []);
         setCreditHistoryAvailable(res.historyAvailable ?? (res.transactions || []).length > 0);
+        if (res.summary && typeof res.summary.remainingFreeCredits === 'number') {
+          appContext?.updateBuyerAccount(buyer.id, {
+            remainingFreeRFQs: res.summary.remainingFreeCredits,
+            creditBalance: res.summary.remainingFreeCredits,
+            available_credits: res.summary.remainingFreeCredits,
+          });
+        }
       } else {
         setCreditSummary(null);
         setCreditTransactions([]);
         setCreditHistoryError(res.error || strings.credit.loadFailure);
       }
     } catch (error) {
-      logger.error('Buyer credit history request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      logger.error('Buyer credit history request failed', { buyerId: canonicalBuyerId, error }, 'BUYER_DOSSIER');
       setCreditSummary(null);
       setCreditTransactions([]);
       setCreditHistoryError(strings.credit.loadFailure);
     } finally {
       setLoadingCredit(false);
     }
-  }, [buyer.id, strings.credit.loadFailure]);
+  }, [canonicalBuyerId, buyer.id, strings.credit.loadFailure, appContext]);
 
   useEffect(() => {
     if (dossierTab === 'credits' || isAddCreditModalOpen) {
@@ -839,7 +823,7 @@ export default function BuyerDossierDrawer({
         initiatorName: effectiveInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
       };
-      const res = await requestBuyerCreditApproval(buyer.id, payload);
+      const res = await requestBuyerCreditApproval(canonicalBuyerId, payload);
       if (res.success) {
         creditApprovalRequestKey.current = '';
         creditApprovalRequestFingerprint.current = '';
@@ -1014,7 +998,7 @@ export default function BuyerDossierDrawer({
         idempotencyKey: creditApprovalRequestKey.current,
       };
 
-      const res = await requestBuyerCreditApproval(buyer.id, payload);
+      const res = await requestBuyerCreditApproval(canonicalBuyerId, payload);
       if (res.success) {
         creditApprovalRequestKey.current = '';
         creditApprovalRequestFingerprint.current = '';
@@ -1087,7 +1071,7 @@ export default function BuyerDossierDrawer({
     if (!composeMessage.trim()) return;
     setIsSendingComm(true);
     try {
-      const res = await recordBuyerCommunication(buyer.id, {
+      const res = await recordBuyerCommunication(canonicalBuyerId, {
         channel: composeChannel,
         recipient: composeRecipient || buyer.corporateEmail || buyer.mobileNumber || '',
         subject: composeSubject || `Buyer Communication: ${composeChannel}`,
@@ -1130,19 +1114,19 @@ export default function BuyerDossierDrawer({
     setLoadingComms(true);
     setCommunicationsError(null);
     try {
-      const res = await fetchBuyerCommunications(buyer.id);
+      const res = await fetchBuyerCommunications(canonicalBuyerId);
       if (res && res.success && Array.isArray(res.data)) {
         setCommunications(res.data);
       } else {
         setCommunicationsError(res?.error || strings.compose.loadFailure);
       }
     } catch (error) {
-      logger.error('Buyer communications request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      logger.error('Buyer communications request failed', { buyerId: canonicalBuyerId, error }, 'BUYER_DOSSIER');
       setCommunicationsError(strings.compose.loadFailure);
     } finally {
       setLoadingComms(false);
     }
-  }, [buyer.id, strings.compose.loadFailure]);
+  }, [canonicalBuyerId, strings.compose.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'communications') {
@@ -1204,24 +1188,24 @@ export default function BuyerDossierDrawer({
     setPayments([]);
     setPaymentHistoryError(null);
     try {
-      const res = await fetchBuyerPaymentHistory(buyer.id);
+      const res = await fetchBuyerPaymentHistory(canonicalBuyerId);
       if (res.success) {
         setPaymentSummary(res.summary || null);
         setPayments(res.payments || []);
       } else {
         logger.error('Buyer payment history API returned an unsuccessful response', {
-          buyerId: buyer.id,
+          buyerId: canonicalBuyerId,
           error: res.error,
         }, 'BUYER_DOSSIER');
         setPaymentHistoryError(res.error || strings.payments.loadFailure);
       }
     } catch (error) {
-      logger.error('Buyer payment history request failed', { buyerId: buyer.id, error }, 'BUYER_DOSSIER');
+      logger.error('Buyer payment history request failed', { buyerId: canonicalBuyerId, error }, 'BUYER_DOSSIER');
       setPaymentHistoryError(strings.payments.loadFailure);
     } finally {
       setLoadingPayments(false);
     }
-  }, [buyer.id, strings.payments.loadFailure]);
+  }, [canonicalBuyerId, strings.payments.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'payments') {
@@ -2660,29 +2644,15 @@ export default function BuyerDossierDrawer({
 
                           {/* Initiated By & Approver (2 cols) */}
                           <div className="grid grid-cols-2 gap-2.5">
-                            <div>
-                              <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                                {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                              </label>
-                              <select
-                                id="discount-initiator"
-                                value={creditInitiator}
-                                onChange={(e) => {
-                                  const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
-                                  setCreditInitiator(name);
-                                  setCreditInitiatorId(id);
-                                }}
-                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                                required
-                              >
-                                <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
-                                {buyerInitiatorSelectOptions.map((user) => (
-                                  <option key={user} value={user}>
-                                    {user}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                            <InitiatorSelectField
+                              id="discount-initiator"
+                              label={discountStrings.initiatedByLabel}
+                              value={creditInitiator}
+                              onChange={(name, id) => {
+                                setCreditInitiator(name);
+                                setCreditInitiatorId(id || name);
+                              }}
+                            />
 
                             <div>
                               <label htmlFor="discount-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -3014,29 +2984,15 @@ export default function BuyerDossierDrawer({
 
                       {/* Initiated By & Assigned Approver (2 cols) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {strings.creditApproval?.trialPeriodWorkflow?.initiatedByLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                          </label>
-                          <select
-                            id="trial-initiator"
-                            value={creditInitiator}
-                            onChange={(e) => {
-                              const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
-                              setCreditInitiator(name);
-                              setCreditInitiatorId(id);
-                            }}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                            required
-                          >
-                            <option value="">{strings.creditApproval?.trialPeriodWorkflow?.selectUserPlaceholder || 'Select Initiator...'}</option>
-                            {buyerInitiatorSelectOptions.map((user) => (
-                              <option key={user} value={user}>
-                                {user}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        <InitiatorSelectField
+                          id="trial-initiator"
+                          label={strings.creditApproval?.trialPeriodWorkflow?.initiatedByLabel || 'Initiated By'}
+                          value={creditInitiator}
+                          onChange={(name, id) => {
+                            setCreditInitiator(name);
+                            setCreditInitiatorId(id || name);
+                          }}
+                        />
 
                         <div>
                           <label htmlFor="trial-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -3324,29 +3280,15 @@ export default function BuyerDossierDrawer({
 
                       {/* Initiated By & Approver (2 cols) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label htmlFor="offline-initiator-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                          </label>
-                          <select
-                            id="offline-initiator-select"
-                            value={offlineInitiatorName}
-                            onChange={(e) => {
-                              const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
-                              setOfflineInitiatorName(name);
-                              setOfflineInitiatorId(id);
-                            }}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                            required
-                          >
-                            <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder}</option>
-                            {buyerInitiatorSelectOptions.map((user) => (
-                              <option key={user} value={user}>
-                                {user}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        <InitiatorSelectField
+                          id="offline-initiator-select"
+                          label={offlinePaymentStrings.initiatedByLabel}
+                          value={offlineInitiatorName}
+                          onChange={(name, id) => {
+                            setOfflineInitiatorName(name);
+                            setOfflineInitiatorId(id || name);
+                          }}
+                        />
 
                         <div>
                           <label htmlFor="offline-approver-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -3482,29 +3424,15 @@ export default function BuyerDossierDrawer({
                       />
                     </div>
 
-                    <div>
-                      <label htmlFor="credit-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {creditApprovalStrings.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        id="credit-initiator"
-                        value={creditInitiator}
-                        onChange={(e) => {
-                          const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
-                          setCreditInitiator(name);
-                          setCreditInitiatorId(id);
-                        }}
-                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                        required
-                      >
-                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
-                        {buyerInitiatorSelectOptions.map((user) => (
-                          <option key={user} value={user}>
-                            {user}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    <InitiatorSelectField
+                      id="credit-initiator"
+                      label={creditApprovalStrings.initiatorLabel || 'Initiated By'}
+                      value={creditInitiator}
+                      onChange={(name, id) => {
+                        setCreditInitiator(name);
+                        setCreditInitiatorId(id || name);
+                      }}
+                    />
                   </div>
 
                   {/* Row 3: Assigned Approver & Remarks (2 cols) */}

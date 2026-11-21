@@ -7971,3 +7971,74 @@ All done ?
 ```
 
 ---
+
+### Prompt 383
+
+**Timestamp**: 2026-11-21T22:22:15+05:30
+
+```text
+Investigate the root causes and fix the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, and Request Approval flows).
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Do not apply surface-level UI patches that hide backend/data mismatches. Trace the exact API endpoints, DB queries, and ID fields so these issues cannot recur.
+- **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API clients, or modal components. Reuse existing approval, credit, and directory services/hooks.
+- **Do not break any existing UI or functionality**: Keep all unrelated tabs, columns, filters, and workflows intact, and add regression tests covering each fix.
+
+---
+
+### 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+- **Investigate ID/Lookup Mismatch**: In `BuyerDossierDrawer` (e.g., for `Veera solutions pvt ltd`), the **Payments** tab returns `Buyer account user-veerababuv2002-001 not found` and the **Request Buyer Credit Approval** modal shows `Available Credits: —` with the error `"The credit balance for ... is not on record, so the approver cannot see the balance this request is made against."` Meanwhile, the **Seller** credit approval modal correctly displays `Available Credits` (e.g., `99 Credits`).
+- **Fix the lookup consistently across all Buyer Dossier tabs (Profile, Credit, Payments, and Credit Approval Modal)**:
+  - Ensure the frontend passes the exact canonical buyer identifier expected by the backend (and/or the backend resolves by both `buyerId` and `userId` consistently) so `Credit`, `Payments`, and `Request Buyer Credit Approval` all read the live DB record without `not found` or `not on record` errors.
+  - Ensure `Available Credits` in the Buyer Credit Approval modal always displays the real numeric DB balance (including `0 Credits` when the balance is `0`, never `—` or a blocking error when the account exists in DB).
+- **Direct DB Sync After Approval**:
+  - Verify the full end-to-end credit approval flow (for both Buyers and Sellers): when a request (e.g., `+5 Credits`) is approved, it must persist to the DB credit balance + credit history ledger and immediately reflect across the Dossier header/Profile `Available Quota`, the `Credit` tab cards/history, the directory table `Credits` column, and the approval modal without stale cache or manual workarounds.
+
+---
+
+### 2. Clean Up `Initiated By` Dropdown Across ALL Request Approval Modals (Buyer & Seller)
+In **both Buyers Directory and Sellers Directory** (and every Request Approval modal across Category Manager):
+- **Remove all dummy data, approver names, generic labels, and raw UUIDs** from the `Initiated By` dropdown (currently polluted with `Sudheer`, `Srinu Sir`, `Category Manager`, `Session Initiator`, and raw UUIDs like `701eb175-baa1-4fc6-b463-2abd659d25cc`).
+- **Show ONLY these 3 valid initiator names**:
+  1. `Govardhan`
+  2. `Chandan`
+  3. `Krishna Chaitanya`
+- **Add an "Other" option**: Include an `Other` (or `+ Add Other Person`) option at the bottom of the `Initiated By` dropdown. When selected, reveal a clean inline text input so the user can type a custom person's name and submit it with the approval request.
+- Centralize this initiator list + "Other" input logic in a single shared constant/component reused by both Buyer and Seller approval modals so it cannot drift out of sync in the future.
+
+---
+
+### 3. Exact DB Counts for Buyers Directory & Sellers Directory (Remove 500 Cap)
+- Currently, KPI cards in **Buyers Directory** and **Sellers Directory** (e.g., `TOTAL BUYERS`, `TOTAL SUPPLIERS`, `BUYER UPLOADED`) are capped at `500` because they are derived from a limited query/array (`limit: 500`) instead of the actual database count.
+- **Fix backend & frontend analytics**:
+  - Query exact live DB counts (`COUNT(*)`) for all directory KPI/analytics cards (`Total Buyers`, `Total Suppliers`, `Network Suppliers`, `Buyer Uploaded`, etc.) directly from the database rather than counting the paginated/capped rows returned to the table.
+  - Ensure all analytics numbers stay directly linked to live DB state.
+
+---
+
+### 4. Verification & Regression Prevention
+- Add/update unit and integration tests covering:
+  1. Buyer dossier credit/payments lookup resolving correctly and post-approval credit addition (`+5 Credits`) reflecting in DB and UI.
+  2. `Initiated By` rendering only `Govardhan`, `Chandan`, `Krishna Chaitanya`, and `Other` (with custom name input) in both Buyer and Seller approval modals.
+  3. Directory KPI totals returning exact DB counts even when total records exceed `500`.
+```
+
+```
+### User Prompt 384 (Timestamp: 22 Nov 2026, 12:04 AM IST)
+continue
+```
+
+
+---
+
+### User Prompt 385 (Timestamp: 22 Nov 2026, 12:12 AM IST)
+```text
+continue
+```
+
+---
+
+### User Prompt 386 (Timestamp: 22 Nov 2026, 02:37 AM IST)
+```text
+continue
+```

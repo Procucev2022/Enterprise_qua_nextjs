@@ -1089,14 +1089,14 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
   const activityId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
   const creditDelta = isDeduct ? -creditQty : creditQty;
   const currentBalanceExpr = buyerAccount
-    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), 0) AS INTEGER)`
+    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), json_extract(raw, '$.remainingFreeRFQs'), 0) AS INTEGER)`
     : `CAST(COALESCE(json_extract(raw, '$.freeQuotationCredits'), json_extract(raw, '$.freeRfqDownloadCredits'), json_extract(raw, '$.credits'), 0) AS INTEGER)`;
   const updatedBalanceExpr = `MAX(0, ${currentBalanceExpr} + $1)`;
   const previousBalanceFromTask = `CAST(json_extract(t.raw, '$.__creditApprovalPreviousBalance') AS INTEGER)`;
-  const updatedBuyerBalance = `CAST(COALESCE(json_extract(b.raw, '$.creditBalance'), 0) AS INTEGER)`;
+  const updatedBuyerBalance = `CAST(COALESCE(json_extract(b.raw, '$.creditBalance'), json_extract(b.raw, '$.remainingFreeRFQs'), 0) AS INTEGER)`;
   const updatedVendorBalance = `CAST(COALESCE(json_extract(v.raw, '$.freeQuotationCredits'), 0) AS INTEGER)`;
   const previousBalanceExpr = buyerAccount
-    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), 0) AS INTEGER)`
+    ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), json_extract(raw, '$.remainingFreeRFQs'), 0) AS INTEGER)`
     : `CAST(COALESCE(json_extract(raw, '$.freeQuotationCredits'), json_extract(raw, '$.freeRfqDownloadCredits'), json_extract(raw, '$.credits'), 0) AS INTEGER)`;
   const taskRawWithPreviousBalance = `json_set(COALESCE(raw, '{}'), '$.__creditApprovalPreviousBalance', (SELECT ${previousBalanceExpr} FROM ${accountTable} WHERE id = $2))`;
 
@@ -1116,7 +1116,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
     {
       text: `UPDATE ${accountTable}
         SET raw = ${buyerAccount
-          ? `json_set(raw, '$.creditBalance', ${updatedBalanceExpr}, '$.available_credits', ${updatedBalanceExpr})`
+          ? `json_set(raw, '$.creditBalance', ${updatedBalanceExpr}, '$.available_credits', ${updatedBalanceExpr}, '$.remainingFreeRFQs', ${updatedBalanceExpr})`
           : `json_set(raw, '$.freeQuotationCredits', ${updatedBalanceExpr}, '$.freeRfqDownloadCredits', ${updatedBalanceExpr}, '$.credits', ${updatedBalanceExpr})`},
             updated_at = CURRENT_TIMESTAMP
         WHERE id = $2
@@ -1422,16 +1422,28 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       }
 
       if (accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') {
-        const dbBuyerRes = await client.query(
+        let dbBuyerRes = await client.query(
           'SELECT id, raw FROM buyer_accounts WHERE id = $1 FOR UPDATE',
           [accountId]
         );
+        if (!dbBuyerRes?.rows?.[0]) {
+          dbBuyerRes = await client.query(
+            `SELECT id, raw FROM buyer_accounts 
+             WHERE lower(corporate_email) = lower($1)
+                OR raw->>'userId' = $1
+                OR raw->>'user_id' = $1
+                OR raw->>'organizationId' = $1
+                OR raw->>'buyerId' = $1
+             FOR UPDATE`,
+            [accountId]
+          );
+        }
         const bRow = requireCreditAccount(dbBuyerRes?.rows?.[0], task, accountId);
         const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
         const targetBuyerId = bRow.id;
-        const prevBal = requireRecordedBalance(bRaw.creditBalance ?? bRaw.available_credits, task, accountId);
+        const prevBal = requireRecordedBalance(bRaw.creditBalance ?? bRaw.available_credits ?? bRaw.remainingFreeRFQs, task, accountId);
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), '{remainingFreeRFQs}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
         await client.query(bSql, [updatedBal, targetBuyerId]);
 
         if (domainQueries.recordBuyerCreditTransactionInDB) {
@@ -1554,6 +1566,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       available_credits: updatedBuyerInfo.updatedBal,
     }, { persist: false });
   }
+  pool.queryCache?.invalidate('buyer_accounts');
   if ((accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') && storeService.updateBuyerAccount) {
     if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);

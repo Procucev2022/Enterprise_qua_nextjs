@@ -6,6 +6,7 @@ import {
   requestBuyerCreditApproval,
   requestSellerQuoteCreditApproval,
   addSellerQuoteCredits,
+  fetchSellerDirectoryKPIStats,
 } from '../../lib/accountDocumentsClient';
 import { authClient } from '../../lib/authClient';
 import { UI_STRINGS, formatString } from '../../lib/uiStrings';
@@ -153,6 +154,21 @@ describe('accountDocumentsClient', () => {
       expect(docs.documents).toEqual([]);
       expect(docs.error).toBe(
         formatString(UI_STRINGS.dataLoad.networkFailed, {
+          resource: UI_STRINGS.dataLoad.resources.accountDocuments,
+        })
+      );
+    });
+
+    it('returns unexpectedResponse when json.documents is not an array', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ documents: null }),
+      } as unknown as Response);
+
+      const docs = await fetchAccountDocuments('buyer', 'b-invalid');
+      expect(docs.documents).toEqual([]);
+      expect(docs.error).toBe(
+        formatString(UI_STRINGS.dataLoad.unexpectedResponse, {
           resource: UI_STRINGS.dataLoad.resources.accountDocuments,
         })
       );
@@ -419,6 +435,54 @@ describe('accountDocumentsClient', () => {
       const result = await addSellerQuoteCredits('vendor-1', { amount: 2 });
       expect(result.success).toBe(false);
       expect(result.error).toContain('Connection reset');
+    });
+  });
+
+  describe('fetchSellerDirectoryKPIStats', () => {
+    it('fetches live seller directory KPI stats successfully', async () => {
+      const mockKPI = { success: true, totalSuppliers: 650, networkSuppliers: 450, buyerUploaded: 200, verifiedActive: 500 };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockKPI,
+      } as unknown as Response);
+
+      const res = await fetchSellerDirectoryKPIStats();
+      expect(res).toEqual(mockKPI);
+      expect(global.fetch).toHaveBeenCalledWith('/api/vendors/kpi-stats', expect.any(Object));
+    });
+
+    it('returns error object when json format is invalid or response is empty', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => null,
+      } as unknown as Response);
+
+      const resNull = await fetchSellerDirectoryKPIStats();
+      expect(resNull.success).toBe(false);
+      expect(resNull.totalSuppliers).toBe(0);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invalid: true }),
+      } as unknown as Response);
+
+      const res = await fetchSellerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalSuppliers).toBe(0);
+      expect(res.error).toBe('Invalid KPI stats response');
+    });
+
+    it('handles network throw when fetching seller KPI stats', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
+      const res = await fetchSellerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalSuppliers).toBe(0);
+      expect(res.error).toBe('Network error');
+
+      global.fetch = jest.fn().mockRejectedValue({});
+      const resNoMsg = await fetchSellerDirectoryKPIStats();
+      expect(resNoMsg.success).toBe(false);
+      expect(resNoMsg.error).toBe('Failed to fetch seller KPI stats.');
     });
   });
 });

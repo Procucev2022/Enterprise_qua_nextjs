@@ -105,6 +105,7 @@ import {
   type RequestSellerQuoteCreditApprovalPayload,
 } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
+import InitiatorSelectField from './InitiatorSelectField';
 
 export interface SupplierDossierSeller {
   id: string;
@@ -1013,25 +1014,6 @@ export default function SupplierDossierDrawer({
     }
     return list;
   }, [assignees]);
-
-  const sellerInitiatorSelectOptions = useMemo(() => {
-    const primaryOrder = ['Govardhan', 'Chandan', 'Krishna Chaitanya', 'Sudheer'];
-    const list: string[] = [...primaryOrder];
-    const extras = [
-      ...internalTaskUserOptions,
-      'Session Initiator',
-      'Category Manager',
-    ];
-    if (quoteCreditInitiator) extras.push(quoteCreditInitiator);
-    if (offlineInitiatorName) extras.push(offlineInitiatorName);
-
-    for (const item of extras) {
-      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
-        list.push(item);
-      }
-    }
-    return list;
-  }, [internalTaskUserOptions, quoteCreditInitiator, offlineInitiatorName]);
 
   const sellerApproverSelectOptions = useMemo(() => {
     return ['Srinu Sir', 'Rao Sir', 'Sudheer Sir'];
@@ -3604,25 +3586,12 @@ export default function SupplierDossierDrawer({
 
                           {/* Initiated By & Assigned Approver */}
                           <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                                {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                              </label>
-                              <select
-                                id="discount-initiator"
-                                value={quoteCreditInitiator}
-                                onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
-                                required
-                              >
-                                <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
-                                {sellerInitiatorSelectOptions.map((user) => (
-                                  <option key={user} value={user}>
-                                    {user}
-                                  </option>
-                                ))}
-                              </select>
-                            </div>
+                            <InitiatorSelectField
+                              id="discount-initiator"
+                              label={discountStrings.initiatedByLabel || 'Initiated By'}
+                              value={quoteCreditInitiator}
+                              onChange={(name) => setQuoteCreditInitiator(name)}
+                            />
                             <div>
                               <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                                 {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
@@ -3923,25 +3892,12 @@ export default function SupplierDossierDrawer({
 
                       {/* Initiated By & Assigned Approver (2 cols) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                          </label>
-                          <select
-                            id="trial-initiator"
-                            value={quoteCreditInitiator}
-                            onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                            required
-                          >
-                            <option value="">{trialPeriodStrings.selectUserPlaceholder}</option>
-                            {sellerInitiatorSelectOptions.map((user) => (
-                              <option key={user} value={user}>
-                                {user}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        <InitiatorSelectField
+                          id="trial-initiator"
+                          label={trialPeriodStrings.initiatedByLabel || 'Initiated By'}
+                          value={quoteCreditInitiator}
+                          onChange={(name) => setQuoteCreditInitiator(name)}
+                        />
                         <div>
                           <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
                             {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
@@ -4200,28 +4156,12 @@ export default function SupplierDossierDrawer({
 
                       {/* Initiated By & Approver (2 cols) */}
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        <div>
-                          <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                            {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
-                          </label>
-                          <select
-                            id="offline-initiator"
-                            value={offlineInitiatorName}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              setOfflineInitiatorName(val);
-                            }}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                            required
-                          >
-                            <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder}</option>
-                            {sellerInitiatorSelectOptions.map((user) => (
-                              <option key={user} value={user}>
-                                {user}
-                              </option>
-                            ))}
-                          </select>
-                        </div>
+                        <InitiatorSelectField
+                          id="offline-initiator"
+                          label={offlinePaymentStrings.initiatedByLabel || 'Initiated By'}
+                          value={offlineInitiatorName}
+                          onChange={(name) => setOfflineInitiatorName(name)}
+                        />
 
                         <div>
                           <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
@@ -4354,25 +4294,12 @@ export default function SupplierDossierDrawer({
                       />
                     </div>
 
-                    <div>
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        id="quote-credit-initiator"
-                        value={quoteCreditInitiator}
-                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer text-xs"
-                        required
-                      >
-                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
-                        {sellerInitiatorSelectOptions.map((user) => (
-                          <option key={user} value={user}>
-                            {user}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    <InitiatorSelectField
+                      id="quote-credit-initiator"
+                      label={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'}
+                      value={quoteCreditInitiator}
+                      onChange={(name) => setQuoteCreditInitiator(name)}
+                    />
                   </div>
 
                   {/* Row 3: Assigned Approver & Remarks (2 cols) */}
@@ -4499,25 +4426,12 @@ export default function SupplierDossierDrawer({
                       />
                     </div>
 
-                    <div>
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        id="quote-credit-initiator"
-                        value={quoteCreditInitiator}
-                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
-                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
-                        required
-                      >
-                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
-                        {sellerInitiatorSelectOptions.map((user) => (
-                          <option key={user} value={user}>
-                            {user}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
+                    <InitiatorSelectField
+                      id="quote-credit-initiator"
+                      label={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'}
+                      value={quoteCreditInitiator}
+                      onChange={(name) => setQuoteCreditInitiator(name)}
+                    />
                   </div>
 
                   {/* Row 3: Assigned Approver & Remarks (2 cols) */}

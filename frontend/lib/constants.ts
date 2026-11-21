@@ -2756,13 +2756,17 @@ export const APPROVER_CONFIG = [
 
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
 
-export const CREDIT_APPROVAL_INITIATORS = [
+export const STANDARD_APPROVAL_INITIATORS = [
   'Govardhan',
-  'Krishna',
-  'Chandhan',
+  'Chandan',
+  'Krishna Chaitanya',
 ] as const;
 
+export const CREDIT_APPROVAL_INITIATORS = STANDARD_APPROVAL_INITIATORS;
+
 export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
+
+export const INITIATOR_OTHER_OPTION = 'Other';
 
 export const OFFLINE_PAYMENT_TYPES = [
   'NEFT / RTGS',

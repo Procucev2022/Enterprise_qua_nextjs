@@ -2261,6 +2261,8 @@ export interface BuyerAccount {
   subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited';
   subscriptionTier?: string;
   remainingFreeRFQs: number;
+  creditBalance?: number;
+  available_credits?: number;
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';

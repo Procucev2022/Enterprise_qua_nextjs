@@ -7,9 +7,27 @@ import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateT
 import type { AuditLogEntry, BuyerAccount, RFQItem } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
-jest.mock('@/lib/store', () => ({
-  useApp: jest.fn(),
-}));
+jest.mock('@/lib/store', () => {
+  const fn = jest.fn();
+  return {
+    useApp: fn,
+    useOptionalApp: fn,
+  };
+});
+
+jest.mock('@/lib/buyerProfileClient', () => {
+  const actual = jest.requireActual('@/lib/buyerProfileClient');
+  return {
+    ...actual,
+    fetchBuyerDirectoryKPIStats: jest.fn().mockResolvedValue({
+      success: true,
+      totalBuyers: 3,
+      verifiedBuyers: 2,
+      subscriptionBuyers: 1,
+      modeCounts: { mode_1: 2, mode_2: 1 },
+    }),
+  };
+});
 
 jest.mock('@/lib/reportsClient', () => ({
   exportReportToExcel: jest.fn(),

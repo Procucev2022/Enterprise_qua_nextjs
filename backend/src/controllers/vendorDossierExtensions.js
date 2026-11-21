@@ -1111,6 +1111,18 @@ async function getSellerActiveRFQs(req, res, next) {
   }
 }
 
+async function getSellerDirectoryKPIStats(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const directoryKPIQueries = require('../db/directoryKPIQueries');
+    const stats = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
+    res.json({ success: true, ...stats });
+  } catch (err) {
+    logger.error('Error fetching seller directory KPI stats', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
@@ -1123,4 +1135,5 @@ module.exports = {
   requestCreditApproval,
   getSellerBuyerUploads,
   getSellerActiveRFQs,
+  getSellerDirectoryKPIStats,
 };
