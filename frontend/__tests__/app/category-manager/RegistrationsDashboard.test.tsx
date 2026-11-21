@@ -3,6 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import RegistrationsDashboard from '@/app/category-manager/components/RegistrationsDashboard';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
+import { exportReportToCsv } from '@/lib/reportsClient';
+
+jest.mock('@/lib/reportsClient', () => {
+  const actual = jest.requireActual('@/lib/reportsClient');
+  return {
+    ...actual,
+    exportReportToCsv: jest.fn(),
+  };
+});
 
 const mockClients = [
   {
@@ -74,6 +83,18 @@ const mockClients = [
     clientType: 'Seller',
   },
   {
+    id: 'reg-client-empty',
+    userName: '',
+    companyName: '',
+    phoneNumber: '',
+    userEmail: '',
+    regDate: '',
+    status: '',
+    sourceType: '',
+    clientType: '',
+    isApproved: false,
+  },
+  {
     id: 'reg-client-seller-2',
     userName: 'Suspended Seller',
     companyName: 'Suspended Metals',
@@ -84,6 +105,18 @@ const mockClients = [
     sourceType: 'Web App',
     isApproved: false,
     clientType: 'Seller',
+  },
+  {
+    id: 'reg-client-empty-2',
+    userName: '',
+    companyName: '',
+    phoneNumber: '',
+    userEmail: '',
+    regDate: '',
+    status: '',
+    sourceType: '',
+    clientType: '',
+    isApproved: false,
   },
 ];
 
@@ -204,35 +237,35 @@ describe('RegistrationsDashboard', () => {
     expect(screen.queryByLabelText(/reject for/i)).not.toBeInTheDocument();
   });
 
-  test('filters registrations by status dropdown (All, Auto-Approved, Rejected)', async () => {
+  test('filters registrations by source dropdown (All, Web App, WhatsApp, Email)', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+    const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel);
 
-    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
+    fireEvent.change(sourceSelect, { target: { value: 'WhatsApp' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('status=Auto-Approved'),
+        expect.stringContaining('sourceType=WhatsApp'),
         expect.anything()
       );
     });
 
-    fireEvent.change(statusSelect, { target: { value: 'Rejected' } });
+    fireEvent.change(sourceSelect, { target: { value: 'Email' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('status=Rejected'),
+        expect.stringContaining('sourceType=Email'),
         expect.anything()
       );
     });
 
-    fireEvent.change(statusSelect, { target: { value: 'all' } });
+    fireEvent.change(sourceSelect, { target: { value: 'all' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenLastCalledWith(
-        expect.not.stringContaining('status='),
+        expect.not.stringContaining('sourceType='),
         expect.anything()
       );
     });
@@ -247,11 +280,11 @@ describe('RegistrationsDashboard', () => {
 
     const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
     const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel);
-    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
 
     fireEvent.change(clientSelect, { target: { value: 'buyer' } });
     fireEvent.change(sourceSelect, { target: { value: 'Web App' } });
-    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
+    fireEvent.change(startInput, { target: { value: '2026-06-01' } });
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenLastCalledWith(
@@ -263,7 +296,7 @@ describe('RegistrationsDashboard', () => {
         expect.anything()
       );
       expect(global.fetch).toHaveBeenLastCalledWith(
-        expect.stringContaining('status=Auto-Approved'),
+        expect.stringContaining('startDate=2026-06-01'),
         expect.anything()
       );
     });
@@ -713,7 +746,7 @@ describe('RegistrationsDashboard', () => {
     fireEvent.click(sortDateBtn);
   });
 
-  test('filters registrations by status dropdown and renders auto-approved sellers without action buttons', async () => {
+  test('renders auto-approved sellers without action buttons and supports refresh', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
@@ -723,58 +756,31 @@ describe('RegistrationsDashboard', () => {
     // Auto-approved seller displays auto-approved badge
     expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusAutoApproved).length).toBeGreaterThan(0);
 
-    // Status filter selection
-    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
-    fireEvent.change(statusSelect, { target: { value: 'Auto-Approved' } });
-    fireEvent.change(statusSelect, { target: { value: 'Rejected' } });
-    fireEvent.change(statusSelect, { target: { value: 'all' } });
-
     // Client view filter selection
     const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
     fireEvent.change(clientSelect, { target: { value: 'seller' } });
     fireEvent.change(clientSelect, { target: { value: 'buyer' } });
     fireEvent.change(clientSelect, { target: { value: 'all' } });
+
+    // Refresh icon button
+    const refreshBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.refreshTooltip);
+    fireEvent.click(refreshBtn);
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
   });
 
-  test('handles date range presets (10 days, 1 month, custom, all dates) and date inputs', async () => {
+  test('handles date range filtering with start and end date inputs', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    // 1. Click "Last 10 Days" preset
-    const btn10Days = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateLast10Days);
-    fireEvent.click(btn10Days);
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
 
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringMatching(/startDate=\d{4}-\d{2}-\d{2}&endDate=\d{4}-\d{2}-\d{2}/),
-        expect.anything()
-      );
-    });
-
-    // Start & End date inputs should now be visible and populated
-    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDateLabel) as HTMLInputElement;
-    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDateLabel) as HTMLInputElement;
-    expect(startInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-    expect(endInput.value).toMatch(/^\d{4}-\d{2}-\d{2}$/);
-
-    // 2. Click "Last 1 Month" preset
-    const btn1Month = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateLast1Month);
-    fireEvent.click(btn1Month);
-
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringMatching(/startDate=\d{4}-\d{2}-\d{2}&endDate=\d{4}-\d{2}-\d{2}/),
-        expect.anything()
-      );
-    });
-
-    // 3. Click "Custom Range" preset and edit dates manually
-    const btnCustom = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateCustomRange);
-    fireEvent.click(btnCustom);
-
+    // 1. Set start and end date
     fireEvent.change(startInput, { target: { value: '2026-11-01' } });
     fireEvent.change(endInput, { target: { value: '2026-11-15' } });
 
@@ -785,9 +791,9 @@ describe('RegistrationsDashboard', () => {
       );
     });
 
-    // 4. Click clear date filter button
-    const clearBtn = screen.getByTitle(UI_STRINGS.actionCenter.registrationsDashboard.clearDateFilter);
-    fireEvent.click(clearBtn);
+    // 2. Clear date inputs
+    fireEvent.change(startInput, { target: { value: '' } });
+    fireEvent.change(endInput, { target: { value: '' } });
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenLastCalledWith(
@@ -795,38 +801,174 @@ describe('RegistrationsDashboard', () => {
         expect.anything()
       );
     });
+  });
 
-    // 5. Click "All Dates" preset directly
-    fireEvent.click(btn10Days);
-    const btnAllDates = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.dateAllTime);
-    fireEvent.click(btnAllDates);
+  test('handles Export CSV button click and exports formatted rows', async () => {
+    render(<RegistrationsDashboard />);
 
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenLastCalledWith(
-        expect.not.stringContaining('startDate='),
-        expect.anything()
-      );
+      expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    // 6. Test startDate only and endDate only
-    fireEvent.click(btnCustom);
-    const customStart = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDateLabel);
-    const customEnd = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDateLabel);
-    fireEvent.change(customStart, { target: { value: '2026-11-01' } });
+    const exportBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.exportBtn);
+    expect(exportBtn).toBeInTheDocument();
+
+    fireEvent.click(exportBtn);
+
+    expect(exportReportToCsv).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          'User Name': 'verababu',
+        }),
+      ]),
+      expect.stringContaining('registrations_')
+    );
+  });
+
+  test('handles calendar picker container click and keyboard navigation', async () => {
+    render(<RegistrationsDashboard />);
+
     await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('startDate=2026-11-01'),
-        expect.anything()
-      );
+      expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    fireEvent.change(customStart, { target: { value: '' } });
-    fireEvent.change(customEnd, { target: { value: '2026-11-20' } });
-    await waitFor(() => {
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('endDate=2026-11-20'),
-        expect.anything()
-      );
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
+
+    const startContainer = startInput.parentElement as HTMLElement;
+    const endContainer = endInput.parentElement as HTMLElement;
+
+    // Click on container triggers focus / showPicker
+    fireEvent.click(startContainer);
+    fireEvent.click(endContainer);
+
+    // Keyboard Enter / Space on container triggers picker
+    fireEvent.keyDown(startContainer, { key: 'Enter' });
+    fireEvent.keyDown(startContainer, { key: ' ' });
+    fireEvent.keyDown(endContainer, { key: 'Enter' });
+    fireEvent.keyDown(endContainer, { key: ' ' });
+
+    // With showPicker function mocked
+    startInput.showPicker = jest.fn();
+    endInput.showPicker = jest.fn().mockImplementation(() => {
+      throw new Error('Picker not supported');
     });
+
+    fireEvent.click(startContainer);
+    expect(startInput.showPicker).toHaveBeenCalled();
+
+    fireEvent.click(endContainer);
+    expect(endInput.showPicker).toHaveBeenCalled();
+  });
+
+  test('closes column settings modal on Escape key and backdrop click', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // 1. Escape key closes column settings
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+
+    // Reopen
+    fireEvent.click(gearBtn);
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // 2. Click backdrop closes column settings
+    const modalBackdrop = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle);
+    fireEvent.click(modalBackdrop, { target: modalBackdrop });
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
+  test('closes summary card records modal on Escape key', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    // Click total registrations summary card
+    const totalCard = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients).closest('[role="group"]') as HTMLElement;
+    fireEvent.click(totalCard);
+
+    // Escape closes summary modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+  });
+
+  test('hydrates saved columns from localStorage on mount and handles invalid json', async () => {
+    localStorage.setItem(
+      'cm_registration_columns_order_v1',
+      JSON.stringify([{ key: 'userName', label: 'User Name', visible: true, required: true }])
+    );
+    const { unmount } = render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    unmount();
+
+    localStorage.setItem('cm_registration_columns_order_v1', 'invalid-json');
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    localStorage.removeItem('cm_registration_columns_order_v1');
+  });
+
+  test('filters with only start date or only end date', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
+
+    fireEvent.change(startInput, { target: { value: '2026-06-01' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('startDate=2026-06-01'), expect.anything());
+    });
+    fireEvent.change(startInput, { target: { value: '' } });
+    fireEvent.change(endInput, { target: { value: '2026-06-30' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('endDate=2026-06-30'), expect.anything());
+    });
+  });
+
+  test('handles drag over and drop onto same column without reordering', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    const firstBadge = screen.getByText('#1');
+    const firstRow = firstBadge.closest('[draggable="true"]') as HTMLElement;
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(firstRow, { dataTransfer });
+    fireEvent.dragOver(firstRow, { dataTransfer });
+    fireEvent.drop(firstRow, { dataTransfer });
+  });
+
+  test('supports sorting by non-date columns ascending and descending', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sortCompanyBtn = screen.getByTestId('sort-col-companyName');
+    fireEvent.click(sortCompanyBtn);
+    fireEvent.click(sortCompanyBtn);
+
+    const sortPhoneBtn = screen.getByTestId('sort-col-phoneNumber');
+    fireEvent.click(sortPhoneBtn);
+    fireEvent.click(sortPhoneBtn);
   });
 });

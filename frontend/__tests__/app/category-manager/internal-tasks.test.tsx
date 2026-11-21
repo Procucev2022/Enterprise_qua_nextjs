@@ -3469,4 +3469,30 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(screen.getByTestId('task-details-close-x'));
   });
 
+  test('handles backdrop click and escape key to close task modal', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // 1. Create task modal Escape & backdrop click
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByText('Create Internal Task'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

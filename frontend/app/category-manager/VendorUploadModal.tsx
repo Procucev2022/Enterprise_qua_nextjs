@@ -16,7 +16,7 @@
 // this app's own conventions (see ManualRFQModal.tsx for the modal shell).
 // ==============================================================================
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { X, Upload, Download, FileSpreadsheet, CheckCircle2, AlertTriangle, Loader2, XCircle, History, Clock } from 'lucide-react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -149,7 +149,7 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     setRows((prev) => prev.filter((r) => r.rowNumber !== rowNumber));
   }
 
-  function resetState() {
+  const resetState = useCallback(() => {
     setStep('select');
     setShowHistory(false);
     setFileName('');
@@ -163,13 +163,13 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     setIsSendingInvitations(false);
     setInvitationSummary(null);
     setInvitationProgress({ completed: 0, total: 0 });
-  }
+  }, []);
 
-  function handleClose() {
+  const handleClose = useCallback(() => {
     if (step === 'importing') return;
     resetState();
     onClose();
-  }
+  }, [step, resetState, onClose]);
 
   async function handleFile(file: File) {
     if (!isAllowedVendorUploadFile(file)) {
@@ -428,6 +428,18 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
     URL.revokeObjectURL(url);
   }
 
+  // Escape key support to close modal
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isParsing && !isSendingInvitations) {
+        handleClose();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, isParsing, isSendingInvitations, handleClose]);
+
   if (!isOpen) return null;
 
   return (
@@ -439,7 +451,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
       aria-labelledby="vendor-upload-modal-title"
       data-testid="vendor-upload-modal"
     >
-      <div className="w-full max-w-4xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto"
+      >
         <header className="flex items-center justify-between gap-3 px-5 py-4 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-xl bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">

@@ -105,6 +105,16 @@ export function ScorecardDashboard() {
     } catch {}
   }, []);
 
+  // Close drilldown modal on Escape key
+  useEffect(() => {
+    if (!drilldownExecutive) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrilldownExecutive(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [drilldownExecutive]);
+
   const handleScorecardSort = (field: string) => {
     if (scorecardSortField === field) {
       setScorecardSortOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
@@ -984,8 +994,18 @@ export function ScorecardDashboard() {
 
       {/* Drilldown Modal for Individual Executive */}
       {drilldownExecutive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDrilldownExecutive(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{strings.executivePerformanceTitle}</h3>

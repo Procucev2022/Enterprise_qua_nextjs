@@ -2152,13 +2152,17 @@ async function addQuote(req, res, next) {
       (Array.isArray(vendorRecord.quotedRfqIds) && vendorRecord.quotedRfqIds.some((quotedRfqId) => String(quotedRfqId) === String(targetRfq.id)));
     if (!eligibility.eligible && !isUnlimitedVendor && !isResubmission) {
       logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
         'RFQ_CONTROLLER'
       );
+      const isSubscribedPlan = eligibility.subscriptionPlan === 'connect' || eligibility.subscriptionPlan === 'select';
+      const quotaMsg = isSubscribedPlan
+        ? `Your ${eligibility.subscriptionPlan === 'select' ? 100 : 50} RFQ quotation credits for the ${eligibility.subscriptionPlan} plan have been used. Please renew or upgrade your subscription plan to continue submitting quotations.`
+        : `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`;
       return res.status(403).json({
         success: false,
-        error: `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`,
+        error: quotaMsg,
         upgradeRequired: true,
         freeCreditsRemaining: 0,
         subscriptionPlan: eligibility.subscriptionPlan,
@@ -2214,7 +2218,9 @@ async function addQuote(req, res, next) {
     res.json({
       success: true,
       data: finalData,
-      freeCreditsRemaining: updatedVendor ? updatedVendor.freeQuotationCredits : undefined,
+      freeCreditsRemaining: updatedVendor ? (
+        storeService.getVendorRfqCredits(updatedVendor.id, updatedVendor)?.freeCreditsRemaining ?? updatedVendor.freeQuotationCredits
+      ) : undefined,
     });
   } catch (err) {
     logger.error(`Error adding quote to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

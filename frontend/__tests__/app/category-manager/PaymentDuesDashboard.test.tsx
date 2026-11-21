@@ -1592,4 +1592,85 @@ describe('Summary Cards Click and Modal Popup', () => {
 
     localStorage.removeItem('qua_payment_dues_column_prefs');
   });
+
+  it('handles backdrop click and escape key to close communication modals and column settings', async () => {
+    const pdStrings = UI_STRINGS.actionCenter.paymentDues;
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    // 1. Email Modal Escape & backdrop click
+    const emailBtns = screen.getAllByTitle(pdStrings.actions.sendEmail);
+    fireEvent.click(emailBtns[0]);
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(screen.getByText(pdStrings.modals.emailTitle));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(emailBtns[0]);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Message Modal Escape & backdrop click
+    const msgBtns = screen.getAllByTitle(pdStrings.actions.sendMessage);
+    fireEvent.click(msgBtns[0]);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByText(pdStrings.modals.messageTitle));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 3. WhatsApp Modal Escape & backdrop click
+    const waBtns = screen.getAllByTitle(pdStrings.actions.sendWhatsApp);
+    fireEvent.click(waBtns[0]);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByText(pdStrings.modals.whatsAppTitle));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 4. Acknowledgement Status Modal Escape & backdrop click
+    const ackBtns = screen.getAllByTitle(pdStrings.actions.updateStatus);
+    fireEvent.click(ackBtns[0]);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(screen.getByText(pdStrings.modals.ackTitle));
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 5. History Modal Escape & backdrop click
+    const histBtns = screen.getAllByTitle(pdStrings.actions.viewHistory);
+    fireEvent.click(histBtns[0]);
+    dialog = await screen.findByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+    const historyHeader = dialog.querySelector('h3');
+    if (historyHeader) fireEvent.click(historyHeader);
+    expect(dialog).toBeInTheDocument();
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 6. Column settings Escape & backdrop click
+    const gearBtn = screen.getByTitle('Customize Columns');
+    fireEvent.click(gearBtn);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(dialog.querySelector('h3')!);
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

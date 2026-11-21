@@ -564,5 +564,91 @@ describe('AccountDocumentsTab', () => {
         expect(screen.getByText(DOCUMENT_STRINGS.toastDeleteError)).toBeInTheDocument();
       });
     });
+
+    it('handles backdrop click and escape key to close modals', async () => {
+      render(
+        <AccountDocumentsTab
+          accountType="buyer"
+          accountId="buyer-1"
+          accountName="Veera Babu Buyer Org"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('GST Registration Certificate')).toBeInTheDocument();
+      });
+
+      // 1. Upload modal backdrop click and Escape key
+      const uploadBtn = screen.getAllByRole('button', { name: DOCUMENT_STRINGS.confirmUploadBtn })[0];
+      fireEvent.click(uploadBtn);
+      let modal = screen.getByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Click inside should not close
+      fireEvent.click(within(modal).getByText(DOCUMENT_STRINGS.uploadModalTitle));
+      expect(modal).toBeInTheDocument();
+
+      // Escape key closes upload modal
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      // Re-open and close via backdrop click
+      fireEvent.click(uploadBtn);
+      modal = screen.getByRole('dialog');
+      fireEvent.click(modal);
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      // 2. Preview modal backdrop click and Escape key
+      const previewBtns = screen.getAllByTitle('Preview');
+      fireEvent.click(previewBtns[0]);
+      modal = screen.getByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Click inside should not close
+      fireEvent.click(within(modal).getByText('GST Registration Certificate'));
+      expect(modal).toBeInTheDocument();
+
+      // Escape key closes preview
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      // Re-open preview and close via backdrop click
+      fireEvent.click(previewBtns[0]);
+      modal = screen.getByRole('dialog');
+      fireEvent.click(modal);
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      // 3. Delete modal backdrop click and Escape key
+      const deleteBtns = screen.getAllByTitle('Delete');
+      fireEvent.click(deleteBtns[0]);
+      modal = screen.getByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Click inside should not close
+      fireEvent.click(within(modal).getByRole('heading', { name: DOCUMENT_STRINGS.deleteModalTitle }));
+      expect(modal).toBeInTheDocument();
+
+      // Escape key closes delete modal
+      fireEvent.keyDown(window, { key: 'Escape' });
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+
+      // Re-open delete modal and close via backdrop click
+      fireEvent.click(deleteBtns[0]);
+      modal = screen.getByRole('dialog');
+      fireEvent.click(modal);
+      await waitFor(() => {
+        expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      });
+    });
   });
 });

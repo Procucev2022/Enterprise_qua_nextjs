@@ -608,4 +608,31 @@ describe('LoginLogsDashboard', () => {
     fireEvent.click(screen.getByText('Category Manager Admin'));
     expect(screen.getByText(strings.details.roleCategoryManager)).toBeInTheDocument();
   });
+
+  it('handles backdrop click and escape key to close details modal', async () => {
+    render(<LoginLogsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Rajesh Sharma')).toBeInTheDocument();
+    });
+
+    // Open details
+    fireEvent.click(screen.getByText('Rajesh Sharma'));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside should not close
+    fireEvent.click(screen.getByText(strings.details.title));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByText('Rajesh Sharma'));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

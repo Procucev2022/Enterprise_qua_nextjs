@@ -1119,4 +1119,35 @@ describe('ActionCenterComposeModal', () => {
       );
     });
   });
+
+  it('handles backdrop click, inner container stopPropagation, and escape key to close', () => {
+    const onClose = jest.fn();
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={onClose}
+        entityType="internal_task"
+        entityId="tsk-escape"
+      />
+    );
+
+    const dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside should not close
+    fireEvent.click(screen.getByText(strings.modalTitle));
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Other key should not close
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    // Escape key closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // Backdrop click closes modal
+    fireEvent.click(dialog);
+    expect(onClose).toHaveBeenCalledTimes(2);
+  });
 });

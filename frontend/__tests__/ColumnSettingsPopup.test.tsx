@@ -154,5 +154,43 @@ describe('ColumnSettingsPopup', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Done' }));
     expect(onSave).toHaveBeenCalled();
   });
+
+  it('handles dropping onto the same item without reordering', () => {
+    const onSave = jest.fn();
+    render(
+      <ColumnSettingsPopup
+        isOpen={true}
+        onClose={jest.fn()}
+        columns={sampleColumns}
+        onSave={onSave}
+        onReset={jest.fn()}
+      />
+    );
+
+    const dragItem = screen.getByText('Column 1').closest('div[draggable="true"]')!;
+    const dataTransfer = { effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(dragItem, { dataTransfer });
+    fireEvent.drop(dragItem, { dataTransfer });
+    fireEvent.dragEnd(dragItem);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Done' }));
+    expect(onSave).toHaveBeenCalled();
+  });
+
+  it('stops propagation when clicking inside the popup container', () => {
+    const onClose = jest.fn();
+    render(
+      <ColumnSettingsPopup
+        isOpen={true}
+        onClose={onClose}
+        columns={sampleColumns}
+        onSave={jest.fn()}
+        onReset={jest.fn()}
+      />
+    );
+
+    fireEvent.click(screen.getByText('Column Settings'));
+    expect(onClose).not.toHaveBeenCalled();
+  });
 });
 

@@ -11,6 +11,10 @@ const { authHeader, TEST_USERS } = require('./testHelpers');
 describe('POST /api/buyer-accounts/:id/subscription-payment', () => {
   let buyerAccount;
 
+  beforeAll(async () => {
+    await request(app).get('/health');
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     buyerAccount = storeService.addBuyerAccount({

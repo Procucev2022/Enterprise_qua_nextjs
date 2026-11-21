@@ -96,6 +96,19 @@ export default function DocumentVaultDashboard() {
     } catch { /* ignore */ }
   }, []);
 
+  // Close modals on Escape key
+  useEffect(() => {
+    if (!isModalOpen && !showDocColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isModalOpen) setIsModalOpen(false);
+        if (showDocColumnSettings) setShowDocColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, showDocColumnSettings]);
+
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
     const timer = setTimeout(() => {
@@ -735,9 +748,15 @@ export default function DocumentVaultDashboard() {
         <div
           role="dialog"
           aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsModalOpen(false);
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative"
+          >
             <h2 className="text-base font-bold text-slate-900 dark:text-white mb-1">
               {editingDoc ? strings.modal.editTitle : strings.modal.uploadTitle}
             </h2>
