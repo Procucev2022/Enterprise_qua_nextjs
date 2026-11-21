@@ -39,6 +39,9 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
     if (!orgId) return [];
 
     const session = await vendorIngestionQueries.findLatestSession(orgId);
+    if (session && (session.status === 'DRAFT' || session.status === 'VENDOR_MASTER_STORED')) {
+      return [];
+    }
     const orgRecords =
       typeof vendorIngestionQueries.findOrganizationVendorMasterRecords === 'function'
         ? await vendorIngestionQueries.findOrganizationVendorMasterRecords(orgId, 500)
@@ -272,11 +275,26 @@ async function getBootstrap(req, res, next) {
     const vendorEvaluations = user && user.role === 'vendor' && sessionEmail
       ? evaluations.filter((evaluation) => String(evaluation.email || '').toLowerCase() === sessionEmail)
       : [];
-    const buyerIdentityValues = [buyerId, ...candidateBuyerIds]
+    const buyerIdentityValues = [
+      buyerId,
+      ...candidateBuyerIds,
+      resolvedBuyerAccount?.organizationId,
+      resolvedBuyerAccount?.organizationName,
+      user?.orgId,
+      user?.organizationId,
+      user?.orgName,
+    ]
       .filter(Boolean)
       .map((value) => String(value).toLowerCase());
     const buyerOwnedVendors = rawVendors.filter((vendor) => {
-      const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+      const vendorOwnerValues = [
+        vendor.buyerId,
+        vendor.buyerAccountId,
+        vendor.buyerEmail,
+        vendor.addedByBuyerCompany,
+        vendor.organizationId,
+        vendor.orgId,
+      ]
         .filter(Boolean)
         .map((value) => String(value).toLowerCase());
       return vendorOwnerValues.some((value) => buyerIdentityValues.includes(value));
@@ -306,10 +324,21 @@ async function getBootstrap(req, res, next) {
 
     const vendors = rawVendors.map((vendor) => {
       const isOwnVendor = sessionEmail && String(vendor.email || '').toLowerCase() === sessionEmail;
-      const vendorOwnerValues = [vendor.buyerId, vendor.buyerAccountId, vendor.buyerEmail]
+      const vendorOwnerValues = [
+        vendor.buyerId,
+        vendor.buyerAccountId,
+        vendor.buyerEmail,
+        vendor.addedByBuyerCompany,
+        vendor.organizationId,
+        vendor.orgId,
+      ]
         .filter(Boolean)
         .map((value) => String(value).toLowerCase());
-      const isBuyerOwnedVendor = isBuyer && vendorOwnerValues.some((value) => buyerIdentityValues.includes(value));
+      const isBuyerOwnedVendor =
+        isBuyer &&
+        (vendorOwnerValues.some((value) => buyerIdentityValues.includes(value)) ||
+          (vendor.source && ['buyer_uploaded', 'vendor_master_ingestion', 'buyer_manual'].includes(vendor.source)) ||
+          vendor.isBuyerEmpanelled === true);
       return isManagementUser || isOwnVendor || isBuyerOwnedVendor ? vendor : sanitizePublicVendor(vendor);
     }).filter(Boolean);
 

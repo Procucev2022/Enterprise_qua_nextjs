@@ -583,4 +583,59 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resOrgWide, jest.fn());
     expect(resOrgWide.data.data.vendors.map((v) => v.id)).toEqual(['v-master-rec-org-wide-1']);
   });
+
+  test('returns empty fallback vendors when latest session status is DRAFT or VENDOR_MASTER_STORED', async () => {
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-1',
+      status: 'VENDOR_MASTER_STORED',
+    });
+    const resDraft = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft, jest.fn());
+    expect(resDraft.data.data.vendors).toEqual([]);
+
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-2',
+      status: 'DRAFT',
+    });
+    const resDraft2 = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft2, jest.fn());
+    expect(resDraft2.data.data.vendors).toEqual([]);
+  });
+
+  test('recognizes buyer-owned vendors matching organizationName, addedByBuyerCompany, or buyer source', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({
+      id: 'ba-org-match',
+      organizationId: 'org-123',
+      organizationName: 'Procucev Solutions',
+      corporateEmail: 'sudheer@procucev.com',
+    });
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValueOnce({
+      buyerAccounts: [],
+      vendors: [
+        {
+          id: 'v-comp-match',
+          name: 'Company Match Vendor',
+          addedByBuyerCompany: 'Procucev Solutions',
+          source: 'vendor_master_ingestion',
+        },
+        {
+          id: 'v-source-match',
+          name: 'Source Match Vendor',
+          source: 'buyer_uploaded',
+        },
+      ],
+      evaluations: [],
+      auditLogs: [],
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce(null);
+    jest.spyOn(vendorIngestionQueries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([]);
+    const res = mockRes();
+    await bootstrapController.getBootstrap(
+      { user: { role: 'buyer', sub: 'usr-buyer-org', email: 'sudheer@procucev.com', orgName: 'Procucev Solutions' } },
+      res,
+      jest.fn()
+    );
+    expect(res.data.data.vendors).toHaveLength(2);
+    expect(res.data.data.vendors.map((v) => v.id)).toEqual(['v-comp-match', 'v-source-match']);
+  });
 });

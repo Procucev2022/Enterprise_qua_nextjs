@@ -1144,10 +1144,26 @@ describe('Indian address location extraction helpers', () => {
         buyerId: 'buyer-owner-a',
         records: [{ vendorName: 'Same Buyer Vendor', email: 'same@vendor.test', category: 'Mechanical' }],
       },
+      {
+        id: 'batch-discarded',
+        buyerId: 'buyer-owner-a',
+        status: 'DISCARDED',
+        records: [{ vendorName: 'Discarded Vendor', email: 'discarded@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-org-match',
+        organizationId: 'org-matching',
+        records: [{ vendorName: 'Org Matching Vendor', email: 'orgmatch@vendor.test', category: 'Mechanical' }],
+      },
     ];
 
-    const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyer);
-    expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor']);
+    const activeBuyerWithOrg = {
+      ...activeBuyer,
+      organizationId: 'org-matching',
+    } as unknown as BuyerAccount;
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyerWithOrg);
+    expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor', 'Org Matching Vendor']);
   });
 
   it('enforces comparison confidentiality helpers isRfqConcluded, resolveQuotesUnsealIso, and isBuyerQuotesSealed', () => {

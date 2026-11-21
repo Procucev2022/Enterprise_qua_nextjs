@@ -358,6 +358,16 @@ describe('scoped reads, limits and deletion results', () => {
     expect(await queries[name](...args)).toBeNull();
   });
 
+  test('findVendorMasterRecordById supports looking up by recordId without organizationId', async () => {
+    pool.rows.mockResolvedValueOnce([{ ...RECORD, id: 'vmv-lookup-1', organization_id: 'org-anon' }]);
+    const rec = await queries.findVendorMasterRecordById('vmv-lookup-1');
+    expect(rec).toMatchObject({ id: 'vmv-lookup-1', organizationId: 'org-anon' });
+    expect(pool.rows.mock.calls[0][1]).toEqual(['vmv-lookup-1']);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findVendorMasterRecordById('vmv-lookup-1')).toBeNull();
+    expect(await queries.findVendorMasterRecordById(null)).toBeNull();
+  });
+
   test('reads master and horizon counts and handles absent aggregate rows', async () => {
     pool.rows.mockResolvedValue([{ total: '8', in_horizon: '6', outside_horizon: '2' }]);
     expect(await queries.countVendorMasterRecords(SESSION, ORG)).toBe(8);

@@ -2327,6 +2327,171 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
       }, missingMasterUpdRes, jest.fn());
       expect(missingMasterUpdRes.status).toHaveBeenCalledWith(404);
 
+      // Synthetic v-master-* update when master record lookup returns null, but vendorName and categories are provided in payload
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue(null);
+      jest.spyOn(storeService, 'empanelIngestedVendor').mockImplementationOnce(async (candidate) => ({
+        id: 'vnd-promoted-gov',
+        ...candidate,
+      }));
+      const fallbackMasterUpdRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmv-6091371f-a51e-47fd-ad3a-ecb5168f4ffb' },
+        user: buyerReqUser,
+        body: {
+          vendorName: 'Govardhan Solutions pvt LTD.',
+          majorCategory: 'IT',
+          minorCategories: ['Laptop'],
+          vendorCode: 'V-GOV-01',
+          email: 'govardhan.kilari@procucev.com',
+          location: 'Hyderabad',
+        },
+      }, fallbackMasterUpdRes, jest.fn());
+      expect(fallbackMasterUpdRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({
+          name: 'Govardhan Solutions pvt LTD.',
+          majorCategory: 'IT',
+          minorCategories: ['Laptop'],
+        }),
+      }));
+
+      // Foreign match lookup where buyer ownership context matches
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key, scope) => {
+        if (key === 'owned@comp.test' && scope === 'all') {
+          return {
+            id: 'v-owned-by-comp',
+            name: 'Owned Vendor Match',
+            email: 'owned@comp.test',
+            buyerId: buyerReqUser.sub,
+            addedByBuyerCompany: buyerReqUser.name,
+            majorCategory: 'IT',
+            minorCategories: ['Laptop'],
+          };
+        }
+        return null;
+      });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValueOnce({
+        id: 'v-owned-by-comp',
+        name: 'Owned Vendor Match',
+        email: 'owned@comp.test',
+        majorCategory: 'IT',
+        minorCategories: ['Laptop'],
+      });
+      const ownedMatchRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-owned-match' },
+        user: buyerReqUser,
+        body: {
+          vendorEmail: 'owned@comp.test',
+          majorCategory: 'IT',
+          minorCategories: ['Laptop'],
+        },
+      }, ownedMatchRes, jest.fn());
+      expect(ownedMatchRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ id: 'v-owned-by-comp' }),
+      }));
+
+      // Foreign match lookup where buyer ownership context does NOT match (returns 404)
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key, scope) => {
+        if (key === 'unowned@diff.test' && scope === 'all') {
+          return {
+            id: 'v-foreign-unowned',
+            email: 'unowned@diff.test',
+            buyerId: 'other-buyer-123',
+          };
+        }
+        return null;
+      });
+      const unownedForeignRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-foreign-unowned' },
+        user: buyerReqUser,
+        body: { vendorEmail: 'unowned@diff.test', majorCategory: 'IT', minorCategories: ['Laptop'] },
+      }, unownedForeignRes, jest.fn());
+      expect(unownedForeignRes.status).toHaveBeenCalledWith(404);
+
+      // Unscoped findVendorMasterRecordById lookup when org candidate lookup returns null
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue(null);
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecordById').mockResolvedValueOnce({
+        id: 'vmv-unscoped-rec',
+        companyName: 'Unscoped Master Co',
+        email: 'unscoped@master.test',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'empanelIngestedVendor').mockResolvedValueOnce({
+        id: 'v-ingest-unscoped',
+        name: 'Unscoped Master Co',
+        email: 'unscoped@master.test',
+        majorCategory: 'IT',
+        minorCategories: ['Laptop'],
+      });
+      const unscopedMasterRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmv-unscoped-rec' },
+        user: buyerReqUser,
+        body: { majorCategory: 'IT', minorCategories: ['Laptop'] },
+      }, unscopedMasterRes, jest.fn());
+      expect(unscopedMasterRes.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // Master record lookup where candidate email matches foreign master owned by buyer
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'vmv-foreign-master-owned',
+        companyName: 'Foreign Master Co',
+        email: 'foreignmaster@comp.test',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key, scope) => {
+        if (key === 'foreignmaster@comp.test' && scope === 'all') {
+          return {
+            id: 'v-foreign-master-owned',
+            email: 'foreignmaster@comp.test',
+            buyerId: buyerReqUser.sub,
+            majorCategory: 'IT',
+            minorCategories: ['Laptop'],
+          };
+        }
+        return null;
+      });
+      jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValueOnce({
+        id: 'v-foreign-master-owned',
+        majorCategory: 'IT',
+        minorCategories: ['Laptop'],
+      });
+      const foreignMasterOwnedRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmv-foreign-master-owned' },
+        user: buyerReqUser,
+        body: { majorCategory: 'IT', minorCategories: ['Laptop'] },
+      }, foreignMasterOwnedRes, jest.fn());
+      expect(foreignMasterOwnedRes.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.objectContaining({ id: 'v-foreign-master-owned' }),
+      }));
+
+      // Master record lookup where candidate email matches foreign master owned by another buyer (returns 404)
+      jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+        id: 'vmv-foreign-master-unowned',
+        companyName: 'Unowned Foreign Master Co',
+        email: 'unownedmaster@other.test',
+      });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockImplementation(async (key, scope) => {
+        if (key === 'unownedmaster@other.test' && scope === 'all') {
+          return {
+            id: 'v-foreign-master-unowned',
+            email: 'unownedmaster@other.test',
+            buyerId: 'diff-buyer-999',
+          };
+        }
+        return null;
+      });
+      const foreignMasterUnownedRes = mockRes();
+      await vendorController.updateVendor({
+        params: { id: 'v-master-vmv-foreign-master-unowned' },
+        user: buyerReqUser,
+        body: { majorCategory: 'IT', minorCategories: ['Laptop'] },
+      }, foreignMasterUnownedRes, jest.fn());
+      expect(foreignMasterUnownedRes.status).toHaveBeenCalledWith(404);
+
       // Cover synthetic v-master-* update when master record is absent from DB but payload includes vendor identity
       jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
       jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce(null);
@@ -2358,7 +2523,6 @@ describe('Vendor Directory, Buyer Isolation & Full Unit Coverage Suite', () => {
           majorCategory: 'Civil',
         }),
       }));
-
       // Cover findCategoryMappingByVendorRecord rejection catch (line 1372)
       jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
         id: 'gov-cat-err-1',

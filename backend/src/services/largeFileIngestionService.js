@@ -1539,7 +1539,7 @@ async function startIngestionJob({ sessionUser, sessionId, fileBuffer, rows, fil
 /**
  * Cancel an active background ingestion job
  */
-async function cancelJob(sessionUser, sessionId, jobId = null) {
+async function cancelJob(sessionUser, sessionId, jobId = null, options = {}) {
   const organizationId = await resolveOrganizationId(sessionUser, sessionId);
   if (!organizationId) return false;
 
@@ -1557,6 +1557,21 @@ async function cancelJob(sessionUser, sessionId, jobId = null) {
       });
     }
   }
+
+  if (options.discardVendorMaster || options.discardIncomplete) {
+    if (typeof queries.deleteVendorMasterRecords === 'function') {
+      await queries.deleteVendorMasterRecords(sessionId, organizationId).catch(() => 0);
+    }
+    if (typeof queries.deleteCategoryMappingsForSession === 'function') {
+      await queries.deleteCategoryMappingsForSession(sessionId, organizationId).catch(() => 0);
+    }
+    if (typeof queries.updateSession === 'function') {
+      await queries.updateSession(sessionId, organizationId, {
+        status: VENDOR_INGESTION_SESSION_STATUS.DRAFT,
+      }).catch(() => null);
+    }
+  }
+
   return true;
 }
 

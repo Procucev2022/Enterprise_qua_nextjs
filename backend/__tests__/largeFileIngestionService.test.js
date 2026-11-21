@@ -1020,6 +1020,21 @@ describe('largeFileIngestionService unit tests', () => {
         expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
       );
 
+      // Discards vendor master and resets session status when options.discardVendorMaster is true
+      const delMasterSpy = jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValueOnce(5);
+      const delMappingsSpy = jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValueOnce(3);
+      const updateSessSpy = jest.spyOn(queries, 'updateSession').mockResolvedValueOnce({});
+      const resDiscard = await largeFileIngestionService.cancelJob(
+        { organizationId: 'org-1' },
+        'sess-1',
+        null,
+        { discardVendorMaster: true }
+      );
+      expect(resDiscard).toBe(true);
+      expect(delMasterSpy).toHaveBeenCalledWith('sess-1', 'org-1');
+      expect(delMappingsSpy).toHaveBeenCalledWith('sess-1', 'org-1');
+      expect(updateSessSpy).toHaveBeenCalledWith('sess-1', 'org-1', { status: 'DRAFT' });
+
       // Returns false when organization is not resolvable
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce(null);
       const resFalse = await largeFileIngestionService.cancelJob(null, 'bad-sess');

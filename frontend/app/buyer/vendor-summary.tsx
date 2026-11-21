@@ -982,6 +982,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       country: selectedVendorForCrud.country,
       pincode: selectedVendorForCrud.pincode,
       gstin: selectedVendorForCrud.gstin || selectedVendorForCrud.gst,
+      vendorCode: selectedVendorForCrud.vendorCode,
       source: selectedVendorForCrud.source,
     });
     setIsSavingCategories(false);

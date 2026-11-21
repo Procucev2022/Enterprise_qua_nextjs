@@ -2312,6 +2312,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         syntheticHints.gstin = gstinVal;
         syntheticHints.gst = gstinVal;
       }
+      if (masterIdSuffix) {
+        syntheticHints.masterRecordId = masterIdSuffix;
+      }
     }
     return { targetVendorId, matchedVendor, syntheticHints };
   };

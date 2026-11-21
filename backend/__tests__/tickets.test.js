@@ -144,7 +144,7 @@ describe('Tickets API & Controller', () => {
     expect(found.body.data.id).toBe(SEEDED_TICKET.id);
   });
 
-  test('POST /api/tickets validates and creates a new ticket', async () => {
+  test('POST /api/tickets rejects missing required subject', async () => {
     // Missing required subject
     const invalidRes = await request(app).post('/api/tickets').send({
       category: 'Billing',
@@ -152,7 +152,9 @@ describe('Tickets API & Controller', () => {
     });
     expect(invalidRes.status).toBe(400);
     expect(invalidRes.body.success).toBe(false);
+  });
 
+  test('POST /api/tickets validates and creates a new ticket', async () => {
     // Valid payload
     const createRes = await request(app)
       .post('/api/tickets')

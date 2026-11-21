@@ -1184,5 +1184,493 @@ describe('Vendor Controller Dedicated Branch Boost Suite', () => {
       );
     });
   });
+
+  describe('vendor self-service, buyer locked fields and bulk import role gating', () => {
+    test('vendor role updates only self-editable fields', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const vendorUser = { role: 'vendor', email: 'vendor@edit.test', id: 'v-vendor-edit-1' };
+      const existingVendor = { id: 'v-vendor-edit-1', email: 'vendor@edit.test', name: 'Original Name' };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(existingVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => ({ ...existingVendor, ...updates }));
+
+      await vendorController.updateVendor(
+        {
+          params: { id: 'v-vendor-edit-1' },
+          user: vendorUser,
+          body: {
+            name: 'Updated Name',
+            rating: 5.0,
+            city: 'Mumbai',
+          },
+        },
+        res,
+        next
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ name: 'Updated Name', city: 'Mumbai' }),
+        })
+      );
+    });
+
+    test('buyer role drops locked statutory fields on updateVendor', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'buyer@lock.test', id: 'b-1', orgName: 'Buyer Org' };
+      const existingVendor = { id: 'v-buyer-lock-1', email: 'vendor@lock.test', addedByBuyerCompany: 'Buyer Org', majorCategory: 'IT', minorCategories: ['Hardware'] };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'ba-lock', organizationName: 'Buyer Org' });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(existingVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => ({ ...existingVendor, ...updates }));
+
+      await vendorController.updateVendor(
+        {
+          params: { id: 'v-buyer-lock-1' },
+          user: buyerUser,
+          body: {
+            pan: 'LOCKEDPAN1',
+            gstin: 'LOCKEDGST1',
+            name: 'Allowed Name Change',
+            majorCategory: 'IT',
+            minorCategories: ['Hardware'],
+          },
+        },
+        res,
+        next
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ name: 'Allowed Name Change' }),
+        })
+      );
+    });
+
+    test('bulkImportVendors rejects unauthorized role with 403', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      await vendorController.bulkImportVendors(
+        { user: { role: 'vendor', email: 'v@bad.test' }, body: {} },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(403);
+    });
+
+    test('createVendor maps body.gstNumber to gstin and gst', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const adminUser = { role: 'admin', email: 'admin@gst.test', id: 'adm-1' };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+      jest.spyOn(storeService, 'addVendorDurably').mockImplementation(async (data) => ({
+        id: 'v-gst-created',
+        ...data,
+      }));
+
+      await vendorController.createVendor(
+        {
+          user: adminUser,
+          body: {
+            name: 'GST Test Company',
+            gstNumber: '29ABCDE1234F1Z5',
+            email: 'gsttest@vendor.com',
+            majorCategory: 'Civil',
+            minorCategories: ['Cement'],
+          },
+        },
+        res,
+        next
+      );
+      expect(res.status).toHaveBeenCalledWith(201);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({
+            gstin: '29ABCDE1234F1Z5',
+            gst: '29ABCDE1234F1Z5',
+          }),
+        })
+      );
+    });
+
+    test('updateVendor updates isActive status when called by buyer role', async () => {
+      const res = mockRes();
+      const next = jest.fn();
+      const buyerUser = { role: 'buyer', email: 'buyer@status.test', id: 'b-status-1', orgName: 'Status Org' };
+      const existingVendor = {
+        id: 'v-status-toggle',
+        email: 'status@toggle.test',
+        addedByBuyerCompany: 'Status Org',
+        isActive: true,
+        majorCategory: 'Civil',
+        minorCategories: ['Cement'],
+      };
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({ id: 'ba-status', organizationName: 'Status Org' });
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(existingVendor);
+      jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updates) => ({
+        ...existingVendor,
+        ...updates,
+      }));
+
+      await vendorController.updateVendor(
+        {
+          params: { id: 'v-status-toggle' },
+          user: buyerUser,
+          body: {
+            isActive: false,
+            majorCategory: 'Civil',
+            minorCategories: ['Cement'],
+          },
+        },
+        res,
+        next
+      );
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          data: expect.objectContaining({ isActive: false }),
+        })
+      );
+    });
+
+    describe('checkVendorOwnershipWithContext branch coverage', () => {
+      const ctx = {
+        scopeSet: new Set(['buyer-scope-1']),
+        sId: 'buyer-sid-1',
+        uEmail: 'buyer.uemail@test.com',
+        orgName: 'acme corp',
+      };
+
+      test('returns false when vendor is falsy', () => {
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, null, ctx)).toBe(false);
+      });
+
+      test('returns true when sId matches vendor.buyerId or vendor.buyerAccountId', () => {
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { buyerId: 'buyer-sid-1' }, ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { buyerAccountId: 'buyer-sid-1' }, ctx)).toBe(true);
+      });
+
+      test('returns true when uEmail matches vendor.buyerEmail', () => {
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { buyerEmail: 'buyer.uemail@test.com' }, ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { buyerAccountId: 'buyer-sid-1' }, ctx)).toBe(true);
+      });
+
+      test('returns true when vendor.buyerId is in scopeSet', () => {
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { buyerId: 'buyer-scope-1' }, ctx)).toBe(true);
+      });
+
+      test('returns true when vendor.addedByBuyerCompany matches orgName', () => {
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'buyer' }, { addedByBuyerCompany: 'ACME CORP' }, ctx)).toBe(true);
+      });
+
+      test('returns true for buyer role when vendorOrEmail is string with supported synthetic prefixes', () => {
+        const buyerUser = { role: 'buyer' };
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'v-hist-123', ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'v-buyer-456', ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'vm-789', ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'v-ingest-321', ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'v-bulk-654', ctx)).toBe(true);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, 'unsupported-999', ctx)).toBe(false);
+        expect(vendorController.checkVendorOwnershipWithContext(buyerUser, '', ctx)).toBe(false);
+        expect(vendorController.checkVendorOwnershipWithContext({ role: 'vendor' }, 'v-buyer-456', ctx)).toBe(false);
+      });
+    });
+
+    describe('empanelFallbackVendorForEvaluation branch coverage', () => {
+      const buyerUser = { role: 'buyer', email: 'owner@buyer.test', sub: 'buyer-sub-1' };
+      const buyerAccount = { id: 'ba-owner', organizationName: 'Owner Corp' };
+
+      test('returns null when requireEmail is true and email is missing', async () => {
+        const result = await vendorController.empanelFallbackVendorForEvaluation({
+          candidate: { name: 'Nameless' },
+          buyerAccount,
+          resolvedOrgId: 'org-1',
+          user: buyerUser,
+          buyerCompany: 'Owner Corp',
+          requireEmail: true,
+        });
+        expect(result).toBeNull();
+      });
+
+      test('returns existing vendor if caller owns it in storeService', async () => {
+        const ownedVendor = {
+          id: 'v-owned-exist',
+          email: 'existing.owned@vendor.test',
+          buyerId: 'ba-owner',
+        };
+        jest.spyOn(storeService, 'getVendorById').mockReturnValue(ownedVendor);
+
+        const result = await vendorController.empanelFallbackVendorForEvaluation({
+          candidate: { email: 'existing.owned@vendor.test', name: 'Existing Owned' },
+          buyerAccount,
+          resolvedOrgId: 'org-1',
+          user: buyerUser,
+          buyerCompany: 'Owner Corp',
+          requireEmail: true,
+        });
+        expect(result).toEqual(ownedVendor);
+      });
+
+      test('returns null if existing vendor is owned by another buyer', async () => {
+        const foreignVendor = {
+          id: 'v-foreign-exist',
+          email: 'foreign.exist@vendor.test',
+          buyerId: 'other-buyer-999',
+        };
+        jest.spyOn(storeService, 'getVendorById').mockReturnValue(foreignVendor);
+
+        const result = await vendorController.empanelFallbackVendorForEvaluation({
+          candidate: { email: 'foreign.exist@vendor.test', name: 'Foreign Exist' },
+          buyerAccount,
+          resolvedOrgId: 'org-1',
+          user: buyerUser,
+          buyerCompany: 'Owner Corp',
+          requireEmail: true,
+        });
+        expect(result).toBeNull();
+      });
+
+      test('defaults category to empty string when category is missing', async () => {
+        jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+        jest.spyOn(storeService, 'empanelIngestedVendor').mockImplementation(async (vendorData) => vendorData);
+
+        const result = await vendorController.empanelFallbackVendorForEvaluation({
+          candidate: { email: 'unassigned@vendor.test', name: 'Unassigned Category Co' },
+          buyerAccount,
+          resolvedOrgId: 'org-1',
+          user: buyerUser,
+          buyerCompany: 'Owner Corp',
+          requireEmail: false,
+          allowUnassignedCategory: true,
+        });
+        expect(result.majorCategory).toBe('');
+      });
+    });
+
+    describe('resolveFallbackVendorRecord branch coverage', () => {
+      const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+      const buyerUser = { role: 'buyer', email: 'owner@buyer.test', sub: 'buyer-sub-1' };
+      const buyerAccount = { id: 'ba-owner', organizationId: 'org-owner', organizationName: 'Owner Corp' };
+      const buyerScope = ['ba-owner', 'org-owner'];
+
+      test('returns foreign vendor when caller owns it via foreignCheck', async () => {
+        const ownedForeign = {
+          id: 'v-foreign-caller-owned',
+          email: 'foreign.caller@test.com',
+          buyerId: 'ba-owner',
+        };
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+          .mockResolvedValueOnce(null) // id lookup
+          .mockResolvedValueOnce(null) // email lookup in buyerScope
+          .mockResolvedValueOnce(ownedForeign); // 'all' scope lookup
+
+        const result = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-foreign-caller-owned',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: { vendorEmail: 'foreign.caller@test.com' },
+          requireEmail: true,
+        });
+        expect(result.vendor).toEqual(ownedForeign);
+        expect(result.promoted).toBe(false);
+      });
+
+      test('returns null vendor when foreignCheck belongs to another buyer', async () => {
+        const foreignRecord = {
+          id: 'v-foreign-other',
+          email: 'foreign.other@test.com',
+          buyerId: 'completely-different-buyer',
+        };
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+          .mockResolvedValueOnce(null) // id lookup
+          .mockResolvedValueOnce(null) // email lookup in buyerScope
+          .mockResolvedValueOnce(foreignRecord); // 'all' scope lookup
+
+        const result = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-foreign-other',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: { vendorEmail: 'foreign.other@test.com' },
+          requireEmail: true,
+        });
+        expect(result.vendor).toBeNull();
+      });
+
+      test('covers candidateOrgIds loop catching errors and finding record on second candidate', async () => {
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+        jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord')
+          .mockRejectedValueOnce(new Error('Network error on candidate 1'))
+          .mockResolvedValueOnce({
+            id: 'vmr-loop-test',
+            email: 'loop.vendor@test.com',
+            companyName: 'Loop Vendor Ltd',
+            majorCategory: 'Civil',
+            minorCategories: ['Cement'],
+          });
+        jest.spyOn(storeService, 'empanelIngestedVendor').mockResolvedValue({
+          id: 'v-loop-promoted',
+          name: 'Loop Vendor Ltd',
+          email: 'loop.vendor@test.com',
+          majorCategory: 'Civil',
+        });
+
+        const result = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-master-vmr-loop-test',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope: ['candidate-org-1', 'candidate-org-2'],
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: {},
+          requireEmail: true,
+        });
+        expect(result.vendor).toBeDefined();
+      });
+
+      test('covers candidateEmail foreignMasterMatch owned by caller', async () => {
+        const ownedMasterVendor = {
+          id: 'v-master-match-owned',
+          email: 'mastermatch@test.com',
+          buyerId: 'ba-owner',
+        };
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+          .mockResolvedValueOnce(null) // first email check
+          .mockResolvedValueOnce(null) // master candidateEmail in buyerScope
+          .mockResolvedValueOnce(ownedMasterVendor); // foreignMasterMatch in 'all'
+        jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValueOnce({
+          id: 'vmr-match-test',
+          email: 'mastermatch@test.com',
+          companyName: 'Master Match Co',
+        });
+
+        const result = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-master-vmr-match-test',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: {},
+          requireEmail: true,
+        });
+        expect(result.vendor).toEqual(ownedMasterVendor);
+      });
+
+      test('covers lines 1918-1955: synthetic v-master resolution when master record is absent and email-only identity is supplied', async () => {
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(null);
+        jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord').mockResolvedValue(null);
+        if (typeof vendorIngestionQueries.findVendorMasterRecordById === 'function') {
+          jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecordById').mockResolvedValue(null);
+        }
+        jest.spyOn(storeService, 'getVendorById').mockReturnValue(null);
+        jest.spyOn(storeService, 'empanelIngestedVendor').mockImplementation(async (candidateData) => ({
+          id: 'v-synthetic-lines1920-promoted',
+          ...candidateData,
+        }));
+
+        // Case A: Missing email when requireEmail is true
+        const noEmailResult = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-master-lines1920-noemail',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: { vendorName: 'Just Name No Email' },
+          requireEmail: true,
+        });
+        expect(noEmailResult.missingEmail).toBe(true);
+        expect(noEmailResult.vendor).toBeNull();
+
+        // Case B: Invalid category when allowUnassignedCategory is false
+        const invalidCatResult = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-master-lines1920-badcat',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: { vendorEmail: 'badcat@vendor.test' }, // No category -> hasCategory: false
+          requireEmail: true,
+          allowUnassignedCategory: false,
+        });
+        expect(invalidCatResult.missingCategory).toBe(true);
+        expect(invalidCatResult.vendor).toBeNull();
+
+        // Case C: Complete effective candidate payload with all fields populated
+        const fullCandidateResult = await vendorController.resolveFallbackVendorRecord({
+          id: 'v-master-lines1920-full',
+          user: buyerUser,
+          buyerAccount,
+          buyerScope,
+          resolvedOrgId: 'org-owner',
+          buyerCompany: 'Owner Corp',
+          bodyData: {
+            vendorEmail: 'fullcandidate@vendor.test',
+            contactPerson: 'Jane Doe',
+            phone: '9988776655',
+            location: 'Bengaluru',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560001',
+            gstNumber: '29ABCDE1234F1Z5',
+            vendorCode: 'VC-FULL-99',
+            majorCategory: 'Civil',
+            minorCategories: ['Cement'],
+            clientMappedCategories: ['Infrastructure'],
+          },
+          requireEmail: true,
+          allowUnassignedCategory: true,
+        });
+        expect(fullCandidateResult.promoted).toBe(true);
+        expect(fullCandidateResult.vendor.email).toBe('fullcandidate@vendor.test');
+        expect(fullCandidateResult.vendor.contactPerson).toBe('Jane Doe');
+        expect(fullCandidateResult.vendor.pincode).toBe('560001');
+      });
+    });
+
+    describe('resolveOrPromoteVendorForStatusChange branch coverage', () => {
+      const vendorIngestionQueries = require('../src/db/vendorIngestionQueries');
+      const buyerUser = { role: 'buyer', email: 'owner@buyer.test', sub: 'buyer-sub-1', orgId: 'org-1' };
+      const buyerAccount = { id: 'ba-owner', organizationId: 'org-1', organizationName: 'Owner Corp' };
+
+      test('covers candidateOrgIds loop and global collision in status change', async () => {
+        jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecord')
+          .mockRejectedValueOnce(new Error('Candidate 1 failed'))
+          .mockResolvedValueOnce({
+            id: 'vmr-status-test',
+            email: 'collision@vendor.test',
+          });
+        jest.spyOn(storeService, 'getVendorByIdWithDBFallback')
+          .mockResolvedValueOnce(null) // id lookup in 'all'
+          .mockResolvedValueOnce(null) // buyerOwned lookup in buyerScope
+          .mockResolvedValueOnce({ id: 'v-global-collided', email: 'collision@vendor.test', buyerId: 'other-buyer' }); // globalCollision
+
+        const result = await vendorController.resolveOrPromoteVendorForStatusChange({
+          id: 'v-master-vmr-status-test',
+          user: buyerUser,
+          isActive: false,
+          buyerContext: {
+            buyerAccount,
+            resolvedOrgId: 'org-1',
+            buyerScope: ['org-1', 'ba-owner'],
+            scopeSet: new Set(['org-1', 'ba-owner']),
+            buyerCompany: 'Owner Corp',
+          },
+        });
+        expect(result.ownershipDenied).toBe(false);
+        expect(result.vendor).toBeDefined();
+        expect(result.vendor.isActive).toBe(false);
+      });
+    });
+  });
 });
 
