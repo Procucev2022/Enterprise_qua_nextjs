@@ -994,9 +994,19 @@ export default function IngestionWizard({
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
           majorCategory: prev.majorCategory || extractedMajor,
           minorCategory: prev.minorCategory || extractedMinor,
-          deliveryLocation: prev.deliveryLocation || derivedLocation,
-          deliveryPincode: prev.deliveryPincode || derivedPincode,
-          targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
+          // Delivery terms prefer what this document actually states over
+          // whatever is already sitting in the form. A prior upload's
+          // extraction (or the activeBuyerAccount default pre-fill above)
+          // leaves these fields non-empty, so `prev.X || derivedX` always
+          // kept the OLD value and the newly extracted one was silently
+          // discarded on re-extraction — fixed only by clicking Clear Form
+          // first. Line items already behave this way (always replaced when
+          // the document has any); delivery location/pincode/date now match,
+          // falling back to whatever was already entered only when this
+          // document states nothing for that field.
+          deliveryLocation: derivedLocation || prev.deliveryLocation,
+          deliveryPincode: derivedPincode || prev.deliveryPincode,
+          targetDeliveryDate: derivedDate || prev.targetDeliveryDate,
           lineItems: extracted.length > 0 ? extracted : prev.lineItems,
         }));
 

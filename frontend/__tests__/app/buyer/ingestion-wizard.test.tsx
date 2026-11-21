@@ -780,6 +780,59 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
   });
 
+  it('refreshes delivery location, pincode, and target date from a re-extracted document without requiring Clear Form first', async () => {
+    renderWizard();
+
+    // First document: extraction fills delivery location/pincode/date.
+    uploadFile(new File(['binary'], 'RFQ_Mumbai.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Mumbai Order',
+        category: '',
+        targetDeliveryDate: '2026-09-15',
+        deliveryLocation: 'Navi Mumbai Plant',
+        deliveryPincode: '400701',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-1' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Navi Mumbai Plant');
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('400701');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-09-15');
+
+    // Second document uploaded and extracted WITHOUT clicking Clear Form —
+    // its own, different delivery terms must win, not the first document's.
+    uploadFile(new File(['binary'], 'RFQ_Pune.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Pune Order',
+        category: '',
+        targetDeliveryDate: '2026-11-20',
+        deliveryLocation: 'Pune Depot',
+        deliveryPincode: '411001',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-2', itemName: 'Gate Valve' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune Depot');
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-11-20');
+  });
+
   it('falls back to a default message when extraction fails without an error string', async () => {
     renderWizard();
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
