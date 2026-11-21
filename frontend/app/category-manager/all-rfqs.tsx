@@ -347,156 +347,154 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
 
       {/* Single-Line Compact Spreadsheet Toolbar */}
       <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-2xs dark:border-slate-800 dark:bg-gray-950">
-        <div className="flex items-center justify-between gap-2.5 flex-nowrap w-full overflow-x-auto whitespace-nowrap">
-          {/* Left section: Search, Start Date, End Date, Status dropdown */}
-          <div className="flex items-center gap-2 flex-1 min-w-0">
-            {/* Search input */}
-            <div className="relative flex-1 min-w-[200px] max-w-sm">
-              <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              <input
-                id="all-rfqs-search"
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                aria-label={S.searchLabel}
-                placeholder={S.searchPlaceholder}
-                className={`h-9 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-8 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 ${search ? 'pr-8' : ''}`}
-              />
-              {search && (
-                <button
-                  type="button"
-                  onClick={() => setSearch('')}
-                  aria-label={S.clearSearch}
-                  className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 cursor-pointer"
-                >
-                  <X size={14} />
-                </button>
-              )}
-            </div>
-
-            {/* Start Date button/field */}
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={openStartDatePicker}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  openStartDatePicker();
-                }
-              }}
-              className="relative flex items-center justify-between h-9 min-w-[125px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
-            >
-              <span className={startDate ? 'font-semibold text-slate-800 dark:text-gray-200' : 'text-slate-500 dark:text-gray-400'}>
-                {startDate || S.startDateLabel}
-              </span>
-              <Calendar size={14} className="text-slate-400 shrink-0 ml-2 pointer-events-none" />
-              <input
-                ref={startDateInputRef}
-                id="all-rfqs-start-date"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-                aria-label={S.startDateLabel}
-                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-              />
-            </div>
-
-            {/* End Date button/field */}
-            <div
-              role="button"
-              tabIndex={0}
-              onClick={openEndDatePicker}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter' || e.key === ' ') {
-                  e.preventDefault();
-                  openEndDatePicker();
-                }
-              }}
-              className="relative flex items-center justify-between h-9 min-w-[125px] rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
-            >
-              <span className={endDate ? 'font-semibold text-slate-800 dark:text-gray-200' : 'text-slate-500 dark:text-gray-400'}>
-                {endDate || S.endDateLabel}
-              </span>
-              <Calendar size={14} className="text-slate-400 shrink-0 ml-2 pointer-events-none" />
-              <input
-                ref={endDateInputRef}
-                id="all-rfqs-end-date"
-                type="date"
-                value={endDate}
-                onChange={(e) => setEndDate(e.target.value)}
-                aria-label={S.endDateLabel}
-                className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-              />
-            </div>
-
-            {/* Status dropdown */}
-            <select
-              id="all-rfqs-status"
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              aria-label={S.statusFilterLabel}
-              className="h-9 min-w-[130px] rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
-            >
-              <option value="all">{S.allStatuses}</option>
-              {ALL_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {s}
-                </option>
-              ))}
-            </select>
-
-            {/* Clear filters button */}
-            {hasFilters && (
+        <div className="flex items-center gap-2 flex-nowrap w-full overflow-x-auto whitespace-nowrap">
+          {/* 1. Search bar (Wide — takes the remaining space) */}
+          <div className="relative flex-1 min-w-[240px]">
+            <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+            <input
+              id="all-rfqs-search"
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              aria-label={S.searchLabel}
+              placeholder={S.searchPlaceholder}
+              className={`h-9 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-8 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 ${search ? 'pr-8' : ''}`}
+            />
+            {search && (
               <button
                 type="button"
-                onClick={clearFilters}
-                className="inline-flex h-9 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-gray-300 dark:hover:bg-gray-900 cursor-pointer"
-                title={S.clearFilters}
+                onClick={() => setSearch('')}
+                aria-label={S.clearSearch}
+                className="absolute right-2 top-1/2 inline-flex h-6 w-6 -translate-y-1/2 items-center justify-center rounded-md text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 cursor-pointer"
               >
-                <X size={13} />
-                <span>{S.clearFilters}</span>
+                <X size={14} />
               </button>
             )}
           </div>
 
-          {/* Right section: Green Export button, Gear (icon-only), Retry (icon-only) */}
-          <div className="flex items-center gap-2 shrink-0 ml-auto">
-            <button
-              type="button"
-              onClick={handleExportCsv}
-              disabled={loading || filtered.length === 0}
-              aria-label={S.exportCsvAria}
-              data-testid="all-rfqs-export-csv"
-              className="inline-flex items-center gap-1.5 h-9 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 px-3.5 text-xs font-bold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
-            >
-              <Download size={14} className="shrink-0" />
-              <span>Export</span>
-            </button>
+          {/* 2. All Statuses dropdown (Small/Compact) */}
+          <select
+            id="all-rfqs-status"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            aria-label={S.statusFilterLabel}
+            className="h-9 w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
+          >
+            <option value="all">{S.allStatuses}</option>
+            {ALL_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {s}
+              </option>
+            ))}
+          </select>
 
-            <button
-              type="button"
-              onClick={createBooleanSetterHandler(setShowAllRfqsColumnSettings, true)}
-              data-testid="all-rfqs-column-settings-btn"
-              aria-label="Column Settings"
-              title="Column Settings"
-              className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
-            >
-              <Settings size={15} />
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void load()}
-              disabled={loading}
-              aria-label={S.retryAction}
-              title={S.retryAction}
-              data-testid="all-rfqs-refresh"
-              className="inline-flex items-center justify-center h-9 w-9 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
-            >
-              <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
-            </button>
+          {/* 3. Start Date: Compact date button/control */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={openStartDatePicker}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openStartDatePicker();
+              }
+            }}
+            className="relative flex items-center justify-between h-9 w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+          >
+            <span className={startDate ? 'font-semibold text-slate-800 dark:text-gray-200 truncate' : 'text-slate-500 dark:text-gray-400 truncate'}>
+              {startDate || S.startDateLabel}
+            </span>
+            <Calendar size={14} className="text-slate-400 shrink-0 ml-1.5 pointer-events-none" />
+            <input
+              ref={startDateInputRef}
+              id="all-rfqs-start-date"
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              aria-label={S.startDateLabel}
+              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            />
           </div>
+
+          {/* 4. End Date: Compact date button/control */}
+          <div
+            role="button"
+            tabIndex={0}
+            onClick={openEndDatePicker}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                openEndDatePicker();
+              }
+            }}
+            className="relative flex items-center justify-between h-9 w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+          >
+            <span className={endDate ? 'font-semibold text-slate-800 dark:text-gray-200 truncate' : 'text-slate-500 dark:text-gray-400 truncate'}>
+              {endDate || S.endDateLabel}
+            </span>
+            <Calendar size={14} className="text-slate-400 shrink-0 ml-1.5 pointer-events-none" />
+            <input
+              ref={endDateInputRef}
+              id="all-rfqs-end-date"
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              aria-label={S.endDateLabel}
+              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+            />
+          </div>
+
+          {/* Clear filters button */}
+          {hasFilters && (
+            <button
+              type="button"
+              onClick={clearFilters}
+              className="inline-flex h-9 shrink-0 items-center justify-center gap-1 rounded-lg border border-slate-200 px-2.5 text-xs font-bold text-slate-600 transition hover:bg-slate-50 dark:border-slate-800 dark:text-gray-300 dark:hover:bg-gray-900 cursor-pointer"
+              title={S.clearFilters}
+              aria-label={S.clearFilters}
+            >
+              <X size={13} />
+              <span>{S.clearFilters}</span>
+            </button>
+          )}
+
+          {/* 5. Export button */}
+          <button
+            type="button"
+            onClick={handleExportCsv}
+            disabled={loading || filtered.length === 0}
+            aria-label={S.exportCsvAria}
+            data-testid="all-rfqs-export-csv"
+            className="inline-flex items-center gap-1.5 h-9 shrink-0 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 px-3.5 text-xs font-bold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+          >
+            <Download size={14} className="shrink-0" />
+            <span>Export</span>
+          </button>
+
+          {/* 6. Gear icon button */}
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowAllRfqsColumnSettings, true)}
+            data-testid="all-rfqs-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
+          >
+            <Settings size={15} />
+          </button>
+
+          {/* 7. Refresh/Retry icon button */}
+          <button
+            type="button"
+            onClick={() => void load()}
+            disabled={loading}
+            aria-label={S.retryAction}
+            title={S.retryAction}
+            data-testid="all-rfqs-refresh"
+            className="inline-flex items-center justify-center h-9 w-9 shrink-0 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 hover:text-indigo-600 disabled:cursor-wait disabled:opacity-60 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 dark:hover:bg-gray-900 shadow-2xs transition-colors cursor-pointer"
+          >
+            <RefreshCw size={15} className={loading ? 'animate-spin' : ''} />
+          </button>
         </div>
       </div>
 
