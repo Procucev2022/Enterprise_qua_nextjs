@@ -10,6 +10,7 @@ import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
+import { fetchRFQById } from '@/lib/rfqClient';
 import {
   Sparkles,
   CheckCircle2,
@@ -55,6 +56,9 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     activeBuyerAccount,
     buyerVendors,
     refreshRFQs,
+    ensureRFQs,
+    syncRFQRecord,
+    isLoadingRFQs,
   } = useApp();
   let router: any = null;
   try {
@@ -67,25 +71,70 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
   const rfqParam = searchParams?.get('rfq');
 
   const rfqs = allRfqs;
+  const [standaloneRFQ, setStandaloneRFQ] = useState<RFQItem | null>(null);
+  const [isLoadingStandalone, setIsLoadingStandalone] = useState<boolean>(false);
 
   useEffect(() => {
-    if (rfqParam && rfqs.length > 0) {
+    if (rfqs.length === 0 && typeof ensureRFQs === 'function') {
+      void ensureRFQs();
+    }
+  }, [rfqs.length, ensureRFQs]);
+
+  useEffect(() => {
+    if (!rfqParam) return;
+    if (rfqs.length > 0) {
       const match = rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam);
-      if (match && match.id !== selectedRFQForMatrix?.id) {
-        setSelectedRFQForMatrix(match);
+      if (match) {
+        if (match.id !== selectedRFQForMatrix?.id) {
+          setSelectedRFQForMatrix(match);
+        }
+        return;
       }
     }
-  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix]);
+    if (!standaloneRFQ && !isLoadingStandalone) {
+      setIsLoadingStandalone(true);
+      fetchRFQById(rfqParam)
+        .then((res) => {
+          if (res.success && res.rfq) {
+            setStandaloneRFQ(res.rfq);
+            setSelectedRFQForMatrix(res.rfq);
+          }
+        })
+        .finally(() => {
+          setIsLoadingStandalone(false);
+        });
+    }
+  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix, standaloneRFQ, isLoadingStandalone]);
 
   const paramMatch = rfqParam ? rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam) : null;
   const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
 
-  const currentRFQ = paramMatch || (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
+  const currentRFQ =
+    (standaloneRFQ && (standaloneRFQ.rfqNumber === rfqParam || standaloneRFQ.id === rfqParam) ? standaloneRFQ : null) ||
+    paramMatch ||
+    (selectionInScope ? selectedRFQForMatrix : null) ||
+    (rfqs.length > 0 ? rfqs[0] : null);
+
+  const availableRfqs =
+    standaloneRFQ && !rfqs.some((r) => r.id === standaloneRFQ.id)
+      ? [standaloneRFQ, ...rfqs]
+      : rfqs;
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);
 
   if (!currentRFQ) {
+    if (isLoadingStandalone || isLoadingRFQs) {
+      return (
+        <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+          <div className="w-8 h-8 mx-auto border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">Loading Quote Matrix...</h3>
+          <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+            Retrieving procurement evaluation data for {rfqParam || 'selected RFQ'}.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
         <AlertCircle size={32} className="mx-auto text-amber-500" />
@@ -142,10 +191,14 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     setPoModalOpen(false);
     showToast('PPO Finalised', `Purchase Order ${poNumber} has been finalised and saved successfully.`, 'success');
     await refreshRFQs?.();
+    const isCM = currentRole === 'category_manager' || currentRole === 'admin';
+    const detailsRoute = isCM
+      ? `/category-manager/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`
+      : `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
     if (router?.push) {
-      router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`);
+      router.push(detailsRoute);
     } else if (typeof window !== 'undefined') {
-      window.location.href = `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
+      window.location.href = detailsRoute;
     }
   };
 
@@ -168,14 +221,14 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           <select
             value={currentRFQ.id}
             onChange={(e) => {
-              const found = rfqs.find((r) => r.id === e.target.value);
+              const found = availableRfqs.find((r) => r.id === e.target.value);
               if (found) setSelectedRFQForMatrix(found);
             }}
             className="text-xs font-semibold mono bg-white dark:bg-gray-900 border border-slate-300 dark:border-gray-700 rounded-lg px-2.5 py-1.5 shadow-sm"
           >
-            {rfqs.map((r) => (
+            {availableRfqs.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.rfqNumber} — {r.title.slice(0, 35)}... ({r.quotesCount} Quotes)
+                {r.rfqNumber} — {String(r.title || 'Untitled RFQ').slice(0, 35)}... ({r.quotesCount || 0} Quotes)
               </option>
             ))}
           </select>
@@ -226,7 +279,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   </span>
                 )}
               </div>
-              <p className="text-slate-600 dark:text-gray-300 font-medium text-xs mt-0.5">{currentRFQ.title}</p>
+              <p className="text-slate-600 dark:text-gray-300 font-medium text-xs mt-0.5">{currentRFQ.title || 'Untitled RFQ'}</p>
             </div>
           </div>
 
@@ -362,7 +415,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-sm text-slate-900 dark:text-white">{quote.vendorName}</span>
+                        <span className="font-extrabold text-sm text-slate-900 dark:text-white">{quote.vendorName || 'Vendor'}</span>
                         <div className="flex items-center gap-1.5">
                           <span
                             data-testid={`quote-source-${quote.vendorId}`}
@@ -527,10 +580,12 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     >
                       {(() => {
                         const isPOFinalised = currentRFQ.status === 'PO Generated' || Boolean((currentRFQ as any).poFinalised);
+                        const vendorNameClean = (quote.vendorName || '').trim();
+                        const awardedVendorClean = (currentRFQ.awardedVendor || '').trim();
                         const isAwarded =
                           Boolean((quote as any).awarded) ||
                           quote.status === 'Awarded' ||
-                          (currentRFQ.awardedVendor && quote.vendorName.trim().toLowerCase() === currentRFQ.awardedVendor.trim().toLowerCase()) ||
+                          (awardedVendorClean !== '' && vendorNameClean.toLowerCase() === awardedVendorClean.toLowerCase()) ||
                           Boolean((currentRFQ as any).awardedVendorId && quote.vendorId === (currentRFQ as any).awardedVendorId);
 
                         if (isPOFinalised) {
@@ -568,7 +623,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             onClick={() => handleSelectVendor(quote)}
                             className="btn btn-secondary btn-md w-full"
                           >
-                            Select {quote.vendorName.split(' ')[0]}
+                            Select {(quote.vendorName || 'Vendor').split(' ')[0]}
                           </button>
                         );
                       })()}
@@ -629,7 +684,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1">
-                        <span className="font-extrabold text-slate-900 dark:text-white truncate">{quote.vendorName}</span>
+                        <span className="font-extrabold text-slate-900 dark:text-white truncate">{quote.vendorName || 'Vendor'}</span>
                         {(() => {
                           const r = vendorRankMap.get(quote.vendorId);
                           const isL1 = r ? r.rank === 1 : quote.isBestPrice;
@@ -657,11 +712,12 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-gray-800/80">
                 {(currentRFQ.extractedEntities || []).map((item, itemIdx) => {
+                  const itemTitle = item.itemName || 'Item';
                   const prices = quotes.map((quote) => {
                     const items = quote.lineItemQuotes || [];
                     const matched =
                       items.find((li) => li.lineItemId === item.id) ||
-                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase()) ||
+                      items.find((li) => (li.itemName || '').trim().toLowerCase() === itemTitle.trim().toLowerCase()) ||
                       items[itemIdx];
                     const effectivePrice =
                       matched && typeof matched.unitPrice === 'number' && matched.unitPrice > 0
@@ -681,8 +737,8 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   return (
                     <tr key={item.id || itemIdx} className="hover:bg-slate-50/60 dark:hover:bg-gray-800/30">
                       <td className="px-3.5 py-3">
-                        <div className="font-semibold text-slate-900 dark:text-white text-xs">{item.itemName}</div>
-                        {item.technicalSpecs && item.technicalSpecs !== item.itemName && (
+                        <div className="font-semibold text-slate-900 dark:text-white text-xs">{itemTitle}</div>
+                        {item.technicalSpecs && item.technicalSpecs !== itemTitle && (
                           <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5 line-clamp-1">{item.technicalSpecs}</div>
                         )}
                       </td>
@@ -793,10 +849,10 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           onFinalized={handlePOFinalized}
           lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
             id: ent.id,
-            description: ent.itemName,
+            description: ent.itemName || 'Item',
             technicalSpecs: ent.technicalSpecs,
             quantity: ent.quantity,
-            unit: ent.unit,
+            unit: ent.unit || 'Nos',
             unitPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.unitPrice ?? selectedVendorForPO.unitPrice,
             totalPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.totalPrice ?? (selectedVendorForPO.unitPrice * (ent.quantity || 1)),
           }))}

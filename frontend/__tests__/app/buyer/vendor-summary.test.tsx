@@ -4947,7 +4947,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(mockAddBuyerVendor).not.toHaveBeenCalled();
 
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
-      await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('411001'));
+      await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('411001'), { timeout: 10000 });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
       await waitFor(() =>

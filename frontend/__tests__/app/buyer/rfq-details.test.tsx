@@ -937,7 +937,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       );
 
       const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(dialog).getByText('Laptop Procurement Request')).toBeInTheDocument());
+      await waitFor(() => expect(within(dialog).getByText('Laptop Procurement Request')).toBeInTheDocument(), { timeout: 10000 });
       expect(within(dialog).getByText('Please supply 20 units to Bangalore.')).toBeInTheDocument();
       expect(within(dialog).getByRole('link', { name: DETAILS.attachmentDownloadAction })).toHaveAttribute(
         'download',

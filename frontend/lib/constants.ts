@@ -939,9 +939,18 @@ export const FOLLOW_UP_BUSINESS_HOURS = {
  * Reads the same forms as formatIndianDateTime. A zone-less "YYYY-MM-DD HH:mm:ss" value and a value
  * tagged UTC are both read as UTC. A date-only value is read as midnight UTC.
  */
-export function parseRfqTimestamp(value?: string | null): number | null {
-  if (!value || value.trim() === '') return null;
+export function parseRfqTimestamp(value?: string | number | Date | null): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
+  if (typeof value !== 'string') return null;
   const trimmed = value.trim();
+  if (trimmed === '') return null;
 
   // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
   // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
@@ -966,13 +975,16 @@ export function parseRfqTimestamp(value?: string | null): number | null {
  * An unparseable or absent value is returned unchanged rather than rendered as
  * "Invalid Date", so a legacy record still shows whatever it holds.
  */
-export function formatIndianDateTime(value?: string): string {
-  if (!value || value.trim() === '') return '';
-  const trimmed = value.trim();
-  if (trimmed.endsWith(' IST')) return trimmed;
+export function formatIndianDateTime(value?: string | number | Date | null): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return '';
+    if (trimmed.endsWith(' IST')) return trimmed;
+  }
 
-  const parsed = parseRfqTimestamp(trimmed);
-  if (parsed === null) return value;
+  const parsed = parseRfqTimestamp(value);
+  if (parsed === null) return typeof value === 'string' ? value : '';
 
   const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
     timeZone: DISPLAY_TIMEZONE,
@@ -995,11 +1007,24 @@ export function formatIndianDateTime(value?: string): string {
  * Used for target delivery dates, which are stored as a plain date. Parsed as UTC
  * so a date-only value cannot slip to the previous day for a viewer behind UTC.
  */
-export function formatIndianDate(value?: string): string {
-  if (!value || value.trim() === '') return '';
+export function formatIndianDate(value?: string | number | Date | null): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || value instanceof Date) {
+    const parsedNum = parseRfqTimestamp(value);
+    if (parsedNum === null) return '';
+    return new Intl.DateTimeFormat(CURRENCY.LOCALE, {
+      timeZone: DISPLAY_TIMEZONE,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(new Date(parsedNum));
+  }
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (trimmed === '') return '';
 
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
-  const parsed = Date.parse(dateOnly ? `${value.trim()}T00:00:00Z` : value);
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  const parsed = Date.parse(dateOnly ? `${trimmed}T00:00:00Z` : trimmed);
   if (Number.isNaN(parsed)) return value;
 
   return new Intl.DateTimeFormat(CURRENCY.LOCALE, {

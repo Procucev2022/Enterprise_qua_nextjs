@@ -14,7 +14,7 @@ export default function CategoryManagerBuyerConsolePage() {
     <BuyerConsole
       onNavigateToMatrix={(rfq?: RFQItem) => {
         if (rfq) setSelectedRFQForMatrix(rfq);
-        router.push('/category-manager/quote-matrix');
+        router.push(rfq?.rfqNumber ? `/category-manager/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber)}` : '/category-manager/quote-matrix');
       }}
       onNavigateToEvaluation={() => router.push('/category-manager/vendor-evaluation-summary')}
     />
