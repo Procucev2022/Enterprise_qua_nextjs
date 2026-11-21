@@ -679,6 +679,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-slate-850">
+              {/* paginatedRfqs slices the sorted rows (sortedRfqs) into pages of 100 */}
               {paginatedRfqs.map((rfq) => {
                 const isUncategorizedV0 =
                   (rfq.sourcingMode === 'mode_0' || (rfq.sourcingMode as string) === 'v0') &&
