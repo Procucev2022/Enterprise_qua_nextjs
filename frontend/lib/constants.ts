@@ -1935,23 +1935,91 @@ export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined
  */
 export function canBuyerManageVendor(
   vendor: Partial<VendorEntry> | null | undefined,
-  activeBuyerAccount?: { id?: string; corporateEmail?: string; organizationName?: string } | null
+  activeBuyerAccount?: {
+    id?: string | null;
+    corporateEmail?: string | null;
+    organizationName?: string | null;
+    organizationId?: string | null;
+    buyerAccountId?: string | null;
+    userId?: string | null;
+    [key: string]: any;
+  } | null,
+  currentUserSession?: {
+    id?: string | null;
+    userUuid?: string | null;
+    sub?: string | null;
+    email?: string | null;
+    orgId?: string | null;
+    organizationId?: string | null;
+    orgName?: string | null;
+    organizationName?: string | null;
+    role?: string | null;
+    [key: string]: any;
+  } | null
 ): boolean {
   if (!vendor || vendor.isProcucevNetwork) return false;
   if (!isBuyerUploadedVendor(vendor)) return false;
-  if (!activeBuyerAccount) return true;
+  if (!activeBuyerAccount && !currentUserSession) return true;
 
-  const buyerId = String(activeBuyerAccount.id || '').trim().toLowerCase();
-  const buyerEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
-  const buyerOrg = String(activeBuyerAccount.organizationName || '').trim().toLowerCase();
+  const buyerIds = [
+    activeBuyerAccount?.id,
+    (activeBuyerAccount as any)?.organizationId,
+    (activeBuyerAccount as any)?.buyerAccountId,
+    (activeBuyerAccount as any)?.userId,
+    currentUserSession?.id,
+    currentUserSession?.userUuid,
+    currentUserSession?.sub,
+    currentUserSession?.orgId,
+    (currentUserSession as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
 
-  const vBuyerId = String(vendor.buyerId || vendor.buyerAccountId || '').trim().toLowerCase();
+  const buyerEmail = String(
+    activeBuyerAccount?.corporateEmail ||
+    (activeBuyerAccount as any)?.email ||
+    currentUserSession?.email ||
+    ''
+  ).trim().toLowerCase();
+
+  const buyerOrg = String(
+    activeBuyerAccount?.organizationName ||
+    (activeBuyerAccount as any)?.company ||
+    currentUserSession?.orgName ||
+    currentUserSession?.organizationName ||
+    ''
+  ).trim().toLowerCase();
+
+  const vBuyerIds = [
+    vendor.buyerId,
+    vendor.buyerAccountId,
+    (vendor as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
+
   const vBuyerEmail = String(vendor.buyerEmail || '').trim().toLowerCase();
   const vCompany = String(vendor.addedByBuyerCompany || '').trim().toLowerCase();
 
-  if (vBuyerId && buyerId && vBuyerId !== buyerId) return false;
-  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail) return false;
-  if (vCompany && buyerOrg && vCompany !== buyerOrg) return false;
+  // If ANY positive ownership match is confirmed, allow management:
+  const matchesId = vBuyerIds.length > 0 && buyerIds.some((bId) => vBuyerIds.includes(bId));
+  const matchesEmail = Boolean(vBuyerEmail && buyerEmail && (vBuyerEmail === buyerEmail || buyerIds.includes(vBuyerEmail)));
+  const matchesCompany = Boolean(vCompany && buyerOrg && (vCompany === buyerOrg || vCompany.includes(buyerOrg) || buyerOrg.includes(vCompany)));
+
+  if (matchesId || matchesEmail || matchesCompany) {
+    return true;
+  }
+
+  // If vendor explicitly belongs to a foreign buyer/company with no matching claim, deny:
+  if (vBuyerIds.length > 0 && buyerIds.length > 0 && !buyerIds.some((bId) => vBuyerIds.includes(bId))) {
+    return false;
+  }
+  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail && !buyerIds.includes(vBuyerEmail)) {
+    return false;
+  }
+  if (vCompany && buyerOrg && vCompany !== buyerOrg && !vCompany.includes(buyerOrg) && !buyerOrg.includes(vCompany)) {
+    return false;
+  }
 
   return true;
 }
