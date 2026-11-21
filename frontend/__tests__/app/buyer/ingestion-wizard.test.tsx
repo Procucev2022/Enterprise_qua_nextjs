@@ -3140,10 +3140,48 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }
     });
 
-    it('covers activeBuyerAccount delivery location auto-prefill (lines 338-350)', async () => {
+    it('never auto-fills delivery location/pincode from the buyer profile before a document is uploaded and extracted', async () => {
+      const origFetch = global.fetch;
+      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        if (urlStr.includes('/api/buyer-accounts/active')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                id: 'ba-1',
+                corporateEmail: 'buyer1@test.com',
+                organizationName: 'Tata Motors',
+                contactPerson: 'CPO',
+                city: 'Pune',
+                state: 'Maharashtra',
+                pincode: '411001',
+                remainingFreeRFQs: 5,
+              },
+            }),
+          }) as any;
+        }
+        return (origFetch as any)(url, init);
+      }) as any;
+
+      renderWizard();
+      // Give the activeBuyerAccount fetch a chance to resolve and settle.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('');
+
+      global.fetch = origFetch;
+    });
+
+    it('fills delivery location/pincode from the buyer profile only as an extraction-time fallback, per field (lines 338-350)', async () => {
       const origFetch = global.fetch;
 
-      // Case 1: city and state present
+      // Case 1: city and state present; document states neither field.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3169,13 +3207,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount1 } = renderWizard();
-      const locInput1 = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(locInput1.value).toBe('Pune, Maharashtra');
+      await act(async () => {
+        await Promise.resolve();
       });
+      uploadFile(new File(['binary'], 'RFQ_1.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce(
+        successResult([entity({ id: 'ent-1' })])
+      );
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune, Maharashtra');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
       unmount1();
 
-      // Case 2: city and state falsy, primaryPlantLocation present
+      // Case 2: city and state falsy, primaryPlantLocation present.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3202,13 +3247,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount2 } = renderWizard();
-      const locInput2 = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(locInput2.value).toBe('Sanand Plant');
+      await act(async () => {
+        await Promise.resolve();
       });
+      uploadFile(new File(['binary'], 'RFQ_2.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce(
+        successResult([entity({ id: 'ent-2' })])
+      );
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Sanand Plant');
       unmount2();
 
-      // Case 3: only pincode present, location empty
+      // Case 3: document states its own location but not its pincode — the
+      // document's location must win and the profile only fills the pincode.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3235,82 +3287,29 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount3 } = renderWizard();
-      const pinInput3 = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(pinInput3.value).toBe('560001');
+      await act(async () => {
+        await Promise.resolve();
       });
-      unmount3();
-
-      global.fetch = origFetch;
-    });
-
-    it('keeps a document-stated field and only fills the other, still-empty one from the buyer profile once it loads later', async () => {
-      // Document extraction states only the pincode; the profile (which
-      // resolves asynchronously, after the document is already extracted)
-      // must fill the still-empty location without touching the pincode the
-      // document already set. The previous guard required BOTH fields to be
-      // empty before filling either, so the location field would be stuck
-      // blank forever in this exact sequence.
-      const origFetch = global.fetch;
-      let resolveActiveAccount: ((value: any) => void) | null = null;
-      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
-        const urlStr = typeof url === 'string' ? url : url.toString();
-        if (urlStr.includes('/api/buyer-accounts/active')) {
-          return new Promise((resolve) => {
-            resolveActiveAccount = resolve;
-          }) as any;
-        }
-        return (origFetch as any)(url, init);
-      }) as any;
-
-      renderWizard();
-
-      uploadFile(new File(['binary'], 'RFQ_Doc.xlsx', { type: '' }));
+      uploadFile(new File(['binary'], 'RFQ_3.xlsx', { type: '' }));
       mockExtract.mockResolvedValueOnce({
         success: true,
         data: {
-          title: 'Doc Order',
+          title: 'Doc 3 Order',
           category: '',
           targetDeliveryDate: '',
-          deliveryPincode: '600028',
+          deliveryLocation: 'Document-stated Depot',
           estimatedBudget: null,
-          extractedEntities: [entity({ id: 'ent-doc' })],
+          extractedEntities: [entity({ id: 'ent-3' })],
           source: 'web_portal',
         },
         classification: undefined,
         extraction: undefined,
       });
       clickExtract();
-      await waitFor(() => expect(mockExtract).toHaveBeenCalled());
-      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
-      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('');
-
-      // Now the buyer profile resolves, after the document already set the pincode.
-      await act(async () => {
-        resolveActiveAccount?.({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            success: true,
-            data: {
-              id: 'ba-later',
-              corporateEmail: 'buyer@test.com',
-              organizationName: 'Tata Motors',
-              contactPerson: 'CPO',
-              city: 'Chennai',
-              state: 'Tamil Nadu',
-              pincode: '600001',
-              remainingFreeRFQs: 5,
-            },
-          }),
-        });
-      });
-
-      await waitFor(() => {
-        expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Chennai, Tamil Nadu');
-      });
-      // The document-stated pincode must not be overwritten by the profile's.
-      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(3));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Document-stated Depot');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('560001');
+      unmount3();
 
       global.fetch = origFetch;
     });
