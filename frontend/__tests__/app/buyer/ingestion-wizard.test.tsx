@@ -3244,6 +3244,77 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       global.fetch = origFetch;
     });
 
+    it('keeps a document-stated field and only fills the other, still-empty one from the buyer profile once it loads later', async () => {
+      // Document extraction states only the pincode; the profile (which
+      // resolves asynchronously, after the document is already extracted)
+      // must fill the still-empty location without touching the pincode the
+      // document already set. The previous guard required BOTH fields to be
+      // empty before filling either, so the location field would be stuck
+      // blank forever in this exact sequence.
+      const origFetch = global.fetch;
+      let resolveActiveAccount: ((value: any) => void) | null = null;
+      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        if (urlStr.includes('/api/buyer-accounts/active')) {
+          return new Promise((resolve) => {
+            resolveActiveAccount = resolve;
+          }) as any;
+        }
+        return (origFetch as any)(url, init);
+      }) as any;
+
+      renderWizard();
+
+      uploadFile(new File(['binary'], 'RFQ_Doc.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce({
+        success: true,
+        data: {
+          title: 'Doc Order',
+          category: '',
+          targetDeliveryDate: '',
+          deliveryPincode: '600028',
+          estimatedBudget: null,
+          extractedEntities: [entity({ id: 'ent-doc' })],
+          source: 'web_portal',
+        },
+        classification: undefined,
+        extraction: undefined,
+      });
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('');
+
+      // Now the buyer profile resolves, after the document already set the pincode.
+      await act(async () => {
+        resolveActiveAccount?.({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'ba-later',
+              corporateEmail: 'buyer@test.com',
+              organizationName: 'Tata Motors',
+              contactPerson: 'CPO',
+              city: 'Chennai',
+              state: 'Tamil Nadu',
+              pincode: '600001',
+              remainingFreeRFQs: 5,
+            },
+          }),
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Chennai, Tamil Nadu');
+      });
+      // The document-stated pincode must not be overwritten by the profile's.
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
+
+      global.fetch = origFetch;
+    });
+
     it('covers AddVendorModal pincode debounce, formats, errors and submission rejections (lines 387-405, 3044, 3140-3142)', async () => {
       jest.useFakeTimers();
 
