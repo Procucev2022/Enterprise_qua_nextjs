@@ -3176,7 +3176,10 @@ class StoreService {
       coversRfq ||
       isDirect ||
       isInvited ||
-      (isNetworkMode && categoryMatches);
+      // Evaluated last, and only for a network-mode RFQ none of the checks above allowed.
+      // (dd9513cf dropped the `categoryMatches` variable this used, so that case threw a
+      // ReferenceError and the download returned 500 instead of a clean refusal.)
+      (isNetworkMode && this._vendorCoversRFQCategories(vendor, rfq));
 
     if (!hasAccess) {
       return {
