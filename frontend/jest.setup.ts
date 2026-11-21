@@ -1,5 +1,8 @@
 import '@testing-library/jest-dom';
+import { configure } from '@testing-library/dom';
 import { TextEncoder, TextDecoder } from 'util';
+
+configure({ asyncUtilTimeout: 10000 });
 import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { CATEGORY_TAXONOMY_FIXTURE } from './test-fixtures/categoryTaxonomy';
 

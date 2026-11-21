@@ -249,6 +249,15 @@ describe('formatIndianDateTime', () => {
     expect(formatIndianDateTime(value)).toBe('');
   });
 
+  it('formats numeric epoch timestamps and Date objects into IST', () => {
+    const epoch = Date.parse('2026-09-04T09:25:21.000Z');
+    expect(formatIndianDateTime(epoch)).toBe('04 Sept 2026, 02:55 pm IST');
+    expect(formatIndianDateTime(new Date(epoch))).toBe('04 Sept 2026, 02:55 pm IST');
+    expect(formatIndianDateTime(NaN)).toBe('');
+    expect(formatIndianDateTime(new Date('invalid'))).toBe('');
+    expect(formatIndianDateTime({} as any)).toBe('');
+  });
+
   // A legacy record should still show whatever it holds rather than "Invalid Date".
   it('returns an unparseable value unchanged', () => {
     expect(formatIndianDateTime('not a date')).toBe('not a date');
@@ -263,6 +272,15 @@ describe('formatIndianDate', () => {
 
   it('formats the date part of a full instant', () => {
     expect(formatIndianDate('2026-09-02T11:07:16.000Z')).toBe('02 Sept 2026');
+  });
+
+  it('formats numeric epoch timestamps and Date objects', () => {
+    const epoch = Date.parse('2026-09-15T00:00:00.000Z');
+    expect(formatIndianDate(epoch)).toBe('15 Sept 2026');
+    expect(formatIndianDate(new Date(epoch))).toBe('15 Sept 2026');
+    expect(formatIndianDate(NaN)).toBe('');
+    expect(formatIndianDate(new Date('invalid'))).toBe('');
+    expect(formatIndianDate({} as any)).toBe('');
   });
 
   it.each([[''], ['  '], [undefined]])('reports nothing for %p', (value) => {
@@ -667,6 +685,15 @@ describe('parseRfqTimestamp', () => {
 
   it.each([[undefined], [null], [''], ['   '], ['not a date']])('returns null for %p', (value) => {
     expect(parseRfqTimestamp(value)).toBeNull();
+  });
+
+  it('handles numeric timestamps, Date instances, and invalid inputs', () => {
+    const epoch = 1756977921000;
+    expect(parseRfqTimestamp(epoch)).toBe(epoch);
+    expect(parseRfqTimestamp(new Date(epoch))).toBe(epoch);
+    expect(parseRfqTimestamp(NaN)).toBeNull();
+    expect(parseRfqTimestamp(new Date('invalid'))).toBeNull();
+    expect(parseRfqTimestamp({} as any)).toBeNull();
   });
 });
 

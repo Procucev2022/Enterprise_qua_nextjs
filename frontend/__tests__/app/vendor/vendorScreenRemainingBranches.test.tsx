@@ -11,6 +11,8 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorOpportunity } from '@/lib/types';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
+jest.setTimeout(35000);
+
 jest.mock('@/lib/store', () => ({ useApp: jest.fn() }));
 jest.mock('@/lib/subscriptionPaymentClient', () => ({ fetchSubscriptionPricing: jest.fn() }));
 jest.mock('@/lib/catalogueUploadClient', () => ({

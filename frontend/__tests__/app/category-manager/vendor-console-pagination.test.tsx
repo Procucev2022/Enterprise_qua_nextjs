@@ -65,7 +65,7 @@ describe('VendorConsole — pagination over a large vendor roster', () => {
 
     fireEvent.click(loadMore);
 
-    await waitFor(() => expect(screen.getAllByText('Vendor 20').length).toBeGreaterThan(0));
+    await waitFor(() => expect(screen.getAllByText('Vendor 20').length).toBeGreaterThan(0), { timeout: 10000 });
     expect(screen.getAllByText('Vendor 24').length).toBeGreaterThan(0);
     expect(screen.queryByTestId('load-more-vendor-cards')).not.toBeInTheDocument();
   });

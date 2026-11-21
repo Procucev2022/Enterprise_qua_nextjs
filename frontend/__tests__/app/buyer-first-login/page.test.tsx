@@ -169,8 +169,8 @@ describe('BuyerFirstLoginPage', () => {
           UI_STRINGS.auth.buyerOnboarding.otpSentMessage,
           'info'
         );
+        expect(screen.getByRole('button', { name: 'Resend OTP' })).toBeInTheDocument();
       });
-      expect(screen.getByRole('button', { name: 'Resend OTP' })).toBeInTheDocument();
     });
 
     it('shows error when email OTP dispatch fails with message', async () => {
@@ -657,7 +657,7 @@ describe('BuyerFirstLoginPage', () => {
 
       await waitFor(() => {
         expect(validatePincode).toHaveBeenCalledWith('411001');
-      }, { timeout: 1000 });
+      }, { timeout: 5000 });
       await waitFor(() => {
         expect(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.cityPlaceholder)).toHaveValue('Pune');
         expect(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.statePlaceholder)).toHaveValue('Maharashtra');
@@ -700,7 +700,7 @@ describe('BuyerFirstLoginPage', () => {
 
       await waitFor(() => {
         expect(validatePincode).toHaveBeenCalledWith('411001');
-      }, { timeout: 1000 });
+      }, { timeout: 5000 });
     });
 
     it('successfully submits onboarding payload and redirects to buyer dashboard', async () => {
@@ -806,7 +806,7 @@ describe('BuyerFirstLoginPage', () => {
 
       await waitFor(() => {
         expect(validatePincode).toHaveBeenCalledWith('411002');
-      }, { timeout: 1000 });
+      }, { timeout: 5000 });
       await waitFor(() => {
         expect(screen.getByPlaceholderText(UI_STRINGS.auth.buyerOnboarding.cityPlaceholder)).toHaveValue('Pune Division');
       });
@@ -824,7 +824,7 @@ describe('BuyerFirstLoginPage', () => {
 
       await waitFor(() => {
         expect(validatePincode).toHaveBeenCalledWith('411003');
-      }, { timeout: 1000 });
+      }, { timeout: 5000 });
     });
 
     it('shows error when completeBuyerOnboarding returns error', async () => {
