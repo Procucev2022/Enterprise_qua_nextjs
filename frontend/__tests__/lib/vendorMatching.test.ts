@@ -3,6 +3,7 @@ import {
   extractRfqCategorySignals,
   extractRfqCategoryFilters,
   hasExplicitAllCategoriesChoice,
+  checkVendorRfqCategoryMatch,
   matchVendorAgainstSignals,
   getCategoryMatchedProcucevVendors,
   selectVendorsForCategories,
@@ -838,5 +839,138 @@ describe('Mode 3 top-10 vendor selection', () => {
       deliveryPincode: '110002',
     });
     expect(allCatTop.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-mid-pin', 'v-far-pin']);
+  });
+
+  describe('checkVendorRfqCategoryMatch', () => {
+    it('returns isMatch false when vendor is null or undefined', () => {
+      const res = checkVendorRfqCategoryMatch(null as any, { signals: ['Pumps'] });
+      expect(res.isMatch).toBe(false);
+      expect(res.matchScore).toBe(0);
+    });
+
+    it('returns isMatch true with 100 score when RFQ has no signals', () => {
+      const vendor = { id: 'v1', name: 'Vendor 1', majorCategory: 'Electrical' } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, { signals: [], rawSignals: [] });
+      expect(res.isMatch).toBe(true);
+      expect(res.matchScore).toBe(100);
+      expect(res.matchedCategories).toContain('Electrical');
+    });
+
+    it('matches vendors with strict minor category (Tier 1)', () => {
+      const vendor = {
+        id: 'v1',
+        name: 'Pump Supplier',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Centrifugal Pumps'],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+      expect(res.isStrictMinorMatch).toBe(true);
+      expect(res.matchScore).toBeGreaterThanOrEqual(95);
+    });
+
+    it('matches vendors through parent major taxonomy association (Tier 3)', () => {
+      // Vendor only has parent majorCategory registered (common in bulk buyer uploads)
+      const vendor = {
+        id: 'v-bulk',
+        name: 'Industrial Spares Corp',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Centrifugal Pumps'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+      expect(res.matchedMajor).toBe('Engineering Spares - Mechanical');
+    });
+
+    it('matches vendors through broad raw signals containing RFQ major category (Tier 2)', () => {
+      const vendor = {
+        id: 'v-elec',
+        name: 'Volt Supplies',
+        majorCategory: 'Electrical Equipment',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['LED Flood Lights'],
+        rawSignals: ['Electrical Equipment', 'LED Flood Lights'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+    });
+
+    it('matches vendors through direct majorCategory fallback token matching (Tier 4)', () => {
+      const vendor = {
+        id: 'v-civil',
+        name: 'Concrete Ltd',
+        majorCategory: 'Civil Works & Construction',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Civil Works'],
+        rawSignals: ['Civil Works'],
+        minorOnly: false,
+        majorCategory: 'Civil Works',
+      });
+      expect(res.isMatch).toBe(true);
+    });
+
+    it('correctly identifies true category mismatch when vendor has zero category overlap', () => {
+      const vendor = {
+        id: 'v-it',
+        name: 'Cloud Solutions Inc',
+        majorCategory: 'Information Technology',
+        minorCategories: ['Cloud Hosting', 'Software Development'],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Centrifugal Pumps', 'Mechanical Spares'],
+        minorOnly: true,
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      expect(res.isMatch).toBe(false);
+      expect(res.matchScore).toBe(0);
+      expect(res.matchedCategories).toHaveLength(0);
+    });
+
+    it('prevents 571 vendors false positive mismatch scenario', () => {
+      // Simulate 571 uploaded vendors that have division majorCategory but empty structured minor
+      const vendors571: VendorEntry[] = Array.from({ length: 571 }, (_, i) => ({
+        id: `v-${i}`,
+        name: `Approved Vendor ${i}`,
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: [],
+        rating: 4.5,
+      })) as unknown as VendorEntry[];
+
+      const categorySignalSet = {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Engineering Spares - Mechanical', 'Centrifugal Pumps'],
+        minorOnly: true,
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategory: 'Centrifugal Pumps',
+      };
+
+      const matched: VendorEntry[] = [];
+      const mismatched: VendorEntry[] = [];
+
+      for (const v of vendors571) {
+        const evalRes = checkVendorRfqCategoryMatch(v, categorySignalSet);
+        if (evalRes.isMatch) {
+          matched.push(v);
+        } else {
+          mismatched.push(v);
+        }
+      }
+
+      // None of the 571 valid division vendors should be falsely identified as mismatched
+      expect(matched.length).toBe(571);
+      expect(mismatched.length).toBe(0);
+    });
   });
 });

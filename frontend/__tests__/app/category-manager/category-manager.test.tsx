@@ -1369,7 +1369,7 @@ describe('Category Manager Screens Suite', () => {
       renderWithProvider(<CategorySummaryDashboard />);
 
       expect(screen.getByText(/Active Categories/i)).toBeInTheDocument();
-      await waitFor(() => expect(screen.getAllByText(/13 Major/i)[0]).toBeInTheDocument());
+      await waitFor(() => expect(screen.getAllByText(/13 Divisions/i)[0]).toBeInTheDocument());
 
       // Timeframe switches
       const sevenDaysBtn = screen.getByRole('button', { name: /7 Days/i });

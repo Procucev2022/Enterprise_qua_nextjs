@@ -290,3 +290,105 @@ describe('an imported buyer (no buyer_accounts row) can see the RFQ they create'
     expect((await storeService.getBuyerAccountByEmail(other.email)).id).toBe('u-imported-boot');
   });
 });
+
+describe('updateBuyerAccountDurably PK preservation & ensureBuyerAccountForUser enrichment', () => {
+  const domainQueries = require('../src/db/domainQueries');
+  const pool = require('../src/db/pool');
+  const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+
+  afterEach(() => {
+    jest.restoreAllMocks();
+  });
+
+  test('preserves canonical PK id in memory mode and records mismatched requested id as userId', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    const created = await storeService.addBuyerAccountDurably({
+      id: 'buyer-acc-legacy-mem-1',
+      organizationName: 'Legacy Mem Corp',
+      corporateEmail: 'legacy-mem@example.com',
+    });
+
+    const updated = await storeService.updateBuyerAccountDurably('legacy-mem@example.com', {
+      id: 'u-auth-mem-1',
+      gstin: '27AAACK3921P1Z9',
+      street: '302 Sharada, AECS Layout',
+    });
+
+    expect(updated.id).toBe(created.id);
+    expect(updated.userId).toBe('u-auth-mem-1');
+    expect(updated.gstin).toBe('27AAACK3921P1Z9');
+  });
+
+  test('preserves SQL snapshot PK id in DB mode and falls back to email snapshot when ID misses', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const snapshot = {
+      id: 'buyer-acc-db-1',
+      account: {
+        id: 'buyer-acc-db-1',
+        organizationName: 'DB Corp',
+        corporateEmail: 'db-buyer@example.com',
+      },
+      rawJson: '{}',
+    };
+    jest.spyOn(domainQueries, 'getBuyerAccountSnapshotByIdFromDB').mockResolvedValueOnce(null);
+    const byEmailSpy = jest.spyOn(domainQueries, 'getBuyerAccountSnapshotByEmailFromDB').mockResolvedValueOnce(snapshot);
+    const casSpy = jest.spyOn(domainQueries, 'updateBuyerAccountIfUnchangedInDB').mockImplementationOnce(async (_snap, nextAcc) => nextAcc);
+
+    const saved = await storeService.updateBuyerAccountDurably('u-mismatch-1', {
+      id: 'u-mismatch-1',
+      corporateEmail: 'db-buyer@example.com',
+      gstin: '27AAACK3921P1Z9',
+      street: '302 Sharada, AECS Layout',
+      pincode: '560037',
+    });
+
+    expect(byEmailSpy).toHaveBeenCalledWith('db-buyer@example.com');
+    expect(casSpy).toHaveBeenCalledWith(snapshot, expect.objectContaining({
+      id: 'buyer-acc-db-1',
+      userId: 'u-mismatch-1',
+      gstin: '27AAACK3921P1Z9',
+      street: '302 Sharada, AECS Layout',
+      pincode: '560037',
+    }));
+    expect(saved.id).toBe('buyer-acc-db-1');
+    expect(saved.userId).toBe('u-mismatch-1');
+  });
+
+  test('ensureBuyerAccountForUser enriches an existing mirror missing pan, pincode, or organizationId from canonical profile', async () => {
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+    await storeService.addBuyerAccountDurably({
+      id: 'u-enrich-1',
+      organizationName: 'Enrich Corp',
+      corporateEmail: 'enrich-pan@example.com',
+      gstin: '27AAACK3921P1Z9',
+      street: '302 Sharada',
+      city: 'Bengaluru',
+      state: 'Karnataka',
+    });
+    jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValueOnce({
+      found: true,
+      profile: {
+        organizationId: 'org-enrich-1',
+        companyName: 'Enrich Corp',
+        gstNumber: '27AAACK3921P1Z9',
+        panNumber: 'AAACK3921P',
+        street: '302 Sharada',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        contactPhone: '+919381877013',
+      },
+    });
+
+    const enriched = await storeService.ensureBuyerAccountForUser({
+      id: 'u-enrich-1',
+      email: 'enrich-pan@example.com',
+      role: 'buyer',
+      orgName: 'Enrich Corp',
+    });
+
+    expect(enriched.organizationId).toBe('org-enrich-1');
+    expect(enriched.pan).toBe('AAACK3921P');
+    expect(enriched.pincode).toBe('560037');
+  });
+});

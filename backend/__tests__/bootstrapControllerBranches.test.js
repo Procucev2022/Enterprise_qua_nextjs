@@ -31,8 +31,9 @@ describe('bootstrapController 100% Branch Coverage', () => {
       organizationId: 'org-full-1',
     };
     jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue(buyerAccount);
-    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test' };
-    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation] });
+    const evaluation = { id: 'eval-buyer-view', email: 'vendor@company.test', buyerAccountId: 'acc-full-1' };
+    const foreignEval = { id: 'eval-unassociated', email: 'other@company.test', vendorName: 'Other Vendor' };
+    const getBootSpy = jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ rfqs: [], evaluations: [evaluation, foreignEval] });
 
     const req = {
       user: {
@@ -284,10 +285,17 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
       email: 'foreign@other.com',
       vendorName: 'Veera Solutions Pvt LTD',
     };
+    const evalOtherBuyerSameEmail = {
+      id: 'eval-other-buyer',
+      buyerAccountId: 'buyer-acc-other',
+      vendorId: 'v-diff-2',
+      email: 'vendor1@owned.com',
+      vendorName: 'Owned Vendor 1',
+    };
 
     jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
       vendors: [ownedVendor1, ownedVendor2, foreignVendor],
-      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign],
+      evaluations: [evalOwnedByBuyerId, evalOwnedByVendorId, evalOwnedByVendorEmail, evalForeign, evalOtherBuyerSameEmail],
     });
 
     const req = {
@@ -305,11 +313,21 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(res.data.data.evaluations).toHaveLength(3);
     expect(res.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1', 'eval-2', 'eval-3']);
     expect(res.data.data.evaluations.find((e) => e.vendorName === 'Veera Solutions Pvt LTD')).toBeUndefined();
+    expect(res.data.data.evaluations.find((e) => e.id === 'eval-other-buyer')).toBeUndefined();
 
     // Foreign vendor must be sanitized
     const returnedForeignVendor = res.data.data.vendors.find((v) => v.id === 'v-foreign-99');
     expect(returnedForeignVendor).toBeDefined();
     expect(returnedForeignVendor.contactEmail).toBeUndefined();
+
+    // Buyer with zero owned vendors must not inherit unassociated DB evaluations
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({
+      vendors: [foreignVendor],
+      evaluations: [evalForeign, evalOwnedByBuyerId],
+    });
+    const emptyOwnedRes = mockRes();
+    await bootstrapController.getBootstrap(req, emptyOwnedRes, jest.fn());
+    expect(emptyOwnedRes.data.data.evaluations.map((e) => e.id)).toEqual(['eval-1']);
   });
 
   test('vendor role scopes vendors and recognizes isOwnVendor', async () => {
@@ -481,5 +499,143 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(placeholder.minorCategories).toEqual([]);
     expect(rejected.majorCategory).toBe('');
     expect(rejected.minorCategories).toEqual([]);
+  });
+
+  test('derives minor categories from relevantProducts and itemsSupplied in master fallback and ignores empty candidates', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({
+      id: 'ba-derive-1',
+      corporateEmail: 'derive@procucev.com',
+      organizationId: 'org-derive-1',
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValue({ id: 'sess-derive-1' });
+    jest.spyOn(vendorIngestionQueries, 'findVendorMasterRecords').mockResolvedValue([
+      {
+        id: 'rec-derive-products',
+        vendorCode: 'VC-D1',
+        companyName: 'Civil Supply Co',
+        email: 'civil@co.test',
+        majorCategory: 'Civil Works',
+        minorCategories: [],
+        itemsSupplied: ['', 'Plumbing Kit', 'Paints'],
+      },
+      {
+        id: 'rec-derive-items-only',
+        vendorCode: 'VC-D2',
+        companyName: 'Roofing Supply Co',
+        email: 'roof@co.test',
+        majorCategory: 'Civil Works',
+        minorCategories: [],
+        itemsSupplied: ['Brick', 'Bricks', ''],
+      },
+      {
+        id: 'rec-unknown-major',
+        vendorCode: 'VC-D3',
+        companyName: 'Custom Co',
+        email: 'custom@co.test',
+        majorCategory: 'NonExistent Division',
+        minorCategories: [],
+        itemsSupplied: ['Widgets'],
+      },
+    ]);
+    jest.spyOn(vendorIngestionQueries, 'findCategoryMappings').mockRejectedValue(new Error('mappings table offline'));
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValue({ vendors: [], evaluations: [] });
+
+    const res = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, res, jest.fn());
+
+    expect(res.statusCode).toBe(200);
+    const civil = res.data.data.vendors.find((v) => v.id === 'v-master-rec-derive-products');
+    const roof = res.data.data.vendors.find((v) => v.id === 'v-master-rec-derive-items-only');
+    const custom = res.data.data.vendors.find((v) => v.id === 'v-master-rec-unknown-major');
+    expect(civil.minorCategories).toEqual(['Plumbing', 'Paints']);
+    expect(roof.minorCategories).toEqual(['Bricks']);
+    expect(custom.minorCategories).toEqual([]);
+
+    // Also cover relevantProducts path when category mappings resolve and empty masterRecords branch
+    vendorIngestionQueries.findCategoryMappings.mockResolvedValueOnce([
+      {
+        vendorRecordId: 'rec-derive-products',
+        aiSuggestion: { majorCategory: 'Civil Works', minorCategories: [], relevantProducts: ['TMT BARS', 'tmt bars', ''] },
+      },
+    ]);
+    const resMapped = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resMapped, jest.fn());
+    const civilMapped = resMapped.data.data.vendors.find((v) => v.id === 'v-master-rec-derive-products');
+    expect(civilMapped.minorCategories).toEqual(expect.arrayContaining(['TMT BARS', 'Plumbing', 'Paints']));
+
+    vendorIngestionQueries.findVendorMasterRecords.mockResolvedValueOnce([]);
+    const resEmpty = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resEmpty, jest.fn());
+    expect(resEmpty.data.data.vendors).toEqual([]);
+
+    // Also cover findOrganizationVendorMasterRecords returning cross-session org records when findLatestSession is null
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce(null);
+    jest.spyOn(vendorIngestionQueries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([
+      {
+        id: 'rec-org-wide-1',
+        sessionId: 'sess-prev-1',
+        vendorCode: 'VC-ORG-1',
+        companyName: 'Cross PC Org Supplier',
+        email: 'crosspc@org.test',
+      },
+    ]);
+    const resOrgWide = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-derive-1', email: 'derive@procucev.com' } }, resOrgWide, jest.fn());
+    expect(resOrgWide.data.data.vendors.map((v) => v.id)).toEqual(['v-master-rec-org-wide-1']);
+  });
+
+  test('returns empty fallback vendors when latest session status is DRAFT or VENDOR_MASTER_STORED', async () => {
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-1',
+      status: 'VENDOR_MASTER_STORED',
+    });
+    const resDraft = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft, jest.fn());
+    expect(resDraft.data.data.vendors).toEqual([]);
+
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce({
+      id: 'sess-draft-2',
+      status: 'DRAFT',
+    });
+    const resDraft2 = mockRes();
+    await bootstrapController.getBootstrap({ user: { role: 'buyer', orgId: 'org-draft-1', email: 'draft@procucev.com' } }, resDraft2, jest.fn());
+    expect(resDraft2.data.data.vendors).toEqual([]);
+  });
+
+  test('recognizes buyer-owned vendors matching organizationName, addedByBuyerCompany, or buyer source', async () => {
+    jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({
+      id: 'ba-org-match',
+      organizationId: 'org-123',
+      organizationName: 'Procucev Solutions',
+      corporateEmail: 'sudheer@procucev.com',
+    });
+    jest.spyOn(storeService, 'getBootstrapData').mockResolvedValueOnce({
+      buyerAccounts: [],
+      vendors: [
+        {
+          id: 'v-comp-match',
+          name: 'Company Match Vendor',
+          addedByBuyerCompany: 'Procucev Solutions',
+          source: 'vendor_master_ingestion',
+        },
+        {
+          id: 'v-source-match',
+          name: 'Source Match Vendor',
+          source: 'buyer_uploaded',
+        },
+      ],
+      evaluations: [],
+      auditLogs: [],
+    });
+    jest.spyOn(vendorIngestionQueries, 'findLatestSession').mockResolvedValueOnce(null);
+    jest.spyOn(vendorIngestionQueries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([]);
+    const res = mockRes();
+    await bootstrapController.getBootstrap(
+      { user: { role: 'buyer', sub: 'usr-buyer-org', email: 'sudheer@procucev.com', orgName: 'Procucev Solutions' } },
+      res,
+      jest.fn()
+    );
+    expect(res.data.data.vendors).toHaveLength(2);
+    expect(res.data.data.vendors.map((v) => v.id)).toEqual(['v-comp-match', 'v-source-match']);
   });
 });

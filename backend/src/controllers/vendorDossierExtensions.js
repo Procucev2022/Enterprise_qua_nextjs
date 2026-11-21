@@ -3,7 +3,7 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const zohoReconciliationService = require('../services/zohoReconciliationService');
 const { logger } = require('../services/loggerService');
-const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES } = require('../config/constants');
+const { VENDOR_FREE_CREDITS_LIMIT, PERSISTENCE_MESSAGES, DOSSIER_MESSAGES, formatMessage } = require('../config/constants');
 
 const VENDOR_DOSSIER_ERRORS = Object.freeze({
   ACTOR_REQUIRED: 'Sign in with a staff account to record this vendor communication. No signed-in user was found on the request.',
@@ -88,7 +88,13 @@ async function getCreditHistory(req, res, next) {
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const creditInfo = storeService.getVendorRfqCredits(vendor.id);
-    let transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
+    let transactions = [];
+    try {
+      transactions = (await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load vendor credit transactions from database', { vendorId: vendor.id, error: dbErr.message }, 'VENDOR_CONTROLLER');
+      transactions = [];
+    }
 
     // The seeded allocation is the vendor's recorded allocation. No recorded allocation seeds 0.
     const alloc = Number(creditInfo.freeCreditsAllocated ?? 0);
@@ -214,7 +220,13 @@ async function getVendorCommunications(req, res, next) {
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
-    const comms = await paymentDuesQueries.getCommunicationHistory(vendor.id);
+    let comms = [];
+    try {
+      comms = (await paymentDuesQueries.getCommunicationHistory(vendor.id)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load vendor communication history from database', { vendorId: vendor.id, error: dbErr.message }, 'VENDOR_CONTROLLER');
+      comms = [];
+    }
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching vendor communications', err, 'VENDOR_CONTROLLER');
@@ -686,68 +698,227 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    const {
+      amount,
+      reason,
+      approverName,
+      approverId,
+      initiatorName,
+      initiatorId,
+      startDate,
+      endDate,
+      paymentDate,
+      paymentType,
+      transactionId,
+      buyerSourceMode,
+      sellerSourceMode,
+      paymentAmount,
+      proofFileName,
+      proofFileUrl,
+      proofFileType,
+      proofFileSize,
+      idempotencyKey,
+      requestType = 'Seller Credit Addition',
+      discountPercentage,
+      durationDays,
+      paymentReference,
+      selectedMode,
+      billingDuration,
+      originalPrice,
+      discountAmount,
+      remainingAmount,
+      gstAmount,
+      finalPayableAmount,
+    } = validation.sanitizedData;
+
     // The maker is the signed-in user. The request body does not set who submitted the approval.
     const makerName = actorDisplayName(req.user);
     if (!makerName) {
       return res.status(401).json({ success: false, error: VENDOR_DOSSIER_ERRORS.ACTOR_REQUIRED });
     }
+    const makerEmail = req.user?.email || null;
     const makerRole = req.user?.role || null;
+    const makerId = req.user?.uuid || req.user?.id || null;
 
     const vendorLabel = vendor.name || vendor.id;
-    const taskReason = reason || `Requested quote credit top-up for ${vendorLabel}`;
+    const balance = vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? vendor.credits ?? 0;
+    const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
+
+    if (requestType === 'Seller Credit Deletion') {
+      if (balance !== null && numAmount > balance) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete ${numAmount} credits: ${vendorLabel} only has ${balance} credits available.`,
+        });
+      }
+    }
+
+    let taskCategory = 'CREDIT_MANAGEMENT';
+    let taskType = 'Add Credits';
+    let title = `Quote Credit Allocation Request: ${numAmount} Credits for ${vendorLabel}`;
+    let description = reason || `Requested quote credit top-up for ${vendorLabel}`;
+    let valueImpact = `${numAmount} Quote Credits (${vendorLabel})`;
+    let quantity = numAmount || 1;
+    let effectiveAmount = numAmount;
+
+    if (requestType === 'Seller Credit Deletion') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Credit Deletion';
+      title = `Quote Credit Deduction Request: ${numAmount} Credits from ${vendorLabel}`;
+      description = reason || `Requested credit deduction for ${vendorLabel}`;
+      valueImpact = `-${numAmount} Quote Credits (${vendorLabel})`;
+      quantity = numAmount;
+      effectiveAmount = numAmount;
+    } else if (requestType === 'Discounts' || requestType === 'Discount') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Discounts';
+      const pct = discountPercentage !== undefined ? discountPercentage : (amount || 0);
+      title = `Discount Approval Request: ${pct}% for ${vendorLabel}`;
+      description = reason || `Requested ${pct}% discount for ${vendorLabel}`;
+      valueImpact = `${pct}% Subscription Discount (${vendorLabel})`;
+      effectiveAmount = pct;
+      quantity = 1;
+    } else if (requestType === 'Trial Periods' || requestType === 'Trial Period') {
+      taskCategory = 'ONBOARDING';
+      taskType = 'Trial Periods';
+      const days = durationDays || amount || 30;
+      title = `Trial Period Request: ${days} Days for ${vendorLabel}`;
+      description = reason || `Requested ${days} days trial extension for ${vendorLabel}`;
+      valueImpact = `${days} Days Free Trial (${vendorLabel})`;
+      effectiveAmount = days;
+      quantity = 1;
+    } else if (requestType === 'Offline Payments') {
+      taskCategory = 'PAYMENT';
+      taskType = 'Offline Payments';
+      const safeAmount = Number(paymentAmount !== undefined ? paymentAmount : numAmount) || 0;
+      effectiveAmount = safeAmount;
+      const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
+      const formattedAmount = safeAmount.toLocaleString('en-IN');
+      title = `Offline Payment Verification: ₹${formattedAmount} for ${vendorLabel}`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${vendorLabel}`;
+      valueImpact = `₹${formattedAmount} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
+      quantity = 1;
+    }
+
+    const discountPct = discountPercentage !== undefined ? discountPercentage : (requestType === 'Discounts' || requestType === 'Discount' ? (amount || 0) : undefined);
+
+    const taskAttachments = [];
+    if (proofFileName) {
+      taskAttachments.push({
+        name: proofFileName,
+        url: proofFileUrl || '',
+        size: proofFileSize || 0,
+        type: proofFileType || 'image/jpeg',
+      });
+    }
 
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
-        taskCategory: 'CREDIT_MANAGEMENT',
-        taskType: 'Add Credits',
-        title: `Quote Credit Allocation Request: ${amount} Credits for ${vendorLabel}`,
-        description: taskReason,
+        taskCategory,
+        taskType,
+        title,
+        description,
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
+        assignedToUserId: approverId || null,
         assignedToName: approverName,
         assignedTeam: 'Management Approvers',
+        createdByName: makerName,
+        createdByUserId: makerId,
         creditAccountType: 'seller',
         creditAccountId: vendor.id,
         creditAccountName: vendorLabel,
-        creditQuantity: amount,
+        creditQuantity: effectiveAmount,
         creditReason: reason,
         notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'SELLER',
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,
+        attachments: taskAttachments,
+        raw: {
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          seller_source_mode: sellerSourceMode || selectedMode || buyerSourceMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          assigned_approver: approverName,
+          assigned_approver_id: approverId,
+        },
       },
       {
+        uuid: makerId,
         fullName: makerName,
         name: makerName,
-        email: req.user?.email || null,
+        email: makerEmail,
         role: makerRole,
       },
       {
-        module: 'Seller Credit Addition',
+        module: requestType,
         idempotencyKey,
-        request_type: 'Seller Credit Addition',
+        request_type: requestType,
         project: vendorLabel,
         applicant_name: vendorLabel,
         applicant_email: vendor.email || '',
-        value_impact: `${amount} Quote Credits (${vendorLabel})`,
-        amount,
-        quantity: amount,
-        available_balance: vendor.freeQuotationCredits ?? VENDOR_FREE_CREDITS_LIMIT,
+        value_impact: valueImpact,
+        amount: effectiveAmount,
+        quantity,
+        available_balance: balance,
         maker_name: makerName,
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: taskReason,
+        details: description,
         seller_id: vendor.id,
+        raw: {
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId,
+          payment_amount: effectiveAmount,
+          seller_source_mode: sellerSourceMode || selectedMode || buyerSourceMode,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+        },
         history: [
           {
             action: 'SUBMITTED',
             actor_name: makerName,
             actor_role: makerRole,
             timestamp: new Date().toISOString(),
-            remarks: reason || `Submitted quote credit addition for approval (${approverName}).`,
+            remarks: reason || `Submitted ${requestType} for approval (${approverName}).`,
           },
         ],
       }
@@ -770,6 +941,176 @@ async function requestCreditApproval(req, res, next) {
   }
 }
 
+function matchesVendorBuyer(vendor, buyer) {
+  if (!buyer) return false;
+  const bId = String(buyer.id || '').toLowerCase();
+  const bEmail = String(buyer.corporateEmail || '').toLowerCase();
+  const bOrg = String(buyer.organizationName || '').toLowerCase();
+
+  const vBuyerId = String(vendor.buyerId || '').toLowerCase();
+  const vBuyerAccountId = String(vendor.buyerAccountId || '').toLowerCase();
+  const vBuyerEmail = String(vendor.buyerEmail || '').toLowerCase();
+  const vAddedBy = String(vendor.addedByBuyerCompany || '').toLowerCase();
+
+  if (vBuyerId && vBuyerId === bId) return true;
+  if (vBuyerAccountId && vBuyerAccountId === bId) return true;
+  if (vBuyerEmail && bEmail && vBuyerEmail === bEmail) return true;
+  if (vAddedBy && bOrg && vAddedBy === bOrg) return true;
+  return false;
+}
+
+async function getSellerBuyerUploads(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbBuyers = [];
+    if (pool.hasStorage()) {
+      dbBuyers = await domainQueries.getAssociatedBuyersForVendorFromDB(vendor, 100);
+    }
+
+    const inMemBuyers = (storeService.getBuyerAccounts() || []).filter((b) => matchesVendorBuyer(vendor, b)).map((b) => {
+      const company = b.organizationName || b.companyName || b.name || 'Enterprise Buyer';
+      const contact = b.contactPerson || b.name || 'Primary Contact';
+      const email = b.corporateEmail || b.email || '';
+      const phone = b.mobileNumber || b.phone || '';
+      const uploadDate = vendor.createdAt || vendor.created_at || b.createdAt;
+      return {
+        id: b.id,
+        name: company,
+        companyName: company,
+        contactPerson: contact,
+        email,
+        phone,
+        uploadDate,
+        status: b.status || 'ACTIVE_VERIFIED',
+        sourcingMode: b.sourcingMode || 'Mode 1',
+        subscriptionPlan: b.subscriptionPlan || b.subscriptionTier || 'Version_3',
+        location: b.location || b.city || '',
+      };
+    });
+
+    const buyerMap = new Map();
+    for (const b of [...dbBuyers, ...inMemBuyers]) {
+      const key = String(b.id || b.email).toLowerCase();
+      if (key && !buyerMap.has(key)) {
+        buyerMap.set(key, b);
+      }
+    }
+
+    if (buyerMap.size === 0 && (vendor.addedByBuyerCompany || vendor.buyerId || vendor.buyerEmail)) {
+      const clientName = vendor.addedByBuyerCompany || vendor.buyerEmail || 'Enterprise Client';
+      const key = String(vendor.buyerId || vendor.buyerEmail || clientName).toLowerCase();
+      buyerMap.set(key, {
+        id: vendor.buyerId || `buyer-ext-${key.slice(0, 10)}`,
+        name: clientName,
+        companyName: clientName,
+        contactPerson: vendor.buyerEmail ? vendor.buyerEmail.split('@')[0] : 'Procurement Contact',
+        email: vendor.buyerEmail || '',
+        phone: '',
+        uploadDate: vendor.createdAt || new Date().toISOString(),
+        status: 'ACTIVE_VERIFIED',
+        sourcingMode: 'Mode 1',
+        subscriptionPlan: 'Enterprise',
+        location: vendor.city ? `${vendor.city}${vendor.state ? ', ' + vendor.state : ''}` : '',
+      });
+    }
+
+    const buyers = Array.from(buyerMap.values());
+    return res.status(200).json({
+      success: true,
+      count: buyers.length,
+      data: buyers,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller buyer uploads', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
+async function getSellerActiveRFQs(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrVendor(req, res)) return;
+    const { id } = req.params;
+    const vendor = await resolveVendor(id, req.user);
+    if (!vendor) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.SELLER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
+
+    let dbMatchedRFQs = [];
+    if (pool.hasStorage()) {
+      dbMatchedRFQs = await domainQueries.getActiveCategoryMatchedRFQsForVendorFromDB(vendor, 100);
+    }
+
+    const now = Date.now();
+    const inMemRFQs = (storeService.rfqs || []).filter((rfq) => {
+      if (!rfq) return false;
+      const status = String(rfq.status || '').toLowerCase();
+      if (status.includes('close') || status.includes('cancel') || status.includes('expire') || status.includes('complet')) {
+        return false;
+      }
+      const closingDate = rfq.closingDate || rfq.deadline || rfq.bidClosingDate;
+      if (closingDate) {
+        const time = new Date(closingDate).getTime();
+        if (!isNaN(time) && time < now) return false;
+      }
+      const rfqCat = rfq.category || rfq.procurementCategory || rfq.majorCategory;
+      if (storeService.vendorCoversCategory(vendor, rfqCat)) return true;
+      if (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+      if (Array.isArray(rfq.extractedEntities)) {
+        return rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category));
+      }
+      return false;
+    }).map((rfq) => {
+      const cat = rfq.category || 'General';
+      const buyerName = rfq.buyerAccountName || 'Buyer Enterprise';
+      return {
+        id: rfq.id,
+        rfqNumber: rfq.rfqNumber || rfq.id,
+        title: rfq.title || `RFQ ${rfq.rfqNumber || rfq.id}`,
+        category: cat,
+        procurementCategory: cat,
+        buyerCompanyName: buyerName,
+        buyerCompany: buyerName,
+        buyerName,
+        location: rfq.deliveryLocation || '—',
+        publishedDate: rfq.publishedDate || rfq.createdAt || new Date().toISOString(),
+        closingDate: rfq.closingDate || null,
+        status: rfq.status || 'Quotes Pending',
+        budget: rfq.budget ?? 0,
+        sourcingMode: rfq.sourcingMode || 'Mode 1',
+        extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : [],
+        description: rfq.description || '',
+        ...rfq,
+      };
+    });
+
+    const rfqMap = new Map();
+    for (const rfq of [...dbMatchedRFQs, ...inMemRFQs]) {
+      if (rfq?.id && !rfqMap.has(rfq.id)) {
+        rfqMap.set(rfq.id, rfq);
+      }
+    }
+
+    const activeRfqs = Array.from(rfqMap.values());
+    return res.status(200).json({
+      success: true,
+      count: activeRfqs.length,
+      data: activeRfqs,
+    });
+  } catch (err) {
+    logger.error('Error fetching seller active RFQs', err, 'VENDOR_DOSSIER_EXTENSIONS');
+    return sendDossierError(res, next, err);
+  }
+}
+
 module.exports = {
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrVendor,
@@ -780,4 +1121,6 @@ module.exports = {
   getVendorPaymentHistory,
   addQuoteCredits,
   requestCreditApproval,
+  getSellerBuyerUploads,
+  getSellerActiveRFQs,
 };

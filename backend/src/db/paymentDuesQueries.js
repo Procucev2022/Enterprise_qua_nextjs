@@ -328,8 +328,8 @@ async function getLowCreditAccounts({
     allEligibleAccounts.push({
       accountId: v.id,
       accountType: 'seller',
-      companyName: pickFirst(v.name, v.companyName) || DASH,
-      contactPerson: pickFirst(v.contactPerson, v.ownerName, v.contactName) || DASH,
+      companyName: pickFirst(v.name, v.companyName, v.company_name, v.organizationName, v.businessName, v.vendor_name) || DASH,
+      contactPerson: pickFirst(v.contactPerson, v.ownerName, v.contactName, v.name) || DASH,
       email: pickFirst(v.email, v.corporateEmail) || DASH,
       phoneNumber: pickFirst(v.phone, v.mobile, v.mobileNumber) || DASH,
       availableCredits: available,

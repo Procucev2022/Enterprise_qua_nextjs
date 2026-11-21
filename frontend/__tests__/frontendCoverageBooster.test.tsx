@@ -7,6 +7,7 @@ import BuyerRFQDetailsPage from '@/app/buyer/rfq-details/page';
 import BuyerRFQDetailsUnderscorePage from '@/app/buyer/rfq_details/page';
 import BuyerQuoteMatrixPage from '@/app/buyer/quote-matrix/page';
 import CategoryManagerQuoteMatrixPage from '@/app/category-manager/quote-matrix/page';
+import { QuoteMatrixErrorBoundary } from '@/app/components/QuoteMatrixErrorBoundary';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { RFQEditModal } from '@/app/buyer/RFQEditModal';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
@@ -21,6 +22,7 @@ import * as storeModule from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 import * as rfqClientModule from '@/lib/rfqClient';
 import * as buyerProfileClientModule from '@/lib/buyerProfileClient';
+import { UI_STRINGS } from '@/lib/uiStrings';
 import type { RFQItem, VendorOpportunity, BuyerProfile } from '@/lib/types';
 
 jest.mock('@/lib/store');
@@ -583,15 +585,59 @@ describe('Frontend Master Coverage Booster Suite', () => {
   });
 
   test('BuyerQuoteMatrixPage and CategoryManagerQuoteMatrixPage back routing', () => {
-    render(<BuyerQuoteMatrixPage />);
+    const { unmount: unmountBuyer } = render(<BuyerQuoteMatrixPage />);
     expect(screen.getByText(/Target Delivery/i)).toBeInTheDocument();
     const backBtn = screen.getByRole('button', { name: /Back to Command Center/i });
     fireEvent.click(backBtn);
+    unmountBuyer();
 
-    render(<CategoryManagerQuoteMatrixPage />);
+    const { unmount: unmountCm } = render(<CategoryManagerQuoteMatrixPage />);
     expect(screen.getAllByText(/Target Delivery/i).length).toBeGreaterThan(0);
-    const cmBackBtns = screen.getAllByRole('button', { name: /Back to Command Center/i });
-    if (cmBackBtns.length > 0) fireEvent.click(cmBackBtns[0]);
+    const cmBackBtn = screen.getByRole('button', { name: /Back to Command Center/i });
+    fireEvent.click(cmBackBtn);
+    expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+    unmountCm();
+  });
+
+  test('QuoteMatrixErrorBoundary catches errors, renders fallback UI, and handles retry and back', () => {
+    const ProblemChild = () => {
+      throw new Error('Test crash in matrix render');
+    };
+    const onBack = jest.fn();
+    const spyConsole = jest.spyOn(console, 'error').mockImplementation(() => {});
+
+    const { unmount } = render(
+      <QuoteMatrixErrorBoundary onBack={onBack}>
+        <ProblemChild />
+      </QuoteMatrixErrorBoundary>
+    );
+
+    expect(screen.getByText('Unable to display Quote Matrix')).toBeInTheDocument();
+    expect(screen.getByText('Test crash in matrix render')).toBeInTheDocument();
+
+    const retryBtn = screen.getByRole('button', { name: /Retry/i });
+    fireEvent.click(retryBtn);
+
+    const backBtn = screen.getByRole('button', { name: /Back to All RFQs/i });
+    fireEvent.click(backBtn);
+    expect(onBack).toHaveBeenCalled();
+
+    unmount();
+
+    const EmptyErrorChild = () => {
+      const err = new Error('');
+      err.message = '';
+      throw err;
+    };
+    const { unmount: unmountEmpty } = render(
+      <QuoteMatrixErrorBoundary onBack={onBack}>
+        <EmptyErrorChild />
+      </QuoteMatrixErrorBoundary>
+    );
+    expect(screen.getByText('An unexpected rendering error occurred while loading the quote matrix.')).toBeInTheDocument();
+    unmountEmpty();
+
+    spyConsole.mockRestore();
   });
 
   test('VendorQuotationFormPage loads matching RFQ, fallback and missing opportunity', () => {
@@ -624,7 +670,7 @@ describe('Frontend Master Coverage Booster Suite', () => {
   test('QuoteMatrix renders comparison table and handles actions', () => {
     const onBack = jest.fn();
 
-    render(<QuoteMatrix onBackToDashboard={onBack} />);
+    const { unmount } = render(<QuoteMatrix onBackToDashboard={onBack} />);
 
     expect(screen.getByText(/Target Delivery/i)).toBeInTheDocument();
     expect(screen.getAllByText(/Apex Hydro Ltd/i).length).toBeGreaterThan(0);
@@ -633,9 +679,12 @@ describe('Frontend Master Coverage Booster Suite', () => {
     if (selectBtns.length > 0) {
       fireEvent.click(selectBtns[0]);
     }
+    unmount();
   });
 
   test('quote matrix reports when no RFQs are available', () => {
+    const prevParam = mockQueryParam;
+    mockQueryParam = null;
     (storeModule.useApp as jest.Mock).mockReturnValueOnce({
       rfqs: [],
       selectedRFQForMatrix: mockRfqs[0],
@@ -648,10 +697,12 @@ describe('Frontend Master Coverage Booster Suite', () => {
       selectedRFQForDeepDive: null,
     });
 
-    render(<QuoteMatrix scopeToOwnBuyerAccount />);
+    const { unmount } = render(<QuoteMatrix scopeToOwnBuyerAccount />);
 
     expect(screen.getByText('No RFQs Available')).toBeInTheDocument();
     expect(screen.getByText(/Please create or ingest an RFQ first/i)).toBeInTheDocument();
+    unmount();
+    mockQueryParam = prevParam;
   });
 
   test('matrix route back controls use browser history when a previous page exists', () => {
@@ -682,7 +733,7 @@ describe('Frontend Master Coverage Booster Suite', () => {
       <VendorSummary onViewEvaluation={onViewEval} onNavigateToWizard={onWizard} />
     );
 
-    expect(screen.getByText(/Total Empanelled/i)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
     const searchInputs = screen.queryAllByRole('textbox');
     if (searchInputs.length > 0) {
       fireEvent.change(searchInputs[0], { target: { value: 'Apex' } });

@@ -346,6 +346,49 @@ const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
 const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
 const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
 const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_QUOTES_SEALED_REASON = 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.';
+
+function parseRfqTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0;
+  const trimmed = String(value).trim();
+  if (!trimmed) return 0;
+  let parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    parsed = Date.parse(trimmed.replace(' ', 'T').replace(/\s+UTC$/i, 'Z'));
+  }
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isRfqConcluded(rfq) {
+  return Boolean(
+    rfq && (
+      rfq.status === 'Closed' ||
+      rfq.status === 'PO Generated' ||
+      rfq.poFinalised ||
+      rfq.poNumber ||
+      rfq.status === 'Expired'
+    )
+  );
+}
+
+function resolveRfqBiddingWindowEndMs(rfq) {
+  if (!rfq) return 0;
+  const createdAtMs = parseRfqTimestampMs(rfq.createdAt);
+  const closingDeadlineMs = parseRfqTimestampMs(rfq.closingDeadline);
+  const defaultEndMs = createdAtMs > 0 ? createdAtMs + RFQ_AUTO_CLOSE_AFTER_MS : 0;
+  return Math.max(defaultEndMs, closingDeadlineMs);
+}
+const RFQ_CLOSURE_MESSAGES = Object.freeze({
+  REOPEN_FORBIDDEN: 'After close, this RFQ cannot be opened again.',
+  BUYER_CLOSE_REASON: 'Closed by buyer',
+  CM_CLOSE_REASON: 'Closed by procurement team',
+  VENDOR_NOTIFICATION_TITLE: 'RFQ Closed: {rfqNumber}',
+  VENDOR_NOTIFICATION_MESSAGE: 'Requisition {rfqNumber} ({rfqTitle}) has been closed by the buyer. Bidding is now concluded and no further quotations will be accepted.',
+  VENDOR_EMAIL_SUBJECT: 'RFQ Closed: {rfqNumber}',
+  VENDOR_SMS_MESSAGE: 'RFQ {rfqNumber} is closed by the buyer. Bidding is concluded.',
+  VENDOR_WHATSAPP_MESSAGE: 'Update on RFQ {rfqNumber} ({rfqTitle}): This RFQ has been closed by the buyer. Bidding is now concluded and no further quotations are needed.',
+});
 const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
 const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
 const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
@@ -374,6 +417,16 @@ const INFRASTRUCTURE_HEALTH = Object.freeze({
     AWAITING_PROBE: 'Awaiting the first connection health probe.',
     CONNECTION_FAILED: 'Database connection failed.',
   }),
+});
+
+const DOSSIER_MESSAGES = Object.freeze({
+  BUYER_NOT_FOUND: 'Buyer account {id} not found.',
+  SELLER_NOT_FOUND: 'Seller {id} not found.',
+  UNAUTHORIZED_BUYER_ACCESS: 'You do not have permission to access this buyer profile.',
+  UNAUTHORIZED_SELLER_ACCESS: 'You do not have permission to access this supplier dossier.',
+  UPLOADED_VENDORS_LOAD_FAILED: 'Failed to retrieve buyer uploaded vendors.',
+  BUYER_UPLOADS_LOAD_FAILED: 'Failed to retrieve associated buyers for seller.',
+  ACTIVE_RFQS_LOAD_FAILED: 'Failed to retrieve active RFQs for seller.',
 });
 const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
@@ -467,14 +520,27 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/zoho',
   ]),
   DIRECT_GET_PATH_PATTERNS: Object.freeze([
+    /^\/api\/rfqs\/[^/]+\/vendor-candidates$/,
     /^\/api\/vendors\/[^/]+$/,
     /^\/api\/vendors\/[^/]+\/rfq-credits$/,
     /^\/api\/vendors\/[^/]+\/payment-links$/,
     /^\/api\/vendors\/[^/]+\/payment-links\/[^/]+\/invoice$/,
     /^\/api\/vendors\/bulk-import\/[^/]+$/,
+    /^\/api\/buyer-accounts\/[^/]+\/credit-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/communications$/,
+    /^\/api\/buyer-accounts\/[^/]+\/payment-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/uploaded-vendors$/,
+    /^\/api\/buyer-accounts\/[^/]+\/documents$/,
+    /^\/api\/vendors\/[^/]+\/credit-history$/,
+    /^\/api\/vendors\/[^/]+\/communications$/,
+    /^\/api\/vendors\/[^/]+\/payment-history$/,
+    /^\/api\/vendors\/[^/]+\/buyer-uploads$/,
+    /^\/api\/vendors\/[^/]+\/active-rfqs$/,
+    /^\/api\/vendors\/[^/]+\/documents$/,
   ]),
   UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
 });
+const CHANNEL_DISPATCH_CONCURRENCY = 4;
 const QUALIFICATION_PILLARS = [
   { id: 'M1', name: 'Commercial Terms', weight: 25, color: '#3b82f6' },
   { id: 'M2', name: 'Technical Capabilities', weight: 15, color: '#06b6d4' },
@@ -621,6 +687,9 @@ const APPROVAL_MESSAGES = Object.freeze({
   ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
   PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
   PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
+  OTP_SENT: 'Verification OTP sent to the approver email.',
+  OTP_INVALID: 'Invalid or expired OTP code. Please request a new OTP.',
+  APPROVER_EMAIL_NOT_CONFIGURED: 'No email address is configured for this approver.',
 });
 
 const REGISTRATION_MESSAGES = Object.freeze({
@@ -693,6 +762,8 @@ const IDENTITY_MASTER_DATA = {
   VERIFICATION_VERIFIED: 'EMAIL_VERIFIED',
   VERIFICATION_PENDING: 'PENDING_EMAIL_VERIFICATION',
 };
+
+const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 
 // Indian phone numbers are stored normalised as +91XXXXXXXXXX in the shared
 // schema, and the Java login path compares them byte-for-byte.
@@ -1517,6 +1588,8 @@ const EMAIL_INGESTION_CONFIG = {
   // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
   // type can never be forwarded that the extractor would then refuse.
   INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  SIGNATURE_IMAGE_MAX_BYTES: 50 * 1024,
+  SIGNATURE_FILE_NAME_PATTERN: /^(?:image\d*|logo\d*|signature\d*|banner\d*|icon\d*|footer\d*|header\d*|outlook\w*|spacer\w*|facebook|twitter|linkedin|instagram|youtube)\.(?:png|jpe?g|gif|webp|bmp|ico)$/i,
   // A line matching any of these starts the quoted thread beneath a forwarded
   // requisition; everything from there down is dropped before extraction.
   QUOTE_MARKERS: [
@@ -2404,6 +2477,8 @@ const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
     'The email provider accepted the vendor category update request.',
   VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
     'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE:
+    'Unable to deliver the vendor category update email right now because outbound mail provider authentication is unavailable or cooling down. Please refresh mail credentials and retry.',
   BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',
 });
 
@@ -2887,6 +2962,7 @@ const VENDOR_INGESTION_JOB_STATUS = {
   PENDING: 'PENDING',
   PROCESSING: 'PROCESSING',
   COMPLETED: 'COMPLETED',
+  PARTIAL_FAILURE: 'PARTIAL_FAILURE',
   FAILED: 'FAILED',
 };
 
@@ -2993,9 +3069,8 @@ const VENDOR_INGESTION_CONFIG = {
   // 200,000 PO rows at a generous ~250 bytes/row is ~50MB; this leaves
   // headroom above that without risking an unbounded buffer.
   MAX_UPLOAD_BYTES: Number(process.env.VENDOR_INGESTION_MAX_UPLOAD_BYTES || 75 * 1024 * 1024),
-  // Vendors classified per AI batch. The job is chunked so a large run reports
-  // progress and can be resumed, rather than holding one long request open.
-  AI_BATCH_SIZE: 8,
+  // Vendors classified per AI batch. Increased to 50 so normal vendor batches (10-40) finish in 1 batch.
+  AI_BATCH_SIZE: 50,
   // A model reply that is not valid JSON of the expected shape is retried this
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.
@@ -3008,7 +3083,7 @@ const VENDOR_INGESTION_CONFIG = {
   // which is what makes this one call per vendor rather than one per PO row.
   AI_MAX_PO_LINES_PER_VENDOR: 60,
   AI_MAX_DESCRIPTION_CHARS: 240,
-  MAX_MINOR_CATEGORIES_PER_VENDOR: 10,
+  MAX_MINOR_CATEGORIES_PER_VENDOR: null,
   // Recipients per dispatch request, so one campaign cannot hold the event loop
   // on a few thousand sequential SMTP sends.
   MAX_RECIPIENTS_PER_DISPATCH: 500,
@@ -3057,6 +3132,14 @@ const VENDOR_INGESTION_MESSAGES = {
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
   AI_JOB_FAILED: 'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
+  AI_JOB_PARTIAL_FAILED:
+    'AI categorization finished with errors: {imported} PO-matched supplier(s) mapped, {failed} failed. Review error details or retry failed classifications.',
+  AI_JOB_NONE_CLASSIFIED:
+    'AI categorization did not classify any of the {total} PO-matched supplier(s). Verify AI configuration and retry categorization.',
+  INGESTION_JOB_PARTIAL_FAILED:
+    'Upload finished with errors: {imported} record(s) imported, {failed} failed. Review the error report and re-upload corrected rows.',
+  INGESTION_JOB_NO_RECORDS_PROCESSED:
+    'Upload failed: 0 of {total} uploaded record(s) could be processed. Check the file columns and error details before trying again.',
   MAPPING_NO_PO_HISTORY:
     'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
@@ -3075,6 +3158,19 @@ const VENDOR_INGESTION_MESSAGES = {
   DISPATCH_ALREADY_SENT:
     '{count} of the selected suppliers have already received this email and will be skipped. Use Retry Failed to re-attempt only the failures.',
   DISPATCH_NOTHING_TO_RETRY: 'There are no failed emails to retry for this session.',
+  DUPLICATE_EMAIL_EXISTING: 'Duplicate email ({value}) — already exists in Buyer Directory',
+  DUPLICATE_EMAIL_FILE: 'Duplicate email ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_GSTIN_EXISTING: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+  DUPLICATE_GSTIN_FILE: 'Duplicate GSTIN ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_CODE_EXISTING: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+  DUPLICATE_CODE_FILE: 'Duplicate vendor code ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_COMPANY_PHONE_EXISTING: 'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+  DUPLICATE_COMPANY_PHONE_FILE: 'Duplicate company & phone ({company} / {phone}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_EMAIL_BATCH_SKIPPED: 'Skipped duplicate email in uploaded batch: {value}',
+  DUPLICATE_PO_EXISTING: 'Duplicate PO record ({summary}) — already uploaded previously',
+  DUPLICATE_PO_FILE: 'Duplicate PO record ({summary}) — already present in uploaded file (row {firstRow})',
+  PO_DUMP_ALL_DUPLICATES:
+    'All {count} PO line item(s) match previously uploaded or earlier duplicate PO records and were skipped.',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
@@ -3598,6 +3694,38 @@ const VENDOR_DIRECTORY_SESSION_STATUS = Object.freeze({
   CLOSED: 'CLOSED',
 });
 
+const VENDOR_ACTIVE_STATUSES = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+});
+
+const VENDOR_STATUS_MESSAGES = Object.freeze({
+  INVALID_ACTIVE_FLAG: 'Specify whether the vendor should be active or inactive (isActive boolean).',
+  BULK_VENDOR_IDS_REQUIRED: 'Select at least one vendor to update active status.',
+  VENDOR_ROLE_FORBIDDEN: 'Vendors cannot change their own active status.',
+  INACTIVE_EVALUATION_BLOCKED: 'This vendor is marked inactive and cannot receive new evaluation requests. Reactivate the vendor first to request an evaluation.',
+  INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
+  MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
+  MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+  BULK_NO_VENDORS_UPDATED: 'None of the selected vendors could be updated. Please verify your roster permissions or refresh the directory.',
+  BULK_OWNERSHIP_DENIED: 'You do not have permission to change the status of the selected vendor(s).',
+  BULK_VENDOR_NOT_FOUND: 'Selected vendor record(s) could not be found in storage. Please refresh and retry.',
+});
+
+/** Returns true when a vendor record has been disabled / marked inactive. */
+function isVendorInactive(vendor) {
+  if (!vendor || typeof vendor !== 'object') return false;
+  if (vendor.isActive === false || vendor.disabled === true || vendor.active === false) {
+    return true;
+  }
+  return String(vendor.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+/** Returns true when a vendor object is present and eligible for active workflows. */
+function isVendorActive(vendor) {
+  return Boolean(vendor) && !isVendorInactive(vendor);
+}
+
 const VENDOR_DIRECTORY_LOGOUT_REASONS = Object.freeze({
   MANUAL: 'MANUAL',
   INACTIVITY: 'INACTIVITY',
@@ -3617,24 +3745,81 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
 
 
 const INTERNAL_TASK_CATEGORIES = Object.freeze({
+  CALL_TASK: 'CALL_TASK',
+  EMAIL_TASK: 'EMAIL_TASK',
+  SMS_TASK: 'SMS_TASK',
+  DEMO_SCHEDULE: 'DEMO_SCHEDULE',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  SITE_VISITING_MEETING_CLIENTS: 'SITE_VISITING_MEETING_CLIENTS',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   COMMUNICATION: 'COMMUNICATION',
   DEMO_SCHEDULING: 'DEMO_SCHEDULING',
-  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
   BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
-  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   ONBOARDING: 'ONBOARDING',
 });
 
+const INTERNAL_TASK_CATEGORY_LIST = Object.freeze([
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
+  'CREDIT_MANAGEMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
+  'INTERNAL_OPERATIONS',
+]);
+
 const INTERNAL_TASK_CATEGORY_LABELS = Object.freeze({
-  COMMUNICATION: 'Communication Tasks',
-  DEMO_SCHEDULING: 'Demo Scheduling',
+  CALL_TASK: 'Call Task',
+  EMAIL_TASK: 'Email Task',
+  SMS_TASK: 'SMS Task',
+  DEMO_SCHEDULE: 'Demo schedule',
   CREDIT_MANAGEMENT: 'Credit Management',
-  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
-  INTERNAL_OPERATIONS: 'Internal Operations',
-  ONBOARDING: 'Onboarding Process',
+  SITE_VISITING_MEETING_CLIENTS: 'Site visiting/Meeting Clients',
+  INTERNAL_OPERATIONS: 'Internal operations',
+  COMMUNICATION: 'Call Task',
+  DEMO_SCHEDULING: 'Demo schedule',
+  BUSINESS_DEVELOPMENT: 'Site visiting/Meeting Clients',
+  ONBOARDING: 'Internal operations',
 });
 
 const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
+  CALL_TASK: Object.freeze([
+    'Phone Call',
+    'Outgoing Call',
+    'Incoming Call',
+    'Follow-up Call',
+  ]),
+  EMAIL_TASK: Object.freeze([
+    'Email',
+    'Send Proposal',
+    'Send Corporate Email',
+    'Email Follow-up',
+  ]),
+  SMS_TASK: Object.freeze([
+    'SMS',
+    'SMS Alert',
+    'SMS Follow-up',
+    'WhatsApp Notification',
+  ]),
+  DEMO_SCHEDULE: Object.freeze([
+    'Schedule Demo',
+    'Product Demo',
+  ]),
+  CREDIT_MANAGEMENT: Object.freeze([
+    'Add Credits',
+    'Delete Credits',
+    'Credit Approval Request',
+  ]),
+  SITE_VISITING_MEETING_CLIENTS: Object.freeze([
+    'Site Visit',
+    'Client Meeting',
+    'Vendor Facility Inspection',
+  ]),
+  INTERNAL_OPERATIONS: Object.freeze([
+    'Operational Task',
+    'Client Onboarding',
+    'Internal Review',
+  ]),
   COMMUNICATION: Object.freeze([
     'Phone Call',
     'SMS',
@@ -3646,16 +3831,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
   DEMO_SCHEDULING: Object.freeze([
     'Schedule Demo',
   ]),
-  CREDIT_MANAGEMENT: Object.freeze([
-    'Add Credits',
-    'Delete Credits',
-  ]),
   BUSINESS_DEVELOPMENT: Object.freeze([
     'Send Proposal',
     'Send Corporate Email',
-  ]),
-  INTERNAL_OPERATIONS: Object.freeze([
-    'Operational Task',
   ]),
   ONBOARDING: Object.freeze([
     'Client Onboarding',
@@ -3663,13 +3841,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
 });
 
 const INTERNAL_TASK_STATUSES = Object.freeze([
-  'New',
-  'Assigned',
-  'In Progress',
-  'Pending Approval',
-  'Completed',
-  'Rejected',
-  'Cancelled',
+  'Open',
+  'Pending',
+  'Closed',
 ]);
 
 const INTERNAL_TASK_PRIORITIES = Object.freeze([
@@ -3677,6 +3851,21 @@ const INTERNAL_TASK_PRIORITIES = Object.freeze([
   'Medium',
   'High',
   'Critical',
+]);
+
+const DEFAULT_INTERNAL_ASSIGNEES = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+]);
+
+const INTERNAL_TASK_USERS = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+  'Srinu Sir',
 ]);
 
 const DEMO_STATUSES = Object.freeze([
@@ -3774,14 +3963,20 @@ const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
 
 const APPROVAL_REQUEST_TYPES = Object.freeze([
   'Buyer Credit Addition',
+  'Buyer Credit Deletion',
   'Seller Credit Addition',
+  'Seller Credit Deletion',
+  'Discounts',
+  'Trial Periods',
+  'Offline Payments',
+]);
+
+const ALL_LEGACY_APPROVAL_REQUEST_TYPES = Object.freeze([
+  ...APPROVAL_REQUEST_TYPES,
   'Credit Notes',
   'Purchase Requests',
   'Payment Approvals',
-  'Discounts',
   'Account Approvals',
-  'Trial Periods',
-  'Offline Payments',
   'Unit Bookings',
   'Cancellations & Refunds',
   'Packages',
@@ -3821,6 +4016,13 @@ const APPROVER_CONFIG = Object.freeze([
     passwordEnvironmentVariable: 'SRINU_APPROVER_PASSWORD',
   },
   {
+    id: 'rao_sir',
+    name: 'Rao Sir',
+    title: 'Management Authority',
+    email: process.env.RAO_APPROVER_EMAIL || null,
+    passwordEnvironmentVariable: 'RAO_APPROVER_PASSWORD',
+  },
+  {
     id: 'sudheer_sir',
     name: 'Sudheer Sir',
     title: 'Management Authority',
@@ -3831,6 +4033,19 @@ const APPROVER_CONFIG = Object.freeze([
 
 // Approver names are the single source for validation enums. Derived, never typed twice.
 const CREDIT_APPROVAL_APPROVERS = Object.freeze(APPROVER_CONFIG.map((approver) => approver.name));
+
+const OFFLINE_PAYMENT_TYPES = Object.freeze([
+  'NEFT / RTGS',
+  'Cheque',
+  'UPI',
+  'Cash',
+]);
+
+const BUYER_SOURCING_MODES = Object.freeze([
+  'Mode 1',
+  'Mode 2',
+  'Mode 3',
+]);
 
 // Matches an approver by exact name or id, case-insensitively. Substring matching is not used.
 function findApproverConfig(approverName) {
@@ -3861,6 +4076,24 @@ function verifyApproverPassword(approverName, submittedPassword) {
   const expectedHash = crypto.createHash('sha256').update(expectedPassword, 'utf8').digest();
   const submittedHash = crypto.createHash('sha256').update(submittedPassword, 'utf8').digest();
   return crypto.timingSafeEqual(expectedHash, submittedHash);
+}
+
+const DEFAULT_APPROVER_EMAILS = Object.freeze({
+  srinu_sir: 'srinivas.mukku@procucev.com',
+  rao_sir: 'mnrao@procucev.com',
+  sudheer_sir: 'sudheer.kangala@procucev.com',
+});
+
+function resolveApproverEmail(approverName) {
+  const approver = findApproverConfig(approverName);
+  if (!approver) return null;
+  const envVar = approver.passwordEnvironmentVariable.replace('_PASSWORD', '_EMAIL');
+  return process.env[envVar] || approver.email || DEFAULT_APPROVER_EMAILS[approver.id] || null;
+}
+
+function buildApprovalOtpKey(approverId) {
+  const clean = String(approverId || '').toLowerCase().trim();
+  return `approval_otp:${clean}`;
 }
 
 // ==============================================================================
@@ -4092,7 +4325,25 @@ function resolveValidVendorCategories(payload = {}) {
   };
 }
 
+function normalizeVendorRating(rating, score) {
+  const numRating = typeof rating === 'number' ? rating : (typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null);
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) return Math.round(numRating * 50) / 10;
+    if (numRating > 5.0) return Math.round((numRating / 20) * 10) / 10;
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : (typeof score === 'string' && score.trim() !== '' ? Number(score) : null);
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) return numScore;
+    return Math.round((numScore / 20) * 10) / 10;
+  }
+  return null;
+}
+
 module.exports = {
+  normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
   ACTION_CENTER_MESSAGES,
@@ -4105,6 +4356,10 @@ module.exports = {
   TICKET_CREATE_FIELD_ALIASES,
   REQUEST_ID_CONFIG,
   APPROVER_CONFIG,
+  DEFAULT_APPROVER_EMAILS,
+  findApproverConfig,
+  resolveApproverEmail,
+  buildApprovalOtpKey,
   isApproverPasswordConfigured,
   verifyApproverPassword,
   DAILY_RFQ_REPORT_CONFIG,
@@ -4113,14 +4368,20 @@ module.exports = {
   ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
   ACCOUNT_DOCUMENT_MAX_BYTES,
   CREDIT_APPROVAL_APPROVERS,
+  OFFLINE_PAYMENT_TYPES,
+  BUYER_SOURCING_MODES,
   SELLER_QUOTE_CREDITS_ALLOWED,
   APPROVAL_REQUEST_TYPES,
+  ALL_LEGACY_APPROVAL_REQUEST_TYPES,
   APPROVAL_STATUSES,
   INTERNAL_TASK_CATEGORIES,
+  INTERNAL_TASK_CATEGORY_LIST,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
   INTERNAL_TASK_STATUSES,
   INTERNAL_TASK_PRIORITIES,
+  DEFAULT_INTERNAL_ASSIGNEES,
+  INTERNAL_TASK_USERS,
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,
@@ -4182,6 +4443,7 @@ module.exports = {
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
+  CHANNEL_DISPATCH_CONCURRENCY,
   D1_OVERLOAD_CONFIG,
   D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
@@ -4197,6 +4459,7 @@ module.exports = {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
+  PLACEHOLDER_MOBILE_NUMBER,
   IDENTITY_OTP_CONFIG,
   BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
@@ -4320,6 +4583,11 @@ module.exports = {
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
   RFQ_AUTO_CLOSE_REASON,
+  RFQ_QUOTES_SEALED_REASON,
+  parseRfqTimestampMs,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
+  RFQ_CLOSURE_MESSAGES,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,
@@ -4363,5 +4631,10 @@ module.exports = {
   ACTION_CENTER_CHANNELS,
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,
+  DOSSIER_MESSAGES,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  isVendorInactive,
+  isVendorActive,
 };
 

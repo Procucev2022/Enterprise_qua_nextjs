@@ -52,6 +52,7 @@ import {
   SELLER_DIRECTORY_COLUMN_PREF_KEY,
   DEFAULT_SELLER_DIRECTORY_COLUMNS,
   getVendorCreditBalance,
+  normalizeVendorRating,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
@@ -120,8 +121,8 @@ function formatScore360(value: unknown): string {
 
 // Shows a rating to one decimal place, or a dash when the record has no numeric rating.
 function formatRating(value: unknown): string {
-  const numeric = toNumberOrNull(value);
-  return numeric === null ? EMPTY_VALUE : String(numeric);
+  const normalized = normalizeVendorRating(value);
+  return normalized === null ? EMPTY_VALUE : String(normalized);
 }
 
 // The finite number held by a record field, or null when the record does not hold one. Never a default.
@@ -236,6 +237,18 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     setCurrentPage(1);
   }, [searchTerm, selectedSource, selectedCategory, selectedRating]);
 
+  // Escape key support to close column settings modal
+  useEffect(() => {
+    if (!showColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings]);
+
   // Debounce search input for backend querying
   useEffect(() => {
     const handler = setTimeout(() => {
@@ -312,13 +325,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
         score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
         score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
-        rating: typeof (v as any).rating === 'number' ? (v as any).rating : null,
+        rating: normalizeVendorRating((v as any).rating, (v as any).score),
         status: (v as any).status || '',
         subscriptionPlan: (v as any).subscriptionPlan || '',
         // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
         freeQuotationCredits: getVendorCreditBalance(v as any),
         rfqDownloadsUsed: toNumberOrNull((v as any).rfqDownloadsUsed),
-        gstNumber: (v as any).gstNumber || '',
+        gstNumber: (v as any).gstNumber || (v as any).gstin || (v as any).gst || '',
+        gstin: (v as any).gstin || (v as any).gst || (v as any).gstNumber || '',
         panNumber: usablePan((v as any).panNumber || (v as any).pan) || '',
         isNetwork: true,
         createdAt: (v as any).createdAt || (v as any).created_at || '',
@@ -353,12 +367,13 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
           score: toNumberOrNull((bv as any).qualityScore ?? bv.score),
           score360: toNumberOrNull((bv as any).qualityScore ?? bv.score),
-          rating: toNumberOrNull(bv.rating),
+          rating: normalizeVendorRating(bv.rating, (bv as any).qualityScore ?? bv.score),
           status: (bv as any).status || '',
           subscriptionPlan: (bv as any).subscriptionPlan || '',
           freeQuotationCredits: getVendorCreditBalance(bv as any),
           rfqDownloadsUsed: toNumberOrNull((bv as any).rfqDownloadsUsed),
-          gstNumber: (bv as any).gstNumber || '',
+          gstNumber: (bv as any).gstNumber || (bv as any).gstin || (bv as any).gst || '',
+          gstin: (bv as any).gstin || (bv as any).gst || (bv as any).gstNumber || '',
           panNumber: usablePan((bv as any).panNumber || (bv as any).pan) || '',
           isNetwork: false,
           createdAt: (bv as any).createdAt || (bv as any).created_at || '',
@@ -558,7 +573,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     },
     {
       key: 'category',
-      label: 'Major Category',
+      label: 'Division',
       render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
           {String(item.majorCategory || item.category || EMPTY_VALUE)}
@@ -923,8 +938,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           aria-modal="true"
           aria-label="Customize Columns"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowColumnSettings(false);
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -1186,10 +1207,9 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                 <button
                                   type="button"
                                   onClick={() => setActiveSeller(seller)}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center gap-1 border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
                                 >
                                   <span>{strings.dossierAction}</span>
-                                  <ChevronRight className="w-3.5 h-3.5" />
                                 </button>
                               </td>
                             );

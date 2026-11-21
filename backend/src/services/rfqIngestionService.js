@@ -22,6 +22,144 @@ const { RFQ_CATEGORY_CLASSIFICATION, RFQ_INGESTION_CONFIG, DEFAULT_CATEGORY_TAXO
 const buyerProfileQueries = require('../db/buyerProfileQueries');
 const { logger } = require('./loggerService');
 
+const CANONICAL_UNITS_MAP = {
+  nos: 'Nos',
+  no: 'Nos',
+  number: 'Nos',
+  numbers: 'Nos',
+  pcs: 'Pcs',
+  pc: 'Pcs',
+  piece: 'Pcs',
+  pieces: 'Pcs',
+  units: 'Units',
+  unit: 'Units',
+  ea: 'EA',
+  each: 'EA',
+  mtr: 'Mtr',
+  mtrs: 'Mtr',
+  meter: 'Mtr',
+  meters: 'Mtr',
+  m: 'Mtr',
+  rmt: 'Rmt',
+  rmtr: 'Rmt',
+  kg: 'Kg',
+  kgs: 'Kg',
+  kilogram: 'Kg',
+  kilograms: 'Kg',
+  gm: 'Gms',
+  gms: 'Gms',
+  gram: 'Gms',
+  grams: 'Gms',
+  ton: 'Ton',
+  tons: 'Ton',
+  mt: 'MT',
+  metricton: 'MT',
+  metrictons: 'MT',
+  ltr: 'Ltr',
+  ltrs: 'Ltr',
+  liter: 'Ltr',
+  liters: 'Ltr',
+  litres: 'Ltr',
+  l: 'Ltr',
+  set: 'Set',
+  sets: 'Set',
+  bag: 'Bags',
+  bags: 'Bags',
+  box: 'Boxes',
+  boxes: 'Boxes',
+  carton: 'Cartons',
+  cartons: 'Cartons',
+  ctn: 'Cartons',
+  ctns: 'Cartons',
+  roll: 'Rolls',
+  rolls: 'Rolls',
+  pkt: 'Pkts',
+  pkts: 'Pkts',
+  packet: 'Pkts',
+  packets: 'Pkts',
+  pack: 'Pkts',
+  packs: 'Pkts',
+  pair: 'Pairs',
+  pairs: 'Pairs',
+  pr: 'Pairs',
+  sqft: 'Sq.Ft',
+  'sq.ft': 'Sq.Ft',
+  'sq-ft': 'Sq.Ft',
+  sqm: 'Sq.M',
+  'sq.m': 'Sq.M',
+  'sq-m': 'Sq.M',
+  squaremeter: 'Sq.M',
+  squaremeters: 'Sq.M',
+  squarefoot: 'Sq.Ft',
+  squarefeet: 'Sq.Ft',
+  cum: 'Cu.M',
+  'cu.m': 'Cu.M',
+  cubicmeter: 'Cu.M',
+  cubicmeters: 'Cu.M',
+  lot: 'Lot',
+  lots: 'Lot',
+  ls: 'Lumpsum',
+  lumpsum: 'Lumpsum',
+  drum: 'Drums',
+  drums: 'Drums',
+  can: 'Cans',
+  cans: 'Cans',
+  barrel: 'Barrels',
+  barrels: 'Barrels',
+  sheet: 'Sheets',
+  sheets: 'Sheets',
+  coil: 'Coils',
+  coils: 'Coils',
+  bundle: 'Bundles',
+  bundles: 'Bundles',
+  dz: 'Dozens',
+  dozen: 'Dozens',
+  dozens: 'Dozens',
+  hours: 'Hours',
+  hr: 'Hours',
+  hrs: 'Hours',
+  days: 'Days',
+  months: 'Months',
+};
+
+const DIMENSION_EXCLUSIONS = new Set([
+  'inch', 'inches', 'in', 'mm', 'cm', 'gauge', 'thk', 'thick', 'od', 'id', 'dia', 'diameter',
+  'volt', 'volts', 'v', 'kv', 'amp', 'amps', 'a', 'hz', 'rpm', 'hp', 'kw', 'w', 'watt', 'watts', 'bar', 'psi'
+]);
+
+function normalizeUnit(candidate) {
+  if (candidate === null || candidate === undefined) return null;
+  const str = String(candidate).trim();
+  if (!str) return null;
+  const cleaned = str.replace(/^[\(\[\{"']+|[\)\]\}"']+$/g, '').replace(/\.+$/, '').trim();
+  if (!cleaned) return null;
+  const key = cleaned.toLowerCase().replace(/[^a-z0-9.]/g, '');
+  if (DIMENSION_EXCLUSIONS.has(key)) return null;
+  if (CANONICAL_UNITS_MAP[key]) {
+    return CANONICAL_UNITS_MAP[key];
+  }
+  if (/^[a-zA-Z0-9./\-]{1,15}$/.test(cleaned) && !/^\d+$/.test(cleaned)) {
+    return cleaned;
+  }
+  return null;
+}
+
+function extractUnitFromText(raw) {
+  if (raw === null || raw === undefined) return null;
+  const str = String(raw).trim();
+  if (!str) return null;
+  const regex = /(?:^|[^\w./])\d+(?:\.\d+)?\s*[-/(]?\s*([a-zA-Z./]{1,15})(?:[^\w./]|$)/g;
+  let m;
+  while ((m = regex.exec(str)) !== null) {
+    if (m[1]) {
+      const candidate = m[1].replace(/[.)]+$/, '').trim();
+      const normalized = normalizeUnit(candidate);
+      if (normalized) return normalized;
+    }
+  }
+  return null;
+}
+
 const {
   CONFIDENCE,
   STATUS,
@@ -526,9 +664,13 @@ function normalizeQuantity(raw) {
   }
   if (typeof raw === 'string') {
     const cleaned = raw.replace(/,/g, '').trim();
-    const match = cleaned.match(/^\d+(?:\.\d+)?/);
+    const stripped = cleaned
+      .replace(/^(?:qty|quantity|count|approx|total|req|order)?[\s:=~]*/i, '')
+      .replace(/^\(([0-9.]+)\)/, '$1')
+      .trim();
+    const match = stripped.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))/);
     if (match) {
-      const parsed = Number(match[0]);
+      const parsed = Number(match[1]);
       if (Number.isFinite(parsed) && parsed > 0) return parsed;
     }
   }
@@ -631,23 +773,26 @@ function normalizeLineItems(rawItems, options = {}) {
     // rather than surfaced as a blank line for the buyer to clean up.
     if (!itemName) return;
 
+    const rawQty = raw.quantity ?? raw.qty ?? raw.Quantity ?? raw.count;
+    const normalizedQty = normalizeQuantity(rawQty);
+
     if (options.requireValidQuantity) {
-      if (raw.quantity === null || raw.quantity === undefined || raw.quantity === '') {
-        return;
-      }
-      const rawNum = typeof raw.quantity === 'number'
-        ? raw.quantity
-        : Number(String(raw.quantity).replace(/,/g, '').trim());
-      if (!Number.isFinite(rawNum) || rawNum <= 0) {
+      if (normalizedQty === null || normalizedQty <= 0) {
         return;
       }
     }
 
+    let rawUnit = String(raw.unit ?? raw.uom ?? raw.UOM ?? raw.unitOfMeasure ?? raw.unit_of_measure ?? raw.Unit ?? '').trim();
+    if (!rawUnit) {
+      rawUnit = extractUnitFromText(rawQty) || extractUnitFromText(raw.quantity) || extractUnitFromText(raw.qty) || extractUnitFromText(raw.itemName) || extractUnitFromText(raw.itemDescription) || '';
+    }
+    const normalizedUnit = normalizeUnit(rawUnit) || (rawUnit || null);
+
     const normalized = {
       id: raw.id || `ent-ingested-${Date.now()}-${index}`,
       itemName,
-      quantity: normalizeQuantity(raw.quantity),
-      unit: String(raw.unit || raw.uom || '').trim() || null,
+      quantity: normalizedQty,
+      unit: normalizedUnit,
       targetDate: (options.allowEmptyDeliveryDate || options.source === 'ai_extraction')
         ? (raw.targetDate ? (options.ensureFutureDate ? ensureFutureDeliveryDate(raw.targetDate, DELIVERY_DATE_OFFSET_DAYS) : String(raw.targetDate).trim()) : '')
         : (options.ensureFutureDate

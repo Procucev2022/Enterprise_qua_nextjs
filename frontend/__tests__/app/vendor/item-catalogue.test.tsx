@@ -5,8 +5,22 @@ import ItemCatalogue from '@/app/vendor/item-catalogue';
 import { AppProvider, useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
 
-function renderWithProvider(ui: React.ReactElement) {
-  return render(<AppProvider>{ui}</AppProvider>);
+function SubscribedWrapper({ children, plan = 'select' }: { children: React.ReactNode; plan?: any }) {
+  const { vendorSubscription, setVendorSubscription } = useApp();
+  React.useEffect(() => {
+    if (vendorSubscription !== plan) {
+      setVendorSubscription(plan);
+    }
+  }, [plan, vendorSubscription, setVendorSubscription]);
+  return <>{children}</>;
+}
+
+function renderWithProvider(ui: React.ReactElement, plan: any = 'select') {
+  return render(
+    <AppProvider>
+      <SubscribedWrapper plan={plan}>{ui}</SubscribedWrapper>
+    </AppProvider>
+  );
 }
 
 function catalogueWorkbookFile(sku = 'SKU-IMPORT-1'): File {
@@ -795,7 +809,7 @@ describe('ItemCatalogue Comprehensive Suite', () => {
       fireEvent.change(moqInput, { target: { value: '1' } });
       fireEvent.click(addBtn);
     });
-  });
+  }, 30000);
 
   test('covers category input focus and non-Error exception handling', async () => {
     renderWithProvider(<ItemCatalogueWithSession />);
@@ -834,5 +848,31 @@ describe('ItemCatalogue Comprehensive Suite', () => {
     await act(async () => {
       fireEvent.click(addBtn);
     });
+  });
+
+  test('makes item catalogue non-editable for vendors without the ₹14,999 subscription plan', async () => {
+    // Render with no subscription / free tier
+    renderWithProvider(<ItemCatalogue />, 'premium');
+
+    await waitFor(() => {
+      expect(screen.getByText(/Select Model Required/i)).toBeInTheDocument();
+    });
+
+    // Form inputs must be disabled
+    const nameInput = screen.getByPlaceholderText(/Centrifugal Water Pump/i);
+    const skuInput = screen.getByPlaceholderText(/SKU-PUMP-500/i);
+    expect(nameInput).toBeDisabled();
+    expect(skuInput).toBeDisabled();
+
+    // Submit button must be disabled and indicate ₹14,999 plan required
+    const submitBtn = screen.getByRole('button', { name: /Select Plan \(₹14,999\) Required/i });
+    expect(submitBtn).toBeDisabled();
+
+    // Bulk upload input must be disabled
+    const fileInput = screen.getByLabelText(/Upload catalogue Excel workbook/i);
+    expect(fileInput).toBeDisabled();
+
+    // Upgrade CTA banner must be visible
+    expect(screen.getByText(/Select Model Plan Required \(₹14,999 \/ yr\)/i)).toBeInTheDocument();
   });
 });

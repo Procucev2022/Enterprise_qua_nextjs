@@ -537,9 +537,32 @@ describe('Authentication against the account records (/api/auth)', () => {
 
     test('rejects an OTP request for an unrecognised email + mobile pair', async () => {
       jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
       await expect(
         authService.requestOtp('ghost@nowhere.test', MOBILE, 'buyer', '::1')
       ).rejects.toThrow(AUTH_MESSAGES.INVALID_USERNAME_OR_MOBILE);
+    });
+
+    test('permits OTP request for onboarding buyer when mobile in database is a placeholder', async () => {
+      jest.spyOn(identityQueries, 'findUserByEmailAndPhone').mockResolvedValue(null);
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({
+        id: 'user-onboarding-1',
+        email: 'onboarding.buyer@example.com',
+        mobile: '9999999999',
+        role: 'buyer',
+        isActive: true,
+        isApproved: true,
+        resetPasswordRequired: true,
+      });
+
+      const res = await authService.requestOtp('onboarding.buyer@example.com', '9876543210', 'buyer', '::1');
+      expect(res.success).toBe(true);
+      expect(mailerService.sendOtpEmail).toHaveBeenCalledWith(
+        'onboarding.buyer@example.com',
+        expect.any(String),
+        expect.any(Number),
+        expect.any(Object)
+      );
     });
 
     test('returns a retryable persistence error when the sign-in account lookup fails', async () => {
@@ -1007,6 +1030,47 @@ describe('Authentication against the account records (/api/auth)', () => {
       );
     });
 
+    test('POST /api/auth/register derives real non-dummy PAN automatically from GSTIN', async () => {
+      const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({
+        created: true,
+        user: {
+          id: 'new-uuid-real',
+          email: 'real.buyer@example.com',
+          name: 'Veera',
+          role: 'buyer',
+          orgId: 'new-org-real',
+          orgName: 'Veera Solutions Pvt Ltd',
+        },
+      });
+
+      const res = await request(app).post('/api/auth/register').send({
+        name: 'Veera',
+        email: 'real.buyer@example.com',
+        password: 'Secret@123',
+        mobile: '9381877013',
+        role: 'buyer',
+        orgName: 'Veera Solutions Pvt Ltd',
+        street: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        gstin: '27AAACK3921P1Z9',
+      });
+
+      expect(res.statusCode).toBe(201);
+      expect(res.body.success).toBe(true);
+      expect(insertSpy).toHaveBeenCalledWith(
+        expect.objectContaining({
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+        })
+      );
+    });
+
     test('POST /api/auth/register reports a duplicate with 400', async () => {
       jest
         .spyOn(identityQueries, 'insertBuyerAccount')
@@ -1366,6 +1430,23 @@ describe('Changing your own password', () => {
       await call({ email });
 
       expect(updateVendorSpy).not.toHaveBeenCalled();
+    });
+
+    test('successfully changes vendor password using verification code when vendor has no mobile in database', async () => {
+      const email = 'vendor-no-mobile@procucev.com';
+      identityQueries.findUserByEmail.mockResolvedValue(
+        signedInBuyer({ role: 'vendor', email, id: UUID, mobile: '' })
+      );
+      await authSessionQueries.saveOtp(`otp:${email}`, '123456', Date.now() + 60000, email);
+
+      const result = await call({ email, currentPassword: '', code: '123456' });
+      expect(result.success).toBe(true);
+      expect(await authSessionQueries.findOtp(`otp:${email}`)).toBeNull();
+      expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
+        UUID,
+        NEXT,
+        email
+      );
     });
 
     test.each([

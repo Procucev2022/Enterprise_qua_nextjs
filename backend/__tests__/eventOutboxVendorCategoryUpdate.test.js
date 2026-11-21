@@ -72,4 +72,26 @@ describe('durable vendor category update notifications', () => {
       lastError: 'INVALID_PERSISTED_RECORD:Error',
     }));
   });
+
+  test('marks non-enumerable authUnavailable on MAIL_PROVIDERS_COOLING_DOWN across slices without changing enumerable keys', async () => {
+    const authErr = Object.assign(new Error('All mail providers cooling down'), { code: 'MAIL_PROVIDERS_COOLING_DOWN' });
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+    const { EVENT_OUTBOX_MAX_BATCH_SIZE } = require('../src/config/constants');
+    const eventIds = Array.from({ length: EVENT_OUTBOX_MAX_BATCH_SIZE + 1 }, (_, i) => `ev-${i}`);
+    jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB')
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{
+        id: 'ev-last',
+        event_type: EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+        raw: payload,
+        attempts: 1,
+        lease_token: 'lease-auth',
+      }]);
+    jest.spyOn(notificationService, 'sendVendorCategoryUpdateNotification').mockRejectedValue(authErr);
+    jest.spyOn(eventOutboxQueries, 'rescheduleEventOutboxInDB').mockResolvedValue(true);
+
+    const summary = await eventOutboxService.dispatchDueEventOutboxJobs(eventIds.length, eventIds);
+    expect(Object.keys(summary).sort()).toEqual(['claimed', 'completed', 'completedIds', 'dead', 'retried']);
+    expect(summary.authUnavailable).toBe(true);
+  });
 });

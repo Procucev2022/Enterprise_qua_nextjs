@@ -121,7 +121,7 @@ const SCOPED_READS = [
   ['findVendorPurchasingProfiles', [], []], ['findUnmatchedPoVendors', [], []], ['seedCategoryMappings', [[{}]], []],
   ['findCategoryMappings', [], []], ['findCategoryMappingByVendorRecord', ['vendor'], null],
   ['findQueuedCategoryMappings', [], []], ['markMappingProcessing', [], null], ['saveAiSuggestion', [{}], null],
-  ['markMappingFailed', [], null], ['requeueMapping', [], null], ['saveBuyerReview', [{}], null], ['attachVendorId', [], null],
+  ['markMappingFailed', [], null], ['requeueMapping', [], null], ['resetCategoryMappingsForReclassification', [], 0], ['deleteCategoryMappingsForSession', [], 0], ['saveBuyerReview', [{}], null], ['attachVendorId', [], null],
   ['findCategorySegmentation', [], []], ['finalizeDispatch', [{}], null], ['findDispatches', [], []],
   ['markEmailSent', [], null], ['markEmailFailed', [], null], ['findEmailLogs', [], []], ['findAiClassificationLogs', [], []],
 ];
@@ -334,6 +334,21 @@ describe('scoped reads, limits and deletion results', () => {
     }
   });
 
+  test('findOrganizationVendorMasterRecords returns org vendor master records across sessions with bounded limits and guards', async () => {
+    expect(await queries.findOrganizationVendorMasterRecords(null)).toEqual([]);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findOrganizationVendorMasterRecords(ORG)).toEqual([]);
+    for (const limit of [undefined, 0, -5, 100, 5000]) {
+      const result = await queries.findOrganizationVendorMasterRecords(ORG, limit);
+      expect(result).toHaveLength(1);
+      expect(pool.rows.mock.calls.at(-1)[1]).toEqual(
+        typeof limit === 'number' && Number.isInteger(limit) && limit > 0
+          ? [ORG, Math.min(limit, 2000)]
+          : [ORG]
+      );
+    }
+  });
+
   test.each([
     ['findVendorMasterRecord', [SESSION, ORG]], ['findCategoryMappingByVendorRecord', [SESSION, ORG, 'master']],
   ])('%s distinguishes missing rows from mapped records without broadening the organization', async (name, args) => {
@@ -341,6 +356,16 @@ describe('scoped reads, limits and deletion results', () => {
     expect(pool.rows.mock.calls[0][1]).toEqual(args);
     pool.rows.mockResolvedValue([]);
     expect(await queries[name](...args)).toBeNull();
+  });
+
+  test('findVendorMasterRecordById supports looking up by recordId without organizationId', async () => {
+    pool.rows.mockResolvedValueOnce([{ ...RECORD, id: 'vmv-lookup-1', organization_id: 'org-anon' }]);
+    const rec = await queries.findVendorMasterRecordById('vmv-lookup-1');
+    expect(rec).toMatchObject({ id: 'vmv-lookup-1', organizationId: 'org-anon' });
+    expect(pool.rows.mock.calls[0][1]).toEqual(['vmv-lookup-1']);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findVendorMasterRecordById('vmv-lookup-1')).toBeNull();
+    expect(await queries.findVendorMasterRecordById(null)).toBeNull();
   });
 
   test('reads master and horizon counts and handles absent aggregate rows', async () => {
@@ -352,11 +377,85 @@ describe('scoped reads, limits and deletion results', () => {
     expect(await queries.countPoLineItems(SESSION, ORG)).toEqual({ total: 0, inHorizon: 0, outsideHorizon: 0 });
   });
 
-  test.each(['deleteVendorMasterRecords', 'deletePoLineItems'])('%s returns the affected count and keeps the organization predicate', async (name) => {
+  test.each(['deleteVendorMasterRecords', 'deletePoLineItems', 'deleteCategoryMappingsForSession', 'resetCategoryMappingsForReclassification'])('%s returns the affected count and keeps the organization predicate', async (name) => {
     expect(await queries[name](SESSION, ORG)).toBe(1);
-    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('organization_id = $2'), [SESSION, ORG], { d1: true });
+    expect(pool.query).toHaveBeenCalledWith(expect.stringContaining('organization_id = $2'), expect.arrayContaining([SESSION, ORG]), expect.objectContaining({ d1: true }));
     pool.query.mockResolvedValue({ rows: [] });
     expect(await queries[name](SESSION, ORG)).toBe(0);
+  });
+
+  test('findExistingPoLineItemsByOrganization returns normalized org PO rows and respects guards & limit cap', async () => {
+    expect(await queries.findExistingPoLineItemsByOrganization('')).toEqual([]);
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.findExistingPoLineItemsByOrganization(ORG)).toEqual([]);
+
+    pool.rows.mockResolvedValueOnce([
+      {
+        id: 'poli-1',
+        session_id: SESSION,
+        po_number: 'PO-100',
+        po_date: new Date('2025-07-01T00:00:00Z'),
+        vendor_code: 'V-001',
+        vendor_name: 'Apex Supplies',
+        item_description: 'Ball Bearings',
+        specification: 'SKF 6205',
+        quantity: '10',
+        uom: 'Nos',
+        spend: '25000',
+        department: 'Maintenance',
+      },
+      {
+        id: 'poli-2',
+        session_id: SESSION,
+        po_number: null,
+        po_date: null,
+        vendor_code: null,
+        vendor_name: 'Beta Corp',
+        item_description: 'Hex Bolts',
+        specification: null,
+        quantity: null,
+        uom: null,
+        spend: null,
+        department: null,
+      },
+    ]);
+
+    const rows = await queries.findExistingPoLineItemsByOrganization(ORG, 99999);
+    expect(pool.rows).toHaveBeenCalledWith(
+      expect.stringContaining('from po_line_items'),
+      [ORG, 10000],
+      { d1: true }
+    );
+    expect(rows).toEqual([
+      {
+        id: 'poli-1',
+        sessionId: SESSION,
+        poNumber: 'PO-100',
+        poDate: '2025-07-01',
+        vendorCode: 'V-001',
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Ball Bearings',
+        specification: 'SKF 6205',
+        quantity: 10,
+        uom: 'Nos',
+        spend: 25000,
+        department: 'Maintenance',
+      },
+      {
+        id: 'poli-2',
+        sessionId: SESSION,
+        poNumber: null,
+        poDate: null,
+        vendorCode: null,
+        vendorName: 'Beta Corp',
+        itemDescription: 'Hex Bolts',
+        specification: null,
+        quantity: null,
+        uom: null,
+        spend: null,
+        department: null,
+      },
+    ]);
   });
 
   test('deleteVendorMasterRecordsByIdsOrEmails removes matching vendor master records and cascades category mappings', async () => {
@@ -392,6 +491,94 @@ describe('scoped reads, limits and deletion results', () => {
     // When no rows match
     pool.rows.mockResolvedValueOnce([]);
     expect(await queries.deleteVendorMasterRecordsByIdsOrEmails(['rec-nonexistent'], ORG)).toBe(0);
+  });
+
+  test('mapRowToVendorMaster and updateVendorMasterRecordActiveStatus preserve active/inactive lifecycle metadata cleanly', async () => {
+    expect(queries.updateVendorMasterRecordActiveStatus('', ORG, { isActive: false })).resolves.toBeNull();
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-1', '', { isActive: false })).toBeNull();
+    pool.hasStorage.mockReturnValueOnce(false);
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-1', ORG, { isActive: false })).toBeNull();
+
+    // Not found returns null
+    pool.rows.mockResolvedValueOnce([]);
+    expect(await queries.updateVendorMasterRecordActiveStatus('rec-missing', ORG, { isActive: false })).toBeNull();
+
+    // Map inactive + active raw states
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        raw: JSON.stringify({
+          isActive: false,
+          disabled: true,
+          status: 'INACTIVE',
+          previousStatus: 'PENDING EVALUATION',
+          disabledAt: '2026-11-18T00:00:00Z',
+          disabledBy: 'buyer@test.com',
+        }),
+      })
+    ).toMatchObject({
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      previousStatus: 'PENDING EVALUATION',
+      disabledAt: '2026-11-18T00:00:00Z',
+      disabledBy: 'buyer@test.com',
+    });
+
+    expect(
+      queries.mapRowToVendorMaster({
+        ...RECORD,
+        raw: JSON.stringify({
+          isActive: true,
+          disabled: false,
+          status: 'PENDING EVALUATION',
+          reactivatedAt: '2026-11-18T01:00:00Z',
+          reactivatedBy: 'buyer@test.com',
+        }),
+      })
+    ).toMatchObject({
+      isActive: true,
+      disabled: false,
+      status: 'PENDING EVALUATION',
+      reactivatedAt: '2026-11-18T01:00:00Z',
+      reactivatedBy: 'buyer@test.com',
+    });
+
+    // Merges statusUpdates onto existing raw JSON and updates DB row
+    pool.rows.mockResolvedValueOnce([{ ...RECORD, raw: JSON.stringify({ vendorCode: 'V-1', city: 'Pune' }) }]);
+    pool.query.mockResolvedValueOnce({
+      rows: [
+        {
+          ...RECORD,
+          raw: JSON.stringify({
+            vendorCode: 'V-1',
+            city: 'Pune',
+            isActive: false,
+            disabled: true,
+            status: 'INACTIVE',
+            previousStatus: 'PENDING EVALUATION',
+          }),
+        },
+      ],
+    });
+    const updatedMaster = await queries.updateVendorMasterRecordActiveStatus('master', ORG, {
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      previousStatus: 'PENDING EVALUATION',
+    });
+    expect(updatedMaster).toMatchObject({
+      id: RECORD.id,
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      city: 'Pune',
+    });
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('update vendor_master_records'),
+      ['master', ORG, expect.stringContaining('"isActive":false')],
+      expect.objectContaining({ d1: true, d1Text: expect.stringContaining('update vendor_master_records') })
+    );
   });
 
   test('matches PO data in identifier priority order and reports each outcome', async () => {

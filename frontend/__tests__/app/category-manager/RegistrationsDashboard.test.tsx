@@ -3,6 +3,15 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import RegistrationsDashboard from '@/app/category-manager/components/RegistrationsDashboard';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
+import { exportReportToCsv } from '@/lib/reportsClient';
+
+jest.mock('@/lib/reportsClient', () => {
+  const actual = jest.requireActual('@/lib/reportsClient');
+  return {
+    ...actual,
+    exportReportToCsv: jest.fn(),
+  };
+});
 
 const mockClients = [
   {
@@ -74,6 +83,18 @@ const mockClients = [
     clientType: 'Seller',
   },
   {
+    id: 'reg-client-empty',
+    userName: '',
+    companyName: '',
+    phoneNumber: '',
+    userEmail: '',
+    regDate: '',
+    status: '',
+    sourceType: '',
+    clientType: '',
+    isApproved: false,
+  },
+  {
     id: 'reg-client-seller-2',
     userName: 'Suspended Seller',
     companyName: 'Suspended Metals',
@@ -84,6 +105,18 @@ const mockClients = [
     sourceType: 'Web App',
     isApproved: false,
     clientType: 'Seller',
+  },
+  {
+    id: 'reg-client-empty-2',
+    userName: '',
+    companyName: '',
+    phoneNumber: '',
+    userEmail: '',
+    regDate: '',
+    status: '',
+    sourceType: '',
+    clientType: '',
+    isApproved: false,
   },
 ];
 
@@ -119,13 +152,15 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('renders header with title and total count badge', async () => {
+  test('renders summary cards and updates total count', async () => {
     const onCountChange = jest.fn();
     render(<RegistrationsDashboard onTotalCountChange={onCountChange} />);
 
-    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.title)).toBeInTheDocument();
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWebApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiWhatsApp).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiEmail).length).toBeGreaterThan(0);
     await waitFor(() => {
-      expect(screen.getByText(`${mockClients.length} Total`)).toBeInTheDocument();
       expect(onCountChange).toHaveBeenCalledWith(mockClients.length);
     });
   });
@@ -182,125 +217,88 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('accepts client registration and updates status', async () => {
+  test('displays auto-approved status indicator for both buyers and sellers without action buttons', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
+      expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
     });
 
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
+    // Auto-Approved is shown for both buyers and sellers
+    const autoApprovedBadges = screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusAutoApproved);
+    expect(autoApprovedBadges.length).toBeGreaterThan(0);
 
+    // Rejected is shown for genuinely rejected records
+    expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusRejected).length).toBeGreaterThan(0);
+
+    // No manual accept or reject action buttons should exist
+    expect(screen.queryByLabelText(/accept for/i)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/reject for/i)).not.toBeInTheDocument();
+  });
+
+  test('filters registrations by source dropdown (All, Web App, WhatsApp, Email)', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel);
+
+    fireEvent.change(sourceSelect, { target: { value: 'WhatsApp' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
-          body: JSON.stringify({ action: 'accept' }),
-        })
+        expect.stringContaining('sourceType=WhatsApp'),
+        expect.anything()
       );
-      expect(
-        screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.acceptSuccess)
-      ).toBeInTheDocument();
-    });
-  });
-
-  test('rejects client registration and updates status', async () => {
-    render(<RegistrationsDashboard />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
     });
 
-    const rejectButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.rejectTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(rejectButton);
-
+    fireEvent.change(sourceSelect, { target: { value: 'Email' } });
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/internal-tasks/registrations/reg-client-102/action'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: expect.objectContaining({ Authorization: 'Bearer registration-session-token' }),
-          body: JSON.stringify({ action: 'reject' }),
-        })
+        expect.stringContaining('sourceType=Email'),
+        expect.anything()
       );
-      expect(
-        screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.rejectSuccess)
-      ).toBeInTheDocument();
     });
 
-    // Dismiss feedback banner
-    const closeFeedback = screen.getByText('×');
-    fireEvent.click(closeFeedback);
-    expect(
-      screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.rejectSuccess)
-    ).not.toBeInTheDocument();
-  });
-
-  test('handles action error from API', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.resolve({
-          ok: false,
-          json: () => Promise.resolve({ success: false, error: 'Database conflict' }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
-    render(<RegistrationsDashboard />);
-
+    fireEvent.change(sourceSelect, { target: { value: 'all' } });
     await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
-    });
-
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
-
-    await waitFor(() => {
-      expect(screen.getByText('Database conflict')).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.not.stringContaining('sourceType='),
+        expect.anything()
+      );
     });
   });
 
-  test('handles network error on action', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.reject(new Error('Network drop'));
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
+  test('independent filters combine correctly when multiple filters are selected', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    expect(screen.getByText('GOVARDHAN PVT LTD')).toBeInTheDocument();
+      expect(screen.getByText('verababu')).toBeInTheDocument();
     });
 
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
+    const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
+    const sourceSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.sourceTypeLabel);
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+
+    fireEvent.change(clientSelect, { target: { value: 'buyer' } });
+    fireEvent.change(sourceSelect, { target: { value: 'Web App' } });
+    fireEvent.change(startInput, { target: { value: '2026-06-01' } });
 
     await waitFor(() => {
-      expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.actionError)).toBeInTheDocument();
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('clientType=buyer'),
+        expect.anything()
+      );
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('sourceType=Web+App'),
+        expect.anything()
+      );
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.stringContaining('startDate=2026-06-01'),
+        expect.anything()
+      );
     });
   });
 
@@ -401,35 +399,6 @@ describe('RegistrationsDashboard', () => {
     });
   });
 
-  test('handles action failure when API returns error without message', async () => {
-    (global.fetch as jest.Mock).mockImplementation((url: string) => {
-      if (url.includes('/action')) {
-        return Promise.resolve({
-          ok: false,
-          json: () => Promise.resolve({ success: false }),
-        });
-      }
-      return Promise.resolve({
-        ok: true,
-        json: () => Promise.resolve({ success: true, total: mockClients.length, data: mockClients }),
-      });
-    });
-
-    render(<RegistrationsDashboard />);
-
-    await waitFor(() => {
-      expect(screen.getByText('Govardhan Kilari')).toBeInTheDocument();
-    });
-
-    const acceptButton = screen.getByLabelText(
-      `${UI_STRINGS.actionCenter.registrationsDashboard.acceptTooltip} for Govardhan Kilari`
-    );
-    fireEvent.click(acceptButton);
-
-    await waitFor(() => {
-      expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.actionError)).toBeInTheDocument();
-    });
-  });
 
   test('renders empty state when no clients returned', async () => {
     (global.fetch as jest.Mock).mockResolvedValue({
@@ -777,7 +746,7 @@ describe('RegistrationsDashboard', () => {
     fireEvent.click(sortDateBtn);
   });
 
-  test('filters registrations by status dropdown and renders auto-approved sellers without action buttons', async () => {
+  test('renders auto-approved sellers without action buttons and supports refresh', async () => {
     render(<RegistrationsDashboard />);
 
     await waitFor(() => {
@@ -787,16 +756,219 @@ describe('RegistrationsDashboard', () => {
     // Auto-approved seller displays auto-approved badge
     expect(screen.getAllByText(UI_STRINGS.actionCenter.registrationsDashboard.statusAutoApproved).length).toBeGreaterThan(0);
 
-    // Status filter selection
-    const statusSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.colStatus);
-    fireEvent.change(statusSelect, { target: { value: 'New' } });
-    fireEvent.change(statusSelect, { target: { value: 'Accepted' } });
-    fireEvent.change(statusSelect, { target: { value: 'all' } });
-
     // Client view filter selection
     const clientSelect = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.clientTypeLabel);
     fireEvent.change(clientSelect, { target: { value: 'seller' } });
     fireEvent.change(clientSelect, { target: { value: 'buyer' } });
     fireEvent.change(clientSelect, { target: { value: 'all' } });
+
+    // Refresh icon button
+    const refreshBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.refreshTooltip);
+    fireEvent.click(refreshBtn);
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalled();
+    });
+  });
+
+  test('handles date range filtering with start and end date inputs', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
+
+    // 1. Set start and end date
+    fireEvent.change(startInput, { target: { value: '2026-11-01' } });
+    fireEvent.change(endInput, { target: { value: '2026-11-15' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining('startDate=2026-11-01&endDate=2026-11-15'),
+        expect.anything()
+      );
+    });
+
+    // 2. Clear date inputs
+    fireEvent.change(startInput, { target: { value: '' } });
+    fireEvent.change(endInput, { target: { value: '' } });
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenLastCalledWith(
+        expect.not.stringContaining('startDate='),
+        expect.anything()
+      );
+    });
+  });
+
+  test('handles Export CSV button click and exports formatted rows', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const exportBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.exportBtn);
+    expect(exportBtn).toBeInTheDocument();
+
+    fireEvent.click(exportBtn);
+
+    expect(exportReportToCsv).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.objectContaining({
+          'User Name': 'verababu',
+        }),
+      ]),
+      expect.stringContaining('registrations_')
+    );
+  });
+
+  test('handles calendar picker container click and keyboard navigation', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
+
+    const startContainer = startInput.parentElement as HTMLElement;
+    const endContainer = endInput.parentElement as HTMLElement;
+
+    // Click on container triggers focus / showPicker
+    fireEvent.click(startContainer);
+    fireEvent.click(endContainer);
+
+    // Keyboard Enter / Space on container triggers picker
+    fireEvent.keyDown(startContainer, { key: 'Enter' });
+    fireEvent.keyDown(startContainer, { key: ' ' });
+    fireEvent.keyDown(endContainer, { key: 'Enter' });
+    fireEvent.keyDown(endContainer, { key: ' ' });
+
+    // With showPicker function mocked
+    startInput.showPicker = jest.fn();
+    endInput.showPicker = jest.fn().mockImplementation(() => {
+      throw new Error('Picker not supported');
+    });
+
+    fireEvent.click(startContainer);
+    expect(startInput.showPicker).toHaveBeenCalled();
+
+    fireEvent.click(endContainer);
+    expect(endInput.showPicker).toHaveBeenCalled();
+  });
+
+  test('closes column settings modal on Escape key and backdrop click', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // 1. Escape key closes column settings
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+
+    // Reopen
+    fireEvent.click(gearBtn);
+    expect(screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).toBeInTheDocument();
+
+    // 2. Click backdrop closes column settings
+    const modalBackdrop = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle);
+    fireEvent.click(modalBackdrop, { target: modalBackdrop });
+    expect(screen.queryByText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTitle)).not.toBeInTheDocument();
+  });
+
+  test('closes summary card records modal on Escape key', async () => {
+    render(<RegistrationsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    // Click total registrations summary card
+    const totalCard = screen.getByText(UI_STRINGS.actionCenter.registrationsDashboard.kpiTotalClients).closest('[role="group"]') as HTMLElement;
+    fireEvent.click(totalCard);
+
+    // Escape closes summary modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+  });
+
+  test('hydrates saved columns from localStorage on mount and handles invalid json', async () => {
+    localStorage.setItem(
+      'cm_registration_columns_order_v1',
+      JSON.stringify([{ key: 'userName', label: 'User Name', visible: true, required: true }])
+    );
+    const { unmount } = render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    unmount();
+
+    localStorage.setItem('cm_registration_columns_order_v1', 'invalid-json');
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    localStorage.removeItem('cm_registration_columns_order_v1');
+  });
+
+  test('filters with only start date or only end date', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    const startInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.startDatePlaceholder) as HTMLInputElement;
+    const endInput = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.endDatePlaceholder) as HTMLInputElement;
+
+    fireEvent.change(startInput, { target: { value: '2026-06-01' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('startDate=2026-06-01'), expect.anything());
+    });
+    fireEvent.change(startInput, { target: { value: '' } });
+    fireEvent.change(endInput, { target: { value: '2026-06-30' } });
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('endDate=2026-06-30'), expect.anything());
+    });
+  });
+
+  test('handles drag over and drop onto same column without reordering', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+    const gearBtn = screen.getByLabelText(UI_STRINGS.actionCenter.registrationsDashboard.columnSettingsTooltip);
+    fireEvent.click(gearBtn);
+
+    const firstBadge = screen.getByText('#1');
+    const firstRow = firstBadge.closest('[draggable="true"]') as HTMLElement;
+
+    const dataTransfer = { effectAllowed: '', dropEffect: '' };
+    fireEvent.dragStart(firstRow, { dataTransfer });
+    fireEvent.dragOver(firstRow, { dataTransfer });
+    fireEvent.drop(firstRow, { dataTransfer });
+  });
+
+  test('supports sorting by non-date columns ascending and descending', async () => {
+    render(<RegistrationsDashboard />);
+    await waitFor(() => {
+      expect(screen.getByText('verababu')).toBeInTheDocument();
+    });
+
+    const sortCompanyBtn = screen.getByTestId('sort-col-companyName');
+    fireEvent.click(sortCompanyBtn);
+    fireEvent.click(sortCompanyBtn);
+
+    const sortPhoneBtn = screen.getByTestId('sort-col-phoneNumber');
+    fireEvent.click(sortPhoneBtn);
+    fireEvent.click(sortPhoneBtn);
   });
 });

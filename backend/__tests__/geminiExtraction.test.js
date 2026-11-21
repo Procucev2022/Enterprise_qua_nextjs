@@ -247,7 +247,9 @@ describe('Gemini document extraction service', () => {
       expect(rows[1]).toEqual({
         itemName: 'Hex Bolt M8x250',
         quantity: 50,
-        unit: 'PCS',
+        // The model-provided unit is now normalized like every other unit
+        // source, so "PCS" canonicalizes to "Pcs" instead of staying raw.
+        unit: 'Pcs',
         technicalSpecs: 'Grade 8.8',
         category: '',
         targetDate: '',
@@ -261,6 +263,32 @@ describe('Gemini document extraction service', () => {
       expect(rows[2].quantity).toBe(25);
       expect(rows[2].unitPrice).toBe(5000);
       expect(rows[2].totalPrice).toBe(125000);
+    });
+
+    test('discards a storage/clock-speed spec token echoed into "unit" instead of trusting it as a real unit of measure', () => {
+      // Reproduces the reported bug: "Business Laptops" with specification
+      // "Intel Core i5, 16GB" and quantity 20 came back with unit "GB" (read
+      // from the 16GB RAM spec) instead of being left for the buyer to set.
+      const rows = gemini.toRawLineItems({
+        items: [
+          // Compact array form: model put "GB" straight into the unit slot.
+          ['Business Laptops', 20, 'GB', 'Intel Core i5, 16GB', 55000, 1100000],
+          // Object form, same mistake via a synonym key.
+          { itemDescription: 'Business Laptops', quantity: 20, uom: 'GB', specification: 'Intel Core i5, 16GB' },
+          // Model left unit blank; only the spec mentions "16GB" and "2.5GHz" — neither must be inferred as the unit.
+          { itemDescription: 'Business Laptops', quantity: 20, specification: 'Intel Core i5, 16GB, 2.5GHz' },
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row.unit).toBe('');
+      }
+      // A real stated unit for the same kind of item is still honored normally.
+      const withRealUnit = gemini.toRawLineItems({
+        items: [['Business Laptops', 20, 'Nos', 'Intel Core i5, 16GB']],
+      });
+      expect(withRealUnit[0].unit).toBe('Nos');
     });
   });
 
@@ -2117,6 +2145,44 @@ describe('geminiService.generateJson', () => {
         expect(extracted[0].quantity).toBe(100);
         expect(extracted[0].targetDate).toBe('2026-11-15');
       });
+
+      test('accurately extracts line items from email tables with SR No. | Material Description | Quantity', () => {
+        const emailTable = [
+          'SR No. | Material Description | Quantity',
+          '1 | DELL: Intel Core i3 Processor, 12th Gen | 1',
+          '4 | 4 MP IP CAMERA (MAKE UNV) | 2',
+          '6 | 4 TB HDD SEAGATE | 1',
+          '11 | THERMAL PRINTER PAPER ROLL | 100',
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(emailTable);
+        expect(extracted).toHaveLength(4);
+        expect(extracted[0].itemName).toBe('DELL: Intel Core i3 Processor');
+        expect(extracted[0].quantity).toBe(1);
+        expect(extracted[1].itemName).toBe('4 MP IP CAMERA (MAKE UNV)');
+        expect(extracted[1].quantity).toBe(2);
+        expect(extracted[2].itemName).toBe('4 TB HDD SEAGATE');
+        expect(extracted[2].quantity).toBe(1);
+        expect(extracted[3].itemName).toBe('THERMAL PRINTER PAPER ROLL');
+        expect(extracted[3].quantity).toBe(100);
+      });
+
+      test('fallback column inference distinguishes leading serial numbers from quantities when headers are missing', () => {
+        const headerlessTable = [
+          '1 | Industrial Valve 2 inch | 10',
+          '2 | Pneumatic Actuator | 5',
+          '3 | Flange Gasket | 50',
+        ].join('\n');
+
+        const extracted = gemini.extractSpreadsheetLineItems(headerlessTable);
+        expect(extracted).toHaveLength(3);
+        expect(extracted[0].itemName).toBe('Industrial Valve 2 inch');
+        expect(extracted[0].quantity).toBe(10);
+        expect(extracted[1].itemName).toBe('Pneumatic Actuator');
+        expect(extracted[1].quantity).toBe(5);
+        expect(extracted[2].itemName).toBe('Flange Gasket');
+        expect(extracted[2].quantity).toBe(50);
+      });
     });
 
     describe('extractLineItems integration with large multi-worksheet text', () => {
@@ -2587,6 +2653,206 @@ describe('geminiService.generateJson', () => {
       expect(gemini.parseSpreadsheetDate('2026-11-20T18:30:00')).toBe('2026-11-21');
       expect(gemini.parseSpreadsheetDate('November 21, 2026')).toBe('2026-11-21');
       expect(gemini.parseSpreadsheetDate('completely-invalid-date')).toBe('completely-invalid-date');
+    });
+  });
+
+  describe('RFQ Unit and Quantity Extraction Enhancement', () => {
+    describe('matchHeaderField for expanded quantity and unit synonyms', () => {
+      it('matches quantity headers with embedded units or synonyms', () => {
+        expect(gemini.matchHeaderField('Qty (Nos)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Qty in Nos')).toBe('quantity');
+        expect(gemini.matchHeaderField('Qty (Pcs)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Qty (Units)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Qty (Mtr)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Qty (Kg)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Order Qty (Sets)')).toBe('quantity');
+        expect(gemini.matchHeaderField('Total Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('Total Quantity')).toBe('quantity');
+        expect(gemini.matchHeaderField('Ordered Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('Required Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('Indent Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('BOQ Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('Scope Qty')).toBe('quantity');
+        expect(gemini.matchHeaderField('No. of Units')).toBe('quantity');
+        expect(gemini.matchHeaderField('Number of Units')).toBe('quantity');
+        expect(gemini.matchHeaderField('Quantities')).toBe('quantity');
+      });
+
+      it('matches unit headers with synonyms and variations', () => {
+        expect(gemini.matchHeaderField('Unit')).toBe('unit');
+        expect(gemini.matchHeaderField('UOM')).toBe('unit');
+        expect(gemini.matchHeaderField('Units')).toBe('unit');
+        expect(gemini.matchHeaderField('Unit of Measure')).toBe('unit');
+        expect(gemini.matchHeaderField('Unit of Measurement')).toBe('unit');
+        expect(gemini.matchHeaderField('Units of Measure')).toBe('unit');
+        expect(gemini.matchHeaderField('Unit/UOM')).toBe('unit');
+        expect(gemini.matchHeaderField('UOM/Unit')).toBe('unit');
+        expect(gemini.matchHeaderField('Unit of Issue')).toBe('unit');
+        expect(gemini.matchHeaderField('Measurement Unit')).toBe('unit');
+        expect(gemini.matchHeaderField('Unit Type')).toBe('unit');
+        expect(gemini.matchHeaderField('UM')).toBe('unit');
+      });
+    });
+
+    describe('extractUnitFromHeader', () => {
+      it('extracts unit from parenthetical or suffixed quantity headers', () => {
+        expect(gemini.extractUnitFromHeader('Qty (Nos)')).toBe('Nos');
+        expect(gemini.extractUnitFromHeader('Quantity in Mtrs')).toBe('Mtr');
+        expect(gemini.extractUnitFromHeader('Req Qty [Sets]')).toBe('Set');
+        expect(gemini.extractUnitFromHeader('Order Qty / Kg')).toBe('Kg');
+        expect(gemini.extractUnitFromHeader('Total Quantity (Pcs)')).toBe('Pcs');
+        expect(gemini.extractUnitFromHeader('Bare Quantity Header')).toBeNull();
+      });
+    });
+
+    describe('extractUnitFromText & normalizeUnit', () => {
+      it('normalizes canonical units properly', () => {
+        expect(gemini.normalizeUnit('nos')).toBe('Nos');
+        expect(gemini.normalizeUnit('(Nos)')).toBe('Nos');
+        expect(gemini.normalizeUnit('pcs.')).toBe('Pcs');
+        expect(gemini.normalizeUnit('MTRS')).toBe('Mtr');
+        expect(gemini.normalizeUnit('kilograms')).toBe('Kg');
+        expect(gemini.normalizeUnit('sqft')).toBe('Sq.Ft');
+        expect(gemini.normalizeUnit('cum')).toBe('Cu.M');
+        expect(gemini.normalizeUnit(null)).toBeNull();
+      });
+
+      it('extracts unit from text strings with quantities', () => {
+        expect(gemini.extractUnitFromText('10 Nos')).toBe('Nos');
+        expect(gemini.extractUnitFromText('500 Mtr')).toBe('Mtr');
+        expect(gemini.extractUnitFromText('25 Sets')).toBe('Set');
+        expect(gemini.extractUnitFromText('100 Pcs')).toBe('Pcs');
+        expect(gemini.extractUnitFromText('50 Kg')).toBe('Kg');
+        expect(gemini.extractUnitFromText('Qty: 10 Nos')).toBe('Nos');
+        expect(gemini.extractUnitFromText('Just some text')).toBeNull();
+      });
+    });
+
+    describe('parseValidQuantity enhanced prefix handling', () => {
+      it('parses quantity with label prefixes or symbols', () => {
+        expect(gemini.parseValidQuantity('Qty: 10')).toBe(10);
+        expect(gemini.parseValidQuantity('Quantity: 25.5')).toBe(25.5);
+        expect(gemini.parseValidQuantity('Approx 50')).toBe(50);
+        expect(gemini.parseValidQuantity('~100')).toBe(100);
+        expect(gemini.parseValidQuantity('(15)')).toBe(15);
+        expect(gemini.parseValidQuantity('10 Nos')).toBe(10);
+      });
+    });
+
+    describe('extractSpreadsheetLineItems with header-derived units and combined cells', () => {
+      it('extracts unit from header when no separate unit column exists', () => {
+        const text = 'SHEET: Items\nItem Description | Qty (Nos)\nCentrifugal Pump | 5\nGate Valve | 10';
+        const items = gemini.extractSpreadsheetLineItems(text);
+        expect(items).toHaveLength(2);
+        expect(items[0].itemName).toBe('Centrifugal Pump');
+        expect(items[0].quantity).toBe(5);
+        expect(items[0].unit).toBe('Nos');
+        expect(items[1].itemName).toBe('Gate Valve');
+        expect(items[1].quantity).toBe(10);
+        expect(items[1].unit).toBe('Nos');
+      });
+
+      it('extracts unit from cell value when no separate unit column exists', () => {
+        const text = 'SHEET: Items\nItem Description | Quantity\nCentrifugal Pump | 5 Nos\nElectrical Cable | 500 Mtr';
+        const items = gemini.extractSpreadsheetLineItems(text);
+        expect(items).toHaveLength(2);
+        expect(items[0].quantity).toBe(5);
+        expect(items[0].unit).toBe('Nos');
+        expect(items[1].quantity).toBe(500);
+        expect(items[1].unit).toBe('Mtr');
+      });
+    });
+
+    describe('toRawLineItems object and swapped array handling', () => {
+      it('extracts quantity and unit from object payloads with synonyms', () => {
+        const rows = gemini.toRawLineItems({
+          items: [
+            { item: 'Submersible Pump', qty: '10 Nos', uom: '' },
+            { product: 'Armoured Cable', Quantity: 50, Unit: 'Mtr' },
+            { description: 'Ball Valve', orderQty: 25, unitOfMeasure: 'Pcs' },
+          ],
+        });
+        expect(rows).toHaveLength(3);
+        expect(rows[0].itemName).toBe('Submersible Pump');
+        expect(rows[0].quantity).toBe(10);
+        expect(rows[0].unit).toBe('Nos');
+        expect(rows[1].itemName).toBe('Armoured Cable');
+        expect(rows[1].quantity).toBe(50);
+        expect(rows[1].unit).toBe('Mtr');
+        expect(rows[2].itemName).toBe('Ball Valve');
+        expect(rows[2].quantity).toBe(25);
+        expect(rows[2].unit).toBe('Pcs');
+      });
+
+      it('corrects swapped array positions where quantity and unit are inverted', () => {
+        const rows = gemini.toRawLineItems({
+          items: [
+            ['Gate Valve 2 inch', 'Nos', 10, 'SS316'],
+          ],
+        });
+        expect(rows).toHaveLength(1);
+        expect(rows[0].itemName).toBe('Gate Valve 2 inch');
+        expect(rows[0].quantity).toBe(10);
+        expect(rows[0].unit).toBe('Nos');
+      });
+
+      it('exercises all normalizeUnit, extractUnitFromHeader, and extractUnitFromText edge cases', () => {
+        expect(gemini.normalizeUnit('12345')).toBeNull();
+        expect(gemini.normalizeUnit('a'.repeat(20))).toBeNull();
+        expect(gemini.normalizeUnit('')).toBeNull();
+        expect(gemini.normalizeUnit('   ')).toBeNull();
+        expect(gemini.normalizeUnit(undefined)).toBeNull();
+        expect(gemini.normalizeUnit('custom-unit')).toBe('custom-unit');
+
+        expect(gemini.extractUnitFromHeader(null)).toBeNull();
+        expect(gemini.extractUnitFromHeader(123)).toBeNull();
+        expect(gemini.extractUnitFromHeader('')).toBeNull();
+        expect(gemini.extractUnitFromHeader('Quantity in Meters')).toBe('Mtr');
+        expect(gemini.extractUnitFromHeader('Req [Sets]')).toBe('Set');
+
+        expect(gemini.extractUnitFromText(null)).toBeNull();
+        expect(gemini.extractUnitFromText(123)).toBeNull();
+        expect(gemini.extractUnitFromText('')).toBeNull();
+        expect(gemini.extractUnitFromText('10-Nos')).toBe('Nos');
+        expect(gemini.extractUnitFromText('50(Pcs)')).toBe('Pcs');
+      });
+
+      it('exercises all toRawLineItems fallback branches for object items and arrays', () => {
+        const rows = gemini.toRawLineItems({
+          items: [
+            { item: 'Centrifugal Pump', qty: 'Nos', unit: 15 },
+            { item: 'Gate Valve (20 Nos)', qty: 20 },
+            { item: 'Electrical Wire', qty: 100, technicalSpecs: 'Coil 100 Mtr' },
+            { item: 'Industrial Pipe', qty: 50, specs: 'Grade 50 Mtr' },
+            { item: 'Induction Motor', qty: 2, unit: 'Sets', make: 'ABB', price: 1000, amount: 2000 },
+            { item: 'Transformer', qty: 1, unit: 'Units', manufacturer: 'BHEL', rate: 5000, total: 5000 },
+            ['Control Cable', 200, '', 'Armoured 200 Mtr'],
+            ['Butterfly Valve 4 inch (10 Pcs)', 10, ''],
+          ],
+        });
+        expect(rows).toHaveLength(8);
+        expect(rows[0].quantity).toBe(15);
+        expect(rows[0].unit).toBe('Nos');
+        expect(rows[1].unit).toBe('Nos');
+        expect(rows[2].unit).toBe('Mtr');
+        expect(rows[3].unit).toBe('Mtr');
+        expect(rows[4].brand).toBe('ABB');
+        expect(rows[4].unitPrice).toBe(1000);
+        expect(rows[4].totalPrice).toBe(2000);
+        expect(rows[5].brand).toBe('BHEL');
+        expect(rows[5].unitPrice).toBe(5000);
+        expect(rows[5].totalPrice).toBe(5000);
+        expect(rows[6].unit).toBe('Mtr');
+        expect(rows[7].unit).toBe('Pcs');
+      });
+
+      it('exercises extractSpreadsheetLineItems fallback unit from itemName and spec', () => {
+        const text = 'SHEET: Items\nItem Description | Technical Specifications | Quantity\nCentrifugal Pump 10 Nos | Standard | 10\nGate Valve | High grade 5 Pcs | 5';
+        const items = gemini.extractSpreadsheetLineItems(text);
+        expect(items).toHaveLength(2);
+        expect(items[0].unit).toBe('Nos');
+        expect(items[1].unit).toBe('Pcs');
+      });
     });
   });
 });

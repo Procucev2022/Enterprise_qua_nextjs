@@ -37,7 +37,7 @@ const extensionDaysInvalidMessage = formatString(UI_STRINGS.rfqDetails.extension
   max: EXTENSION_MAX_DAYS,
 });
 
-export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_PATTERN = /^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
 export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
@@ -129,6 +129,48 @@ export function usablePan(pan: unknown): string | null {
   const clean = pan.trim().toUpperCase();
   if (!PAN_PATTERN.test(clean)) return null;
   return clean;
+}
+
+const PLACEHOLDER_DERIVED_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+/**
+ * Extract the 10-character PAN embedded in a valid Indian GSTIN when it does
+ * not match synthetic placeholder test PANs.
+ */
+export function derivePanFromGstin(gstin: unknown): string {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_PATTERN.test(clean)) return '';
+  const candidate = clean.slice(2, 12);
+  if (
+    !PAN_PATTERN.test(candidate) ||
+    PLACEHOLDER_DERIVED_PANS.has(candidate) ||
+    REPEATED_LETTER_PAN_PATTERN.test(candidate) ||
+    isDummyPan(candidate)
+  ) {
+    return '';
+  }
+  return candidate;
+}
+
+/**
+ * Parse a plant location string like "Pune, Maharashtra (411001)" into
+ * structured address parts so fallback accounts still hydrate city/state/pincode.
+ */
+export function parsePrimaryPlantLocation(location: unknown): { city: string; state: string; pincode: string } {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
 }
 export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
 export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
@@ -407,6 +449,10 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
   approvalActionForm: {
     action: { required: true, message: 'Action is required.' },
     password: { required: true, minLength: 1, message: 'Approver password is required.' },
+  },
+
+  approvalSendOtpForm: {
+    approverName: { required: true, minLength: 1, message: 'Approver name is required.' },
   },
 
   registrationActionForm: {
@@ -765,6 +811,13 @@ export const SELLER_ADD_QUOTE_CREDITS_SCHEMA = {
 export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
   amount: { min: 1 },
   reason: { maxLength: 1000 },
+} as const;
+
+/** Offline Payment Proof Upload validation schema */
+export const OFFLINE_PAYMENT_UPLOAD_SCHEMA = {
+  maxFileSize: 10 * 1024 * 1024, // 10MB
+  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/jpg'],
+  allowedExtensions: ['.jpg', '.jpeg', '.png'],
 } as const;
 
 /** Request Vendor Evaluation validation schema */

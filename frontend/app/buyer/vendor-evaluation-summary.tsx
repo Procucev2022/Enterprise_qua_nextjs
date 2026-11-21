@@ -3,15 +3,27 @@
 import React, { useState, useMemo, useEffect, useRef } from 'react';
 import { useApp } from '@/lib/store';
 import {
+  BUYER_EVALUATION_SUMMARY_COLUMNS,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
   VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT,
   VENDOR_EVALUATION_GATE_SCORE,
   VENDOR_EVALUATION_PILLARS,
   VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   isBuyerUploadedVendor,
   isProcucevNetworkVendor,
+  isRfqOrPoSummaryEntity,
+  isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
+  type TableColumnOption,
+  type TableSortState,
 } from '@/lib/constants';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type {
   QuestionEvaluationItem,
@@ -32,15 +44,12 @@ import {
   Clock,
   FileCheck,
   FileText,
-  Mail,
   Paperclip,
-  Phone,
   Search,
+  Settings,
   ShieldCheck,
   Sparkles,
-  Tag,
   UploadCloud,
-  Zap,
 } from 'lucide-react';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 
@@ -52,6 +61,7 @@ const NOT_APPLICABLE = UI_STRINGS.recordPlaceholders.notApplicable;
 // Classification helpers shared with Buyer Vendor Directory.
 export const isBuyerUploaded = isBuyerUploadedVendor;
 export const isProcucevVendor = isProcucevNetworkVendor;
+export const isRfqOrPoSummary = isRfqOrPoSummaryEntity;
 
 /** A finite number from a number or a numeric string. Anything else counts as not on record. */
 function toScore(value: unknown): number | null {
@@ -189,37 +199,39 @@ function attachmentSummaryFor(questions: QuestionEvaluationItem[], pillarId: Ven
 }
 
 function renderStatusBadge(status: VendorEvaluationSummaryView['status']) {
+  const badgeBase =
+    'inline-flex items-center justify-center text-center whitespace-nowrap leading-tight shrink-0 px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider max-w-full';
   if (status === null) {
     return (
-      <span className="px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-600">
+      <span className={`${badgeBase} bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-300 dark:border-slate-600`}>
         {NOT_EVALUATED}
       </span>
     );
   }
   if (status === 'PREFERRED ENTERPRISE SUPPLIER') {
     return (
-      <span className="px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40">
+      <span className={`${badgeBase} bg-emerald-100 dark:bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-500/40`}>
         {status}
       </span>
     );
   }
   if (status === 'CONDITIONAL / UNDER REVIEW') {
     return (
-      <span className="px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40">
+      <span className={`${badgeBase} bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40`}>
         {status}
       </span>
     );
   }
   if (status === 'DISQUALIFIED SUPPLIER') {
     return (
-      <span className="px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-rose-100 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-500/40">
+      <span className={`${badgeBase} bg-rose-100 dark:bg-rose-500/20 text-rose-800 dark:text-rose-300 border border-rose-300 dark:border-rose-500/40`}>
         {status}
       </span>
     );
   }
   // A status the record holds that this screen has no colour for is shown as written.
   return (
-    <span className="px-3.5 py-1.5 rounded-full text-xs font-black uppercase tracking-wider bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600">
+    <span className={`${badgeBase} bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 border border-slate-300 dark:border-slate-600`}>
       {status}
     </span>
   );
@@ -295,35 +307,54 @@ export default function VendorEvaluationSummary({
     const optionById = new Map<string, VendorEvaluationSelectOption>();
     const matchedEvaluationRefs = new Set<VendorEvaluationRecord>();
     reconciledBuyerVendors.forEach((v) => {
-      if (!v.id) return;
+      if (!v.id || isRfqOrPoSummaryEntity(v)) return;
       const matchedEval = findEvaluation(allEvaluations, v.id, v.name, v.email);
+      // Inactive buyer vendors remain accessible when viewing a historical evaluation record,
+      // but unevaluated inactive suppliers stay excluded from future evaluation selection.
+      if (!isVendorActive(v) && !matchedEval && evaluationRecord?.vendorId !== v.id) return;
       if (matchedEval) matchedEvaluationRefs.add(matchedEval);
       optionById.set(v.id, buildSelectOption(v, toScore(matchedEval?.overallScore)));
     });
     evaluationById.forEach((e, id) => {
+      if (isRfqOrPoSummaryEntity({ id: e.vendorId || id, name: e.vendorName, category: e.category })) return;
       if (!optionById.has(id) && !matchedEvaluationRefs.has(e)) optionById.set(id, buildOptionFromRecord(e));
     });
-    return Array.from(optionById.values());
+    return Array.from(optionById.values()).filter((opt) => !isRfqOrPoSummaryEntity(opt));
   }, [reconciledBuyerVendors, vendorEvaluations, evaluationRecord]);
 
   // Buyer-uploaded suppliers when there are any. Otherwise every supplier.
   const companyOptions = useMemo(() => {
-    const buyerUploaded = allOptions.filter(
+    const validOptions = allOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    const buyerUploaded = validOptions.filter(
       (c) => c.isBuyerUploaded || (evaluationRecord ? c.id === evaluationRecord.vendorId : false)
     );
-    return buyerUploaded.length > 0 ? buyerUploaded : allOptions;
+    return buyerUploaded.length > 0 ? buyerUploaded : validOptions;
   }, [allOptions, evaluationRecord]);
 
   const initialVendorId =
-    activeRecord?.vendorId ||
+    (activeRecord?.vendorId &&
+    !isRfqOrPoSummaryEntity({
+      id: activeRecord.vendorId,
+      name: activeRecord.vendorName,
+      category: activeRecord.category,
+    })
+      ? activeRecord.vendorId
+      : '') ||
     companyOptions[0]?.id ||
-    buyerVendors?.[0]?.id ||
-    vendorEvaluations?.[0]?.vendorId ||
+    reconciledBuyerVendors.find((v) => !isRfqOrPoSummaryEntity(v))?.id ||
+    vendorEvaluations?.find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    )?.vendorId ||
     '';
   const [selectedVendorId, setSelectedVendorId] = useState<string>(initialVendorId);
   const [dropdownOpen, setDropdownOpen] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedPillarFilter, setSelectedPillarFilter] = useState<'ALL' | VendorEvaluationPillarId>('ALL');
+  const [evalTableSort, setEvalTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [evalColumns, setEvalColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_EVALUATION_SUMMARY_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showEvalColumnSettings, setShowEvalColumnSettings] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   // Close dropdown on outside click
@@ -380,14 +411,17 @@ export default function VendorEvaluationSummary({
     if (first) return buildSummaryView(findEvaluation(vendorEvaluations, first.id, first.name, first.email), first);
 
     // 6. The first stored evaluation, when no supplier is listed.
-    const storedFirst = vendorEvaluations?.[0];
+    const storedFirst = (vendorEvaluations || []).find(
+      (e) => !isRfqOrPoSummaryEntity({ id: e.vendorId, name: e.vendorName, category: e.category })
+    );
     return storedFirst ? buildSummaryView(storedFirst, null) : null;
   }, [evaluationRecord, selectedVendorId, vendorEvaluations, allOptions, companyOptions]);
 
   const filteredCompanyOptions = useMemo(() => {
-    if (!searchQuery.trim()) return companyOptions;
+    const validBase = companyOptions.filter((c) => !isRfqOrPoSummaryEntity(c));
+    if (!searchQuery.trim()) return validBase;
     const q = searchQuery.toLowerCase();
-    return companyOptions.filter(
+    return validBase.filter(
       (c) =>
         (c.name || '').toLowerCase().includes(q) ||
         (c.category || '').toLowerCase().includes(q) ||
@@ -464,11 +498,6 @@ export default function VendorEvaluationSummary({
   const verifiedDocumentCount = documents.filter((d) => d.verified || d.status === 'Verified').length;
   const visibleDocuments = documents.slice(0, VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT);
   const overallScore = summary.overallScore;
-  const gateText = overallScore === null
-    ? NOT_EVALUATED
-    : overallScore >= VENDOR_EVALUATION_GATE_SCORE
-    ? formatString(SUMMARY.gateUnlocked, { score: VENDOR_EVALUATION_GATE_SCORE })
-    : formatString(SUMMARY.gateLocked, { score: VENDOR_EVALUATION_GATE_SCORE });
 
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
@@ -490,28 +519,28 @@ export default function VendorEvaluationSummary({
       )}
 
       {/* Interactive Company / Supplier Selection Dropdown Bar */}
-      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/70 dark:from-indigo-950/30 dark:via-gray-900/90 dark:to-sky-950/30 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-2.5 relative z-30">
-        <div className="flex items-center gap-2.5">
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-indigo-200/80 dark:border-indigo-900/50 bg-gradient-to-r from-indigo-50/70 via-white to-sky-50/70 dark:from-indigo-950/30 dark:via-gray-900/90 dark:to-sky-950/30 shadow-sm flex flex-col md:flex-row md:items-center justify-between gap-2.5 relative z-30 min-w-0 max-w-full">
+        <div className="flex items-center gap-2.5 min-w-0">
           <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center shrink-0 shadow-sm">
             <Building2 size={15} />
           </div>
-          <div>
+          <div className="min-w-0">
             <div className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400 tracking-wider">
               {SUMMARY.pickerLabel}
             </div>
-            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200">
+            <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
               {SUMMARY.pickerHelp}
             </div>
           </div>
         </div>
 
         {/* Company Select Dropdown */}
-        <div className="relative z-40" ref={dropdownRef}>
+        <div className="relative z-40 w-full md:w-auto min-w-0 max-w-full" ref={dropdownRef}>
           <button
             type="button"
             onClick={() => setDropdownOpen((prev) => !prev)}
             aria-label={SUMMARY.pickerAriaLabel}
-            className="flex items-center justify-between gap-3 px-3.5 py-2 rounded-lg bg-white dark:bg-gray-800 border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-xs font-bold text-slate-800 dark:text-slate-100 shadow-sm min-w-[280px] sm:min-w-[360px] transition-all cursor-pointer text-left"
+            className="flex items-center justify-between gap-3 px-3.5 py-2 rounded-lg bg-white dark:bg-gray-800 border border-slate-300 dark:border-slate-700 hover:border-indigo-500 text-xs font-bold text-slate-800 dark:text-slate-100 shadow-sm w-full md:w-auto min-w-0 sm:min-w-[280px] md:min-w-[320px] max-w-full transition-all cursor-pointer text-left"
           >
             <div className="flex items-center gap-2 truncate">
               <span className="w-2 h-2 rounded-full bg-emerald-500 shrink-0" />
@@ -541,7 +570,7 @@ export default function VendorEvaluationSummary({
 
           {/* Dropdown Menu Popover */}
           {dropdownOpen && (
-            <div className="absolute right-0 top-full mt-1.5 w-84 sm:w-96 bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-fade-in">
+            <div className="absolute right-0 top-full mt-1.5 w-full sm:w-96 max-w-[calc(100vw-2rem)] bg-white dark:bg-gray-900 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 z-50 overflow-hidden animate-fade-in">
               {/* Header */}
               <div className="p-2.5 border-b border-slate-200 dark:border-slate-800 bg-slate-100/70 dark:bg-gray-950 flex items-center justify-between">
                 <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
@@ -643,36 +672,66 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* Main Vendor Evaluation Summary Table */}
-      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm relative z-10 space-y-2">
-        <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 dark:border-gray-800">
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm relative z-10 space-y-2 min-w-0 max-w-full overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2 pb-1.5 border-b border-slate-100 dark:border-gray-800">
           <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-            <FileCheck size={15} className="text-indigo-600 dark:text-indigo-400" />
-            {SUMMARY.tableHeading}
+            <FileCheck size={15} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>{SUMMARY.tableHeading}</span>
           </h3>
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowEvalColumnSettings, true)}
+            data-testid="evaluation-summary-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold shrink-0"
+          >
+            <Settings size={12} />
+            <span>Column Settings</span>
+          </button>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse" data-testid="vendor-evaluation-summary-table">
+        <ColumnSettingsPopup
+          isOpen={showEvalColumnSettings}
+          onClose={createBooleanSetterHandler(setShowEvalColumnSettings, false)}
+          columns={evalColumns}
+          onSave={setEvalColumns}
+          onReset={createColumnResetHandler(BUYER_EVALUATION_SUMMARY_COLUMNS, setEvalColumns)}
+          title="Column Settings"
+        />
+
+        <div className="overflow-x-auto w-full max-w-full">
+          <table className="w-full text-left text-xs border-collapse min-w-[360px] sm:min-w-full" data-testid="vendor-evaluation-summary-table">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
-                <th className="py-2 px-2.5 min-w-[200px]">{SUMMARY.colVendorDetails}</th>
-                <th className="py-2 px-2.5 text-center min-w-[140px]">{SUMMARY.colEvaluationStatus}</th>
-                <th className="py-2 px-2.5 text-center min-w-[130px]">{SUMMARY.colOverallScore}</th>
-                <th className="py-2 px-2.5 min-w-[220px]">{SUMMARY.colCategoryScores}</th>
-                <th className="py-2 px-2.5 min-w-[180px]">{SUMMARY.colReviewStatus}</th>
+                <th
+                  onClick={createColumnSortClickHandler('vendorName', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'vendorName')}
+                  className={getTableColumnClass(evalColumns, 'vendorName', 'py-2 px-2.5 min-w-[180px] sm:min-w-[200px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center gap-1">{SUMMARY.colVendorName} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'vendorName')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('status', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'status')}
+                  className={getTableColumnClass(evalColumns, 'status', 'py-2 px-2.5 text-center min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colEvaluationStatus} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'status')}</span></span>
+                </th>
+                <th
+                  onClick={createColumnSortClickHandler('overallScore', setEvalTableSort)}
+                  aria-sort={getTableAriaSort(evalTableSort, 'overallScore')}
+                  className={getTableColumnClass(evalColumns, 'overallScore', 'py-2 px-2.5 text-center min-w-[120px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                >
+                  <span className="inline-flex items-center justify-center gap-1">{SUMMARY.colVendorScore} <span aria-hidden="true">{getSortIndicatorSymbol(evalTableSort, 'overallScore')}</span></span>
+                </th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
-              <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-top">
-                {/* 1. Vendor Details */}
-                <td className="py-2.5 px-2.5 space-y-1">
-                  <div className="flex items-center gap-1.5 flex-wrap text-xs">
-                    <span className="text-slate-600 dark:text-gray-400 font-medium flex items-center gap-1 text-[11px]">
-                      <Tag size={11} /> {summary.category ?? NOT_RECORDED}
-                    </span>
-                  </div>
-
-                  <div className="text-sm sm:text-base font-black text-slate-900 dark:text-white flex items-center gap-1.5">
+              <tr className="hover:bg-slate-50/50 dark:hover:bg-gray-800/30 transition-colors align-middle">
+                {/* 1. Vendor Name */}
+                <td className={getTableColumnClass(evalColumns, 'vendorName', 'py-2.5 px-2.5 align-middle min-w-[180px]')}>
+                  <div className="text-xs sm:text-sm font-black text-slate-900 dark:text-white flex items-center gap-1.5 min-w-0">
                     <CompanyHoverTooltip
                       name={summary.vendorName ?? ''}
                       type="vendor"
@@ -683,90 +742,24 @@ export default function VendorEvaluationSummary({
                         verified: summary.status === 'PREFERRED ENTERPRISE SUPPLIER',
                       }}
                     />
-                    <ShieldCheck className="text-emerald-500 shrink-0" size={16} />
-                  </div>
-
-                  <div className="space-y-0.5 text-[11px] text-slate-500 dark:text-gray-400">
-                    <div className="flex items-center gap-1">
-                      <Building2 size={11} /> {SUMMARY.contactLabel}{' '}
-                      <strong className="text-slate-700 dark:text-gray-200">{summary.contactPerson ?? NOT_RECORDED}</strong>
-                    </div>
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <span className="flex items-center gap-1"><Mail size={11} /> {summary.email ?? NOT_RECORDED}</span>
-                      <span>•</span>
-                      <span className="flex items-center gap-1"><Phone size={11} /> {summary.phone ?? NOT_RECORDED}</span>
-                    </div>
-                    {summary.submissionDate !== null && (
-                      <div className="flex items-center gap-1 text-[10px] text-slate-400 dark:text-gray-500">
-                        <Clock size={10} /> {SUMMARY.submittedLabel} {summary.submissionDate}
-                      </div>
-                    )}
+                    <ShieldCheck className="text-emerald-500 shrink-0" size={15} />
                   </div>
                 </td>
 
                 {/* 2. Evaluation Status */}
-                <td className="py-2.5 px-2.5 text-center align-middle">
-                  <div className="inline-block">
+                <td className={getTableColumnClass(evalColumns, 'status', 'py-2.5 px-2.5 text-center align-middle whitespace-nowrap min-w-[140px]')}>
+                  <div className="inline-flex items-center justify-center max-w-full">
                     {renderStatusBadge(summary.status)}
                   </div>
                 </td>
 
-                {/* 3. Overall Score */}
-                <td className="py-2.5 px-2.5 text-center align-middle space-y-0.5">
+                {/* 3. Vendor Score */}
+                <td className={getTableColumnClass(evalColumns, 'overallScore', 'py-2.5 px-2.5 text-center align-middle space-y-0.5 whitespace-nowrap min-w-[120px]')}>
                   <div className="text-[10px] uppercase font-bold text-slate-500 dark:text-gray-400 tracking-wider">
                     {SUMMARY.scoreLabel}
                   </div>
-                  <div className="text-2xl sm:text-3xl font-black mono text-emerald-600 dark:text-emerald-400">
+                  <div className="text-xl sm:text-2xl font-black mono text-emerald-600 dark:text-emerald-400">
                     {overallScore === null ? NOT_APPLICABLE : `${overallScore}%`}
-                  </div>
-                  <div className="text-[10px] text-slate-600 dark:text-gray-400 font-medium">
-                    {SUMMARY.gateLabel} <span className="font-bold text-emerald-600 dark:text-emerald-400">{gateText}</span>
-                  </div>
-                </td>
-
-                {/* 4. Category Scores Preview */}
-                <td className="py-2.5 px-2.5 align-middle">
-                  <div className="grid grid-cols-2 gap-1 text-[10px]">
-                    {VENDOR_EVALUATION_PILLARS.map((p) => {
-                      const viewPillar = summary.pillars.find((pi) => pi.pillarId === p.id);
-                      const weighted = viewPillar?.weightedScore;
-                      return (
-                        <div key={p.id} className="p-1 rounded bg-slate-50 dark:bg-gray-800/60 border border-slate-100 dark:border-gray-800 flex items-center justify-between gap-1">
-                          <span className="font-semibold text-slate-700 dark:text-gray-300 truncate">
-                            <span className={`inline-block w-3.5 h-3.5 rounded text-[8px] font-bold text-center leading-3.5 mr-1 ${p.accent.badge}`}>{p.id}</span>
-                            {p.name.split(' ')[0]}
-                          </span>
-                          <span className="font-mono font-bold text-indigo-600 dark:text-indigo-400 shrink-0">
-                            {weighted !== null && weighted !== undefined ? `${weighted}/${p.weight}` : '—'}
-                          </span>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </td>
-
-                {/* 5. Review Status */}
-                <td className="py-2.5 px-2.5 space-y-1.5 align-middle">
-                  <div className="p-1.5 rounded-lg bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 text-[11px] space-y-0.5">
-                    <div className="flex items-center gap-1 font-bold text-emerald-800 dark:text-emerald-300">
-                      <Zap size={12} className="text-emerald-600 dark:text-emerald-400 shrink-0 animate-pulse" />
-                      <span>{SUMMARY.executionLabel}</span>
-                    </div>
-                    <div className="text-slate-700 dark:text-gray-300 font-medium text-[10px]">
-                      {summary.systemAction ?? NOT_RECORDED}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-1 text-[10px]">
-                    {documents.length === 0 ? (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 flex items-center gap-1 font-mono">
-                        <Clock size={10} /> {SUMMARY.documentsEmptyTitle}
-                      </span>
-                    ) : (
-                      <span className="badge badge-emerald font-mono text-[10px]">
-                        {formatString(SUMMARY.attachmentsSummaryTotal, { verified: verifiedDocumentCount, total: documents.length })}
-                      </span>
-                    )}
                   </div>
                 </td>
               </tr>
@@ -776,16 +769,16 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* 6-Pillar Subtotal Summary & Auditor Remarks Table */}
-      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2">
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2 min-w-0 max-w-full overflow-hidden">
         <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 dark:border-gray-800">
           <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-            <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400" />
-            {SUMMARY.pillarsHeading}
+            <Sparkles size={15} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>{SUMMARY.pillarsHeading}</span>
           </h3>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+        <div className="overflow-x-auto w-full max-w-full">
+          <table className="w-full text-left text-xs border-collapse min-w-[550px]">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px] bg-slate-50/70 dark:bg-gray-950/70">
                 <th className="py-2 px-2.5">{SUMMARY.colPillarName}</th>
@@ -793,7 +786,7 @@ export default function VendorEvaluationSummary({
                 <th className="py-2 px-2.5 text-center">{SUMMARY.colPillarScore}</th>
                 <th className="py-2 px-2.5 min-w-[120px]">{SUMMARY.colPillarBar}</th>
                 <th className="py-2 px-2.5 min-w-[140px]">{SUMMARY.colPillarAttachments}</th>
-                <th className="py-2 px-2.5 min-w-[200px]">{SUMMARY.colPillarRemarks}</th>
+                <th className="py-2 px-2.5 min-w-[180px]">{SUMMARY.colPillarRemarks}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 dark:divide-gray-800/80">
@@ -824,18 +817,18 @@ export default function VendorEvaluationSummary({
                         : formatString(SUMMARY.pillarPoints, { score: weightedScore, weight: pillar.weight })}
                     </td>
                     <td className="py-2 px-2.5">
-                      <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden">
+                      <div className="w-full bg-slate-100 dark:bg-gray-800 rounded-full h-1.5 overflow-hidden min-w-[80px]">
                         <div className={`${pillar.accent.bar} h-full rounded-full`} style={{ width: `${barPercent}%` }} />
                       </div>
                     </td>
-                    <td className="py-2 px-2.5 text-[10px]">
+                    <td className="py-2 px-2.5 text-[10px] min-w-[120px]">
                       <div className="flex flex-col">
                         <span className="text-slate-500">{attachment.label}</span>
                         <span className={attachment.statusClass}>{attachment.statusLabel}</span>
                       </div>
                     </td>
-                    <td className="py-2 px-2.5 text-[10px]">
-                      <div className={`p-1.5 rounded ${pillar.accent.remarksBox}`}>
+                    <td className="py-2 px-2.5 text-[10px] min-w-[160px] max-w-[280px]">
+                      <div className={`p-1.5 rounded break-words ${pillar.accent.remarksBox}`}>
                         <div className={`font-bold mb-0.5 ${pillar.accent.remarksTitle}`}>
                           💬 {formatString(SUMMARY.pillarRemarksTitle, { pillarId: pillar.id })}
                         </div>
@@ -851,26 +844,26 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* Evaluation Matrix */}
-      <div className="glass-panel p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 shadow-sm">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-100 dark:border-gray-800">
-          <div>
+      <div className="glass-panel p-3 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-3 shadow-sm min-w-0 max-w-full overflow-hidden">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 pb-2 border-b border-slate-100 dark:border-gray-800 min-w-0">
+          <div className="min-w-0">
             <h3 className="text-xs sm:text-sm font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-              <FileText size={15} className="text-indigo-600 dark:text-indigo-400" />
-              {SUMMARY.matrixTitle}
+              <FileText size={15} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+              <span>{SUMMARY.matrixTitle}</span>
               {questions.length > 0 && formatString(SUMMARY.matrixCount, { count: questions.length })}
             </h3>
-            <p className="text-[11px] text-slate-500 dark:text-gray-400">
+            <p className="text-[11px] text-slate-500 dark:text-gray-400 truncate">
               {questions.length > 0 ? SUMMARY.matrixSubtitle : SUMMARY.matrixNoScores}
             </p>
           </div>
 
           {/* Pillar Filter Pills */}
-          <div className="flex items-center gap-1 overflow-x-auto text-xs">
+          <div className="flex items-center gap-1 overflow-x-auto text-xs pb-1 flex-wrap sm:flex-nowrap max-w-full">
             {pillarFilterOptions.map((p) => (
               <button
                 key={p}
                 onClick={() => setSelectedPillarFilter(p)}
-                className={`px-2.5 py-1 rounded-md font-bold transition-all ${
+                className={`px-2.5 py-1 rounded-md font-bold transition-all shrink-0 whitespace-nowrap ${
                   selectedPillarFilter === p
                     ? 'bg-indigo-600 text-white shadow-sm'
                     : 'text-slate-600 dark:text-gray-400 hover:bg-slate-100 dark:hover:bg-gray-800'
@@ -882,8 +875,8 @@ export default function VendorEvaluationSummary({
           </div>
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left text-xs border-collapse">
+        <div className="overflow-x-auto w-full max-w-full">
+          <table className="w-full text-left text-xs border-collapse min-w-[620px]">
             <thead>
               <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px] bg-slate-50/50 dark:bg-gray-950/50">
                 <th className="py-2 px-2.5">{SUMMARY.colRef}</th>
@@ -968,18 +961,18 @@ export default function VendorEvaluationSummary({
       </div>
 
       {/* Mandatory Compliance Documents Table */}
-      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2">
-        <div className="flex items-center justify-between">
+      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900 shadow-sm space-y-2 min-w-0 max-w-full overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-xs font-bold uppercase tracking-wider text-slate-800 dark:text-gray-200 flex items-center gap-2">
-            <Paperclip size={15} className="text-indigo-600 dark:text-indigo-400" />
-            {formatString(SUMMARY.documentsHeading, { count: documents.length })}
+            <Paperclip size={15} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+            <span>{formatString(SUMMARY.documentsHeading, { count: documents.length })}</span>
           </h3>
           {documents.length === 0 ? (
-            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40">
+            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-100 dark:bg-amber-500/20 text-amber-800 dark:text-amber-300 border border-amber-300 dark:border-amber-500/40 whitespace-nowrap">
               {SUMMARY.documentsEmptyTitle}
             </span>
           ) : (
-            <span className="badge badge-emerald">
+            <span className="badge badge-emerald whitespace-nowrap">
               {formatString(SUMMARY.documentsBadgeVerified, { verified: verifiedDocumentCount, total: documents.length })}
             </span>
           )}
@@ -996,8 +989,8 @@ export default function VendorEvaluationSummary({
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
+          <div className="overflow-x-auto w-full max-w-full">
+            <table className="w-full text-left text-xs min-w-[450px]">
               <thead>
                 <tr className="border-b border-slate-200 dark:border-gray-800 text-slate-400 dark:text-gray-500 uppercase tracking-wider text-[10px]">
                   <th className="py-2 px-2">{SUMMARY.docColTitle}</th>

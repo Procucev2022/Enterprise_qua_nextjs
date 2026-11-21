@@ -4,6 +4,7 @@ import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
+  BuyerUploadedVendorItem,
   BuyerCreditSummary,
   BuyerCreditTransaction,
   BuyerCommunicationItem,
@@ -116,7 +117,8 @@ export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Pro
 
   if (!res.ok || !body?.success || !body.data) {
     const { error } = describeFailure(res, body);
-    logger.error('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       status: res.status,
@@ -131,6 +133,55 @@ export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Pro
 
   logger.info('Buyer profile loaded', {}, 'BUYER_PROFILE');
   return { success: true, status: res.status, data: body.data as BuyerProfile };
+}
+
+/**
+ * Fetch and evaluate completion status for the signed-in buyer's profile.
+ */
+export async function fetchBuyerProfileCompletion(options?: {
+  signal?: AbortSignal;
+}): Promise<{
+  success: boolean;
+  status?: number;
+  data?: import('./buyerProfileCompletion').ProfileCompletionResult;
+  profile?: BuyerProfile;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(BUYER_PROFILE_ENDPOINTS.COMPLETION, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    if (res.ok) {
+      const body = await readEnvelope(res);
+      if (body?.success && body.data) {
+        return {
+          success: true,
+          status: res.status,
+          data: body.data as import('./buyerProfileCompletion').ProfileCompletionResult,
+        };
+      }
+    }
+  } catch {
+    // Fall back to fetchBuyerProfile and local evaluation
+  }
+
+  const profileRes = await fetchBuyerProfile(options);
+  if (!profileRes.success || !profileRes.data) {
+    return {
+      success: false,
+      status: profileRes.status,
+      error: profileRes.error || 'Failed to load buyer profile for completion evaluation',
+    };
+  }
+  const { checkBuyerProfileCompletion } = await import('./buyerProfileCompletion');
+  const completion = checkBuyerProfileCompletion(profileRes.data);
+  return {
+    success: true,
+    status: profileRes.status,
+    data: completion,
+    profile: profileRes.data,
+  };
 }
 
 /**
@@ -171,6 +222,9 @@ export async function saveBuyerProfile(
   }
 
   logger.info('Buyer profile saved', { categoryCount: body.categoryCount }, 'BUYER_PROFILE');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('buyer-profile-updated', { detail: body.data }));
+  }
   return {
     success: true,
     status: res.status,
@@ -219,7 +273,8 @@ export async function fetchCategoryTaxonomy(
 
   if (!res.ok || !body?.success || !Array.isArray(body.data)) {
     const { error } = describeFailure(res, body);
-    logger.error('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       data: [],
@@ -490,8 +545,27 @@ export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
   }
 }
 
+export async function fetchBuyerUploadedVendors(buyerId: string): Promise<{
+  success: boolean;
+  count?: number;
+  data?: BuyerUploadedVendorItem[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/uploaded-vendors`, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer uploaded vendors request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch buyer uploaded vendors') };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
+  fetchBuyerProfileCompletion,
   saveBuyerProfile,
   fetchCategoryTaxonomy,
   flattenCategorySelection,
@@ -504,6 +578,7 @@ const buyerProfileClient = {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchBuyerUploadedVendors,
 };
 
 export default buyerProfileClient;

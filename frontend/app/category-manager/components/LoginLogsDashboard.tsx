@@ -121,7 +121,16 @@ export default function LoginLogsDashboard() {
   // Column settings states
   // -------------------------------------------------------------------------
   const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
-  const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumnPrefs());
+  const [columns, setColumns] = useState<ColumnDef[]>(LOGIN_LOGS_DEFAULT_COLUMNS);
+
+  // Hydrate login logs column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = loadColumnPrefs();
+    if (saved && saved.length > 0) {
+      setColumns(saved);
+    }
+  }, []);
 
   // -------------------------------------------------------------------------
   // Pagination & modal states
@@ -175,6 +184,16 @@ export default function LoginLogsDashboard() {
 
     return () => clearInterval(interval);
   }, [realtimeActive, loadData]);
+
+  // Close details modal on Escape key
+  useEffect(() => {
+    if (!selectedLogForDetails) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedLogForDetails(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLogForDetails]);
 
   // -------------------------------------------------------------------------
   // Filtered + sorted logs
@@ -758,6 +777,7 @@ export default function LoginLogsDashboard() {
               ) : (
                 paginatedLogs.map((log) => {
                   const isBuyer = log.userType === 'buyer';
+                  const isCategoryManager = log.userType === 'category_manager';
                   const isActive = log.status === 'ACTIVE';
 
                   return (
@@ -776,10 +796,16 @@ export default function LoginLogsDashboard() {
                                   className={`inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
                                     isBuyer
                                       ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
+                                      : isCategoryManager
+                                      ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50'
                                       : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
                                   }`}
                                 >
-                                  {isBuyer ? 'Buyer' : 'Seller / Vendor'}
+                                  {isBuyer
+                                    ? strings.roles.buyer
+                                    : isCategoryManager
+                                    ? strings.roles.categoryManager
+                                    : strings.roles.vendor}
                                 </span>
                               </td>
                             );
@@ -916,8 +942,18 @@ export default function LoginLogsDashboard() {
 
       {/* Session Details Modal */}
       {selectedLogForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedLogForDetails(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150"
+          >
             <button
               type="button"
               onClick={() => setSelectedLogForDetails(null)}
@@ -947,7 +983,11 @@ export default function LoginLogsDashboard() {
                 <div className="border border-slate-100 dark:border-slate-800 p-2.5 rounded-lg">
                   <div className="text-slate-400 text-[10px] uppercase font-semibold">{strings.details.userRole}</div>
                   <div className="font-semibold text-slate-800 dark:text-slate-200 mt-0.5 capitalize">
-                    {selectedLogForDetails.userType === 'buyer' ? 'Buyer Account' : 'Seller / Vendor'}
+                    {selectedLogForDetails.userType === 'buyer'
+                      ? strings.details.roleBuyer
+                      : selectedLogForDetails.userType === 'category_manager'
+                      ? strings.details.roleCategoryManager
+                      : strings.details.roleVendor}
                   </div>
                 </div>
 

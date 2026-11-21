@@ -925,7 +925,10 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       expect(resSystem.allowed).toBe(false);
 
       const msgVendor = { fromAddress: 'unreg-vendor@example.com' };
-      const resVendor = await emailGatewayService.resolveMultiBuyerAttribution(msgVendor, emailGatewayService.resolveVendorConfig());
+      const resVendor = await emailGatewayService.resolveMultiBuyerAttribution(
+        msgVendor,
+        emailGatewayService.resolveVendorConfig({ VENDOR_EMAIL_GATEWAY_AUTO_REGISTER: 'false' })
+      );
       expect(resVendor.allowed).toBe(false);
 
       const msgAllowed = { fromAddress: 'unreg-unallowed@example.com' };

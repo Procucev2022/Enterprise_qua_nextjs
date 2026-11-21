@@ -32,6 +32,11 @@
  * @property {string} majorCategory
  * @property {number} compositeRating
  * @property {string} status
+ * @property {boolean} [isActive]
+ * @property {boolean} [disabled]
+ * @property {string|null} [disabledAt]
+ * @property {string|null} [disabledBy]
+ * @property {string|null} [previousStatus]
  * @property {boolean} [evaluationRequested]
  * @property {string} [evaluationRequestedAt]
  * @property {string} [evaluationRequestedBy]
@@ -86,6 +91,7 @@ const DOMAIN_TYPES = {
     'general',
   ],
   RFQ_STATUSES: ['Ingested', 'Dispatched', 'In Evaluation', 'Quotes Pending', 'PO Awarded'],
+  VENDOR_ACTIVE_STATUSES: ['ACTIVE', 'INACTIVE'],
   SOURCING_MODES: ['mode_0', 'mode_1', 'mode_2', 'mode_3'],
   SEVERITY_LEVELS: ['INFO', 'WARN', 'ERROR', 'CRITICAL'],
   AUDIT_CATEGORIES: ['SECURITY', 'DATA_MUTATION', 'SYSTEM', 'AUTHENTICATION', 'PERFORMANCE', 'CRYPTOGRAPHY'],
@@ -170,4 +176,47 @@ module.exports = {
  * @property {string} [comment]
  * @property {Object} [metadata]
  * @property {string} created_at
+ */
+
+/**
+ * @typedef {Object} BuyerUploadedVendorEntity
+ * @property {string} id
+ * @property {string} name
+ * @property {string} companyName
+ * @property {string} contactPerson
+ * @property {string} email
+ * @property {string} phone
+ * @property {string} createdAt
+ * @property {string} status
+ * @property {string} [majorCategory]
+ * @property {string[]} [minorCategories]
+ * @property {string} [location]
+ */
+
+/**
+ * @typedef {Object} SellerBuyerUploadEntity
+ * @property {string} id
+ * @property {string} name
+ * @property {string} companyName
+ * @property {string} contactPerson
+ * @property {string} email
+ * @property {string} phone
+ * @property {string} uploadDate
+ * @property {string} status
+ * @property {string} [sourcingMode]
+ * @property {string} [subscriptionPlan]
+ */
+
+/**
+ * @typedef {Object} SellerActiveRFQEntity
+ * @property {string} id
+ * @property {string} rfqNumber
+ * @property {string} title
+ * @property {string} category
+ * @property {string} procurementCategory
+ * @property {string} buyerCompanyName
+ * @property {string} location
+ * @property {string} publishedDate
+ * @property {string} closingDate
+ * @property {string} status
  */

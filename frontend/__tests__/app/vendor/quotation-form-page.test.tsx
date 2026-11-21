@@ -206,8 +206,8 @@ describe('VendorQuotationFormPage', () => {
       type: 'network_marketplace', status: 'under_review',
       estimatedValue: `₹${rfq.budget.toLocaleString('en-IN')}`,
       lineItems: [
-        { id: 'line-pump', description: 'Industrial Pump', quantity: 2, unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
-        { id: 'item-1', description: 'Isolation Valve', quantity: 3, unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
+        { id: 'line-pump', description: 'Industrial Pump', quantity: 2, unit: 'Each', unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
+        { id: 'item-1', description: 'Isolation Valve', quantity: 3, unit: 'Each', unitPrice: 0, leadTimeDays: 0, marketBandStatus: 'optimal', paymentTerms: '' },
       ],
     });
   });

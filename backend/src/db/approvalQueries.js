@@ -12,7 +12,14 @@ const pool = require('./pool');
 const crypto = require('crypto');
 const { getD1Binding, getD1HttpClient, batchD1 } = require('./d1Bridge');
 const { logger } = require('../services/loggerService');
-const { APPROVAL_MESSAGES, isApproverPasswordConfigured, verifyApproverPassword } = require('../config/constants');
+const {
+  APPROVAL_MESSAGES,
+  isApproverPasswordConfigured,
+  verifyApproverPassword,
+  buildApprovalOtpKey,
+  APPROVER_CONFIG,
+} = require('../config/constants');
+const authSessionQueries = require('./authSessionQueries');
 
 const APPROVAL_QUERY_ERRORS = Object.freeze({
   STORAGE_UNAVAILABLE: 'Management approval storage is not configured. No approval data is available.',
@@ -159,6 +166,30 @@ async function getApprovalSummary() {
 }
 
 /**
+ * Maps an approval request type to database module aliases/variants for resilient query matching.
+ */
+function getModuleFilterVariants(requestType) {
+  const normalized = String(requestType || '').trim().toLowerCase();
+  const variants = [normalized];
+  if (normalized === 'buyer credit addition') {
+    variants.push('buyer_credit_addition', 'buyer credit', 'credit addition', 'admin credit addition');
+  } else if (normalized === 'buyer credit deletion') {
+    variants.push('buyer_credit_deletion', 'buyer credit deduction', 'buyer_credit_deduction', 'credit deletion', 'credit deduction', 'admin credit deduction');
+  } else if (normalized === 'seller credit addition') {
+    variants.push('seller_credit_addition', 'seller credit', 'quote credit addition', 'quote_credit_addition', 'vendor credit addition');
+  } else if (normalized === 'seller credit deletion') {
+    variants.push('seller_credit_deletion', 'seller credit deduction', 'seller_credit_deduction', 'quote credit deduction', 'quote_credit_deduction', 'vendor credit deduction');
+  } else if (normalized === 'discounts' || normalized === 'discount') {
+    variants.push('discount', 'discounts');
+  } else if (normalized === 'trial periods' || normalized === 'trial period') {
+    variants.push('trial period', 'trial_periods', 'trial_period', 'trial periods');
+  } else if (normalized === 'offline payments' || normalized === 'offline payment') {
+    variants.push('offline payment', 'offline_payments', 'offline_payment', 'offline payments');
+  }
+  return Array.from(new Set(variants));
+}
+
+/**
  * List approvals with module, status, project, assigned approver, and search filtering.
  */
 async function getApprovals({
@@ -186,7 +217,19 @@ async function getApprovals({
     params.push(value);
     filters.push(predicate(params.length));
   };
-  if (module && module !== 'all') addFilter(String(module).toLowerCase(), (index) => `lower(module) = $${index}`);
+  if (module && module !== 'all') {
+    const rawMod = String(module).toLowerCase().trim();
+    const variants = getModuleFilterVariants(rawMod);
+    if (variants.length <= 1) {
+      addFilter(variants[0] || rawMod, (index) => `lower(module) = $${index}`);
+    } else {
+      const placeholders = variants.map((v) => {
+        params.push(v);
+        return `$${params.length}`;
+      }).join(', ');
+      filters.push(`lower(module) IN (${placeholders})`);
+    }
+  }
   if (status && status !== 'all') addFilter(String(status).toLowerCase(), (index) => `lower(status) = $${index}`);
   if (project && project !== 'all') addFilter(`%${String(project).trim().toLowerCase()}%`, (index) => `lower(coalesce(project, '')) LIKE $${index}`);
   if (assigned_approver && String(assigned_approver).trim()) {
@@ -430,7 +473,7 @@ async function createApproval(data, actor = {}) {
  * Process approval or rejection action.
  * For Buyer Credit Additions, updates buyer credit balance and synchronizes corresponding internal task.
  */
-async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '' }, actor = {}) {
+async function processApprovalAction(id, { action, remarks = '', password = '', approverName = '', otp = '' }, actor = {}) {
   const actorId = actor.uuid || actor.id || null;
   const actorName = actor.name || actor.fullName || actor.email || null;
   const actorEmail = actor.email || null;
@@ -438,13 +481,47 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
 
   if (!pool.hasStorage()) throw storageUnavailable('process-approval-action');
 
-  if (!isApproverPasswordConfigured(approverName)) {
-    const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
-    configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
-    configurationError.statusCode = 503;
-    throw configurationError;
+  const cleanApprover = String(approverName || '').trim().toLowerCase();
+  const approverMatch = APPROVER_CONFIG.find(
+    (a) => a.name.toLowerCase() === cleanApprover || a.id === cleanApprover
+  );
+  let verified = false;
+
+  const trimmedPassword = typeof password === 'string' ? password.trim() : '';
+  const trimmedOtp = typeof otp === 'string' ? otp.trim() : '';
+
+  if (isApproverPasswordConfigured(approverName)) {
+    if ((trimmedPassword && verifyApproverPassword(approverName, trimmedPassword)) ||
+        (trimmedOtp && verifyApproverPassword(approverName, trimmedOtp))) {
+      verified = true;
+    }
   }
-  if (!verifyApproverPassword(approverName, password)) {
+
+  if (!verified && approverMatch) {
+    const otpKey = buildApprovalOtpKey(approverMatch.id);
+    const storedOtp = await authSessionQueries.findOtp(otpKey);
+    if (storedOtp && storedOtp.expiresAt > Date.now()) {
+      if ((trimmedOtp && storedOtp.code === trimmedOtp) ||
+          (trimmedPassword && storedOtp.code === trimmedPassword)) {
+        verified = true;
+        await authSessionQueries.deleteOtp(otpKey);
+      }
+    }
+  }
+
+  if (!verified) {
+    if (trimmedOtp) {
+      const otpError = new Error(APPROVAL_MESSAGES.OTP_INVALID);
+      otpError.code = 'APPROVER_OTP_INVALID';
+      otpError.statusCode = 401;
+      throw otpError;
+    }
+    if (!isApproverPasswordConfigured(approverName)) {
+      const configurationError = new Error(APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE);
+      configurationError.code = 'APPROVER_PASSWORD_NOT_CONFIGURED';
+      configurationError.statusCode = 503;
+      throw configurationError;
+    }
     const passwordError = new Error(APPROVAL_MESSAGES.PASSWORD_INVALID);
     passwordError.code = 'APPROVER_PASSWORD_INVALID';
     passwordError.statusCode = 401;
@@ -644,4 +721,5 @@ module.exports = {
   prepareApprovalCreate,
   processApprovalAction,
   hydrateApprovalRow,
+  getModuleFilterVariants,
 };

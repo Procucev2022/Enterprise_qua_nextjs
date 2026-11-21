@@ -70,7 +70,13 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
 
   test('rfq resolver searches by id and rfqNumber or returns null', async () => {
     const context = contextFor('buyer');
-    const publicRFQ = { ...seededRfq };
+    const { RFQ_QUOTES_SEALED_REASON } = require('../src/config/constants');
+    const publicRFQ = {
+      ...seededRfq,
+      quotesHidden: true,
+      quotesHiddenUntil: expect.any(String),
+      quotesHiddenReason: RFQ_QUOTES_SEALED_REASON,
+    };
     delete publicRFQ.vendorInvitationTargets;
 
     expect(await rootResolvers.rfq({ id: seededRfq.id }, context)).toEqual(publicRFQ);
@@ -681,6 +687,30 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
         contextFor('buyer')
       );
       expect(missingUpdate).toBeNull();
+    });
+
+    test('rfqs and rfq resolvers hide sealed buyer quotations before closing or 48h window expiration', async () => {
+      const sealedRfq = storeService.createRFQ(
+        {
+          rfqNumber: 'RFQ-GQL-SEALED',
+          title: 'GraphQL Sealed Quote Check',
+          sourcingMode: 'mode_2',
+          status: 'In Evaluation',
+          createdAt: new Date().toISOString(),
+        },
+        { id: seededRfq.buyerAccountId, corporateEmail: TEST_USERS.buyer.email }
+      );
+      sealedRfq.quotes = [{ vendorId: 'v-secret', vendorName: 'Secret Bidder', unitPrice: 45000 }];
+
+      const listResult = await rootResolvers.rfqs({}, contextFor('buyer'));
+      const matched = listResult.find((item) => item.id === sealedRfq.id);
+      expect(matched).toBeDefined();
+      expect(matched.quotesHidden).toBe(true);
+      expect(matched.quotes).toEqual([]);
+
+      const singleResult = await rootResolvers.rfq({ id: sealedRfq.id }, contextFor('buyer'));
+      expect(singleResult.quotesHidden).toBe(true);
+      expect(singleResult.quotes).toEqual([]);
     });
   });
 });

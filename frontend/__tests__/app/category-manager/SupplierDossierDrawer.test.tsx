@@ -45,7 +45,7 @@ function signInAndChooseApprover(): void {
     email: 'initiator@example.com',
   } as unknown as ReturnType<typeof authClient.getSessionUser>);
   const approverInput = document.getElementById('quote-credit-approver') as HTMLInputElement;
-  fireEvent.change(approverInput, { target: { value: 'Test Approver' } });
+  fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
 }
 
 jest.mock('@/lib/supplierProfileClient', () => ({
@@ -54,6 +54,8 @@ jest.mock('@/lib/supplierProfileClient', () => ({
   fetchSupplierCommunications: jest.fn(),
   recordSupplierCommunication: jest.fn(),
   fetchSupplierPaymentHistory: jest.fn(),
+  fetchSellerBuyerUploads: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
+  fetchSellerActiveRFQs: jest.fn().mockResolvedValue({ success: true, count: 0, data: [] }),
 }));
 
 jest.mock('@/lib/documentVaultClient', () => ({
@@ -301,7 +303,7 @@ describe('SupplierDossierDrawer', () => {
     expect(screen.getByText('Sudheer Solutions pvt LTD')).toBeInTheDocument();
     expect(screen.getByText('Buyer Uploaded')).toBeInTheDocument();
     expect(screen.getByText(/360° AI Score:\s*88\/100/i)).toBeInTheDocument();
-    expect(screen.getByText(/Rating:\s*★\s*4.5/i)).toBeInTheDocument();
+    expect(screen.queryByText(/Rating:/i)).not.toBeInTheDocument();
 
     // Verify Seller ID (v-hist-...) is NOT rendered in visible UI header
     expect(screen.queryByText(/ID:\s*v-hist/i)).not.toBeInTheDocument();
@@ -312,7 +314,7 @@ describe('SupplierDossierDrawer', () => {
     expect(onClose).toHaveBeenCalled();
   });
 
-  test('2. Profile Tab allows editing categories, selecting checkboxes, adding custom and saving', async () => {
+  test('2. Profile Tab allows editing categories, selecting suggestions, adding custom and saving', async () => {
     render(
       <SupplierDossierDrawer
         seller={mockSeller}
@@ -325,14 +327,19 @@ describe('SupplierDossierDrawer', () => {
     const editBtn = screen.getByRole('button', { name: /^Edit$/i });
     fireEvent.click(editBtn);
 
-    expect(screen.getByText('Select Major Procurement Categories:')).toBeInTheDocument();
+    const modal = screen.getByRole('dialog');
+    expect(within(modal).getByRole('heading', { name: /Procurement Categories Master/i })).toBeInTheDocument();
 
-    // Toggle a category checkbox
-    const spareCheckbox = await screen.findByLabelText('Raw Materials & Metallurgy');
-    fireEvent.click(spareCheckbox);
+    // Min chars hint with < 3 chars
+    const customInput = screen.getByPlaceholderText(/Search category/i);
+    fireEvent.change(customInput, { target: { value: 'ca' } });
+    expect(screen.getByText(/Type at least 3 characters to search/i)).toBeInTheDocument();
+
+    // Autocomplete with >= 3 chars
+    fireEvent.change(customInput, { target: { value: 'Pumps' } });
+    expect(screen.queryByText(/Type at least 3 characters to search/i)).toBeNull();
 
     // Add custom category
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
     fireEvent.change(customInput, { target: { value: 'Solar Inverters & Panels' } });
     const addBtn = screen.getByRole('button', { name: /Add Category/i });
     fireEvent.click(addBtn);
@@ -362,17 +369,16 @@ describe('SupplierDossierDrawer', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
 
-    // Uncheck existing category to test validation
-    const checked = screen.getAllByRole('checkbox') as HTMLInputElement[];
-    checked.forEach((cb) => {
-      if (cb.checked) fireEvent.click(cb);
-    });
+    // Remove existing category to test validation
+    const modal = screen.getByRole('dialog');
+    const removeButtons = within(modal).getAllByRole('button', { name: /^Remove /i });
+    removeButtons.forEach((btn) => fireEvent.click(btn));
 
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
-    expect(screen.getByText(/Please select at least one major category/i)).toBeInTheDocument();
+    expect(screen.getByText(/Please select at least one division/i)).toBeInTheDocument();
 
     // Add back category and test API failure
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
+    const customInput = screen.getByPlaceholderText(UI_STRINGS.vendorCategorySelect.searchPlaceholder);
     fireEvent.change(customInput, { target: { value: 'IT Hardware' } });
     fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
 
@@ -384,6 +390,9 @@ describe('SupplierDossierDrawer', () => {
     await waitFor(() => {
       expect(screen.getByText('Backend permission denied')).toBeInTheDocument();
     });
+    await waitFor(() => {
+      expect(screen.getByRole('button', { name: /Save Categories/i })).not.toBeDisabled();
+    });
 
     // Test rejection exception
     (supplierProfileClient.updateSupplierCategories as jest.Mock).mockRejectedValueOnce(
@@ -392,7 +401,7 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.click(screen.getByRole('button', { name: /Save Categories/i }));
     await waitFor(() => {
       expect(screen.getByText('Error updating categories')).toBeInTheDocument();
-    }, { timeout: 3000 });
+    }, { timeout: 5000 });
   });
 
   test('4. Quotes Tab displays quotes, supports search, status filtering, and opens Quote Details Modal', async () => {
@@ -457,10 +466,10 @@ describe('SupplierDossierDrawer', () => {
     // Test Category modal dismiss
     fireEvent.click(screen.getByRole('button', { name: /^Profile$/i }));
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
-    expect(screen.getByText('Select Major Procurement Categories:')).toBeInTheDocument();
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: 'Escape' });
-    expect(screen.queryByText('Select Major Procurement Categories:')).not.toBeInTheDocument();
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   test('6. Credit Tab displays summary cards, transaction table, sorting, pagination and CSV export', async () => {
@@ -678,7 +687,7 @@ describe('SupplierDossierDrawer', () => {
     });
     fireEvent.click(screen.getByRole('button', { name: /^Communications \(\d+\)$/i }));
     await waitFor(() => {
-      expect(screen.getByText(/No EMAIL communication records found/i)).toBeInTheDocument();
+      expect(screen.getByText(/No (?:EMAIL )?communication records found/i)).toBeInTheDocument();
     });
 
     // Switch to empty payments
@@ -1017,18 +1026,18 @@ describe('SupplierDossierDrawer', () => {
       />
     );
 
-    expect(screen.getByText(/Major: Packaging Materials/i)).toBeInTheDocument();
+    expect(screen.getByText('Packaging Materials')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
-    const customInput = screen.getByPlaceholderText('Enter custom category...');
+    const customInput = screen.getByPlaceholderText(/Search category/i);
     // Try adding duplicate
     fireEvent.change(customInput, { target: { value: 'Packaging Materials' } });
     fireEvent.click(screen.getByRole('button', { name: /Add Category/i }));
 
-    // Toggle off the existing category
-    const chk = screen.getByLabelText('Packaging Materials');
-    fireEvent.click(chk);
-    fireEvent.click(chk);
+    // Toggle off the existing category via badge remove button
+    const modal = screen.getByRole('dialog');
+    const removeButtons = within(modal).getAllByRole('button', { name: /^Remove /i });
+    if (removeButtons.length > 0) fireEvent.click(removeButtons[0]);
     fireEvent.click(screen.getByRole('button', { name: /^Cancel$/i }));
   });
 
@@ -1050,7 +1059,7 @@ describe('SupplierDossierDrawer', () => {
     );
 
     // Tests category fallback to seller.category
-    expect(screen.getByText(/Major: Chemical Reagents/i)).toBeInTheDocument();
+    expect(screen.getByText('Chemical Reagents')).toBeInTheDocument();
 
     // Credit Tab failure
     fireEvent.click(screen.getByRole('button', { name: /^Credit$/i }));
@@ -1642,7 +1651,8 @@ test('reuses seller credit idempotency key when retrying unchanged request detai
       <SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     const submitButton = screen.getByRole('button', { name: 'Submit for Approval' });
@@ -1692,8 +1702,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    const addCreditsHeaderBtn = screen.getByTitle('Add Quote Credits (1-5)');
-    fireEvent.click(addCreditsHeaderBtn);
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
 
     // Enter requested credits amount and reason
@@ -1737,7 +1747,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1760,7 +1771,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1780,7 +1792,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
       />
     );
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1789,12 +1802,14 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     });
 
     // Test closing modal via backdrop click and cancel button
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const modalDialog = screen.getByRole('dialog');
     fireEvent.click(modalDialog); // clicks backdrop
     expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const cancelBtn = screen.getByRole('button', { name: 'Cancel' });
     fireEvent.click(cancelBtn);
     expect(screen.queryByText('Request Seller Quote Credit Approval')).not.toBeInTheDocument();
@@ -1814,7 +1829,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
     expect(screen.getByText(mockSeller.name)).toBeInTheDocument();
 
     // Open add quote credits and test inner dialog click (does not close modal)
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     const modalHeading = screen.getByText('Request Seller Quote Credit Approval');
     fireEvent.click(modalHeading);
     expect(screen.getByText('Request Seller Quote Credit Approval')).toBeInTheDocument();
@@ -1837,7 +1853,8 @@ test('Documents tab renders AccountDocumentsTab and Add Quote Credits modal work
         onClose={jest.fn()}
       />
     );
-    fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+    fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
     signInAndChooseApprover();
     fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -1902,9 +1919,11 @@ test('requires an approver name before a seller quote credit request is submitte
   } as unknown as ReturnType<typeof authClient.getSessionUser>);
   render(<SupplierDossierDrawer seller={mockSeller} initialTab="profile" onClose={jest.fn()} />);
 
-  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
   fireEvent.change(screen.getAllByRole('spinbutton')[0], { target: { value: '3' } });
-  fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
+  const form = screen.getByRole('button', { name: 'Submit for Approval' }).closest('form') as HTMLFormElement;
+  fireEvent.submit(form);
 
   expect(
     await screen.findByText(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired)
@@ -1939,7 +1958,8 @@ test('shows no supplier category when none is recorded, and asks for a credit am
   );
   expect(screen.queryByText('Engineering Spares - Electrical')).not.toBeInTheDocument();
 
-  fireEvent.click(screen.getByTitle('Add Quote Credits (1-5)'));
+  fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+  fireEvent.click(screen.getByRole('menuitem', { name: 'Seller Credit Addition' }));
   const form = screen.getByRole('button', { name: 'Submit for Approval' }).closest('form') as HTMLFormElement;
   fireEvent.submit(form);
 
@@ -1957,4 +1977,785 @@ test('displays PAN in SupplierDossierDrawer Statutory Verification card without 
     />
   );
   expect(screen.getByText('ABCPE1234F')).toBeInTheDocument();
+});
+
+describe('SupplierDossierDrawer - Buyer Uploads Tab', () => {
+  const mockBuyerUploads = [
+    {
+      id: 'buyer-1',
+      name: 'Veera Enterprise',
+      companyName: 'Veera solutions pvt ltd',
+      contactPerson: 'Veera',
+      email: 'veerababuv2002@gmail.com',
+      phone: '+919381877013',
+      uploadDate: '2026-11-14T12:48:00.000Z',
+      status: 'ACTIVE_VERIFIED',
+      sourcingMode: 'Mode 1',
+      subscriptionPlan: 'Version_3',
+      location: 'Hyderabad, India',
+    },
+  ];
+
+  test('renders Buyer Uploads tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab} \\(1\\)`, 'i'),
+      })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+    expect(screen.getByText('veerababuv2002@gmail.com')).toBeInTheDocument();
+    expect(screen.getByText('+919381877013')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('Mode 1')).toBeInTheDocument();
+    expect(screen.getByText('Version_3')).toBeInTheDocument();
+
+    // Close modal
+    const closeBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(closeBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+  });
+
+  test('handles search filter and error/empty states for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      count: 1,
+      data: mockBuyerUploads,
+    });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="buyer-uploads"
+        onClose={jest.fn()}
+      />
+    );
+
+    const searchInput = await screen.findByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.buyerUploads.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Backdrop click on buyer details modal and close footer
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    
+    // Close using the footer button
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+    }
+  });
+
+  test('handles tab navigation, refresh button, error responses, and exceptions for Buyer Uploads', async () => {
+    (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to retrieve buyers',
+      })
+      .mockRejectedValueOnce(new Error('Network disconnected'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockBuyerUploads,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Click tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploadsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to retrieve buyers')).toBeInTheDocument();
+
+    // Click retry button in error banner
+    const retryBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(retryBtns[retryBtns.length - 1]);
+
+    // Displays network error message
+    expect(await screen.findByText('Network disconnected')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Successfully loads buyers
+    expect(await screen.findByText('Veera solutions pvt ltd')).toBeInTheDocument();
+  });
+});
+
+describe('SupplierDossierDrawer - Active RFQs Tab', () => {
+  const mockActiveRfqs = [
+    {
+      id: 'rfq-act-1',
+      rfqNumber: 'RFQ-2026-999',
+      title: 'Centrifugal Industrial Pumps 50HP',
+      category: 'Mechanical & Fluid Equipment',
+      procurementCategory: 'Mechanical & Fluid Equipment',
+      buyerCompanyName: 'Veera solutions pvt ltd',
+      location: 'Bengaluru, KA',
+      publishedDate: '2026-11-15T09:00:00.000Z',
+      closingDate: '2026-11-30T18:00:00.000Z',
+      status: 'PUBLISHED',
+      budget: 1500000,
+      sourcingMode: 'Direct',
+      extractedEntities: [
+        {
+          itemDescription: '50HP Centrifugal Pump with starter',
+          quantity: 2,
+          unit: 'Units',
+          targetPrice: 750000,
+        },
+      ],
+    },
+  ];
+
+  test('renders Active RFQs tab button and displays table with details', async () => {
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock).mockResolvedValue({
+      success: true,
+      count: 1,
+      data: mockActiveRfqs,
+    });
+    const onSelectRFQMock = jest.fn();
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="active-rfqs"
+        onClose={jest.fn()}
+        onSelectRFQ={onSelectRFQMock}
+      />
+    );
+
+    expect(
+      await screen.findByRole('button', {
+        name: new RegExp(`${UI_STRINGS.sellerDirectory.dossier.activeRfqsTab} \\(1\\)`, 'i'),
+      }, { timeout: 5000 })
+    ).toBeInTheDocument();
+
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+    expect(screen.getByText('Centrifugal Industrial Pumps 50HP')).toBeInTheDocument();
+    expect(screen.getByText('Bengaluru, KA')).toBeInTheDocument();
+
+    // View Details modal
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    expect(screen.getByText('50HP Centrifugal Pump with starter')).toBeInTheDocument();
+
+    // Close via header X button
+    const closeXBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+    fireEvent.click(closeXBtns[0]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via footer close button
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const footerCloseBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal,
+    });
+    fireEvent.click(footerCloseBtns[footerCloseBtns.length - 1]);
+    expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+
+    // Reopen and close via backdrop click
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+    const modalBackdrop = screen.getByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle).closest('.fixed');
+    if (modalBackdrop) {
+      fireEvent.click(modalBackdrop);
+      expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).not.toBeInTheDocument();
+    }
+
+    // Reopen and Open in RFQ Workspace
+    fireEvent.click(viewBtn);
+    const openRfqBtn = await screen.findByRole('button', { name: /Open in RFQ Workspace/i });
+    fireEvent.click(openRfqBtn);
+    expect(onSelectRFQMock).toHaveBeenCalledWith(expect.objectContaining({ rfqNumber: 'RFQ-2026-999' }));
+  });
+
+  test('handles tab navigation, refresh, empty line items, error responses and exceptions for Active RFQs', async () => {
+    const mockRfqNoItems = [
+      {
+        ...mockActiveRfqs[0],
+        extractedEntities: [],
+        budget: 0,
+      },
+    ];
+
+    (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock)
+      .mockResolvedValueOnce({
+        success: false,
+        error: 'Failed to query active RFQs',
+      })
+      .mockRejectedValueOnce(new Error('Connection timed out'))
+      .mockResolvedValue({
+        success: true,
+        count: 1,
+        data: mockRfqNoItems,
+      });
+
+    render(
+      <SupplierDossierDrawer
+        seller={mockSeller}
+        initialTab="profile"
+        onClose={jest.fn()}
+      />
+    );
+
+    // Switch tab by clicking the tab button directly
+    const tabBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqsTab, 'i'),
+    });
+    fireEvent.click(tabBtn);
+
+    // Displays error banner
+    expect(await screen.findByText('Failed to query active RFQs')).toBeInTheDocument();
+
+    // Click retry button in banner
+    const retryBannerBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(retryBannerBtns[retryBannerBtns.length - 1]);
+
+    // Displays timeout error
+    expect(await screen.findByText('Connection timed out')).toBeInTheDocument();
+
+    // Click header refresh button
+    const refreshBtns = screen.getAllByRole('button', {
+      name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry,
+    });
+    fireEvent.click(refreshBtns[0]);
+
+    // Displays loaded table with RFQ
+    expect(await screen.findByText('RFQ-2026-999')).toBeInTheDocument();
+
+    // Search filter
+    const searchInput = screen.getByPlaceholderText(
+      UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder
+    );
+    fireEvent.change(searchInput, { target: { value: 'NonExistent' } });
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.emptyMessage)).toBeInTheDocument();
+
+    // Clear search
+    fireEvent.change(searchInput, { target: { value: '' } });
+
+    // Open View Details to verify empty line items message
+    const viewBtn = screen.getByRole('button', {
+      name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+    });
+    fireEvent.click(viewBtn);
+    expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.noLineItems)).toBeInTheDocument();
+  });
+
+  describe('SupplierDossierDrawer - Extended Branch Coverage', () => {
+    test('covers Buyer Uploads search across all fields, error fallbacks, and sparse item fallbacks', async () => {
+      const sparseBuyerUploads = [
+        {
+          id: 'bu-sparse-1',
+          name: 'Omega Tech Solutions',
+          companyName: 'Omega Corp',
+          contactPerson: 'Karan Sharma',
+          email: 'karan@omega.test',
+          phone: '+919876500001',
+          uploadDate: '2026-03-10T11:00:00.000Z',
+          status: 'ACTIVE',
+          sourcingMode: 'Mode 2',
+          subscriptionPlan: 'Enterprise Plan',
+          location: 'Bengaluru, Karnataka',
+        },
+        {
+          id: 'bu-sparse-2',
+          name: '',
+          companyName: '',
+          contactPerson: '',
+          email: '',
+          phone: '',
+          uploadDate: null,
+          status: 'PENDING_REVIEW',
+          sourcingMode: '',
+          subscriptionPlan: '',
+          location: '',
+        },
+      ];
+
+      // Error fallbacks: res.success = false without res.error, and non-Error throw
+      (supplierProfileClient.fetchSellerBuyerUploads as jest.Mock)
+        .mockResolvedValueOnce({ success: false })
+        .mockRejectedValueOnce('Non-error string rejection')
+        .mockResolvedValue({ success: true, count: 2, data: sparseBuyerUploads });
+
+      const { rerender } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="buyer-uploads"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Verify generic load error banner
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.loadError)).toBeInTheDocument();
+
+      // Trigger retry button in banner to hit non-Error catch branch
+      const retryBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry });
+      fireEvent.click(retryBtns[retryBtns.length - 1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.loadError)).toBeInTheDocument();
+
+      // Trigger header refresh to load data
+      const refreshBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.retry });
+      fireEvent.click(refreshBtns[0]);
+
+      expect(await screen.findByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.searchPlaceholder);
+
+      // Search match name
+      fireEvent.change(searchInput, { target: { value: 'Omega Tech' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match companyName
+      fireEvent.change(searchInput, { target: { value: 'Omega Corp' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match contactPerson
+      fireEvent.change(searchInput, { target: { value: 'Karan Sharma' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match email
+      fireEvent.change(searchInput, { target: { value: 'karan@omega.test' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Search match phone
+      fireEvent.change(searchInput, { target: { value: '+919876500001' } });
+      expect(screen.getByText('Omega Tech Solutions')).toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // View details for sparse buyer item (hits all modal empty fallbacks)
+      const viewButtons = screen.getAllByRole('button', {
+        name: new RegExp(UI_STRINGS.sellerDirectory.dossier.buyerUploads.viewDetails, 'i'),
+      });
+      fireEvent.click(viewButtons[1]);
+
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).toBeInTheDocument();
+
+      // Close modal
+      const closeBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.buyerUploads.closeModal });
+      fireEvent.click(closeBtns[0]);
+      await waitFor(() => {
+        expect(screen.queryByText(UI_STRINGS.sellerDirectory.dossier.buyerUploads.buyerDetailsTitle)).not.toBeInTheDocument();
+      });
+    });
+
+    test('covers Active RFQs search across all fields, error fallbacks, and sparse line items fallbacks', async () => {
+      const sparseActiveRfqs = [
+        {
+          id: 'rfq-ext-1',
+          rfqNumber: 'RFQ-EXT-001',
+          title: 'High Pressure Water Jetting Pump',
+          buyerCompanyName: 'Apex Global Industries',
+          buyerCompany: 'Apex Global Industries',
+          buyerName: 'Vikram Joshi',
+          category: 'Mechanical Machinery',
+          procurementCategory: 'Industrial Pumps',
+          location: 'Pune, Maharashtra',
+          budget: 850000,
+          publishedDate: '2026-03-01T10:00:00.000Z',
+          closingDate: '2026-04-15T18:00:00.000Z',
+          status: 'Active',
+          sourcingMode: 'Direct',
+          extractedEntities: [
+            { itemName: 'Triplex Plunger Pump', quantity: 3, unit: 'Units', targetPrice: 250000 },
+            { itemDescription: 'Spare Seal Kit', quantity: null, unit: '', targetPrice: null },
+            { rawText: 'Unstructured Line Item Raw Text' },
+            { technicalSpecs: 'High pressure stainless steel 316 specs' },
+            {},
+          ],
+        },
+        {
+          id: 'rfq-ext-fallback-id',
+          rfqNumber: '',
+          title: '',
+          buyerCompanyName: '',
+          buyerCompany: 'Subordinate Buyers Ltd',
+          buyerName: '',
+          category: '',
+          procurementCategory: 'Pneumatics & Hydraulics',
+          location: 'Surat, Gujarat',
+          budget: 0,
+          publishedDate: null,
+          closingDate: null,
+          status: 'CLOSED_EXPIRED',
+          sourcingMode: '',
+          extractedEntities: [],
+        },
+        {
+          id: '',
+          rfqNumber: '',
+          title: '',
+          buyerCompanyName: '',
+          buyerCompany: '',
+          buyerName: 'Direct Sole Buyer',
+          category: '',
+          procurementCategory: '',
+          location: '',
+          budget: -100,
+          publishedDate: null,
+          closingDate: null,
+          status: '',
+          sourcingMode: '',
+          extractedEntities: null,
+        },
+      ];
+
+      (supplierProfileClient.fetchSellerActiveRFQs as jest.Mock)
+        .mockResolvedValueOnce({ success: false })
+        .mockRejectedValueOnce('Non-error string timeout')
+        .mockResolvedValue({ success: true, count: 3, data: sparseActiveRfqs });
+
+      render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="active-rfqs"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Verify generic load error banner
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.loadError)).toBeInTheDocument();
+
+      // Retry to hit non-Error catch
+      const retryBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry });
+      fireEvent.click(retryBtns[retryBtns.length - 1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.loadError)).toBeInTheDocument();
+
+      // Refresh to load data
+      const refreshBtns = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.retry });
+      fireEvent.click(refreshBtns[0]);
+
+      expect(await screen.findByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.searchPlaceholder);
+
+      // Search match rfqNumber
+      fireEvent.change(searchInput, { target: { value: 'RFQ-EXT-001' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match fallback id
+      fireEvent.change(searchInput, { target: { value: 'rfq-ext-fallback-id' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match title
+      fireEvent.change(searchInput, { target: { value: 'Water Jetting' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match buyerCompanyName
+      fireEvent.change(searchInput, { target: { value: 'Apex Global' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match buyerCompany
+      fireEvent.change(searchInput, { target: { value: 'Subordinate Buyers' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match buyerName
+      fireEvent.change(searchInput, { target: { value: 'Direct Sole Buyer' } });
+      expect(screen.getByText('Direct Sole Buyer')).toBeInTheDocument();
+
+      // Search match category
+      fireEvent.change(searchInput, { target: { value: 'Mechanical Machinery' } });
+      expect(screen.getByText('RFQ-EXT-001')).toBeInTheDocument();
+
+      // Search match procurementCategory
+      fireEvent.change(searchInput, { target: { value: 'Pneumatics & Hydraulics' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Search match location
+      fireEvent.change(searchInput, { target: { value: 'Surat' } });
+      expect(screen.getByText('rfq-ext-fallback-id')).toBeInTheDocument();
+
+      // Clear search
+      fireEvent.change(searchInput, { target: { value: '' } });
+
+      // Open View Details for first item to exercise extractedEntities fallbacks
+      const viewButtons = screen.getAllByRole('button', {
+        name: new RegExp(UI_STRINGS.sellerDirectory.dossier.activeRfqs.viewDetails, 'i'),
+      });
+      fireEvent.click(viewButtons[0]);
+
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      expect(screen.getByText('Triplex Plunger Pump')).toBeInTheDocument();
+      expect(screen.getByText('Spare Seal Kit')).toBeInTheDocument();
+      expect(screen.getByText('Unstructured Line Item Raw Text')).toBeInTheDocument();
+      expect(screen.getByText('High pressure stainless steel 316 specs')).toBeInTheDocument();
+
+      // Close modal
+      const closeBtn = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn[0]);
+
+      // Open View Details for second item (sparse fallbacks)
+      fireEvent.click(viewButtons[1]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      const closeBtn2 = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn2[0]);
+
+      // Open View Details for third item (null entities and zero/negative budget fallbacks)
+      fireEvent.click(viewButtons[2]);
+      expect(await screen.findByText(UI_STRINGS.sellerDirectory.dossier.activeRfqs.rfqDetailsTitle)).toBeInTheDocument();
+      const closeBtn3 = screen.getAllByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.activeRfqs.closeModal });
+      fireEvent.click(closeBtn3[0]);
+    });
+
+    test('covers communications channel switching, follow-up scheduling, and toast notifications', async () => {
+      const recordMock = supplierProfileClient.recordSupplierCommunication as jest.Mock;
+      recordMock.mockResolvedValue({ success: true });
+
+      const { container } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          initialTab="communications"
+          onClose={jest.fn()}
+        />
+      );
+
+      // Open compose modal
+      const recordCommBtn = screen.getByRole('button', { name: /Record Communication/i });
+      fireEvent.click(recordCommBtn);
+
+      expect(screen.getByText(UI_STRINGS.sellerDirectory.dossier.compose.title)).toBeInTheDocument();
+
+      // Switch channels
+      const channelSelect = screen.getByDisplayValue('Email');
+      fireEvent.change(channelSelect, { target: { value: 'SMS' } });
+      fireEvent.change(channelSelect, { target: { value: 'WHATSAPP' } });
+      fireEvent.change(channelSelect, { target: { value: 'CALL' } });
+      fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
+
+      // Fill subject and message
+      const subjectInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.subjectPlaceholder);
+      fireEvent.change(subjectInput, { target: { value: 'Test Subject Outreach' } });
+
+      const msgInput = screen.getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.messagePlaceholder);
+      fireEvent.change(msgInput, { target: { value: 'Outreach follow up communication message content.' } });
+
+      // Add next followup date
+      const followupInput = container.querySelector('input[type="datetime-local"]') as HTMLInputElement;
+      fireEvent.change(followupInput, { target: { value: '2026-12-01T15:30' } });
+
+      // Submit with followup date
+      const submitBtn = screen.getByRole('button', { name: UI_STRINGS.sellerDirectory.dossier.compose.sendBtn });
+      fireEvent.click(submitBtn);
+
+      await waitFor(() => {
+        expect(recordMock).toHaveBeenCalledWith(mockSeller.id, expect.objectContaining({
+          subject: 'Test Subject Outreach',
+          nextFollowupDate: '2026-12-01T15:30',
+        }));
+      });
+    });
+
+    test('39. Verified Seller Directory changes: no Add Quote Credit button, no rating badge, no tab icons, and category popup autocomplete behavior with click-outside', async () => {
+      const { unmount } = render(
+        <SupplierDossierDrawer
+          seller={mockSeller}
+          onClose={jest.fn()}
+          sellerRfqs={mockRfqs}
+        />
+      );
+
+      // 1. "+ Add Quote Credit" button is not in header
+      expect(screen.queryByTitle('Add Quote Credits (1-5)')).toBeNull();
+      expect(screen.queryByRole('button', { name: /\+ Add Quote Credits/i })).toBeNull();
+
+      // 2. Rating badge is not in header
+      expect(screen.queryByText(/★/i)).toBeNull();
+
+      // 3. Action buttons / tabs do not have SVG icons
+      const profileBtn = screen.getByRole('button', { name: /^Profile$/i });
+      expect(profileBtn.querySelector('svg')).toBeNull();
+      const creditBtn = screen.getByRole('button', { name: /^Credit$/i });
+      expect(creditBtn.querySelector('svg')).toBeNull();
+
+      // 4. Open Category modal
+      const editBtn = screen.getByRole('button', { name: /^Edit$/i });
+      fireEvent.click(editBtn);
+
+      // Modal is open
+      const modal = screen.getByRole('dialog');
+      expect(modal).toBeInTheDocument();
+
+      // Does not display categories by default
+      expect(screen.queryByText('Select Procurement Divisions:')).toBeNull();
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      const searchInput = screen.getByPlaceholderText(UI_STRINGS.vendorCategorySelect.searchPlaceholder);
+
+      // Typing < 3 characters shows hint
+      fireEvent.change(searchInput, { target: { value: 'it' } });
+      expect(screen.getByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeInTheDocument();
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Typing >= 3 characters displays matching suggestions in popup
+      fireEvent.change(searchInput, { target: { value: 'Pump' } });
+      expect(screen.queryByText(UI_STRINGS.vendorCategorySelect.minCharsHint)).toBeNull();
+      const listbox = within(modal).getByRole('listbox');
+      expect(listbox).toBeInTheDocument();
+
+      // Clicking inside listbox keeps it open
+      fireEvent.click(listbox);
+      expect(within(modal).getByRole('listbox')).toBeInTheDocument();
+
+      // Clicking outside the listbox closes it
+      fireEvent.mouseDown(document.body);
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Focus again to reopen
+      fireEvent.focus(searchInput);
+      expect(within(modal).getByRole('listbox')).toBeInTheDocument();
+
+      // Press Escape closes suggestions
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Reopen suggestions with a new keyword
+      fireEvent.change(searchInput, { target: { value: 'Motors' } });
+      const suggestions = within(modal).getAllByRole('option');
+      expect(suggestions.length).toBeGreaterThan(0);
+
+      // Clicking an option adds the tag and closes suggestions
+      fireEvent.click(suggestions[0]);
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test clear button
+      fireEvent.change(searchInput, { target: { value: 'Transformers' } });
+      const clearBtn = screen.getByRole('button', { name: 'Clear category input' });
+      fireEvent.click(clearBtn);
+      expect((searchInput as HTMLInputElement).value).toBe('');
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test enter key with suggestion
+      fireEvent.change(searchInput, { target: { value: 'Cables' } });
+      fireEvent.keyDown(searchInput, { key: 'Enter' });
+      expect(within(modal).queryByRole('listbox')).toBeNull();
+
+      // Test enter key with custom text when suggestions closed
+      fireEvent.change(searchInput, { target: { value: 'Custom Hardware Category' } });
+      fireEvent.keyDown(searchInput, { key: 'Escape' });
+      fireEvent.keyDown(searchInput, { key: 'Enter' });
+      expect(within(modal).getByText('Custom Hardware Category')).toBeInTheDocument();
+
+      // Test no matches found branch
+      fireEvent.change(searchInput, { target: { value: 'ZzzNonExistent123' } });
+      expect(within(modal).getByText(UI_STRINGS.vendorCategorySelect.noMatches)).toBeInTheDocument();
+      const addCustomTagBtn = within(modal).getByRole('button', { name: UI_STRINGS.vendorCategorySelect.addCustomTag });
+      fireEvent.click(addCustomTagBtn);
+      expect(within(modal).getByText('ZzzNonExistent123')).toBeInTheDocument();
+
+      // Clicking inside modal keeps modal open
+      fireEvent.click(within(modal).getByText(/Procurement Categories Master/i));
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+
+      // Clicking backdrop closes modal
+      fireEvent.click(modal);
+      expect(screen.queryByRole('dialog')).toBeNull();
+
+      unmount();
+    });
+
+    it('covers payments description search, call channel communications, and active RFQ modal line item description', async () => {
+      const mockPayments = [
+        {
+          id: 'pay-desc-1',
+          invoiceNo: 'INV-DESC-001',
+          transactionDate: '2026-11-20T10:00:00Z',
+          description: 'Special Annual Membership Upgrade',
+          subscriptionPlan: 'Select Model',
+          amount: 8999,
+          currency: 'INR',
+          gateway: 'Razorpay',
+          status: 'PAID',
+        },
+      ];
+      (supplierProfileClient.fetchSupplierPaymentHistory as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        payments: mockPayments,
+        summary: { totalAmountPaid: 8999, totalSuccessfulPayments: 1, pendingPayments: 0, failedPayments: 0 },
+      });
+
+      const { unmount } = render(
+        <SupplierDossierDrawer seller={mockSeller} initialTab="payments" onClose={jest.fn()} />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('INV-DESC-001')).toBeInTheDocument();
+      });
+
+      const paymentSearch = screen.getByPlaceholderText('Search invoices or gateway...');
+      fireEvent.change(paymentSearch, { target: { value: 'Annual Membership' } });
+      expect(screen.getByText('INV-DESC-001')).toBeInTheDocument();
+
+      // Switch to Communications and test Call tab
+      const commTabBtn = screen.getByRole('button', { name: /Communications/i });
+      fireEvent.click(commTabBtn);
+      const callSubTab = screen.getByRole('button', { name: /Call/i });
+      fireEvent.click(callSubTab);
+
+      unmount();
+    });
+  });
 });

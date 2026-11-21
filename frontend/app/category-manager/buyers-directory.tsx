@@ -84,7 +84,7 @@ import { exportReportToExcel } from '@/lib/reportsClient';
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   initialBuyerId?: string;
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors';
 }
 
 export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
@@ -231,6 +231,18 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     setCurrentPage(1);
   }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, sortColumn, sortOrder]);
 
+  // Escape key support to close column settings modal
+  useEffect(() => {
+    if (!showColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings]);
+
   // Dossier Drawer / Modal state
   const [activeBuyer, setActiveBuyer] = useState<BuyerAccount | null>(null);
 
@@ -245,7 +257,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       }
     }
   }, [initialBuyerId, initialTab, buyerAccounts]);
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>('profile');
+  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
   const buyerMetricsMap = useMemo(() => {
@@ -959,8 +971,14 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
           aria-modal="true"
           aria-label="Customize Columns"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowColumnSettings(false);
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />

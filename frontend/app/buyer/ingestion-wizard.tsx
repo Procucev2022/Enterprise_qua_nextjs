@@ -12,9 +12,11 @@ import {
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
   entitledSourcingModes,
+  isVendorActive,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   subscribeVendorUploadHistory,
+  createBackdropClickHandler,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
@@ -42,6 +44,7 @@ import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   extractRfqCategoryFilters,
   extractRfqCategorySignals,
+  checkVendorRfqCategoryMatch,
   matchVendorAgainstSignals,
   selectTopProcucevVendorsForMode3,
   selectVendorsForCategories,
@@ -337,6 +340,12 @@ export default function IngestionWizard({
     [buyerVendors, uploadHistoryList, activeBuyerAccount]
   );
 
+  // Exclude inactive/disabled vendors from all future RFQ creation and invitation flows
+  const activeReconciledVendors = useMemo<VendorEntry[]>(
+    () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
+    [reconciledBuyerVendors]
+  );
+
   const effectivePlan = forceSubscription ?? activeBuyerAccount?.subscriptionPlan ?? storeSubscription ?? 'free_trial';
   const effectiveRemaining =
     forceRemainingFreeRFQs !== undefined
@@ -358,26 +367,13 @@ export default function IngestionWizard({
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0 && form.sourcingMode !== 'mode_0';
 
-  // Auto-prefill delivery location and pincode from active buyer profile
-  useEffect(() => {
-    if (activeBuyerAccount) {
-      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
-        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
-        : (activeBuyerAccount.primaryPlantLocation || '');
-      const defaultPin = activeBuyerAccount.pincode || '';
-      setForm((prev) => {
-        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
-          return {
-            ...prev,
-            deliveryLocation: prev.deliveryLocation || defaultLoc,
-            deliveryPincode: prev.deliveryPincode || defaultPin,
-          };
-        }
-        return prev;
-      });
-    }
-  }, [activeBuyerAccount]);
-
+  // Delivery location and pincode must come from the uploaded document, via
+  // "Extract Line Items with AI" — not be silently pre-filled from the buyer
+  // profile the moment the page loads, before any document is even uploaded.
+  // The buyer profile is only consulted as a fallback inside
+  // handleExtractFromFiles, for whichever of these fields the document
+  // itself doesn't state. See the deliveryLocation/deliveryPincode fallback
+  // chain there.
   const [mode1VendorSearch, setMode1VendorSearch] = useState('');
   const [isAddVendorModalOpen, setIsAddVendorModalOpen] = useState(false);
   const [vendorFormName, setVendorFormName] = useState('');
@@ -629,7 +625,7 @@ export default function IngestionWizard({
     ).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList(result.candidates);
+        setAllVendorsList(result.candidates.filter((v) => isVendorActive(v)));
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoading(false);
@@ -651,7 +647,7 @@ export default function IngestionWizard({
     }).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList((prev) => [...prev, ...result.candidates]);
+        setAllVendorsList((prev) => [...prev, ...result.candidates.filter((v) => isVendorActive(v))]);
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoadingMore(false);
@@ -691,7 +687,7 @@ export default function IngestionWizard({
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
         const ranked = selectTopProcucevVendorsForMode3(
-          result.candidates,
+          result.candidates.filter((v) => isVendorActive(v)),
           form,
           VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
         );
@@ -963,6 +959,15 @@ export default function IngestionWizard({
         // extracted line items (not just the first row), and only when the
         // document actually provided one — never a guess.
         const derivedMajor = dominantMajorCategory(extracted, [ALL_CATEGORIES_OPTION]);
+        // Document first, buyer profile only as a fallback for whichever of
+        // these the document itself doesn't state — the profile is never
+        // consulted before an extraction actually runs.
+        const profileLocation = activeBuyerAccount
+          ? (activeBuyerAccount.city && activeBuyerAccount.state
+            ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+            : (activeBuyerAccount.primaryPlantLocation || ''))
+          : '';
+        const profilePincode = activeBuyerAccount?.pincode || '';
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
@@ -985,14 +990,23 @@ export default function IngestionWizard({
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
           majorCategory: prev.majorCategory || extractedMajor,
           minorCategory: prev.minorCategory || extractedMinor,
-          deliveryLocation: prev.deliveryLocation || derivedLocation,
-          deliveryPincode: prev.deliveryPincode || derivedPincode,
-          targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
+          // Delivery terms prefer what this document actually states over
+          // whatever is already sitting in the form (a prior upload's
+          // extraction, say) — `prev.X || derivedX` always kept the OLD
+          // value and the newly extracted one was silently discarded on
+          // re-extraction, fixed only by clicking Clear Form first. Line
+          // items already behave this way (always replaced when the
+          // document has any). When THIS document states nothing for
+          // location/pincode, the buyer profile is the fallback; only after
+          // that does whatever was already in the form apply.
+          deliveryLocation: derivedLocation || profileLocation || prev.deliveryLocation,
+          deliveryPincode: derivedPincode || profilePincode || prev.deliveryPincode,
+          targetDeliveryDate: derivedDate || prev.targetDeliveryDate,
           lineItems: extracted.length > 0 ? extracted : prev.lineItems,
         }));
 
         setExtractionSummary({
-          model: result.extraction?.model || 'Gemini 2.5 AI',
+          model: result.extraction?.model || EXTRACTION.defaultModelLabel,
           accepted: result.classification?.accepted ?? extracted.length,
           needsReview: result.classification?.needsReview ?? 0,
           fileName: primaryFile.name,
@@ -1243,11 +1257,11 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(reconciledBuyerVendors)) {
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(activeReconciledVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? reconciledBuyerVendors.filter((v) => isBuyerUploaded(v))
-          : reconciledBuyerVendors;
-        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
+          ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
+          : activeReconciledVendors;
+        const { signals: dispatchSignals, rawSignals: dispatchRawSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
@@ -1259,22 +1273,18 @@ export default function IngestionWizard({
           finalMatching = candidatePool;
         } else {
           const matchingVendors: typeof candidatePool = [];
-          const mismatchedVendors: typeof candidatePool = [];
 
           for (const v of candidatePool) {
-            if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: dispatchSignals,
+              rawSignals: dispatchRawSignals,
+              minorOnly: dispatchMinorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            if (dispatchSignals.length === 0 || matchEval.isMatch) {
               matchingVendors.push(v);
-            } else {
-              mismatchedVendors.push(v);
             }
-          }
-
-          if (mismatchedVendors.length > 0) {
-            showToast(
-              'Shortlist Adjusted',
-              `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
-              'info'
-            );
           }
 
           finalMatching = dispatchSignals.length > 0
@@ -1466,7 +1476,7 @@ export default function IngestionWizard({
               className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
             >
               {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isExtracting ? 'Extracting with AI...' : 'Extract Line Items with AI'}
+              {isExtracting ? EXTRACTION.extractingButtonLabel : EXTRACTION.extractAction}
             </button>
           </div>
         </div>
@@ -1502,17 +1512,33 @@ export default function IngestionWizard({
               : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
             }`}
         >
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={18} />
+          {isExtracting ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-1" role="status" aria-live="polite">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
+              <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                {EXTRACTION.extractingStatus}
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                {EXTRACTION.extractingHint}
+              </p>
             </div>
-            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={18} />
-            </div>
-          </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
-            {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
-          </h3>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={18} />
+                </div>
+                <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+                  <Mail size={18} />
+                </div>
+              </div>
+              <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
+                {EXTRACTION.dropZoneIdlePrompt}
+              </h3>
+            </>
+          )}
         </div>
 
         {/* Uploaded Files List */}
@@ -2047,7 +2073,7 @@ export default function IngestionWizard({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                       <span className="badge badge-blue text-[10px] font-bold">
-                        {reconciledBuyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                        {activeReconciledVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -2081,7 +2107,7 @@ export default function IngestionWizard({
               </div>
 
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2094,12 +2120,28 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const { signals: mode1Signals, rawSignals: mode1RawSignals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
+                const matchingVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: mode1Signals,
+                        rawSignals: mode1RawSignals,
+                        minorOnly: mode1MinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : allMyVendors;
-                const mismatchedVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const mismatchedVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      !checkVendorRfqCategoryMatch(v, {
+                        signals: mode1Signals,
+                        rawSignals: mode1RawSignals,
+                        minorOnly: mode1MinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : [];
 
                 let pool = allMyVendors;
@@ -2175,8 +2217,14 @@ export default function IngestionWizard({
                           type="button"
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
-                              if (mode1Signals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
+                              if (mode1Signals.length === 0 && mode1RawSignals.length === 0) return true;
+                              return checkVendorRfqCategoryMatch(v, {
+                                signals: mode1Signals,
+                                rawSignals: mode1RawSignals,
+                                minorOnly: mode1MinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              }).isMatch;
                             }).map((v) => v.id);
 
                             if (allSelected) {
@@ -2228,10 +2276,16 @@ export default function IngestionWizard({
                                 ? vendor.vendorSelectedCategories
                                 : [];
 
-                          const matchResult = mode1Signals.length > 0
-                            ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
+                          const matchResult = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                            ? checkVendorRfqCategoryMatch(vendor, {
+                                signals: mode1Signals,
+                                rawSignals: mode1RawSignals,
+                                minorOnly: mode1MinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              })
                             : { isMatch: true };
-                          const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
+                          const isCategoryMismatch = (mode1Signals.length > 0 || mode1RawSignals.length > 0) && !matchResult.isMatch;
 
                           const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
                           const isSelected = selectedVendorIds.length === 0
@@ -2393,7 +2447,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_2' && (
             <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2406,12 +2460,29 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
+                const matchingVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : allMyVendors;
-                const mismatchedVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const mismatchedVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                      !checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    )
                   : [];
 
                 let pool = allMyVendors;
@@ -2488,7 +2559,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2556,8 +2627,14 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => {
                               const selectableIds = myVendors.filter((v) => {
-                                if (rfqSignals.length === 0) return true;
-                                return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
+                                if (rfqSignals.length === 0 && rfqRawSignals.length === 0) return true;
+                                return checkVendorRfqCategoryMatch(v, {
+                                  signals: rfqSignals,
+                                  rawSignals: rfqRawSignals,
+                                  minorOnly: rfqMinorOnly,
+                                  majorCategory: form.majorCategory,
+                                  minorCategory: form.minorCategory,
+                                }).isMatch;
                               }).map((v) => v.id);
 
                               if (allSelected) {
@@ -2602,10 +2679,16 @@ export default function IngestionWizard({
                                   ? vendor.vendorSelectedCategories
                                   : [];
 
-                            const matchResult = rfqSignals.length > 0
-                              ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
+                            const matchResult = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                              ? checkVendorRfqCategoryMatch(vendor, {
+                                  signals: rfqSignals,
+                                  rawSignals: rfqRawSignals,
+                                  minorOnly: rfqMinorOnly,
+                                  majorCategory: form.majorCategory,
+                                  minorCategory: form.minorCategory,
+                                })
                               : { isMatch: true };
-                            const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+                            const isCategoryMismatch = (rfqSignals.length > 0 || rfqRawSignals.length > 0) && !matchResult.isMatch;
 
                             const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
                             const isSelected = selectedVendorIds.length === 0
@@ -2779,8 +2862,9 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_3' && (
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = reconciledBuyerVendors.filter(isBuyerUploaded);
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
+                const allMyVendors = activeReconciledVendors.filter(isBuyerUploaded);
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
                 const lineItemMinors = Array.from(
                   new Set(
                     (form.lineItems || [])
@@ -2793,15 +2877,39 @@ export default function IngestionWizard({
                 let myVendors = allMyVendors;
                 if (lineItemMinors.length > 0) {
                   const minorMatched = allMyVendors.filter((v) =>
-                    lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
+                    lineItemMinors.some((m) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: [m],
+                        rawSignals: [m, form.majorCategory, form.minorCategory].filter(Boolean) as string[],
+                        minorOnly: true,
+                        majorCategory: form.majorCategory,
+                        minorCategory: m,
+                      }).isMatch
+                    )
                   );
                   if (minorMatched.length > 0) {
                     myVendors = minorMatched;
-                  } else if (rfqSignals.length > 0) {
-                    myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                  } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                    myVendors = allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    );
                   }
-                } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                  myVendors = allMyVendors.filter((v) =>
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  );
                 }
 
                 return (
@@ -2862,7 +2970,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2940,7 +3048,7 @@ export default function IngestionWizard({
                                   return (
                                     <span
                                       className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
-                                      title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
+                                      title={`Category: ${displayMinor} | Division: ${v.majorCategory || 'General Industrial'}`}
                                     >
                                       {displayMinor}
                                     </span>
@@ -3392,7 +3500,10 @@ export default function IngestionWizard({
 
       {/* ── RFQ Dispatch Confirmation Modal ── */}
       {confirmationRfq && (
-        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setConfirmationRfq, null)}
+          className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+        >
           <div className="w-full max-w-xl p-6 sm:p-8 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-6 text-center animate-in zoom-in-95">
             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 size={36} />

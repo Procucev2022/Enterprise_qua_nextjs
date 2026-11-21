@@ -30,7 +30,7 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
+import { MAX_INVITE_VENDORS, createBackdropClickHandler, getIndianStates, getCitiesForState, isVendorActive, parseSearchTokens } from '@/lib/constants';
 import type { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
@@ -242,8 +242,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
     void fetchVendorCandidates(rfq.id).then((result) => {
       if (result.success) {
-        setCandidates(result.candidates);
-        result.candidates.forEach((c) => {
+        const activeCandidates = result.candidates.filter((c) => isVendorActive(c));
+        setCandidates(activeCandidates);
+        activeCandidates.forEach((c) => {
           if (c?.id) knownVendorsRef.current.set(c.id, c);
         });
       } else {
@@ -269,6 +270,22 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         setCategoryLoadError(UI_STRINGS.inviteVendors.categoryOptionsLoadFailed);
       });
   }, [isOpen, rfq]);
+
+  // Escape key support to close modals
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting && !creatingVendor) {
+        if (showAddVendorModal) {
+          setShowAddVendorModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, submitting, creatingVendor, showAddVendorModal, onClose]);
 
   // Track known vendors for displaying chip names across searches and filters
   useEffect(() => {
@@ -311,7 +328,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   const stampInvited = (vendors: RFQVendorCandidate[]): RFQVendorCandidate[] => {
     const isAssigned = buildAssignedMatcher(rfq);
-    return vendors.map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
+    return vendors.filter((v) => isVendorActive(v)).map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
   };
 
   // Fetched lazily on first switch into "All Vendors", and re-fetched from
@@ -695,7 +712,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const majorCategory = newVendorMajorCategory.trim() || rfq?.category || '';
 
     if (!name || !contactPerson || !email || !phone || !majorCategory) {
-      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Major Category).');
+      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Division).');
       return;
     }
 
@@ -817,13 +834,17 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
   return (
     <div
+      onClick={createBackdropClickHandler(onClose, undefined, submitting)}
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-3 sm:p-5 md:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="invite-vendors-modal-title"
       data-testid="invite-vendors-modal"
     >
-      <div className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+      >
         {/* Header */}
         <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
           <div>
@@ -1306,13 +1327,17 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       {/* Add New Vendor Modal (Sub-modal for V0 and V2) */}
       {showAddVendorModal && (
         <div
+          onClick={createBackdropClickHandler(setShowAddVendorModal, false, creatingVendor)}
           className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="add-new-vendor-title"
           data-testid="add-vendor-modal"
         >
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up"
+          >
             <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
@@ -1405,7 +1430,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Major Category *
+                    Division *
                   </label>
                   <select
                     value={newVendorMajorCategory}
@@ -1421,7 +1446,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Minor Category
+                    Category
                   </label>
                   <input
                     type="text"

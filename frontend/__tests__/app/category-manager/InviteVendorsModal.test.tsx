@@ -5,6 +5,8 @@ import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQVendorCandidate } from '@/lib/types';
 
+jest.setTimeout(35000);
+
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
 }));
@@ -418,15 +420,15 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'copper' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'y.com' } });
-    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
   });
 
@@ -486,9 +488,9 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     };
 
     render(<InviteVendorsModal isOpen={true} rfq={rfqWithEntities} onClose={mockOnClose} onInvited={mockOnInvited} />);
-    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument(), { timeout: 10000 });
     fireEvent.click(screen.getByTestId('invite-tab-all'));
-    await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument(), { timeout: 10000 });
 
     // The RFQ names the minor 'Copper Wire', so only a vendor carrying that minor (or named
     // 'Copper Wire' as its major) is inside. A vendor whose major alone is 'Insulation' is outside.

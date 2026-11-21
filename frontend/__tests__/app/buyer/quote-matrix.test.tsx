@@ -2,10 +2,15 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import QuoteMatrix from '../../../app/buyer/quote-matrix';
 import { useApp } from '../../../lib/store';
-import { formatCurrency, formatIndianDate } from '../../../lib/constants';
+import { formatCurrency, formatIndianDate, formatIndianDateTime, parseRfqTimestamp } from '../../../lib/constants';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { UI_STRINGS } from '../../../lib/uiStrings';
 import type { RFQItem } from '../../../lib/types';
+
+const mockFetchRFQById = jest.fn().mockResolvedValue({ success: false });
+jest.mock('../../../lib/rfqClient', () => ({
+  fetchRFQById: (...args: any[]) => mockFetchRFQById(...args),
+}));
 
 jest.mock('../../../lib/store', () => ({
   useApp: jest.fn(),
@@ -972,7 +977,7 @@ describe('QuoteMatrix Component Tests', () => {
     });
 
     it('renders followUpData AI strip with accurate responded and total invited counts and L2 rank badge', () => {
-      const pastTime = new Date(Date.now() - 36 * 60 * 60 * 1000).toISOString();
+      const pastTime = new Date(Date.now() - 50 * 60 * 60 * 1000).toISOString();
       const rfqWithFollowUp: RFQItem = {
         ...mockRFQs[0],
         id: 'rfq-fup-deep',
@@ -1120,6 +1125,196 @@ describe('QuoteMatrix Component Tests', () => {
       const deepDiveBtn = screen.getByText(/Vendor Follow-Up Details \(3\/4 Responded\)/);
       fireEvent.click(deepDiveBtn);
       expect(mockOpenRFQDeepDive).toHaveBeenCalledWith(rfqWithFollowUp);
+    });
+
+    it('renders zero-default follow-up telemetry without followUpData and falls back to totalPrice when unitPrice is 0', () => {
+      const bareRfq = {
+        ...mockRFQs[0],
+        id: 'rfq-bare-fup',
+        rfqNumber: 'RFQ-BARE-001',
+        followUpData: undefined,
+        extractedEntities: [{ id: 'li-bare', itemName: 'Steel Flange', quantity: 5, unit: 'Nos' }],
+        quotes: [
+          {
+            id: 'q-bare-1',
+            vendorId: 'v-bare-1',
+            vendorName: 'Bare Vendor One',
+            vendorCategory: 'Client List',
+            unitPrice: 0,
+            totalPrice: 2500,
+            leadTimeDays: 5,
+            complianceStatus: 'Compliant',
+            aiMatchScore: 88,
+            isPreferred: false,
+            lineItemQuotes: [],
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        rfqs: [bareRfq],
+        selectedRFQForMatrix: bareRfq,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getAllByText('Bare Vendor One').length).toBeGreaterThan(0);
+      expect(screen.queryByText('AI FOLLOW-UP STATUS:')).not.toBeInTheDocument();
+    });
+
+    it('hides quotations on buyer view for In Evaluation RFQs before closing or 48h/deadline expiration', () => {
+      const sealedInEvalRfq = {
+        ...mockRFQs[0],
+        id: 'rfq-sealed-uneval',
+        rfqNumber: 'RFQ-SEALED-48H',
+        status: 'In Evaluation' as const,
+        quotesHidden: false,
+        createdAt: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+        closingDeadline: new Date(Date.now() + 72 * 3600 * 1000).toISOString(),
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [sealedInEvalRfq],
+        selectedRFQForMatrix: sealedInEvalRfq,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getByText(/Quotes Sealed — 48-Hour Bidding Period Active/i)).toBeInTheDocument();
+      expect(screen.queryByText('Apex Supplies Ltd.')).not.toBeInTheDocument();
+    });
+
+    it('fetches standalone RFQ when rfqParam is present and not found in rfqs array', async () => {
+      mockRfqParam = 'RFQ-STANDALONE-999';
+      const mockStandaloneRfq: any = {
+        id: 'rfq-standalone-id',
+        rfqNumber: 'RFQ-STANDALONE-999',
+        title: 'Authoritative Standalone Pump RFQ',
+        category: 'Mechanical',
+        targetDeliveryDate: '2026-05-15',
+        budget: 500000,
+        quotesCount: 1,
+        status: 'In Evaluation',
+        quotes: [
+          {
+            vendorId: 'v-standalone',
+            vendorName: 'Direct Supplier Co',
+            vendorCategory: 'Direct Pool',
+            unitPrice: 50000,
+            totalPrice: 50000,
+            leadTimeDays: 7,
+            complianceStatus: 'Compliant',
+            warrantyYears: 2,
+            paymentTerms: 'Immediate',
+            remarks: 'Direct quote',
+            attachments: [],
+          },
+        ],
+      };
+      mockFetchRFQById.mockResolvedValueOnce({ success: true, rfq: mockStandaloneRfq });
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'category_manager',
+        rfqs: [],
+        selectedRFQForMatrix: null,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+        ensureRFQs: jest.fn().mockResolvedValue(undefined),
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+      await waitFor(() => {
+        expect(mockFetchRFQById).toHaveBeenCalledWith('RFQ-STANDALONE-999');
+        expect(screen.getByText('Authoritative Standalone Pump RFQ')).toBeInTheDocument();
+      });
+      mockRfqParam = null;
+    });
+
+    it('renders safely when RFQ has null title, missing vendorName, and timestamp number targetDeliveryDate', () => {
+      const edgeCaseRfq: any = {
+        id: 'rfq-null-fields',
+        rfqNumber: 'RFQ-EDGE-001',
+        title: null,
+        category: 'Spares',
+        targetDeliveryDate: 1774396800000,
+        budget: null,
+        quotesCount: null,
+        status: 'In Evaluation',
+        quotes: [
+          {
+            vendorId: 'v-null-name',
+            vendorName: null,
+            vendorCategory: 'General',
+            unitPrice: 1000,
+            totalPrice: 2000,
+            leadTimeDays: 5,
+            complianceStatus: 'Compliant',
+            warrantyYears: 1,
+            paymentTerms: 'Net 30',
+            remarks: 'Remarks',
+            attachments: [],
+          },
+        ],
+        extractedEntities: [
+          {
+            id: 'ent-1',
+            itemName: null,
+            technicalSpecs: null,
+            quantity: 2,
+            unit: null,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'category_manager',
+        rfqs: [edgeCaseRfq],
+        selectedRFQForMatrix: edgeCaseRfq,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        openRFQDeepDive: jest.fn(),
+        showToast: mockShowToast,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      expect(screen.getAllByText('Untitled RFQ').length).toBeGreaterThan(0);
+      expect(screen.getAllByText('Vendor').length).toBeGreaterThan(0);
+    });
+
+    it('validates formatIndianDate, formatIndianDateTime, and parseRfqTimestamp with multiple types', () => {
+      expect(formatIndianDate(undefined)).toBe('');
+      expect(formatIndianDate(null)).toBe('');
+      expect(formatIndianDate('')).toBe('');
+      expect(formatIndianDate('   ')).toBe('');
+      expect(formatIndianDate('2026-11-20')).toBe('20 Nov 2026');
+      expect(formatIndianDate(1763683200000)).toMatch(/2025|2026/);
+      expect(formatIndianDate(new Date('2026-11-20T00:00:00Z'))).toBe('20 Nov 2026');
+      expect(formatIndianDate('invalid-date')).toBe('invalid-date');
+
+      expect(formatIndianDateTime(undefined)).toBe('');
+      expect(formatIndianDateTime(null)).toBe('');
+      expect(formatIndianDateTime('')).toBe('');
+      expect(formatIndianDateTime('20 Nov 2026, 10:00 am IST')).toBe('20 Nov 2026, 10:00 am IST');
+      expect(formatIndianDateTime('2026-11-20 04:30:00 UTC')).toMatch(/IST/);
+      expect(formatIndianDateTime(1763683200000)).toMatch(/IST/);
+      expect(formatIndianDateTime(new Date('2026-11-20T04:30:00Z'))).toMatch(/IST/);
+
+      expect(parseRfqTimestamp(null)).toBeNull();
+      expect(parseRfqTimestamp(undefined)).toBeNull();
+      expect(parseRfqTimestamp('')).toBeNull();
+      expect(parseRfqTimestamp(123456789)).toBe(123456789);
+      expect(parseRfqTimestamp(NaN)).toBeNull();
+      expect(parseRfqTimestamp(new Date('2026-11-20T00:00:00Z'))).toBe(Date.parse('2026-11-20T00:00:00Z'));
+      expect(parseRfqTimestamp(new Date('invalid'))).toBeNull();
+      expect(parseRfqTimestamp('2026-11-20 12:00:00')).not.toBeNull();
+      expect(parseRfqTimestamp('2026-11-20 12:00:00 UTC')).not.toBeNull();
+      expect(parseRfqTimestamp('not-a-date')).toBeNull();
     });
   });
 });

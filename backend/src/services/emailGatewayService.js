@@ -30,6 +30,7 @@ const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
+const mailTransport = require('./mailTransport');
 const cryptoService = require('./cryptoService');
 const emailGatewayQueries = require('../db/emailGatewayQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
@@ -55,6 +56,7 @@ const {
   RFQ_MODE_MAP,
   EMAIL_REGEX,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
+  PLACEHOLDER_MOBILE_NUMBER,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -179,6 +181,12 @@ async function getOrCreateLabelId(gmail, labelName) {
         return existing.id;
       }
     } catch (err) {
+      if (
+        typeof mailTransport.classifyDeliveryError === 'function' &&
+        mailTransport.classifyDeliveryError(err) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+      ) {
+        throw err;
+      }
       logger.warn(`Failed to list Gmail labels for "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
     }
   }
@@ -203,6 +211,12 @@ async function getOrCreateLabelId(gmail, labelName) {
         return createRes.data.id;
       }
     } catch (err) {
+      if (
+        typeof mailTransport.classifyDeliveryError === 'function' &&
+        mailTransport.classifyDeliveryError(err) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+      ) {
+        throw err;
+      }
       logger.warn(`Failed to create Gmail label "${trimmed}": ${err.message}`, { labelName: trimmed }, 'EMAIL_GATEWAY');
     }
   }
@@ -299,6 +313,11 @@ function resolveVendorConfig(env = process.env) {
     ),
     allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
     allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
+    autoRegisterUnregisteredBuyers: String(
+      env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER !== undefined
+        ? env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER
+        : env.EMAIL_GATEWAY_AUTO_REGISTER || 'true'
+    ).toLowerCase() !== 'false',
     isVendorMailbox: true,
     labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
     labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
@@ -617,7 +636,7 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       !isDomainOrSenderRestricted &&
       !message?.automatedReason &&
       !isSystemOrAutomatedSender(senderAddress) &&
-      !config?.isVendorMailbox &&
+      (!config?.isVendorMailbox || config?.autoRegisterUnregisteredBuyers !== false) &&
       config?.autoRegisterUnregisteredBuyers !== false;
 
     if (!isUnregisteredSender) {
@@ -710,23 +729,26 @@ async function resolveSenderAuthorisation(fromAddress, config = resolveConfig(),
 
   let tempPassword = null;
   if (isOnboardingPending) {
+    // Always generate a fresh password while the buyer is still PENDING_ONBOARDING,
+    // so every subsequent RFQ email carries a valid, up-to-date credential.
     let idUser = null;
     try {
       idUser = await identityQueries.findUserByEmail(address);
-      if (isIdentityOnboardingPending(idUser)) {
-        tempPassword = idUser.password || null;
-      }
     } catch (err) {
-      logger.warn('Failed to query identity user password in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
+      logger.warn('Failed to query identity user in resolveSenderAuthorisation', { address, error: err.message }, 'EMAIL_GATEWAY');
     }
     // A login that has finished onboarding holds the buyer's real password:
     // never overwrite it or mail out a fresh one.
-    if (!tempPassword && !hasCompletedIdentity(idUser)) {
+    if (!hasCompletedIdentity(idUser)) {
       tempPassword = storeService._generateTempPassword();
       try {
         await identityQueries.updateUserPassword(address, tempPassword);
       } catch (pwErr) {
         logger.warn('Failed to persist fresh temp password in resolveSenderAuthorisation', { address, error: pwErr.message }, 'EMAIL_GATEWAY');
+        // Fall back to the stored password rather than sending nothing.
+        if (idUser && isIdentityOnboardingPending(idUser)) {
+          tempPassword = idUser.password || tempPassword;
+        }
       }
     }
   }
@@ -842,21 +864,27 @@ async function getOrCreateBuyerAccount(email) {
     );
     let tempPassword = null;
     if (isPending) {
+      // Always generate a fresh password for every subsequent RFQ email while
+      // the buyer is still PENDING_ONBOARDING. This ensures the buyer always
+      // receives a valid, up-to-date credential with each new RFQ notification
+      // until they complete onboarding (set their own password / verify profile).
       let idUser = null;
       try {
         idUser = await identityQueries.findUserByEmail(normEmail);
-        if (isIdentityOnboardingPending(idUser)) {
-          tempPassword = idUser.password || null;
-        }
       } catch (err) {
-        logger.warn('Failed to resolve identity user temp password in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
+        logger.warn('Failed to resolve identity user in getOrCreateBuyerAccount', { email: normEmail, error: err.message }, 'EMAIL_GATEWAY');
       }
-      if (!tempPassword && !hasCompletedIdentity(idUser)) {
+      if (!hasCompletedIdentity(idUser)) {
+        // Always mint a new password so each re-send carries a fresh credential.
         tempPassword = storeService._generateTempPassword();
         try {
           await identityQueries.updateUserPassword(normEmail, tempPassword);
         } catch (pwErr) {
           logger.warn('Failed to persist fresh temp password in getOrCreateBuyerAccount', { email: normEmail, error: pwErr.message }, 'EMAIL_GATEWAY');
+          // Fall back to the stored password rather than sending nothing.
+          if (idUser && isIdentityOnboardingPending(idUser)) {
+            tempPassword = idUser.password || tempPassword;
+          }
         }
       }
     }
@@ -900,12 +928,13 @@ async function getOrCreateBuyerAccount(email) {
       userResult = await identityQueries.insertBuyerAccount({
         email: normEmail,
         password: tempPassword,
-        phone: null,
+        phone: PLACEHOLDER_MOBILE_NUMBER,
         fullName: displayName,
         organizationName: orgName,
         resetPasswordRequired: true,
         verificationStatus: 'PENDING_ONBOARDING',
         createdBy: 'email-gateway-autonomous',
+        sourceType: 'Email',
       });
     } catch (dbErr) {
       logger.error('Failed to create identity user for unregistered buyer', {
@@ -957,7 +986,7 @@ async function getOrCreateBuyerAccount(email) {
         brandName: displayName,
         corporateEmail: normEmail,
         contactPerson: displayName,
-        mobileNumber: null,
+        mobileNumber: `+91${PLACEHOLDER_MOBILE_NUMBER}`,
         organizationId: orgId,
         sourcingMode: 'mode_0',
         subscriptionPlan: 'free_trial',
@@ -969,6 +998,8 @@ async function getOrCreateBuyerAccount(email) {
         phoneVerified: false,
         tempPasswordRequired: true,
         isAutoRegistered: true,
+        sourceType: 'Email',
+        accountSource: 'Email',
       });
     } catch (accountError) {
       logger.error('Buyer identity exists but its buyer-account mirror could not be persisted', {
@@ -1024,43 +1055,60 @@ async function resolveBuyerRegisteredLocation(buyerAccount) {
     return { city: '', state: '', pincode: '' };
   }
 
-  // 1. Direct fields on buyerAccount (in-memory or store service account object)
-  const directCity = buyerAccount.city || buyerAccount.deliveryCity || '';
-  const directState = buyerAccount.state || buyerAccount.deliveryState || '';
-  const directPincode = buyerAccount.pincode || buyerAccount.zipCode || buyerAccount.deliveryPincode || '';
+  // 1. Direct fields on buyerAccount or linked organization object
+  const org = buyerAccount.organization || {};
+  let city = String(buyerAccount.city || buyerAccount.deliveryCity || org.city || '').trim();
+  let state = String(buyerAccount.state || buyerAccount.deliveryState || org.state || '').trim();
+  let pincode = String(buyerAccount.pincode || buyerAccount.zipCode || buyerAccount.deliveryPincode || org.pincode || org.zip_code || '').trim();
+  let location = String(
+    buyerAccount.location ||
+    buyerAccount.deliveryLocation ||
+    buyerAccount.primaryPlantLocation ||
+    buyerAccount.street ||
+    buyerAccount.address1 ||
+    org.location ||
+    org.deliveryLocation ||
+    org.primaryPlantLocation ||
+    org.address1 ||
+    org.street ||
+    ''
+  ).trim();
 
-  if (directCity || directState || directPincode) {
-    return {
-      city: String(directCity).trim(),
-      state: String(directState).trim(),
-      pincode: String(directPincode).trim(),
-    };
-  }
+  // 2. Query Neon PostgreSQL / D1 buyer profile if any location detail is missing
+  const hasStorage = pool && (typeof pool.hasStorage === 'function' ? pool.hasStorage() : Boolean(pool.pool));
+  const hasIdentifier = Boolean(buyerAccount.corporateEmail || buyerAccount.email || buyerAccount.id || buyerAccount.organizationId);
 
-  // 2. Query Neon PostgreSQL buyer profile if pool is active and buyer has corporateEmail
-  if (pool && pool.pool && buyerAccount.corporateEmail) {
+  if ((!city || !state || !pincode || !location) && hasStorage && hasIdentifier) {
     try {
-      const email = String(buyerAccount.corporateEmail).trim().toLowerCase();
-      const rows = await pool.rows(
-        `${buyerProfileQueries.PROFILE_SELECT} where lower(u.username) = lower($1) or lower(u.email) = lower($1) limit 1`,
-        [email]
-      );
-      if (rows.length > 0) {
-        const mapped = buyerProfileQueries.mapRowToProfile(rows[0]);
-        if (mapped) {
-          return {
-            city: mapped.city || '',
-            state: mapped.state || '',
-            pincode: mapped.pincode || '',
-          };
-        }
+      const email = String(buyerAccount.corporateEmail || buyerAccount.email || '').trim().toLowerCase();
+      const res = await buyerProfileQueries.findProfileByIdentifier({
+        email: email || undefined,
+        userId: buyerAccount.id || undefined,
+        organizationId: buyerAccount.organizationId || undefined,
+      });
+      if (res && res.found && res.profile) {
+        const mapped = res.profile;
+        if (!city && mapped.city) city = String(mapped.city).trim();
+        if (!state && mapped.state) state = String(mapped.state).trim();
+        if (!pincode && mapped.pincode) pincode = String(mapped.pincode).trim();
+        if (!location && mapped.street) location = String(mapped.street).trim();
       }
     } catch (dbErr) {
       logger.error('Failed to query buyer profile for location fallback', dbErr, 'EMAIL_GATEWAY');
     }
   }
 
-  return { city: '', state: '', pincode: '' };
+  const result = {
+    city,
+    state,
+    pincode,
+  };
+
+  if (location && location !== [city, state, pincode].filter(Boolean).join(', ')) {
+    result.location = location;
+  }
+
+  return result;
 }
 
 /**
@@ -1107,14 +1155,14 @@ function processLineItemsAndGroups(lineItems, extraction = {}, buyerLocation = {
       deliveryCity = buyerLocation.city || '';
       deliveryState = buyerLocation.state || '';
       deliveryPincode = buyerLocation.pincode || '';
-      deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+      deliveryLocation = buyerLocation.location || [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
     } else {
       // Partial location handling: preserve explicit fields without replacing them with buyer defaults
       if (!deliveryCity && deliveryLocation) {
         deliveryCity = deliveryLocation;
       }
       if (!deliveryLocation) {
-        deliveryLocation = [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
+        deliveryLocation = buyerLocation.location || [deliveryCity, deliveryState, deliveryPincode].filter(Boolean).join(', ');
       }
     }
 
@@ -1878,7 +1926,7 @@ async function retryPendingAcknowledgements({
           rfqNumber: row.rfq_number,
           rfqTitle: saved.rfqTitle || row.subject,
           deliveryDate: saved.deliveryDate,
-          mobileNumber: saved.mobileNumber || null,
+          mobileNumber: saved.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
           category: saved.category,
           deliveryLocation: saved.deliveryLocation,
           requiredBy: saved.requiredBy || saved.deliveryDate,
@@ -2000,7 +2048,7 @@ async function notifyRfqNotCreated(message, reason, { buyerAccount = null, confi
       to: message.fromAddress,
       recipientName: buyerDisplayName(buyerAccount, message),
       tempPassword: authorisation.tempPassword,
-      contactPhone: buyerAccount?.mobileNumber || null,
+      contactPhone: buyerAccount?.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
     };
     try {
       ensureMailDeliveryAccepted(await mailerService.sendBuyerCredentialsEmail(credentials), 'Buyer credentials notice');
@@ -2084,6 +2132,16 @@ async function storeEmailAttachments(message) {
     // a PDF requisition is); saveAttachment's MIME allow-list decides what is
     // storable, exactly as for a portal upload.
     if (!attachment || !attachment.content) continue;
+    // Signature graphics, company logos, social icons, and tracking pixels are never RFQ documents.
+    const isSig = attachment.isSignature || attachment.role === 'signature' || (typeof emailIngestionService.isSignatureAttachment === 'function' && emailIngestionService.isSignatureAttachment(attachment));
+    if (isSig) {
+      logger.info(
+        `Skipped email signature graphic from RFQ attachments: ${attachment.fileName || attachment.filename || 'unnamed'}`,
+        { fileName: attachment.fileName || attachment.filename, contentType: attachment.contentType, size: attachment.size },
+        'EMAIL_GATEWAY'
+      );
+      continue;
+    }
     try {
       const result = await withTimeout(
         rfqAttachmentService.saveAttachment({
@@ -2884,7 +2942,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
       `${message.subject || ''} ${message.bodyText || ''}`
     );
 
-    if (!isRegisteredBuyer && isRfqSubjectOrContent) {
+    if (!isRegisteredBuyer && isRfqSubjectOrContent && config.autoRegisterUnregisteredBuyers === false) {
       await sendAutoReply(
         message,
         AUTO_REPLY_KIND.UNAUTHORIZED_SENDER,
@@ -3118,12 +3176,12 @@ async function processMessage(rawSource, config = resolveConfig()) {
         sourceFileName: draft.title || message.subject || EMAIL_GATEWAY_CONFIG.SYNTHETIC_FILE_NAME,
         raisedByEmail: message.fromAddress,
         budget: draft.estimatedBudget ?? null,
-        targetDeliveryDate: draft.targetDeliveryDate,
+        targetDeliveryDate: draft.targetDeliveryDate || group.targetDate || rfqIngestionService.defaultTargetDate(5),
         extractedEntities: draft.extractedEntities,
-        deliveryLocation: draft.deliveryLocation,
-        deliveryCity: draft.deliveryCity,
-        deliveryState: draft.deliveryState,
-        deliveryPincode: draft.deliveryPincode,
+        deliveryLocation: draft.deliveryLocation || group.deliveryLocation || buyerLocation.location || [buyerLocation.city, buyerLocation.state, buyerLocation.pincode].filter(Boolean).join(', '),
+        deliveryCity: draft.deliveryCity || group.deliveryCity || buyerLocation.city || '',
+        deliveryState: draft.deliveryState || group.deliveryState || buyerLocation.state || '',
+        deliveryPincode: draft.deliveryPincode || group.deliveryPincode || buyerLocation.pincode || '',
         attachments: await emailAttachments(),
         sharedBuyerAccountIds: attribution.sharedBuyerAccountIds || [],
         sharedBuyerEmails: attribution.sharedBuyerEmails || [],
@@ -3215,9 +3273,8 @@ async function processMessage(rawSource, config = resolveConfig()) {
       authorisation?.buyerAccount?.mobileNumber ||
       authorisation?.buyerAccount?.phone ||
       authorisation?.user?.phone ||
-      null;
-    // Null when the buyer has no phone on record. No placeholder number is sent.
-    const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || null : null;
+      PLACEHOLDER_MOBILE_NUMBER;
+    const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || PLACEHOLDER_MOBILE_NUMBER : PLACEHOLDER_MOBILE_NUMBER;
 
     const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
       ? created.extractedEntities
@@ -3387,6 +3444,30 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     return { skipped: true, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   }
 
+  const providerKey = options.providerKey || (
+    typeof mailerService.getGmailProviderKey === 'function'
+      ? mailerService.getGmailProviderKey(config.isVendorMailbox ? 'vendor' : 'buyer')
+      : null
+  );
+  if (providerKey && typeof mailTransport.loadPersistedCooldowns === 'function') {
+    await mailTransport.loadPersistedCooldowns();
+    const cooldown = typeof mailTransport.getCooldown === 'function' ? mailTransport.getCooldown(providerKey) : null;
+    if (cooldown) {
+      state.lastError = cooldown.reason;
+      logger.warn('Email gateway poll skipped: Gmail credentials are cooling down', {
+        providerKey,
+        isVendorMailbox: !!config.isVendorMailbox,
+        until: new Date(cooldown.until).toISOString(),
+        reason: cooldown.reason,
+      }, 'EMAIL_GATEWAY');
+      return {
+        skipped: true,
+        status: 'cooling_down',
+        reason: cooldown.reason,
+      };
+    }
+  }
+
   const { google } = require('googleapis');
   const gmail = google.gmail({ version: 'v1', auth });
 
@@ -3425,8 +3506,21 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     const processedLabelName = config.labelProcessed || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED;
     const errorLabelName = config.labelError || EMAIL_GATEWAY_CONFIG.LABEL_ERROR;
 
-    const processedLabelId = await getOrCreateLabelId(gmail, processedLabelName).catch(() => null);
-    const errorLabelId = await getOrCreateLabelId(gmail, errorLabelName).catch(() => null);
+    const resolveLabel = async (labelName) => {
+      try {
+        return await getOrCreateLabelId(gmail, labelName);
+      } catch (labelErr) {
+        if (
+          typeof mailTransport.classifyDeliveryError === 'function' &&
+          mailTransport.classifyDeliveryError(labelErr) === mailTransport.DELIVERY_ERROR_KIND?.AUTH_REVOKED
+        ) {
+          throw labelErr;
+        }
+        return null;
+      }
+    };
+    const processedLabelId = await resolveLabel(processedLabelName);
+    const errorLabelId = await resolveLabel(errorLabelName);
 
     const moveMessageToLabel = (id, targetLabelId, labelName, operationLabel) => {
       const addLabelIds = targetLabelId ? [targetLabelId] : [];
@@ -3774,8 +3868,14 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
     };
   } catch (err) {
     // An API or auth failure (e.g. an insufficiently-scoped refresh token).
-    // Reported through status rather than thrown, same convention as the
-    // IMAP path, so the panel can explain it and the interval keeps trying.
+    // Record auth/rate-limit cooldowns in the shared mail_provider_cooldowns
+    // table so subsequent 5-minute crons skip polling until credentials are rotated.
+    if (providerKey && typeof mailTransport.noteProviderFailure === 'function') {
+      mailTransport.noteProviderFailure(providerKey, err);
+      if (typeof mailTransport.flushPendingCooldownWrites === 'function') {
+        await mailTransport.flushPendingCooldownWrites();
+      }
+    }
     state.lastError = err.message;
     logger.error(`Email gateway poll failed (Gmail API): ${err.message}`, err, 'EMAIL_GATEWAY');
     return { skipped: false, error: err.message, considered: state.consideredThisRun, outcomes };

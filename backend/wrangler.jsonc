@@ -55,7 +55,7 @@
   // scheduled() tells the two triggers apart on controller.cron.
   "triggers": {
     "crons": [
-      "*/5 * * * *",
+      "* * * * *",
       "*/10 * * * *",
       "30 0 * * *"
     ]
@@ -132,7 +132,11 @@
         "SELLER_V2_6M_PRICE": "8250",
         "SELLER_V2_12M_PRICE": "14999",
         "SELLER_V3_6M_PRICE": "11000",
-        "SELLER_V3_12M_PRICE": "19999"
+        "SELLER_V3_12M_PRICE": "19999",
+        "APPROVER_PASSWORD": "Procucev@2026",
+        "SRINU_APPROVER_EMAIL": "srinivas.mukku@procucev.com",
+        "RAO_APPROVER_EMAIL": "mnrao@procucev.com",
+        "SUDHEER_APPROVER_EMAIL": "sudheer.kangala@procucev.com"
       },
       "d1_databases": [
         {
@@ -202,7 +206,11 @@
         "SELLER_V2_6M_PRICE": "8250",
         "SELLER_V2_12M_PRICE": "14999",
         "SELLER_V3_6M_PRICE": "11000",
-        "SELLER_V3_12M_PRICE": "19999"
+        "SELLER_V3_12M_PRICE": "19999",
+        "APPROVER_PASSWORD": "Procucev@2026",
+        "SRINU_APPROVER_EMAIL": "srinivas.mukku@procucev.com",
+        "RAO_APPROVER_EMAIL": "mnrao@procucev.com",
+        "SUDHEER_APPROVER_EMAIL": "sudheer.kangala@procucev.com"
       },
       "d1_databases": [
         {
@@ -274,7 +282,11 @@
         "SELLER_V2_6M_PRICE": "8250",
         "SELLER_V2_12M_PRICE": "14999",
         "SELLER_V3_6M_PRICE": "11000",
-        "SELLER_V3_12M_PRICE": "19999"
+        "SELLER_V3_12M_PRICE": "19999",
+        "APPROVER_PASSWORD": "Procucev@2026",
+        "SRINU_APPROVER_EMAIL": "srinivas.mukku@procucev.com",
+        "RAO_APPROVER_EMAIL": "mnrao@procucev.com",
+        "SUDHEER_APPROVER_EMAIL": "sudheer.kangala@procucev.com"
       },
       "d1_databases": [
         {

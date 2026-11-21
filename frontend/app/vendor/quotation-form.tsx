@@ -4,13 +4,13 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { createBackdropClickHandler, formatFileSize, registerOutsideClickClose } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { LineItemBid, QuoteComparison, RFQItem, RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import {
   getPaidVendorPlanPrice,
   getPaidVendorPlanRfqQuota,
@@ -68,6 +68,84 @@ function extractPin(pinVal?: any, addrVal?: any): string {
   return match ? match[0] : '';
 }
 
+interface RawLineEntity {
+  id?: string;
+  itemName?: string;
+  description?: string;
+  quantity?: number;
+  unit?: string | null;
+}
+
+/** Converts extracted RFQ entities into bid line items with empty vendor rates. */
+function mapEntitiesToLineItems(entities: RawLineEntity[], fallbackTitle: string): LineItemBid[] {
+  return entities.map((ent, idx) => ({
+    id: ent.id || `item-${idx}`,
+    description: ent.itemName || ent.description || fallbackTitle,
+    quantity: typeof ent.quantity === 'number' ? ent.quantity : Number(ent.quantity) || 0,
+    unit: ent.unit || undefined,
+    unitPrice: 0,
+    leadTimeDays: 0,
+    marketBandStatus: 'optimal',
+    paymentTerms: '',
+  }));
+}
+
+/** Ensures an opportunity carries line items from its backing RFQ record when available. */
+function resolveOpportunityForBid(opp: VendorOpportunity, rfqs: RFQItem[]): VendorOpportunity {
+  if (Array.isArray(opp.lineItems) && opp.lineItems.length > 0) {
+    return opp;
+  }
+  const rfqRecord = rfqs.find(
+    (r) => (Boolean(opp.rfqNumber) && r.rfqNumber === opp.rfqNumber) || (Boolean(opp.id) && r.id === opp.id)
+  );
+  if (!rfqRecord) return opp;
+  const rawEntities: RawLineEntity[] = rfqRecord.extractedEntities?.length
+    ? rfqRecord.extractedEntities
+    : Array.isArray(rfqRecord.lineItems)
+    ? (rfqRecord.lineItems as RawLineEntity[])
+    : [];
+  if (rawEntities.length === 0) return opp;
+  return {
+    ...opp,
+    lineItems: mapEntitiesToLineItems(rawEntities, opp.title),
+  };
+}
+
+/** Pre-fills per-line-item rates when reopening an existing quotation for resubmission. */
+function buildInitialLineItemPrices(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemPrices: Record<string, string> = {};
+  if (!existingQuote) return itemPrices;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    if (lq.lineItemId && lq.unitPrice != null) {
+      itemPrices[lq.lineItemId] = String(lq.unitPrice);
+    }
+  });
+  lineItems.forEach((li) => {
+    if (itemPrices[li.id] != null) return;
+    const normalizedDesc = (li.description || '').trim().toLowerCase();
+    if (!normalizedDesc) return;
+    const matchedByName = lineItemQuotes.find(
+      (lq) => lq.unitPrice != null && (lq.itemName || '').trim().toLowerCase() === normalizedDesc
+    );
+    if (matchedByName) {
+      itemPrices[li.id] = String(matchedByName.unitPrice);
+    }
+  });
+  if (
+    lineItems.length === 1 &&
+    itemPrices[lineItems[0].id] == null &&
+    lineItemQuotes.length === 0 &&
+    existingQuote.unitPrice != null
+  ) {
+    itemPrices[lineItems[0].id] = String(existingQuote.unitPrice);
+  }
+  return itemPrices;
+}
+
 interface QuotationFormProps {
   opportunity?: VendorOpportunity;
   onBack: () => void;
@@ -99,7 +177,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [selectedPincodes, setSelectedPincodes] = useState<string[]>([]);
   const [isPincodeDropdownOpen, setIsPincodeDropdownOpen] = useState(false);
-  const [userSelectedTab, setUserSelectedTab] = useState<'my_enquiries' | 'public_enquiries' | null>(null);
+  const pincodeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => registerOutsideClickClose(isPincodeDropdownOpen, pincodeDropdownRef, setIsPincodeDropdownOpen, false),
+    [isPincodeDropdownOpen]
+  );
+  const [userSelectedTab, setUserSelectedTab] = useState<'all' | 'my_enquiries' | 'public_enquiries' | null>(null);
   const [locallyUnlockedRfqIds, setLocallyUnlockedRfqIds] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -461,16 +545,34 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     return vendorOpportunities.filter((opp) => isPublicEnquiryRfq(opp.rfqNumber));
   }, [vendorOpportunities, isPublicEnquiryRfq]);
 
-  const effectiveTab: 'my_enquiries' | 'public_enquiries' = useMemo(() => {
+  // Combined listing without duplicate RFQs
+  const combinedEnquiries = useMemo(() => {
+    const seen = new Set<string>();
+    const list: VendorOpportunity[] = [];
+    for (const opp of [...myEnquiries, ...publicEnquiries]) {
+      const key = opp.rfqNumber || opp.id;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(opp);
+      }
+    }
+    return list;
+  }, [myEnquiries, publicEnquiries]);
+
+  const effectiveTab: 'all' | 'my_enquiries' | 'public_enquiries' = useMemo(() => {
     if (userSelectedTab) return userSelectedTab;
     if (opportunityStatusFilter === 'direct') return 'my_enquiries';
-    if (myEnquiries.length > 0) return 'my_enquiries';
-    return 'public_enquiries';
-  }, [userSelectedTab, opportunityStatusFilter, myEnquiries.length]);
+    return 'all';
+  }, [userSelectedTab, opportunityStatusFilter]);
 
   // Extract distinct categories available across opportunities for the active tab
   const availableCategories = useMemo(() => {
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     const set = new Set<string>();
     pool.forEach((opp) => {
       const cat = resolveOpportunityCategory(opp);
@@ -490,11 +592,16 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       }
     });
     return Array.from(set).sort();
-  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs, resolveOpportunityCategory]);
 
   // Extract distinct pincodes available across opportunities for the active tab
   const availablePincodes = useMemo(() => {
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     const set = new Set<string>();
     pool.forEach((opp) => {
       const rfqRecord = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
@@ -511,7 +618,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (pin) set.add(pin);
     });
     return Array.from(set).sort();
-  }, [effectiveTab, myEnquiries, publicEnquiries, rfqs]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs]);
 
   const totalReceivedCount = vendorOpportunities.length;
   const pendingQuotesCount = useMemo(() => {
@@ -525,7 +632,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   const filteredOpportunities = useMemo(() => {
     const query = opportunitySearch.trim().toLocaleLowerCase();
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     return pool
       .filter((opp) => {
         const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
@@ -583,36 +695,17 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           .some((value) => value.toLocaleLowerCase().includes(query));
       })
       .sort((a, b) => {
-        const aHasQuote = submittedQuotes.some((item) => item.rfqNumber === a.rfqNumber) || a.status === 'submitted';
-        const bHasQuote = submittedQuotes.some((item) => item.rfqNumber === b.rfqNumber) || b.status === 'submitted';
-        const aDirect = isOwnBuyerRfq(a.rfqNumber);
-        const bDirect = isOwnBuyerRfq(b.rfqNumber);
+        const aRecord = (rfqs || []).find((r) => r.rfqNumber === a.rfqNumber || r.id === a.id);
+        const bRecord = (rfqs || []).find((r) => r.rfqNumber === b.rfqNumber || r.id === b.id);
+        const aDate = new Date(a.createdAt || aRecord?.createdAt || 0).getTime();
+        const bDate = new Date(b.createdAt || bRecord?.createdAt || 0).getTime();
 
-        // Sorting priority to prevent vendor's own requests from being buried:
-        // Score 4: Direct client invitation awaiting quote (Highest urgency)
-        // Score 3: Submitted quote (Vendor's active submission tracking)
-        // Score 2: Direct client invitation (closed/other)
-        // Score 0: Generic marketplace / open network enquiry
-        const getPriority = (hasQuote: boolean, isDirect: boolean, opp: VendorOpportunity) => {
-          const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
-          if (isDirect && !hasQuote && !isClosed) return 4;
-          if (hasQuote) return 3;
-          if (isDirect) return 2;
-          return 0;
-        };
-
-        const aScore = getPriority(aHasQuote, aDirect, a);
-        const bScore = getPriority(bHasQuote, bDirect, b);
-
-        if (bScore !== aScore) {
-          return bScore - aScore;
+        if (bDate !== aDate) {
+          return bDate - aDate;
         }
-
-        const aTime = new Date(a.deadline || 0).getTime();
-        const bTime = new Date(b.deadline || 0).getTime();
-        return bTime - aTime;
+        return 0;
       });
-  }, [effectiveTab, myEnquiries, publicEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   useEffect(() => {
     setCurrentPage(1);
@@ -630,10 +723,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
-  // One unit price per RFQ line item, keyed by line item id — only rendered
-  // (and only required) when the RFQ has more than one line item. For the
-  // common single-item case the form stays exactly as it was: just
-  // bidUnitPrice above.
+  // One unit price per RFQ line item, keyed by line item id — rendered and
+  // required whenever the RFQ has one or more line items. Only RFQs without
+  // any line item details fall back to bidUnitPrice above.
   const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
@@ -706,19 +798,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // Opens quotation form modal on explicit user action (Submit Quote / Resubmit Bid).
   // Pre-populates previously submitted values when resubmitting a quotation.
   const openBidForm = (opp: VendorOpportunity) => {
-    setBiddingOn(opp);
-    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber) as any;
+    const resolvedOpp = resolveOpportunityForBid(opp, rfqs);
+    setBiddingOn(resolvedOpp);
+    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === resolvedOpp.rfqNumber) as any;
     if (existingQuote) {
       setBidUnitPrice(existingQuote.unitPrice != null ? String(existingQuote.unitPrice) : (existingQuote.totalPrice != null ? String(existingQuote.totalPrice) : ''));
-      const itemPrices: Record<string, string> = {};
-      if (Array.isArray(existingQuote.lineItemQuotes)) {
-        existingQuote.lineItemQuotes.forEach((lq: any) => {
-          if (lq.lineItemId && lq.unitPrice != null) {
-            itemPrices[lq.lineItemId] = String(lq.unitPrice);
-          }
-        });
-      }
-      setBidLineItemPrices(itemPrices);
+      setBidLineItemPrices(buildInitialLineItemPrices(resolvedOpp.lineItems || [], existingQuote));
       setBidLeadTimeDays(existingQuote.leadTimeDays != null ? String(existingQuote.leadTimeDays) : '');
       setBidWarrantyYears(existingQuote.warrantyYears != null ? String(existingQuote.warrantyYears) : '');
       setBidPaymentTerms(existingQuote.paymentTerms || '');
@@ -819,10 +904,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     setSubmitModalError(null);
 
     const rfqLineItems = biddingOn.lineItems || [];
-    const isMultiItem = rfqLineItems.length > 1;
+    const hasLineItems = rfqLineItems.length > 0;
 
-    // Multi-item RFQs price every line item individually; the single-item
-    // case keeps today's one blanket-price field unchanged.
+    // Any RFQ with one or more line items prices each row via the line-item
+    // pricing UI; only line-item-less RFQs fall back to a blanket unit price.
     let unitPrice: number;
     let totalPrice: number;
     let lineItemQuotes: Array<{
@@ -833,7 +918,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       totalPrice: number;
     }> | undefined;
 
-    if (isMultiItem) {
+    if (hasLineItems) {
       const missing = rfqLineItems.some((li) => {
         const v = Number(bidLineItemPrices[li.id]);
         return !v || v <= 0;
@@ -989,17 +1074,29 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   const isRfqUnlocked = useCallback((rfqNumber: string) => {
-    if (isOwnBuyerRfq(rfqNumber)) return true;
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    const isPublic = Boolean((rfq as any)?.isPublic || (rfqRecord as any)?.isPublic);
+    const isPublicMode = isV0 || isV3 || isPublic;
+
+    // Public RFQs are NEVER automatically unlocked - they require download
+    if (!isPublicMode && isOwnBuyerRfq(rfqNumber)) return true;
+
     const norm = String(rfqNumber).toLowerCase();
     return (
       vendorUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm) ||
       locallyUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm)
     );
-  }, [isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
+  }, [vendorOpportunities, rfqs, isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
-      const isDirect = isOwnBuyerRfq(opp.rfqNumber);
+      const oppMode = String(opp.sourcingMode || '').toLowerCase().trim();
+      const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic);
+      const isDirect = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
       const wasUnlocked = isRfqUnlocked(opp.rfqNumber);
 
       const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
@@ -1142,7 +1239,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* MY ENQUIRIES & PUBLIC ENQUIRIES TABS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setUserSelectedTab('all')}
+          className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition-all shadow-sm ${
+            effectiveTab === 'all'
+              ? 'bg-[#1a3a8f] text-white shadow-blue-900/20'
+              : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 dark:bg-gray-900 dark:text-gray-300 dark:border-slate-800'
+          }`}
+          aria-label="All RFQs tab"
+        >
+          <FileText size={16} />
+          <span>All RFQs</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            effectiveTab === 'all'
+              ? 'bg-white/20 text-white'
+              : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+          }`}>
+            {combinedEnquiries.length}
+          </span>
+        </button>
+
         <button
           type="button"
           onClick={() => setUserSelectedTab('my_enquiries')}
@@ -1200,7 +1318,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <p className="mt-1 pl-10 text-xs text-slate-500 dark:text-gray-400">
                 {effectiveTab === 'my_enquiries'
                   ? 'Direct buyer RFQs invited specifically for your company. Download specifications and submit quotes freely.'
-                  : 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'}
+                  : effectiveTab === 'public_enquiries'
+                  ? 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'
+                  : 'All sourcing enquiries from your buyers and open marketplace combined, newest first.'}
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-gray-400">
@@ -1249,7 +1369,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </label>
 
             {/* Multi-Select Pincode Filter */}
-            <div className="relative block min-w-0">
+            <div ref={pincodeDropdownRef} className="relative block min-w-0">
               <span className="sr-only">Filter enquiries by pincode</span>
               <div className="relative">
                 <button
@@ -1417,7 +1537,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0 || selectedPincodes.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); setUserSelectedTab('all'); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters
@@ -1470,7 +1590,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       null
                     );
                     const parentCompany = getParentCompany(opp.buyer);
-                    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+                    const oppMode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+                    const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic || (rfqRecord as any)?.isPublic);
+                    const isDirectBuyer = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
                     const isLocked = isRfqLockedForVendor(opp.rfqNumber);
                     
                     const isQuoteSubmitted = !!quote || opp.status === 'submitted';
@@ -1890,7 +2012,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* INQUIRY / CLARIFICATION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {inquiryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setInquiryModal, null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -2042,7 +2167,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* BID / QUOTE SUBMISSION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {biddingOn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(closeBidForm)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-4 sm:p-6 max-w-6xl max-h-[92vh] overflow-y-auto w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -2095,7 +2223,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 )}
 
                 <div className="space-y-3">
-                  {(biddingOn.lineItems?.length || 0) > 1 ? (
+                  {(biddingOn.lineItems?.length || 0) > 0 ? (
                     <div>
                       {(biddingOn.lineItems?.length || 0) > 10 && (
                         <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
@@ -2107,7 +2235,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       )}
                       <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Line Item Pricing ({biddingOn.lineItems.length} items) *
+                          {formatString(
+                            biddingOn.lineItems.length === 1
+                              ? UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingSingular
+                              : UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingPlural,
+                            { count: biddingOn.lineItems.length }
+                          )}
                         </label>
                         <div className="flex items-center gap-2">
                           <input

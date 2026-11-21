@@ -1182,6 +1182,240 @@ describe('Identity queries (Neon PostgreSQL)', () => {
 
       expect(orgUuid).toBe('existing-org-uuid');
       expect(querySpy.mock.calls[1][0]).toContain('update organization');
+      expect(querySpy.mock.calls[1][0]).toContain('pincode = case');
+    });
+
+    test('ensureBuyerOrganization retries without pincode on D1 missing-column errors for insert and update', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      dbPool.pool = null;
+      const fakeBinding = { prepare: jest.fn(), batch: jest.fn() };
+      globalThis.__CF_ENV__ = { DB: fakeBinding };
+      jest.spyOn(dbPool, 'rows').mockResolvedValue([{ uuid: 'master-uuid' }]);
+
+      try {
+        // 1. Insert missing-column retry
+        const querySpy = jest.spyOn(dbPool, 'query')
+          .mockResolvedValueOnce({ rows: [] })
+          .mockRejectedValueOnce(new Error('SQLITE_ERROR: table organization has no column named pincode'))
+          .mockResolvedValueOnce({ rowCount: 1 })
+          .mockResolvedValueOnce({ rowCount: 1 });
+
+        const createdOrg = await identityQueries.ensureBuyerOrganization({
+          userUuid: 'u-d1-insert-org',
+          email: 'insert@co.in',
+          orgName: 'D1 Insert Co',
+          street: 'Plot 1',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+        });
+        expect(createdOrg).toEqual(expect.any(String));
+        expect(querySpy.mock.calls[2][0]).toContain('insert into organization');
+        expect(querySpy.mock.calls[2][0]).not.toContain('pincode');
+
+        // Non-missing-column insert error rethrows
+        querySpy
+          .mockResolvedValueOnce({ rows: [] })
+          .mockRejectedValueOnce(new Error('SQLITE_BUSY'));
+        await expect(
+          identityQueries.ensureBuyerOrganization({ userUuid: 'u-d1-fail', email: 'fail@co.in', orgName: 'Fail Co' })
+        ).rejects.toThrow('SQLITE_BUSY');
+
+        // 2. Update missing-column retry
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'existing-d1-org' }] })
+          .mockRejectedValueOnce(new Error('D1_ERROR: no such column: pincode'))
+          .mockResolvedValueOnce({ rowCount: 1 })
+          .mockResolvedValueOnce({ rowCount: 1 });
+
+        const updatedOrg = await identityQueries.ensureBuyerOrganization({
+          userUuid: 'u-d1-update-org',
+          email: 'update@co.in',
+          orgName: 'D1 Update Co',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+        });
+        expect(updatedOrg).toBe('existing-d1-org');
+        expect(querySpy.mock.calls[8][0]).toContain('update organization');
+        expect(querySpy.mock.calls[8][0]).not.toContain('pincode =');
+
+        // Non-missing-column update error rethrows
+        querySpy
+          .mockResolvedValueOnce({ rows: [{ uuid: 'existing-d1-org-2' }] })
+          .mockRejectedValueOnce(new Error('SQLITE_LOCKED'));
+        await expect(
+          identityQueries.ensureBuyerOrganization({ userUuid: 'u-d1-fail-2', email: 'fail2@co.in', orgName: 'Fail2' })
+        ).rejects.toThrow('SQLITE_LOCKED');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+      }
+    });
+
+    test('insertBuyerAccount on D1 retries atomically without pincode when schema lacks pincode', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      dbPool.pool = null;
+      const fakeBinding = { prepare: jest.fn(), batch: jest.fn() };
+      globalThis.__CF_ENV__ = { DB: fakeBinding };
+      jest.spyOn(dbPool, 'rows').mockImplementation(async (sql) => {
+        if (sql.includes('from "user"')) return [];
+        return [{ uuid: 'master-uuid' }];
+      });
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [] });
+
+      try {
+        // 1. New org insert fails once with missing pincode -> PRAGMA omits pincode -> retry succeeds
+        const batchSpy = jest.spyOn(d1Bridge, 'batchD1')
+          .mockRejectedValueOnce(new Error('table organization has no column named pincode'))
+          .mockResolvedValueOnce([{ rows: [{ name: 'uuid' }, { name: 'zip_code' }, { name: 'gstin' }, { name: 'pan' }] }])
+          .mockResolvedValueOnce([{ rows: [{ uuid: 'org-new-1' }] }, { rows: [{ uuid: 'user-new-1' }] }]);
+
+        const created = await identityQueries.insertBuyerAccount({
+          email: 'veera-d1@example.com',
+          password: 'Password@123',
+          firstName: 'Veera',
+          phone: '9381877013',
+          orgName: 'Veera Solutions Pvt Ltd',
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+        });
+        expect(created.created).toBe(true);
+        expect(batchSpy).toHaveBeenCalledTimes(3);
+        expect(batchSpy.mock.calls[2][1][0].text).not.toContain(', pincode,');
+
+        // 2. Reused org update fails once with no such column: pincode -> PRAGMA omits pincode -> retry succeeds
+        jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'org-reused-1' }] });
+        batchSpy
+          .mockRejectedValueOnce(new Error('no such column: pincode'))
+          .mockResolvedValueOnce([{ rows: [{ name: 'uuid' }, { name: 'zip_code' }, { name: 'gstin' }] }])
+          .mockResolvedValueOnce([{ rows: [] }, { rows: [{ uuid: 'user-reused-1' }] }]);
+
+        const reused = await identityQueries.insertBuyerAccount({
+          email: 'veera-reused@example.com',
+          password: 'Password@123',
+          firstName: 'Veera',
+          phone: '9381877013',
+          orgName: 'Veera Solutions Pvt Ltd',
+          pincode: '560037',
+          gstin: '27AAACK3921P1Z9',
+        });
+        expect(reused.created).toBe(true);
+        expect(reused.organizationReused).toBe(true);
+        expect(batchSpy.mock.calls[5][1][0].text).not.toContain('pincode =');
+
+        // 3. Rethrows when PRAGMA returns empty columns or identical statements
+        batchSpy
+          .mockRejectedValueOnce(new Error('no such column: pincode'))
+          .mockResolvedValueOnce([{ rows: [] }]);
+        await expect(identityQueries.insertBuyerAccount({
+          email: 'veera-empty@example.com',
+          password: 'Password@123',
+          phone: '9381877013',
+          orgName: 'Veera Empty',
+          pincode: '560037',
+        })).rejects.toThrow('no such column: pincode');
+
+        batchSpy
+          .mockRejectedValueOnce(new Error('no such column: unknown_col'))
+          .mockResolvedValueOnce([{ rows: [{ name: 'uuid' }, { name: 'pincode' }] }]);
+        await expect(identityQueries.insertBuyerAccount({
+          email: 'veera-same@example.com',
+          password: 'Password@123',
+          phone: '9381877013',
+          orgName: 'Veera Same',
+          pincode: '560037',
+        })).rejects.toThrow('no such column: unknown_col');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+      }
+    });
+
+    test('insertStaffAccount and insertVendorAccount handle concurrent D1 creation races cleanly', async () => {
+      const originalCfEnv = globalThis.__CF_ENV__;
+      dbPool.pool = null;
+      globalThis.__CF_ENV__ = { DB: { prepare: jest.fn(), batch: jest.fn() } };
+      jest.spyOn(dbPool, 'query').mockResolvedValue({ rows: [{ uuid: 'existing-org-race' }] });
+
+      try {
+        // Staff race: user created concurrently -> ALREADY_EXISTS
+        jest.spyOn(dbPool, 'rows')
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ uuid: 'role-1' }])
+          .mockResolvedValueOnce([{ uuid: 'status-1' }])
+          .mockResolvedValueOnce([{ uuid: 'org-type-1' }])
+          .mockResolvedValueOnce([{ uuid: 'concurrent-staff-1', username: 'staff-race@co.in', role_name: 'CATEGORY_MANAGER' }]);
+        jest.spyOn(d1Bridge, 'batchD1').mockResolvedValueOnce([{ rows: [] }]);
+
+        const staffRace = await identityQueries.insertStaffAccount({
+          email: 'staff-race@co.in',
+          password: 'Password@123',
+          firstName: 'Staff',
+          phone: '9876543210',
+          roleName: 'CATEGORY_MANAGER',
+          orgTypeName: 'INTERNAL',
+          statusName: 'ACTIVE',
+        });
+        expect(staffRace).toMatchObject({ created: false, reason: 'ALREADY_EXISTS' });
+
+        // Staff race: org disappeared -> throws
+        jest.spyOn(dbPool, 'rows')
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ uuid: 'role-1' }])
+          .mockResolvedValueOnce([{ uuid: 'status-1' }])
+          .mockResolvedValueOnce([{ uuid: 'org-type-1' }])
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([]);
+        jest.spyOn(d1Bridge, 'batchD1').mockResolvedValueOnce([{ rows: [] }]);
+        await expect(identityQueries.insertStaffAccount({
+          email: 'staff-gone@co.in',
+          password: 'Password@123',
+          firstName: 'Staff',
+          phone: '9876543210',
+          roleName: 'CATEGORY_MANAGER',
+          orgTypeName: 'INTERNAL',
+          statusName: 'ACTIVE',
+        })).rejects.toThrow('Staff account could not be created');
+
+        // Vendor race: user created concurrently -> ALREADY_EXISTS
+        jest.spyOn(dbPool, 'rows')
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ uuid: 'role-v' }])
+          .mockResolvedValueOnce([{ uuid: 'status-v' }])
+          .mockResolvedValueOnce([{ uuid: 'org-type-v' }])
+          .mockResolvedValueOnce([{ uuid: 'concurrent-vendor-1', username: 'vendor-race@co.in', role_name: 'VENDOR' }]);
+        jest.spyOn(d1Bridge, 'batchD1').mockResolvedValueOnce([{ rows: [] }]);
+        const vendorRace = await identityQueries.insertVendorAccount({
+          email: 'vendor-race@co.in',
+          password: 'Password@123',
+          firstName: 'Vendor',
+          phone: '9876543210',
+          orgName: 'Race Vendor',
+        });
+        expect(vendorRace).toMatchObject({ created: false, reason: 'ALREADY_EXISTS' });
+
+        // Vendor race: org disappeared -> throws
+        jest.spyOn(dbPool, 'rows')
+          .mockResolvedValueOnce([])
+          .mockResolvedValueOnce([{ uuid: 'role-v' }])
+          .mockResolvedValueOnce([{ uuid: 'status-v' }])
+          .mockResolvedValueOnce([{ uuid: 'org-type-v' }])
+          .mockResolvedValueOnce([]);
+        jest.spyOn(d1Bridge, 'batchD1').mockResolvedValueOnce([{ rows: [] }]);
+        await expect(identityQueries.insertVendorAccount({
+          email: 'vendor-gone@co.in',
+          password: 'Password@123',
+          firstName: 'Vendor',
+          phone: '9876543210',
+          orgName: 'Gone Vendor',
+        })).rejects.toThrow('Vendor account could not be created');
+      } finally {
+        globalThis.__CF_ENV__ = originalCfEnv;
+      }
     });
   });
 });

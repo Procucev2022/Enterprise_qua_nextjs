@@ -859,4 +859,36 @@ describe('DocumentVaultDashboard', () => {
     if (closeToast) fireEvent.click(closeToast);
   });
 
+  test('handles backdrop click and escape key for upload modal and column settings', async () => {
+    render(<DocumentVaultDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Enterprise Sourcing ROI Deck')).toBeInTheDocument();
+    });
+
+    // 1. Upload modal Escape key & backdrop click
+    fireEvent.click(screen.getByTestId('upload-document-btn'));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside should not close
+    fireEvent.click(dialog.querySelector('h2')!);
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes upload modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByTestId('upload-document-btn'));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Column settings Escape key
+    fireEvent.click(screen.getByRole('button', { name: /Column Settings/i }));
+    expect(screen.getByRole('dialog')).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

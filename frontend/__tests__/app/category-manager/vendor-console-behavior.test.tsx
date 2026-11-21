@@ -151,7 +151,7 @@ test('minor category filter is scoped to the selected major and sent as minors i
     ],
   });
   render(<VendorConsole onNavigateToMatrix={jest.fn()} />);
-  const minorSelect = await screen.findByRole('combobox', { name: 'Minor category' });
+  const minorSelect = await screen.findByRole('combobox', { name: 'Category' });
   expect(minorSelect).toBeDisabled();
 
   const majorSelect = screen.getAllByRole('combobox')[2];
@@ -215,7 +215,7 @@ describe('pincode filter and filter combinations', () => {
     await screen.findByRole('option', { name: 'IT' });
 
     if (category) fireEvent.change(screen.getAllByRole('combobox')[2], { target: { value: category } });
-    if (minor) fireEvent.change(screen.getByRole('combobox', { name: 'Minor category' }), { target: { value: minor } });
+    if (minor) fireEvent.change(screen.getByRole('combobox', { name: 'Category' }), { target: { value: minor } });
     if (pin) fireEvent.change(screen.getByRole('textbox', { name: 'Pincode' }), { target: { value: pin } });
     if (search) fireEvent.change(screen.getByPlaceholderText(/Search Vendor name/), { target: { value: search } });
 

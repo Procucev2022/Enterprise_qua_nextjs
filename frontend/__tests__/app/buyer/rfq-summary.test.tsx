@@ -426,10 +426,9 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
 
       renderScreen([persisted]);
 
-      // Column order: identity, status, items, budget, delivery, actions. The items
-      // cell also carries the quote count as a sub-line.
+      // Column order: rfqNumber, title, category, mode, source, status, items, quotes, budget, delivery, actions.
       const cells = dataRows()[0].querySelectorAll('td');
-      expect(cells[2].textContent).toContain('0');
+      expect(cells[6].textContent).toContain('0');
       expect(within(dataRows()[0]).getByText(RFQ.deliveryDateUnset)).toBeInTheDocument();
     });
 

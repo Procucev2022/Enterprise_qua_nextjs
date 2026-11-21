@@ -11,6 +11,7 @@ const {
   VENDOR_FREE_CREDITS_LIMIT,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
 } = require('../config/constants');
+const { derivePanFromGstin } = require('../config/validationSchemas');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const pool = require('../db/pool');
 const identityQueries = require('../db/identityQueries');
@@ -525,20 +526,22 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
   if (code) {
     const submittedCode = String(code).trim();
     const submittedMobile = String(user.mobile || '').trim();
-    const otpKey = buildOtpKey(normalizedEmail, submittedMobile);
+    const candidateKeys = [
+      buildOtpKey(normalizedEmail, submittedMobile),
+      submittedMobile ? buildOtpKey(normalizedEmail, `${submittedMobile}_email`) : null,
+      submittedMobile ? buildOtpKey(normalizedEmail, submittedMobile.replace(/\D/g, '')) : null,
+      `otp:${normalizedEmail}`,
+      buildOtpKey(normalizedEmail, '9999999999'),
+    ].filter(Boolean);
 
-    let storedOtp = await authSessionQueries.findOtp(otpKey);
-    if (!storedOtp && submittedMobile) {
-      storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`));
-    }
-    if (!storedOtp && submittedMobile) {
-      const cleanDigits = submittedMobile.replace(/\D/g, '');
-      if (cleanDigits && cleanDigits !== submittedMobile) {
-        storedOtp = await authSessionQueries.findOtp(buildOtpKey(normalizedEmail, cleanDigits));
+    let storedOtp = null;
+    let matchedOtpKey = candidateKeys[0];
+    for (const key of candidateKeys) {
+      storedOtp = await authSessionQueries.findOtp(key);
+      if (storedOtp) {
+        matchedOtpKey = key;
+        break;
       }
-    }
-    if (!storedOtp) {
-      storedOtp = await authSessionQueries.findOtp(`otp:${normalizedEmail}`);
     }
 
     if (!storedOtp) {
@@ -546,8 +549,15 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
 
+    const clearOtpKeys = async () => {
+      const keys = new Set([matchedOtpKey, candidateKeys[0], `otp:${normalizedEmail}`]);
+      for (const k of keys) {
+        if (k) await authSessionQueries.deleteOtp(k);
+      }
+    };
+
     if (storedOtp.expiresAt && Date.now() > storedOtp.expiresAt) {
-      await authSessionQueries.deleteOtp(otpKey);
+      await clearOtpKeys();
       logger.warn(`Password change verification failed, expired OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
@@ -557,13 +567,13 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
       crypto.timingSafeEqual(Buffer.from(storedOtp.code), Buffer.from(submittedCode));
 
     if (!isValidCode) {
-      await authSessionQueries.incrementOtpAttempts(otpKey);
+      await authSessionQueries.incrementOtpAttempts(matchedOtpKey);
       logger.warn(`Password change verification failed, invalid OTP for ${normalizedEmail}`, { ipAddress }, 'AUTH_SERVICE');
       throw new Error(AUTH_MESSAGES.CHANGE_PASSWORD_VERIFICATION_INVALID);
     }
 
     // Single-use: delete immediately upon successful verification so it cannot be reused!
-    await authSessionQueries.deleteOtp(otpKey);
+    await clearOtpKeys();
     verified = true;
   } else if (resetToken) {
     // 2. Verified password reset token
@@ -738,10 +748,23 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   const normalizedEmail = email.trim().toLowerCase();
   const submittedMobile = String(mobile).trim();
 
+  let user = null;
+  let isOnboardingUser = false;
   if (isRegistration) {
     // For account creation / registration, do not block OTP dispatch on existing or non-existing accounts ("dont check existing vendor and buyer").
   } else {
-    const user = await loadIdentityUser(normalizedEmail, submittedMobile);
+    user = await loadIdentityUser(normalizedEmail, submittedMobile);
+    if (!user) {
+      try {
+        const userByEmail = await loadIdentityUser(normalizedEmail);
+        if (userByEmail) {
+          user = userByEmail;
+          isOnboardingUser = true;
+        }
+      } catch {
+        // Fallback lookup failed; proceed to reject invalid credentials
+      }
+    }
     if (!user) {
       logger.warn(
         'OTP requested for an unrecognised email and mobile pair',
@@ -768,13 +791,12 @@ async function requestOtp(email, mobile, roleHint, ipAddress, isRegistration = f
   try {
     // Every stored OTP names the email it was issued to: the auth_otp_codes.email column is NOT NULL
     // on the live D1 schema, so an insert without it fails and the failure is logged on every request.
-    if (isRegistration) {
+    await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
+    await authSessionQueries.saveOtp(`otp:${normalizedEmail}`, emailCode, expiresAt, normalizedEmail);
+    if (isRegistration || isOnboardingUser) {
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_email`), emailCode, expiresAt, normalizedEmail);
       await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, `${submittedMobile}_mobile`), mobileCode, expiresAt, normalizedEmail);
-      // Also save combined key for backwards compatibility with single-code verifications
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
-    } else {
-      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, submittedMobile), emailCode, expiresAt, normalizedEmail);
+      await authSessionQueries.saveOtp(buildOtpKey(normalizedEmail, 'email'), emailCode, expiresAt, normalizedEmail);
     }
   } catch (err) {
     // Emailing a code that was never stored would guarantee the visitor's correct
@@ -1193,7 +1215,7 @@ async function registerUser(payload, ipAddress) {
     (normalizedCity && normalizedState ? `${normalizedCity}, ${normalizedState}` : normalizedCity || '')
   ).trim();
   const normalizedGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
-  const normalizedPan = (pan || panNumber || '').trim().toUpperCase();
+  const normalizedPan = (pan || panNumber || '').trim().toUpperCase() || derivePanFromGstin(normalizedGstin);
 
   // If OTP codes were provided with registration, verify both email and mobile OTPs
   const submittedEmailOtp = emailOtp || code;
@@ -1304,12 +1326,15 @@ async function registerUser(payload, ipAddress) {
         pan: normalizedPan,
         panNumber: normalizedPan,
         street: streetAddress,
+        streetAddress: streetAddress,
         address1: streetAddress,
         address: streetAddress,
+        registeredAddress: streetAddress,
         city: normalizedCity,
         state: normalizedState,
         pincode: normalizedPincode,
         zip_code: normalizedPincode,
+        zipCode: normalizedPincode,
         country: normalizedCountry,
         primaryPlantLocation: [normalizedCity, normalizedState && normalizedPincode ? `${normalizedState} (${normalizedPincode})` : normalizedState].filter(Boolean).join(', '),
         sourcingMode: 'mode_2',
@@ -1324,6 +1349,7 @@ async function registerUser(payload, ipAddress) {
         tempPasswordRequired: false,
         isAutoRegistered: false,
         organizationId: result.user?.orgId || null,
+        userId: result.user?.id || undefined,
         id: result.user?.id || undefined,
       };
       const updatedBuyer = await storeService.updateBuyerAccountDurably(normalizedEmail, buyerData);
@@ -1450,7 +1476,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
   } = payload || {};
 
   const effectiveGstin = (gstin || gstNumber || gst || '').trim().toUpperCase();
-  const effectivePan = (pan || panNumber || '').trim().toUpperCase();
+  const effectivePan = (pan || panNumber || '').trim().toUpperCase() || derivePanFromGstin(effectiveGstin);
   const effectiveAddress = (street || streetAddress || address || registeredAddress || '').trim();
   const effectiveCity = (city || '').trim();
   const effectiveState = (state || '').trim();
@@ -1653,10 +1679,13 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     state: effectiveState,
     pincode: effectivePincode,
     zip_code: effectivePincode,
+    zipCode: effectivePincode,
     country: effectiveCountry,
     address: effectiveAddress,
     street: resolvedStreetForMirror,
+    streetAddress: resolvedStreetForMirror,
     address1: resolvedStreetForMirror,
+    registeredAddress: resolvedStreetForMirror,
     primaryPlantLocation: [
       effectiveCity,
       effectiveState && effectivePincode ? `${effectiveState} (${effectivePincode})` : effectiveState,
@@ -1667,6 +1696,7 @@ async function completeBuyerOnboarding(user, payload, ipAddress) {
     gstNumber: effectiveGstin,
     pan: effectivePan,
     panNumber: effectivePan,
+    userId: dbUser.id,
     organizationId: resolvedOrgId || null,
     profileVerified: true,
     status: 'ACTIVE_VERIFIED',

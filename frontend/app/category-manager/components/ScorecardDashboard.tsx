@@ -86,21 +86,34 @@ export function ScorecardDashboard() {
   const [drilldownExecutive, setDrilldownExecutive] = useState<TeamScorecardRow | null>(null);
 
   // Column customization states
-  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch {}
-    }
-    return SCORECARD_DEFAULT_COLUMNS;
-  });
+  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(SCORECARD_DEFAULT_COLUMNS);
   const [showScorecardColumnSettings, setShowScorecardColumnSettings] = useState<boolean>(false);
   const [scorecardSortField, setScorecardSortField] = useState<string>('rank');
   const [scorecardSortOrder, setScorecardSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Hydrate scorecard column preferences safely after mount to prevent SSR mismatch
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setScorecardColumns(parsed);
+        }
+      }
+    } catch {}
+  }, []);
+
+  // Close drilldown modal on Escape key
+  useEffect(() => {
+    if (!drilldownExecutive) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrilldownExecutive(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [drilldownExecutive]);
 
   const handleScorecardSort = (field: string) => {
     if (scorecardSortField === field) {
@@ -981,8 +994,18 @@ export function ScorecardDashboard() {
 
       {/* Drilldown Modal for Individual Executive */}
       {drilldownExecutive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDrilldownExecutive(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{strings.executivePerformanceTitle}</h3>

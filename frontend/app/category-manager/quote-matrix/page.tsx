@@ -1,17 +1,31 @@
 'use client';
 
-import React from 'react';
+import React, { Suspense } from 'react';
 import { useRouter } from 'next/navigation';
 import QuoteMatrix from '@/app/buyer/quote-matrix';
+import { QuoteMatrixErrorBoundary } from '@/app/components/QuoteMatrixErrorBoundary';
 
-export default function CategoryManagerQuoteMatrixPage() {
+function CategoryManagerQuoteMatrixView() {
   const router = useRouter();
   const handleBack = () => {
-    if (typeof window !== 'undefined' && window.history.length > 1) {
+    if (window.history.length > 1) {
       router.back();
     } else {
       router.push('/category-manager/all-rfqs');
     }
   };
-  return <QuoteMatrix onBackToDashboard={handleBack} />;
+  return (
+    <QuoteMatrixErrorBoundary onBack={handleBack}>
+      <QuoteMatrix onBackToDashboard={handleBack} />
+    </QuoteMatrixErrorBoundary>
+  );
 }
+
+export default function CategoryManagerQuoteMatrixPage() {
+  return (
+    <Suspense fallback={null}>
+      <CategoryManagerQuoteMatrixView />
+    </Suspense>
+  );
+}
+

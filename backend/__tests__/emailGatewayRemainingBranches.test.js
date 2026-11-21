@@ -166,6 +166,19 @@ describe('emailGatewayService remaining branch coverage', () => {
       const saved = await emailGatewayService.storeEmailAttachments(messageWithAttachments);
       expect(saved.length).toBe(1);
       expect(saved[0].id).toBe('att-1');
+
+      // Signature attachments and inline graphics must be skipped without calling saveAttachment
+      const saveSpy = jest.spyOn(rfqAttachmentService, 'saveAttachment').mockClear();
+      const messageWithSignatureOnly = {
+        attachments: [
+          { fileName: 'signature_logo.png', contentType: 'image/png', isSignature: true, content: 'sig' },
+          { fileName: 'icon.jpg', contentType: 'image/jpeg', role: 'signature', content: 'icon' },
+          { fileName: 'logo.png', contentType: 'image/png', contentDisposition: 'inline', content: 'logo' },
+        ],
+      };
+      const savedSig = await emailGatewayService.storeEmailAttachments(messageWithSignatureOnly);
+      expect(savedSig).toEqual([]);
+      expect(saveSpy).not.toHaveBeenCalled();
     });
   });
 

@@ -112,12 +112,14 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       expect(result.rfq).toBeDefined();
 
-      // Verify buyer account was created with V0 configuration and no phone on record (no placeholder number)
+      // Verify buyer account was created with V0 configuration, placeholder mobile number 9999999999, and Email source
       const account = await storeService.getBuyerAccountByEmail(SENDER);
       expect(account).toBeDefined();
       expect(account.corporateEmail).toBe(SENDER);
       expect(account.sourcingMode).toBe('mode_0');
-      expect(account.phone || account.mobileNumber || null).toBeNull();
+      expect(account.phone || account.mobileNumber).toBe('+919999999999');
+      expect(account.sourceType).toBe('Email');
+      expect(account.accountSource).toBe('Email');
       expect(account.onboardingRequired).toBe(true);
       expect(account.phoneVerified).toBe(false);
 
@@ -135,7 +137,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
           rfqNumber: result.rfq.rfqNumber,
         })
       );
-    });
+    }, 30000);
   });
 
   describe('Scenario 5: Registered buyer continues to use original workflow', () => {

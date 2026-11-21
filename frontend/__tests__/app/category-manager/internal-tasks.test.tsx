@@ -355,43 +355,46 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     expect(screen.getByRole('heading', { name: 'Filter Tasks' })).toBeInTheDocument();
 
+    // Verify removed fields (Related Module/Entity, Task Type, Created By) are absent
+    expect(screen.queryByText('Related Module / Entity')).not.toBeInTheDocument();
+    expect(screen.queryByText('Task Type')).not.toBeInTheDocument();
+    expect(screen.queryByText('Created By')).not.toBeInTheDocument();
+
+    // Verify Status dropdown options are only: All Statuses, Open, Pending, Closed
+    const statusSelect = screen.getByTestId('drawer-filter-status');
+    const statusOptions = Array.from(statusSelect.querySelectorAll('option')).map((o) => o.textContent?.trim());
+    expect(statusOptions).toEqual(['All Statuses', 'Open', 'Pending', 'Closed']);
+
     // Select Priority High
-    const prioritySelect = screen.getByDisplayValue('All Priorities');
+    const prioritySelect = screen.getByTestId('drawer-filter-priority');
     fireEvent.change(prioritySelect, { target: { value: 'High' } });
 
     // Select Status Pending
-    const statusSelect = screen.getByDisplayValue('All Statuses');
     fireEvent.change(statusSelect, { target: { value: 'Pending' } });
 
-    // Select Related Module RFQ
-    const moduleSelect = screen.getByDisplayValue('All Modules');
-    fireEvent.change(moduleSelect, { target: { value: 'RFQ' } });
-
-    // Select Task Type
-    const typeSelect = screen.getByDisplayValue('All Task Types');
-    fireEvent.change(typeSelect, { target: { value: 'itt_quotation_review' } });
+    // Select Category
+    const categoryFilterSelect = screen.getByTestId('drawer-filter-category');
+    fireEvent.change(categoryFilterSelect, { target: { value: 'CALL_TASK' } });
 
     // Assigned User input
-    const assignedInput = screen.getByPlaceholderText(/Search assignee name/i);
+    const assignedInput = screen.getByTestId('drawer-filter-assignee');
     fireEvent.change(assignedInput, { target: { value: 'Sudheer' } });
 
     // Date inputs
-    const dateInputs = document.querySelectorAll('input[type="date"]');
-    if (dateInputs.length >= 2) {
-      fireEvent.change(dateInputs[0], { target: { value: '2026-10-01' } });
-      fireEvent.change(dateInputs[1], { target: { value: '2026-11-30' } });
-    }
+    const dueFromInput = screen.getByTestId('drawer-filter-due-from');
+    const dueToInput = screen.getByTestId('drawer-filter-due-to');
+    fireEvent.change(dueFromInput, { target: { value: '2026-10-01' } });
+    fireEvent.change(dueToInput, { target: { value: '2026-11-30' } });
 
     // Apply filters
-    const applyBtn = screen.getByRole('button', { name: 'Apply Filters' });
+    const applyBtn = screen.getByTestId('drawer-apply-filters-btn');
     fireEvent.click(applyBtn);
 
     expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
       expect.objectContaining({
         priority: 'High',
         status: 'Pending',
-        relatedEntityType: 'RFQ',
-        taskTypeId: 'itt_quotation_review',
+        taskCategory: 'CALL_TASK',
         assignedTo: 'Sudheer',
         dueFrom: '2026-10-01',
         dueTo: '2026-11-30',
@@ -399,8 +402,8 @@ describe('Action Center & Internal Tasks Redesign', () => {
     );
 
     // Reopen drawer and reset
-    fireEvent.click(filterBtn);
-    const resetBtn = screen.getByRole('button', { name: 'Reset' });
+    fireEvent.click(screen.getByTestId('toolbar-filter-btn'));
+    const resetBtn = screen.getByTestId('drawer-reset-filters-btn');
     fireEvent.click(resetBtn);
 
     expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
@@ -487,20 +490,20 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
         'tsk_101',
-        expect.objectContaining({ status: 'Completed' })
+        expect.objectContaining({ status: 'Closed' })
       );
     });
 
-    // Toggle completed task back to pending
+    // Toggle completed task back to open
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
       ...mockTasks[1],
-      status: 'Pending',
+      status: 'Open',
     });
     fireEvent.click(checkboxes[1]);
     await waitFor(() => {
       expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
         'tsk_102',
-        expect.objectContaining({ status: 'Pending' })
+        expect.objectContaining({ status: 'Open' })
       );
     });
   });
@@ -536,9 +539,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const prioritySelect = screen.getByDisplayValue('Medium');
     fireEvent.change(prioritySelect, { target: { value: 'High' } });
 
-    // Change Status to In Progress
-    const statusSelect = screen.getByDisplayValue('Pending');
-    fireEvent.change(statusSelect, { target: { value: 'In Progress' } });
+    // Change Status to Pending
+    const statusSelect = screen.getByDisplayValue('Open');
+    fireEvent.change(statusSelect, { target: { value: 'Pending' } });
 
     // Change Assign To via custom assignee toggle
     const customAssigneeBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.customAssignee });
@@ -557,10 +560,6 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const notesInput = screen.getByPlaceholderText(/Optional internal remarks/i);
     fireEvent.change(notesInput, { target: { value: 'High priority customer' } });
 
-    // Select Task Type
-    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
-    fireEvent.change(taskTypeSelect, { target: { value: 'itt_buyer_onboarding' } });
-
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
     fireEvent.click(submitBtn);
 
@@ -570,7 +569,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
           title: 'Review New Solar Vendor Catalog',
           description: 'Check electrical compliance certificates',
           priority: 'High',
-          status: 'In Progress',
+          status: 'Pending',
         })
       );
     });
@@ -601,16 +600,11 @@ describe('Action Center & Internal Tasks Redesign', () => {
     if (closeBtn) fireEvent.click(closeBtn);
   });
 
-  test('allows creating custom task type inline inside modal', async () => {
-    (internalTaskClient.createNewTaskType as jest.Mock).mockResolvedValue({
-      id: 'itt_custom_solar',
-      name: 'Solar Panel Compliance',
-      default_module: 'RFQ',
-    });
+  test('allows adding another custom assignee via Add another one inside modal', async () => {
     (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValue({
       id: 'tsk_104',
       task_number: 'TASK-1004',
-      title: 'Task with Custom Type',
+      title: 'Task with New Assignee',
     });
 
     render(<InternalTasksDashboard />);
@@ -622,21 +616,33 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
-    fireEvent.click(addCustomBtn);
+    // Click + Add another one
+    const addAnotherBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.addAnotherOne });
+    fireEvent.click(addAnotherBtn);
 
-    const customTypeInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder);
-    fireEvent.change(customTypeInput, { target: { value: 'Solar Panel Compliance' } });
+    const customAssigneeInput = screen.getByTestId('custom-assignee-input');
+    fireEvent.change(customAssigneeInput, { target: { value: 'Ramesh Patel' } });
+
+    // Confirm adding custom assignee
+    const confirmAddBtn = screen.getByTestId('confirm-add-assignee-button');
+    fireEvent.click(confirmAddBtn);
+
+    // Verify it returned to the select dropdown and selected Ramesh Patel
+    const selectDropdown = screen.getByTestId('select-assignee-dropdown');
+    expect(selectDropdown).toHaveValue('Ramesh Patel');
 
     const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
-    fireEvent.change(titleInput, { target: { value: 'Task with Custom Type' } });
+    fireEvent.change(titleInput, { target: { value: 'Task with New Assignee' } });
 
     const submitBtn = screen.getByRole('button', { name: 'Create Task' });
     fireEvent.click(submitBtn);
 
     await waitFor(() => {
-      expect(internalTaskClient.createNewTaskType).toHaveBeenCalledWith(
-        expect.objectContaining({ name: 'Solar Panel Compliance' })
+      expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
+        expect.objectContaining({
+          title: 'Task with New Assignee',
+          assignedToName: 'Ramesh Patel',
+        })
       );
     });
   });
@@ -796,24 +802,20 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const createBtn = screen.getByRole('button', { name: /Create Internal Task/i });
     fireEvent.click(createBtn);
 
-    // Verify task type dropdown exists and options are populated
-    const taskTypeSelect = screen.getByDisplayValue(/Quotation Review/i);
-    expect(taskTypeSelect).toBeInTheDocument();
+    // Verify task type dropdown is removed from Create Internal Task modal
+    expect(screen.queryByTestId('create-task-type-select')).not.toBeInTheDocument();
 
-    // Change task type select
-    fireEvent.change(taskTypeSelect, { target: { value: 'itt_vendor_followup' } });
+    // Toggle custom assignee input and back to existing
+    const addAnotherBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.addAnotherOne });
+    fireEvent.click(addAnotherBtn);
 
-    // Toggle custom task type inline input
-    const addCustomBtn = screen.getByRole('button', { name: /\+ Add Custom Task Type/i });
-    fireEvent.click(addCustomBtn);
-
-    expect(screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder)).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customAssigneePlaceholder)).toBeInTheDocument();
 
     // Toggle back to existing
-    const chooseExistingBtn = screen.getByRole('button', { name: /Choose Existing/i });
+    const chooseExistingBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.chooseExistingMember });
     fireEvent.click(chooseExistingBtn);
 
-    expect(screen.getByDisplayValue(/Vendor Follow-up/i)).toBeInTheDocument();
+    expect(screen.getByTestId('select-assignee-dropdown')).toBeInTheDocument();
   });
 
   test('renders page wrapper CategoryManagerInternalTasksPage', async () => {
@@ -936,13 +938,13 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
 
     const assigneeSelect = screen.getByTestId('toolbar-assignee-select');
-    fireEvent.change(assigneeSelect, { target: { value: 'Pavani' } });
+    fireEvent.change(assigneeSelect, { target: { value: 'Govardhan' } });
 
     await waitFor(() => {
       expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-        expect.objectContaining({ assignedTo: 'Pavani' })
+        expect.objectContaining({ assignedTo: 'Govardhan' })
       );
-      expect(internalTaskClient.fetchTaskSummary).toHaveBeenCalledWith({ assignedTo: 'Pavani' });
+      expect(internalTaskClient.fetchTaskSummary).toHaveBeenCalledWith({ assignedTo: 'Govardhan' });
     });
 
     // Reset to all
@@ -954,7 +956,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
-  test('toggles My Tasks button on and off', async () => {
+  test('filters by assignee dropdown selecting session user and all users', async () => {
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: [mockTasks[0]],
       total: 1,
@@ -966,18 +968,16 @@ describe('Action Center & Internal Tasks Redesign', () => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
 
-    const myTasksBtn = screen.getByTestId('toolbar-my-tasks-btn');
-    // Click on
-    fireEvent.click(myTasksBtn);
+    const assigneeSelect = screen.getByTestId('toolbar-assignee-select');
+    fireEvent.change(assigneeSelect, { target: { value: 'Sudheer' } });
 
     await waitFor(() => {
       expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-        expect.objectContaining({ assignedTo: 'Navin Chaudhary' })
+        expect.objectContaining({ assignedTo: 'Sudheer' })
       );
     });
 
-    // Click off (toggles back to all)
-    fireEvent.click(myTasksBtn);
+    fireEvent.change(assigneeSelect, { target: { value: 'all' } });
     await waitFor(() => {
       expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
         expect.objectContaining({ assignedTo: '' })
@@ -1108,7 +1108,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
       ...mockTasks[1],
-      status: 'Pending',
+      status: 'Open',
     });
 
     render(<InternalTasksDashboard />);
@@ -1129,7 +1129,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
         'tsk_102',
-        expect.objectContaining({ status: 'Pending' })
+        expect.objectContaining({ status: 'Open' })
       );
     });
   });
@@ -1376,10 +1376,6 @@ describe('Action Center & Internal Tasks Redesign', () => {
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
     fireEvent.click(checkboxes[1]);
 
-    // Click My Tasks toggle when sessionUser is null to test fallback 'My Tasks'
-    const myTasksBtn = screen.getByRole('button', { name: UI_STRINGS.actionCenter.tasks.myTasks });
-    fireEvent.click(myTasksBtn);
-
     unmount();
   });
 
@@ -1475,7 +1471,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     // Toolbar select Special Ops User
     const toolbarSelect = screen.getByTestId('toolbar-assignee-select');
-    fireEvent.change(toolbarSelect, { target: { value: 'Special Ops User' } });
+    fireEvent.change(toolbarSelect, { target: { value: 'Chandan' } });
 
     // Open create modal
     const openCreateBtn = screen.getByRole('button', { name: /Create Internal Task/i });
@@ -1485,16 +1481,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     const selectAssignee = screen.getByTestId('select-assignee-dropdown');
     fireEvent.change(selectAssignee, { target: { value: 'Special Ops User' } });
 
-    // Select Unassigned (empty string)
-    fireEvent.change(selectAssignee, { target: { value: '' } });
+    // Select Krishna Chaitanya
+    fireEvent.change(selectAssignee, { target: { value: 'Krishna Chaitanya' } });
 
-    // Switch to inline custom type mode and mock createNewTaskType returning null
-    const addTypeBtn = screen.getByRole('button', { name: '+ Add Custom Task Type' });
-    fireEvent.click(addTypeBtn);
-    const customTypeInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.customTypeNamePlaceholder);
-    fireEvent.change(customTypeInput, { target: { value: 'Experimental Type' } });
-
-    (internalTaskClient.createNewTaskType as jest.Mock).mockResolvedValueOnce(null);
     (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce({
       ...mockTasks[0],
       id: 'tsk_experimental',
@@ -1510,6 +1499,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
       expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
         expect.objectContaining({
           title: 'Task with custom type failure',
+          assignedToName: 'Krishna Chaitanya',
         })
       );
     });
@@ -1839,10 +1829,10 @@ describe('Action Center & Internal Tasks Redesign', () => {
       );
     });
 
-    fireEvent.change(categorySelect, { target: { value: 'COMMUNICATION' } });
+    fireEvent.change(categorySelect, { target: { value: 'CALL_TASK' } });
     await waitFor(() => {
       expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-        expect.objectContaining({ taskCategory: 'COMMUNICATION' })
+        expect.objectContaining({ taskCategory: 'CALL_TASK' })
       );
     });
 
@@ -1853,67 +1843,80 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(filterBtn);
 
     const drawerCatSelect = screen.getByTestId('drawer-filter-category');
-    fireEvent.change(drawerCatSelect, { target: { value: 'DEMO_SCHEDULING' } });
+    fireEvent.change(drawerCatSelect, { target: { value: 'DEMO_SCHEDULE' } });
 
     const applyBtn = screen.getByRole('button', { name: 'Apply Filters' });
     fireEvent.click(applyBtn);
 
     await waitFor(() => {
       expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalledWith(
-        expect.objectContaining({ taskCategory: 'DEMO_SCHEDULING' })
+        expect.objectContaining({ taskCategory: 'DEMO_SCHEDULE' })
       );
     });
   });
 
-  test('handles check task reminders button across success, failure, and error', async () => {
+  test('renders toolbar with search, categories, assignees, filters, and export csv next to column settings', async () => {
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
       total: mockTasks.length,
     });
 
-    // 1. Success branch with message
-    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
-      success: true,
-      dispatched: 3,
-      message: 'Dispatched 3 deadline alerts.',
-    });
-
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
-      expect(screen.getByTestId('toolbar-check-reminders-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('toolbar-gear-btn')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
-    await waitFor(() => {
-      expect(internalTaskClient.checkTaskReminders).toHaveBeenCalled();
-      expect(screen.getByText('Dispatched 3 deadline alerts.')).toBeInTheDocument();
-    });
+    // Confirm My Tasks and Reminders buttons are completely removed
+    expect(screen.queryByTestId('toolbar-my-tasks-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toolbar-check-reminders-btn')).not.toBeInTheDocument();
+    expect(screen.getByText('Export CSV')).toBeInTheDocument();
 
-    // 2. Success branch without message (default fallback)
-    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
-      success: true,
-    });
-    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
-    await waitFor(() => {
-      expect(screen.getByText('Dispatched 0 reminders.')).toBeInTheDocument();
-    });
+    // Verify All Users toolbar dropdown reflects the 4 users (Govardhan, Chandan, Krishna Chaitanya, Sudheer) and excludes Unassigned and Category Manager
+    const assigneeSelect = screen.getByTestId('toolbar-assignee-select');
+    const options = Array.from(assigneeSelect.querySelectorAll('option')).map((o) => o.textContent?.trim());
+    expect(options).toContain('All Users');
+    expect(options).toContain('Govardhan');
+    expect(options).toContain('Chandan');
+    expect(options).toContain('Krishna Chaitanya');
+    expect(options).toContain('Sudheer');
+    expect(options.some((opt) => opt?.toLowerCase().includes('category manager'))).toBe(false);
+    expect(options.some((opt) => opt?.toLowerCase() === 'unassigned')).toBe(false);
 
-    // 3. Failure branch without error (default fallback)
-    (internalTaskClient.checkTaskReminders as jest.Mock).mockResolvedValueOnce({
-      success: false,
-    });
-    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
-    await waitFor(() => {
-      expect(screen.getByText('Failed to check reminders.')).toBeInTheDocument();
-    });
+    // Verify All Categories and All Users have proper width classes so text is fully visible
+    const categorySelect = screen.getByTestId('toolbar-category-select');
+    expect(categorySelect.className).toContain('w-[150px]');
+    expect(assigneeSelect.className).toContain('w-[130px]');
 
-    // 4. Exception branch
-    (internalTaskClient.checkTaskReminders as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
-    fireEvent.click(screen.getByTestId('toolbar-check-reminders-btn'));
-    await waitFor(() => {
-      expect(screen.getByText('Error checking task reminders.')).toBeInTheDocument();
-    });
+    // Verify the 9 toolbar items exist in order
+    expect(screen.getByPlaceholderText(/Search by title/i)).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-create-task-btn')).toBeInTheDocument();
+    expect(categorySelect).toBeInTheDocument();
+    expect(assigneeSelect).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-send-sms-email-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-filter-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-refresh-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-gear-btn')).toBeInTheDocument();
+
+    // Test selecting specific user in toolbar assignee select
+    fireEvent.change(assigneeSelect, { target: { value: 'Govardhan' } });
+    fireEvent.change(assigneeSelect, { target: { value: 'Sudheer' } });
+    fireEvent.change(assigneeSelect, { target: { value: 'all' } });
+    fireEvent.change(assigneeSelect, { target: { value: 'all' } });
+
+    // Open create task modal and verify Task Type is completely removed and Category Manager is excluded from Assign to User
+    fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
+    expect(screen.queryByTestId('create-task-type-select')).not.toBeInTheDocument();
+    const modalAssigneeSelect = screen.getByTestId('select-assignee-dropdown');
+    const modalOptions = Array.from(modalAssigneeSelect.querySelectorAll('option')).map((o) => o.textContent?.trim());
+    expect(modalOptions.some((opt) => opt?.toLowerCase().includes('category manager'))).toBe(false);
+    expect(modalOptions).toContain('Govardhan');
+    expect(modalOptions).toContain('Chandan');
+    expect(modalOptions).toContain('Krishna Chaitanya');
+    expect(modalOptions).toContain('Sudheer');
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   });
 
   test('creates a task under CREDIT_MANAGEMENT with credit parameters', async () => {
@@ -1966,19 +1969,20 @@ describe('Action Center & Internal Tasks Redesign', () => {
           creditQuantity: 100,
           creditAccountName: 'Jindal Steel Works',
           creditReason: 'Special incentive for emergency spares',
-          status: 'Pending Approval',
+          status: 'Pending',
         })
       );
     });
   });
 
-  test('creates a task under DEMO_SCHEDULING and other categories (BUYER credit, ONBOARDING, BD)', async () => {
+  test('creates a task under DEMO_SCHEDULE and other categories (BUYER credit, EMAIL, SMS)', async () => {
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
       total: mockTasks.length,
     });
     (internalTaskClient.createInternalTask as jest.Mock).mockResolvedValueOnce({
       ...mockDemoTask,
+      task_category: 'DEMO_SCHEDULE',
     });
 
     render(<InternalTasksDashboard />);
@@ -1990,7 +1994,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
 
     const catSelect = screen.getByTestId('create-task-category-select');
-    fireEvent.change(catSelect, { target: { value: 'DEMO_SCHEDULING' } });
+    fireEvent.change(catSelect, { target: { value: 'DEMO_SCHEDULE' } });
 
     const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
     fireEvent.change(titleInput, { target: { value: 'Demo of enterprise bidding platform' } });
@@ -2007,7 +2011,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     await waitFor(() => {
       expect(internalTaskClient.createInternalTask).toHaveBeenCalledWith(
         expect.objectContaining({
-          taskCategory: 'DEMO_SCHEDULING',
+          taskCategory: 'DEMO_SCHEDULE',
           demoDate: '2026-11-20',
           demoTime: '15:30',
         })
@@ -2027,10 +2031,11 @@ describe('Action Center & Internal Tasks Redesign', () => {
       );
     });
 
-    // Test ONBOARDING, BUSINESS_DEVELOPMENT, INTERNAL_OPERATIONS categories
+    // Test EMAIL_TASK, SMS_TASK, SITE_VISITING_MEETING_CLIENTS, INTERNAL_OPERATIONS categories
     fireEvent.click(screen.getByRole('button', { name: /Create Internal Task/i }));
-    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'ONBOARDING' } });
-    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'BUSINESS_DEVELOPMENT' } });
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'EMAIL_TASK' } });
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'SMS_TASK' } });
+    fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'SITE_VISITING_MEETING_CLIENTS' } });
     fireEvent.change(screen.getByTestId('create-task-category-select'), { target: { value: 'INTERNAL_OPERATIONS' } });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
   });
@@ -2253,7 +2258,7 @@ describe('Action Center & Internal Tasks Redesign', () => {
     });
   });
 
-  test('covers active filter count with taskCategory, taskType, and createdBy', async () => {
+  test('covers active filter count with taskCategory and assignedTo', async () => {
     (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
       tasks: mockTasks,
       total: mockTasks.length,
@@ -2264,9 +2269,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
     // Open filter drawer
     fireEvent.click(screen.getByRole('button', { name: /Filter/i }));
 
-    // Set Category, CreatedBy
+    // Set Category and Assigned User
     fireEvent.change(screen.getByTestId('drawer-filter-category'), { target: { value: 'CREDIT_MANAGEMENT' } });
-    fireEvent.change(screen.getByPlaceholderText('Creator name...'), { target: { value: 'Admin' } });
+    fireEvent.change(screen.getByPlaceholderText(/Search assignee name/i), { target: { value: 'Sudheer' } });
 
     // Apply
     fireEvent.click(screen.getByRole('button', { name: 'Apply Filters' }));
@@ -2639,7 +2644,9 @@ describe('Action Center & Internal Tasks Redesign', () => {
       demo_time: '16:00',
       demo_status: 'Rescheduled',
     });
-    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    });
     await waitFor(() => {
       expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
         'tsk_demo_1',
@@ -2657,14 +2664,18 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     // Reschedule Demo - Failure & Error
     (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
-    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    });
     await waitFor(() => {
       expect(screen.getByText('Failed to reschedule demo.')).toBeInTheDocument();
       expect(screen.getByTestId('drawer-reschedule-demo-btn')).not.toBeDisabled();
     });
 
     (internalTaskClient.updateInternalTask as jest.Mock).mockRejectedValueOnce(new Error('reschedule error'));
-    fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('drawer-reschedule-demo-btn'));
+    });
     await waitFor(() => {
       expect(screen.getByText('Error rescheduling demo.')).toBeInTheDocument();
     });
@@ -3215,4 +3226,273 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
+  test('covers offline payments, trial period drawer details, sorting with missing values, and status filtering', async () => {
+    const tasksWithDetails = [
+      {
+        id: 'tsk_offline_pay',
+        task_number: 'TSK-OFFLINE-1',
+        title: '',
+        category: 'CREDIT',
+        task_category: 'CREDIT_MANAGEMENT',
+        task_type: 'Offline Payments',
+        recipient_phone: '',
+        priority: 'UnknownPriority',
+        status: 'Pending',
+        assigned_to_name: '',
+        due_date: null,
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-pay',
+        raw: {
+          buyer_source_mode: 'Annual',
+          payment_date: '2026-11-01',
+          payment_type: 'NEFT',
+          transaction_id: 'TXN123456',
+          payment_amount: 50000,
+          proof_file_name: 'receipt.pdf',
+          proof_file_url: 'https://example.com/receipt.pdf',
+        },
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_trial_period',
+        task_number: 'TSK-TRIAL-1',
+        title: 'Trial setup',
+        category: 'CREDIT',
+        task_category: 'CREDIT_MANAGEMENT',
+        task_type: 'Trial Periods',
+        priority: 'Critical',
+        status: 'Open',
+        assigned_to_name: 'Priya',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-trial',
+        raw: {
+          selected_mode: 'Full Sourcing',
+          trial_days: 30,
+          start_date: '2026-11-01',
+          end_date: '2026-12-01',
+        },
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_fallback_modules',
+        task_number: 'TSK-FALLBACK-1',
+        title: 'Fallback module task',
+        category: 'DEMO',
+        task_category: 'DEMO_SCHEDULE',
+        task_type: 'Demo',
+        priority: 'Medium',
+        status: 'New',
+        assigned_to_name: 'Chandan',
+        due_date: '2026-11-28T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-fb',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_bd_fallback',
+        task_number: 'TSK-BD-1',
+        title: 'BD Task',
+        category: 'BUSINESS_DEVELOPMENT',
+        task_category: 'BUSINESS_DEVELOPMENT',
+        task_type: 'Proposal',
+        priority: 'Low',
+        status: 'Closed',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-bd',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_onboarding_fallback',
+        task_number: 'TSK-ONBOARD-1',
+        title: 'Onboarding Task',
+        category: 'ONBOARDING',
+        task_category: 'ONBOARDING',
+        task_type: 'Client Onboarding',
+        priority: 'High',
+        status: 'Pending Approval',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-onboard',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+      {
+        id: 'tsk_comm_followup',
+        task_number: 'TSK-COMM-1',
+        title: 'Communication task',
+        category: 'COMMUNICATION',
+        task_category: 'COMMUNICATION',
+        task_type: 'WhatsApp Follow-up',
+        recipient_phone: '+91 9876543210',
+        priority: 'High',
+        status: 'In Progress',
+        assigned_to_name: 'Govardhan',
+        due_date: '2026-11-20T10:00:00Z',
+        related_entity_type: 'BUYER',
+        related_entity_id: 'buyer-comm',
+        attachments: [],
+        created_at: '2026-11-01T10:00:00Z',
+        updated_at: '2026-11-01T10:00:00Z',
+      },
+    ];
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: tasksWithDetails,
+      total: 6,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockImplementation(async (id: string) => {
+      return tasksWithDetails.find((t) => t.id === id) || null;
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TSK-OFFLINE-1')).toBeInTheDocument();
+    });
+
+    // Test sorting with null/undefined values in both directions
+    const table = screen.getByRole('table');
+    const sortHeaders = within(table).getAllByRole('columnheader');
+    for (const th of sortHeaders) {
+      fireEvent.click(th);
+      fireEvent.click(th);
+    }
+
+    // Open Offline Payment drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_offline_pay'));
+    await waitFor(() => {
+      expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+      expect(screen.getByText('TXN123456')).toBeInTheDocument();
+      expect(screen.getByText('receipt.pdf')).toBeInTheDocument();
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Trial Period drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_trial_period'));
+    await waitFor(() => {
+      expect(screen.getByText('Trial Period Details:')).toBeInTheDocument();
+      expect(screen.getAllByText('Full Sourcing').length).toBeGreaterThanOrEqual(1);
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Fallback modules drawer (Demo without demo_status / demo_date)
+    fireEvent.click(screen.getByTestId('task-row-tsk_fallback_modules'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-demo-status-badge')).toHaveTextContent('Scheduled');
+      expect(screen.getByTestId('drawer-demo-date')).toHaveTextContent('Not set');
+      expect(screen.getByTestId('drawer-demo-time')).toHaveTextContent('Not set');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open BD Fallback drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_bd_fallback'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-proposal-status-badge')).toHaveTextContent('Draft');
+      expect(screen.getByTestId('drawer-proposal-value')).toHaveTextContent('—');
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open Onboarding Fallback drawer
+    fireEvent.click(screen.getByTestId('task-row-tsk_onboarding_fallback'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-onboarding-stage-badge')).toHaveTextContent('Stage 1 of 5');
+    });
+
+    // Test Credit Approval & Rejection Handlers while drawer is open
+    (internalTaskClient.approveCreditTask as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      task: { ...tasksWithDetails[3], approval_status: 'APPROVED', status: 'In Progress' },
+      message: 'Credit request approved and balances updated.',
+    });
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Open pending approval task
+    fireEvent.click(screen.getByTestId('task-row-tsk_onboarding_fallback'));
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+
+    // Test Communication drawer completion workflow
+    fireEvent.click(screen.getByTestId('task-row-tsk_comm_followup'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drawer-open-whatsapp-btn')).toBeInTheDocument();
+      expect(screen.getByTestId('drawer-schedule-followup-btn')).toBeInTheDocument();
+    });
+
+    // Click mark complete in drawer
+    fireEvent.click(screen.getByTestId('drawer-mark-complete-btn'));
+    expect(screen.getByTestId('confirm-complete-task-btn')).toBeInTheDocument();
+
+    // Try completing communication task without checkbox -> error toast
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    // Check confirmation checkbox and complete
+    fireEvent.click(screen.getByTestId('communication-confirm-checkbox'));
+    fireEvent.change(screen.getByTestId('completion-remarks-input'), {
+      target: { value: 'Followup completed with buyer' },
+    });
+    (internalTaskClient.completeInternalTask as jest.Mock).mockResolvedValueOnce({
+      ...tasksWithDetails[5],
+      status: 'Completed',
+      completed_at: '2026-11-20T10:00:00Z',
+    });
+    fireEvent.click(screen.getByTestId('confirm-complete-task-btn'));
+
+    await waitFor(() => {
+      expect(internalTaskClient.completeInternalTask).toHaveBeenCalled();
+    });
+
+    // Add activity note
+    (internalTaskClient.addTaskActivity as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      activity: { id: 'act-new-1', actor_name: 'Navin', comment: 'Added progress update note', created_at: '2026-11-20T10:30:00Z' },
+    });
+    fireEvent.change(screen.getByTestId('drawer-add-activity-input'), {
+      target: { value: 'New progress update' },
+    });
+    fireEvent.click(screen.getByTestId('drawer-add-activity-btn'));
+    await waitFor(() => {
+      expect(internalTaskClient.addTaskActivity).toHaveBeenCalled();
+    });
+
+    fireEvent.click(screen.getByTestId('task-details-close-x'));
+  });
+
+  test('handles backdrop click and escape key to close task modal', async () => {
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // 1. Create task modal Escape & backdrop click
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByText('Create Internal Task'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByTestId('toolbar-create-task-btn'));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

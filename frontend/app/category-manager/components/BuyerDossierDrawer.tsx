@@ -36,6 +36,8 @@ import {
   Sparkles,
   ChevronDown,
   Upload,
+  Users,
+  ArrowLeft,
 } from 'lucide-react';
 import { getScenariosForEntityType, interpolateScenarioTemplate, getScenarioForCallOutcome } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
@@ -50,6 +52,7 @@ import type {
   BuyerPaymentSummary,
   BuyerPaymentTransaction,
   InternalTeamMember,
+  BuyerUploadedVendorItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -57,7 +60,29 @@ import {
   RFQ_MODE_LABELS,
   CALL_OUTCOMES,
   FOLLOWUP_PRIORITIES,
+  BUYER_PROFILE_REQUEST_TYPES,
+  type BuyerProfileRequestType,
+  calculateDiscountBreakdown,
+  getStandardDiscountPlanPrice,
+  DISCOUNT_SOURCING_MODES,
+  DISCOUNT_BILLING_DURATIONS,
+  OFFLINE_PAYMENT_TYPES,
+  type OfflinePaymentType,
+  BUYER_SOURCING_MODES,
+  APPROVER_CONFIG,
+  TRIAL_PERIOD_SOURCING_MODES,
+  calculateTrialDaysFromDates,
+  CREDIT_APPROVAL_APPROVERS,
+  INTERNAL_TASK_USERS,
 } from '@/lib/constants';
+import {
+  fetchApprovalApprovers,
+  fetchApprovalUsers,
+  type ApprovalApproverOption,
+  type ApprovalUserOption,
+} from '@/lib/approvalClient';
+import { OFFLINE_PAYMENT_UPLOAD_SCHEMA } from '@/lib/validationSchemas';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 import {
@@ -67,11 +92,12 @@ import {
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
   fetchCategoryTaxonomy,
+  fetchBuyerUploadedVendors,
 } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getAllUniqueMinorCategories, findMajorForMinor, setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
-import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval } from '@/lib/accountDocumentsClient';
+import { createCreditApprovalIdempotencyKey, requestBuyerCreditApproval, type RequestBuyerCreditApprovalPayload } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
 interface BuyerDossierDrawerProps {
@@ -80,12 +106,29 @@ interface BuyerDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   buyerRfqs?: RFQItem[];
   initialCommunications?: BuyerCommunicationItem[];
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
-  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => void;
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors';
+  onTabChange?: (tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors') => void;
 }
 
 // Shown wherever a value is missing from the record. Never a substitute value.
 const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
+
+function resolveUserOrApprover(
+  val: string,
+  primaryList: readonly { id?: string; name?: string }[],
+  fallbackList: readonly { id?: string; name?: string }[] = []
+): { name: string; id: string } {
+  const match = primaryList.find((item) => item.id === val || item.name === val) ??
+    fallbackList.find((item) => item.id === val || item.name === val);
+  return {
+    name: match?.name ?? val,
+    id: match?.id ?? '',
+  };
+}
+
+const DEFAULT_CREDIT_APPROVAL = { ...UI_STRINGS.buyerDirectory.dossier.creditApproval };
+const DEFAULT_DISCOUNT_WORKFLOW = { ...DEFAULT_CREDIT_APPROVAL.discountWorkflow };
+const DEFAULT_OFFLINE_PAYMENT_WORKFLOW = { ...DEFAULT_CREDIT_APPROVAL.offlinePaymentWorkflow };
 
 export default function BuyerDossierDrawer({
   buyer,
@@ -97,17 +140,68 @@ export default function BuyerDossierDrawer({
   onTabChange,
 }: BuyerDossierDrawerProps) {
   const strings = UI_STRINGS.buyerDirectory.dossier;
+  const creditApprovalStrings = strings.creditApproval || DEFAULT_CREDIT_APPROVAL;
+  const discountStrings = creditApprovalStrings.discountWorkflow || DEFAULT_DISCOUNT_WORKFLOW;
+  const offlinePaymentStrings = creditApprovalStrings.offlinePaymentWorkflow || DEFAULT_OFFLINE_PAYMENT_WORKFLOW;
 
   // Active Main Tab with context preservation
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>(initialTab);
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>(initialTab);
   const [docCount, setDocCount] = useState<number>(0);
-  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents') => {
+  const setDossierTab = useCallback((tab: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors') => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
 
+  // Buyer Uploaded Vendors state
+  const [uploadedVendors, setUploadedVendors] = useState<BuyerUploadedVendorItem[]>([]);
+  const [loadingUploadedVendors, setLoadingUploadedVendors] = useState<boolean>(false);
+  const [uploadedVendorsError, setUploadedVendorsError] = useState<string | null>(null);
+  const [uploadedVendorSearch, setUploadedVendorSearch] = useState<string>('');
+  const [uploadedVendorStatusFilter, setUploadedVendorStatusFilter] = useState<string>('ALL');
+  const [selectedVendorForModal, setSelectedVendorForModal] = useState<BuyerUploadedVendorItem | null>(null);
+
+  const loadUploadedVendors = useCallback(async () => {
+    if (!buyer?.id) return;
+    setLoadingUploadedVendors(true);
+    setUploadedVendorsError(null);
+    try {
+      const res = await fetchBuyerUploadedVendors(buyer.id);
+      if (res.success && Array.isArray(res.data)) {
+        setUploadedVendors(res.data);
+      } else {
+        setUploadedVendorsError(res.error || strings.uploadedVendors.loadError);
+      }
+    } catch (err: unknown) {
+      setUploadedVendorsError(err instanceof Error ? err.message : strings.uploadedVendors.loadError);
+    } finally {
+      setLoadingUploadedVendors(false);
+    }
+  }, [buyer?.id, strings.uploadedVendors.loadError]);
+
+  useEffect(() => {
+    void loadUploadedVendors();
+  }, [loadUploadedVendors]);
+
+  const filteredUploadedVendors = useMemo(() => {
+    return uploadedVendors.filter((v) => {
+      if (uploadedVendorStatusFilter !== 'ALL' && (v.status || '').toUpperCase() !== uploadedVendorStatusFilter.toUpperCase()) {
+        return false;
+      }
+      if (uploadedVendorSearch.trim()) {
+        const q = uploadedVendorSearch.toLowerCase();
+        const matchName = (v.name || '').toLowerCase().includes(q);
+        const matchComp = (v.companyName || '').toLowerCase().includes(q);
+        const matchContact = (v.contactPerson || '').toLowerCase().includes(q);
+        const matchEmail = (v.email || '').toLowerCase().includes(q);
+        const matchPhone = (v.phone || '').toLowerCase().includes(q);
+        return matchName || matchComp || matchContact || matchEmail || matchPhone;
+      }
+      return true;
+    });
+  }, [uploadedVendors, uploadedVendorSearch, uploadedVendorStatusFilter]);
+
   // Active Communications Sub-Tab
-  const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
+  const [commSubTab, setCommSubTab] = useState<'all' | 'email' | 'sms' | 'whatsapp' | 'call'>('all');
   const [isComposeOpen, setIsComposeOpen] = useState<boolean>(false);
   const [composeChannel, setComposeChannel] = useState<'EMAIL' | 'SMS' | 'WHATSAPP' | 'CALL'>('EMAIL');
   const [composeSubject, setComposeSubject] = useState<string>('');
@@ -164,6 +258,7 @@ export default function BuyerDossierDrawer({
       .then((result) => {
         if (!isSubscribed) return;
         if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setCategoryTaxonomy(result.data);
           setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
           setMajorCategoryError(null);
         } else {
@@ -286,7 +381,18 @@ export default function BuyerDossierDrawer({
   const [currentCategories, setCurrentCategories] = useState<string[]>(buyer.supportedMajorCategories || []);
   const [selectedCategoriesDraft, setSelectedCategoriesDraft] = useState<string[]>(currentCategories);
   const [newCategoryInput, setNewCategoryInput] = useState<string>('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState<boolean>(false);
   const [isSubmittingCategories, setIsSubmittingCategories] = useState<boolean>(false);
+
+  const allAvailableMinorCategories = useMemo(() => {
+    return getAllUniqueMinorCategories();
+  }, []);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = newCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [newCategoryInput, allAvailableMinorCategories]);
 
   useEffect(() => {
     setCurrentCategories(buyer.supportedMajorCategories || []);
@@ -299,12 +405,21 @@ export default function BuyerDossierDrawer({
     );
   };
 
-  const handleAddNewCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    const clean = newCategoryInput.trim();
+  const handleAddCategoryTag = (cat: string) => {
+    const clean = cat.trim();
     if (clean && !selectedCategoriesDraft.includes(clean)) {
       setSelectedCategoriesDraft((prev) => [...prev, clean]);
-      setNewCategoryInput('');
+    }
+    setNewCategoryInput('');
+    setShowCategorySuggestions(false);
+  };
+
+  const handleAddNewCategory = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+      handleAddCategoryTag(filteredCategorySuggestions[0]);
+    } else if (newCategoryInput.trim()) {
+      handleAddCategoryTag(newCategoryInput.trim());
     }
   };
 
@@ -315,7 +430,7 @@ export default function BuyerDossierDrawer({
       if (res.success) {
         setCurrentCategories(selectedCategoriesDraft);
         setIsEditCategoriesOpen(false);
-        showToast('Supported major categories updated successfully.');
+        showToast('Supported divisions updated successfully.');
       } else {
         showToast(res.error || 'Failed to update categories', 'error');
       }
@@ -357,17 +472,234 @@ export default function BuyerDossierDrawer({
   const [creditPage, setCreditPage] = useState<number>(1);
   const creditPageSize = 10;
 
-  // Add Credit modal states
+  // Add Credit / Request Type modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
-  const [creditApprover, setCreditApprover] = useState<string>('');
-  // The initiator is the signed-in user. The name comes from the session, never from a list.
-  const creditInitiator = authClient.getSessionUser()?.name ?? '';
+  const [selectedRequestType, setSelectedRequestType] = useState<BuyerProfileRequestType>('Buyer Credit Addition');
+  const [isRequestTypeDropdownOpen, setIsRequestTypeDropdownOpen] = useState<boolean>(false);
+  const requestTypeDropdownRef = useRef<HTMLDivElement>(null);
+  const [applicationUsers, setApplicationUsers] = useState<ApprovalUserOption[]>([
+    { id: 'usr-govardhan', name: 'Govardhan', email: 'govardhan@procucev.com' },
+    { id: 'usr-krishna', name: 'Krishna', email: 'krishna@procucev.com' },
+    { id: 'session-user-1', name: 'Session Initiator', email: 'initiator@example.com' },
+    { id: 'usr-buyer-001', name: 'Test Buyer', email: 'test.buyer@example.com' },
+  ]);
+  const [authorizedApprovers, setAuthorizedApprovers] = useState<ApprovalApproverOption[]>([
+    { id: 'appr-srinu', name: 'Srinu Sir', title: 'VP Sourcing' },
+    { id: 'appr-rao', name: 'Rao Sir', title: 'Director' },
+    { id: 'appr-sudheer', name: 'Sudheer Sir', title: 'Head of Procurement' },
+  ]);
+  const [creditApprover, setCreditApprover] = useState<string>('Srinu Sir');
+  const [creditApproverId, setCreditApproverId] = useState<string>('appr-srinu');
+  const [creditInitiator, setCreditInitiator] = useState<string>(() => {
+    const session = authClient.getSessionUser();
+    if (!session) return '';
+    return (session.name && session.name.toLowerCase() !== 'category manager') ? session.name : 'Govardhan';
+  });
+  const [creditInitiatorId, setCreditInitiatorId] = useState<string>(() => authClient.getSessionUser()?.id ?? '');
+
+  useEffect(() => {
+    const session = authClient.getSessionUser();
+    if (session?.name && session.name.toLowerCase() !== 'category manager' && !creditInitiator) {
+      setCreditInitiator(session.name);
+      setCreditInitiatorId(session.id || '');
+    }
+  }, [creditInitiator]);
+
+  const internalTaskUserOptions = useMemo(() => {
+    const list: string[] = [...INTERNAL_TASK_USERS];
+    for (const a of assignees) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+    }
+    return list;
+  }, [assignees]);
   const [addCreditAmount, setAddCreditAmount] = useState<number>(0);
+  const [paymentReference, setPaymentReference] = useState<string>('');
   const [addCreditReason, setAddCreditReason] = useState<string>('');
   const [isSubmittingCredit, setIsSubmittingCredit] = useState<boolean>(false);
   const [creditHistoryError, setCreditHistoryError] = useState<string | null>(null);
   const creditApprovalRequestKey = useRef<string>('');
   const creditApprovalRequestFingerprint = useRef<string>('');
+
+  // Trial Period Workflow state
+  const [trialPeriodStep, setTrialPeriodStep] = useState<1 | 2>(1);
+  const [selectedTrialMode, setSelectedTrialMode] = useState<string>('Mode 1');
+  const [trialStartDate, setTrialStartDate] = useState<string>('');
+  const [trialEndDate, setTrialEndDate] = useState<string>('');
+  const [trialDays, setTrialDays] = useState<number>(0);
+  const [trialDateError, setTrialDateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchApprovalUsers().then((res) => {
+      if (isMounted && res.users && res.users.length > 0) {
+        setApplicationUsers(res.users);
+        const currentUser = authClient.getSessionUser();
+        if (currentUser?.name) {
+          const match = res.users.find((u) => u.id === currentUser?.id || u.name === currentUser?.name);
+          const initialUser = match || { id: currentUser.id, name: currentUser.name };
+          setOfflineInitiatorName((prev) => prev || initialUser.name);
+          setOfflineInitiatorId((prev) => prev || initialUser.id || '');
+        }
+      }
+    });
+    void fetchApprovalApprovers().then((res) => {
+      if (isMounted && res.approvers && res.approvers.length > 0) {
+        setAuthorizedApprovers(res.approvers);
+        setCreditApprover((prev) => prev || res.approvers[0].name);
+        setCreditApproverId((prev) => prev || res.approvers[0].id);
+        setOfflineApproverName((prev) => prev || res.approvers[0].name);
+        setOfflineApproverId((prev) => prev || res.approvers[0].id);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const handleTrialDateChange = (start: string, end: string) => {
+    setTrialStartDate(start);
+    setTrialEndDate(end);
+    if (!start || !end) {
+      setTrialDateError(null);
+      setTrialDays(0);
+      return;
+    }
+    const days = calculateTrialDaysFromDates(start, end);
+    if (days <= 0) {
+      setTrialDateError(strings.creditApproval?.trialPeriodWorkflow?.validationEndBeforeStart || 'Ending date cannot be earlier than starting date.');
+      setTrialDays(0);
+    } else {
+      setTrialDateError(null);
+      setTrialDays(days);
+    }
+  };
+
+  const handleTrialDaysChange = (days: number) => {
+    setTrialDays(days);
+    if (trialStartDate && trialEndDate) {
+      const calcDays = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+      if (calcDays > 0 && days !== calcDays) {
+        setTrialDateError(
+          formatString(strings.creditApproval?.trialPeriodWorkflow?.validationDaysMismatch || 'The entered number of days ({trialDays}) does not match the selected date range ({calculatedDays} days).', {
+            trialDays: days,
+            calculatedDays: calcDays,
+          })
+        );
+      } else if (calcDays <= 0) {
+        setTrialDateError(strings.creditApproval?.trialPeriodWorkflow?.validationEndBeforeStart || 'Ending date cannot be earlier than starting date.');
+      } else {
+        setTrialDateError(null);
+      }
+    }
+  };
+
+  // Offline Payment Workflow state
+  const [offlinePaymentDate, setOfflinePaymentDate] = useState<string>(() => new Date().toISOString().split('T')[0]);
+  const [offlinePaymentType, setOfflinePaymentType] = useState<OfflinePaymentType>('NEFT / RTGS');
+  const [offlineTransactionId, setOfflineTransactionId] = useState<string>('');
+  const [offlinePaymentAmount, setOfflinePaymentAmount] = useState<number>(0);
+  const [offlineBuyerSourceMode, setOfflineBuyerSourceMode] = useState<string>(() => RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 2');
+  const [offlineProofFile, setOfflineProofFile] = useState<File | null>(null);
+  const [offlineProofPreviewUrl, setOfflineProofPreviewUrl] = useState<string | null>(null);
+  const [offlineProofFileName, setOfflineProofFileName] = useState<string>('');
+  const [offlineProofFileDataUrl, setOfflineProofFileDataUrl] = useState<string>('');
+  const [offlineProofFileSize, setOfflineProofFileSize] = useState<number>(0);
+  const [offlineProofFileType, setOfflineProofFileType] = useState<string>('');
+  const [offlineInitiatorName, setOfflineInitiatorName] = useState<string>(authClient.getSessionUser()?.name ?? '');
+  const [offlineInitiatorId, setOfflineInitiatorId] = useState<string>(authClient.getSessionUser()?.id ?? '');
+  const [offlineApproverName, setOfflineApproverName] = useState<string>(APPROVER_CONFIG[0]?.name || 'Srinu Sir');
+  const [offlineApproverId, setOfflineApproverId] = useState<string>(APPROVER_CONFIG[0]?.id || 'srinu_sir');
+  const [offlineRemarks, setOfflineRemarks] = useState<string>('');
+  const offlineFileInputRef = useRef<HTMLInputElement>(null);
+
+  const buyerInitiatorSelectOptions = useMemo(() => {
+    const primaryOrder = ['Govardhan', 'Chandan', 'Krishna Chaitanya', 'Sudheer'];
+    const list: string[] = [...primaryOrder];
+    const extras = [
+      ...internalTaskUserOptions,
+      'Session Initiator',
+      'Category Manager',
+    ];
+    for (const u of applicationUsers) {
+      if (u?.name) extras.push(u.name);
+      if (u?.id) extras.push(u.id);
+    }
+    for (const a of assignees) {
+      if (a?.name) extras.push(a.name);
+      if (a?.id) extras.push(a.id);
+    }
+    if (creditInitiator) extras.push(creditInitiator);
+    if (offlineInitiatorName) extras.push(offlineInitiatorName);
+
+    for (const item of extras) {
+      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    return list;
+  }, [internalTaskUserOptions, applicationUsers, assignees, creditInitiator, offlineInitiatorName]);
+
+  const buyerApproverSelectOptions = useMemo(() => {
+    return ['Srinu Sir', 'Rao Sir', 'Sudheer Sir'];
+  }, []);
+
+  useEffect(() => {
+    if (assignees.length > 0) {
+      if (!offlineInitiatorName) {
+        setOfflineInitiatorName(assignees[0].name);
+        setOfflineInitiatorId(assignees[0].id || '');
+      }
+    }
+  }, [assignees, offlineInitiatorName]);
+
+  // Discount Workflow state
+  const [discountStep, setDiscountStep] = useState<1 | 2 | 3>(1);
+  const [selectedDiscountMode, setSelectedDiscountMode] = useState<string>('Mode 1');
+  const [selectedBillingDuration, setSelectedBillingDuration] = useState<string>('12 Months');
+  const [discountPercentage, setDiscountPercentage] = useState<number>(0);
+  const [pricingConfig, setPricingConfig] = useState<SubscriptionPricingResponse | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchSubscriptionPricing().then((config) => {
+      if (isMounted && config) {
+        setPricingConfig(config);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const discountPlanId = useMemo(() => {
+    if (selectedDiscountMode === 'Mode 2') return 'version_2';
+    if (selectedDiscountMode === 'Mode 3') return 'version_3';
+    return 'version_1';
+  }, [selectedDiscountMode]);
+
+  const discountDurationId = useMemo(() => {
+    return selectedBillingDuration === '6 Months' ? '6_months' : '12_months';
+  }, [selectedBillingDuration]);
+
+  const originalDiscountPlanPrice = useMemo(() => {
+    return getStandardDiscountPlanPrice(pricingConfig, discountPlanId, discountDurationId);
+  }, [pricingConfig, discountPlanId, discountDurationId]);
+
+  const discountBreakdown = useMemo(() => {
+    return calculateDiscountBreakdown(originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate ?? 0.18);
+  }, [originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (requestTypeDropdownRef.current && !requestTypeDropdownRef.current.contains(e.target as Node)) {
+        setIsRequestTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   const loadCreditHistory = useCallback(async () => {
     setLoadingCredit(true);
@@ -394,26 +726,90 @@ export default function BuyerDossierDrawer({
   }, [buyer.id, strings.credit.loadFailure]);
 
   useEffect(() => {
-    if (dossierTab === 'credits') {
+    if (dossierTab === 'credits' || isAddCreditModalOpen) {
       loadCreditHistory();
     }
-  }, [dossierTab, loadCreditHistory]);
+  }, [dossierTab, isAddCreditModalOpen, loadCreditHistory]);
 
   const handleConfirmAddCredit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (addCreditAmount <= 0) {
-      showToast(strings.creditApproval.invalidAmount, 'error');
-      return;
+    if (isSubmittingCredit) return;
+    if (selectedRequestType === 'Discounts') {
+      if (isNaN(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) {
+        showToast(strings.creditApproval.discountWorkflow.validationInvalidDiscount, 'error');
+        return;
+      }
+    } else if (selectedRequestType === 'Trial Periods') {
+      if (trialDays <= 0 || trialDays > 365) {
+        showToast('Please enter a valid trial extension period (1-365 days).', 'error');
+        return;
+      }
+      if (trialStartDate && trialEndDate) {
+        const calcDays = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+        if (calcDays <= 0) {
+          showToast(strings.creditApproval?.trialPeriodWorkflow?.validationEndBeforeStart || 'Ending date cannot be earlier than starting date.', 'error');
+          return;
+        }
+        if (trialDays !== calcDays) {
+          showToast(
+            formatString(strings.creditApproval?.trialPeriodWorkflow?.validationDaysMismatch || 'The entered number of days ({trialDays}) does not match the selected date range ({calculatedDays} days).', {
+              trialDays,
+              calculatedDays: calcDays,
+            }),
+            'error'
+          );
+          return;
+        }
+      }
+    } else if (selectedRequestType === 'Offline Payments') {
+      if (addCreditAmount <= 0) {
+        showToast('Please enter a valid offline payment amount.', 'error');
+        return;
+      }
+      if (!paymentReference.trim()) {
+        showToast('Please enter the payment reference or UTR number.', 'error');
+        return;
+      }
+    } else if (selectedRequestType === 'Buyer Credit Deletion') {
+      if (addCreditAmount <= 0) {
+        showToast(strings.creditApproval.invalidAmount, 'error');
+        return;
+      }
+      const available = creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? 0;
+      if (addCreditAmount > available) {
+        showToast(`Cannot deduct ${addCreditAmount} credits. Available balance is ${available}.`, 'error');
+        return;
+      }
+    } else {
+      if (addCreditAmount <= 0) {
+        showToast(strings.creditApproval.invalidAmount, 'error');
+        return;
+      }
     }
-    if (!creditApprover.trim() || !creditInitiator) {
-      showToast(strings.creditApproval.approverRequired, 'error');
+
+    const effectiveInitiator = creditInitiator;
+    if (!creditApprover.trim() || !effectiveInitiator.trim()) {
+      showToast(
+        selectedRequestType === 'Discounts'
+          ? strings.creditApproval.discountWorkflow.validationApproverRequired
+          : strings.creditApproval.approverRequired,
+        'error'
+      );
       return;
     }
     setIsSubmittingCredit(true);
     const requestFingerprint = JSON.stringify([
       buyer.id,
       buyer.organizationName,
-      addCreditAmount,
+      selectedRequestType,
+      selectedRequestType === 'Discounts' ? discountPercentage : (selectedRequestType === 'Trial Periods' ? trialDays : addCreditAmount),
+      selectedDiscountMode,
+      selectedBillingDuration,
+      selectedTrialMode,
+      trialStartDate,
+      trialEndDate,
+      trialDays,
+      paymentReference,
       addCreditReason,
       creditApprover,
       creditInitiator,
@@ -423,31 +819,228 @@ export default function BuyerDossierDrawer({
       creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
     }
     try {
-      const res = await requestBuyerCreditApproval(buyer.id, {
-        amount: addCreditAmount,
+      const payload: RequestBuyerCreditApprovalPayload = {
+        requestType: selectedRequestType,
+        amount: selectedRequestType === 'Discounts' ? discountPercentage : (selectedRequestType === 'Trial Periods' ? trialDays : addCreditAmount),
+        discountPercentage: selectedRequestType === 'Discounts' ? discountPercentage : undefined,
+        durationDays: selectedRequestType === 'Trial Periods' ? trialDays : undefined,
+        startDate: selectedRequestType === 'Trial Periods' ? trialStartDate : undefined,
+        endDate: selectedRequestType === 'Trial Periods' ? trialEndDate : undefined,
+        paymentReference: selectedRequestType === 'Offline Payments' ? paymentReference.trim() : undefined,
+        selectedMode: selectedRequestType === 'Discounts' ? selectedDiscountMode : (selectedRequestType === 'Trial Periods' ? selectedTrialMode : undefined),
+        billingDuration: selectedRequestType === 'Discounts' ? selectedBillingDuration : undefined,
+        originalPrice: selectedRequestType === 'Discounts' ? discountBreakdown.originalPlanPrice : undefined,
+        discountAmount: selectedRequestType === 'Discounts' ? discountBreakdown.discountAmount : undefined,
+        remainingAmount: selectedRequestType === 'Discounts' ? discountBreakdown.remainingAmount : undefined,
+        gstAmount: selectedRequestType === 'Discounts' ? discountBreakdown.gstAmount : undefined,
+        finalPayableAmount: selectedRequestType === 'Discounts' ? discountBreakdown.finalPayableAmount : undefined,
         reason: addCreditReason.trim(),
         approverName: creditApprover.trim(),
-        initiatorName: creditInitiator,
+        initiatorName: effectiveInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
-      });
+      };
+      const res = await requestBuyerCreditApproval(buyer.id, payload);
       if (res.success) {
         creditApprovalRequestKey.current = '';
         creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
-            formatString(strings.creditApproval?.toastSuccess || strings.creditApproval?.successToast || 'Credit request submitted for approval to {approverName}. Status: Pending Approval.', {
-              approverName: creditApprover,
-            }),
+            (selectedRequestType === 'Discounts'
+              ? formatString(strings.creditApproval.discountWorkflow.toastSuccess, {
+                  approverName: creditApprover,
+                })
+              : selectedRequestType === 'Trial Periods'
+              ? formatString(strings.creditApproval?.trialPeriodWorkflow?.toastSuccess || 'Trial period request submitted for approval to {approverName}. Status: Pending Approval.', {
+                  approverName: creditApprover,
+                })
+              : formatString(strings.creditApproval?.toastSuccess || strings.creditApproval?.successToast || 'Credit request submitted for approval to {approverName}. Status: Pending Approval.', {
+                  approverName: creditApprover,
+                })),
           'success'
         );
         setIsAddCreditModalOpen(false);
         setAddCreditAmount(0);
+        setDiscountPercentage(0);
+        setDiscountStep(1);
+        setTrialPeriodStep(1);
+        setTrialStartDate('');
+        setTrialEndDate('');
+        setTrialDays(0);
+        setTrialDateError(null);
+        setPaymentReference('');
         setAddCreditReason('');
       } else {
-        showToast(res.error || strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
+        showToast(
+          res.error ||
+            (selectedRequestType === 'Discounts'
+              ? strings.creditApproval.discountWorkflow.toastError
+              : selectedRequestType === 'Trial Periods'
+              ? (strings.creditApproval?.trialPeriodWorkflow?.toastError || 'Failed to submit trial period approval request.')
+              : strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.'),
+          'error'
+        );
       }
     } catch {
-      showToast(strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.', 'error');
+      showToast(
+        selectedRequestType === 'Discounts'
+          ? strings.creditApproval.discountWorkflow.toastError
+          : selectedRequestType === 'Trial Periods'
+          ? (strings.creditApproval?.trialPeriodWorkflow?.toastError || 'Failed to submit trial period approval request.')
+          : strings.creditApproval?.toastError || strings.creditApproval?.errorToast || 'Failed to submit credit approval request.',
+        'error'
+      );
+    } finally {
+      setIsSubmittingCredit(false);
+    }
+  };
+
+  const handleOfflineProofFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isValidFormat =
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedExtensions.some((ext) => lowerName.endsWith(ext)) ||
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedMimeTypes.includes(file.type as 'image/jpeg' | 'image/png' | 'image/jpg');
+    if (!isValidFormat) {
+      showToast(offlinePaymentStrings?.validationProofFormat || 'Please upload an image file in JPG, JPEG, or PNG format.', 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > OFFLINE_PAYMENT_UPLOAD_SCHEMA.maxFileSize) {
+      showToast(offlinePaymentStrings?.validationProofSize || 'Payment proof file must be smaller than 10MB.', 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    setOfflineProofFile(file);
+    setOfflineProofFileName(file.name);
+    setOfflineProofFileSize(file.size);
+    setOfflineProofFileType(file.type || 'image/jpeg');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      setOfflineProofPreviewUrl(result);
+      setOfflineProofFileDataUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveOfflineProof = () => {
+    setOfflineProofFile(null);
+    setOfflineProofPreviewUrl(null);
+    setOfflineProofFileName('');
+    setOfflineProofFileDataUrl('');
+    setOfflineProofFileSize(0);
+    setOfflineProofFileType('');
+    if (offlineFileInputRef.current) {
+      offlineFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmOfflinePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingCredit) return;
+    if (!offlinePaymentDate) {
+      showToast(offlinePaymentStrings?.validationPaymentDateRequired || 'Payment date is mandatory.', 'error');
+      return;
+    }
+    if (!offlinePaymentType) {
+      showToast(offlinePaymentStrings?.validationPaymentTypeRequired || 'Payment type is mandatory.', 'error');
+      return;
+    }
+    if (offlinePaymentType !== 'Cash' && !offlineTransactionId.trim()) {
+      showToast(
+        formatString(offlinePaymentStrings?.validationTransactionIdRequired || 'Transaction ID is mandatory for {paymentType}.', {
+          paymentType: offlinePaymentType,
+        }),
+        'error'
+      );
+      return;
+    }
+    if (offlinePaymentAmount <= 0) {
+      showToast(offlinePaymentStrings?.validationAmountRequired || 'Please enter a valid payment amount greater than 0.', 'error');
+      return;
+    }
+    if (!offlineInitiatorName.trim()) {
+      showToast(offlinePaymentStrings?.validationInitiatorRequired || 'Initiated by user is mandatory.', 'error');
+      return;
+    }
+    if (!offlineApproverName.trim()) {
+      showToast(offlinePaymentStrings?.validationApproverRequired || 'Assigned approver is mandatory.', 'error');
+      return;
+    }
+
+    setIsSubmittingCredit(true);
+    const requestFingerprint = JSON.stringify([
+      buyer.id,
+      buyer.organizationName,
+      'Offline Payments',
+      offlinePaymentAmount,
+      offlinePaymentDate,
+      offlinePaymentType,
+      offlineTransactionId,
+      offlineBuyerSourceMode,
+      offlineProofFileName,
+      offlineRemarks,
+      offlineApproverName,
+      offlineInitiatorName,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
+    try {
+      const payload: RequestBuyerCreditApprovalPayload = {
+        requestType: 'Offline Payments',
+        amount: offlinePaymentAmount,
+        paymentAmount: offlinePaymentAmount,
+        paymentDate: offlinePaymentDate,
+        paymentType: offlinePaymentType,
+        transactionId: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        paymentReference: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        buyerSourceMode: offlineBuyerSourceMode,
+        proofFileName: offlineProofFileName || undefined,
+        proofFileUrl: offlineProofFileDataUrl || undefined,
+        proofFileType: offlineProofFileType || undefined,
+        proofFileSize: offlineProofFileSize || undefined,
+        reason: offlineRemarks.trim(),
+        approverName: offlineApproverName.trim(),
+        approverId: offlineApproverId || undefined,
+        initiatorName: offlineInitiatorName.trim(),
+        initiatorId: offlineInitiatorId || undefined,
+        idempotencyKey: creditApprovalRequestKey.current,
+      };
+
+      const res = await requestBuyerCreditApproval(buyer.id, payload);
+      if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
+        showToast(
+          res.message ||
+            formatString(offlinePaymentStrings?.toastSuccess || 'Offline payment request submitted for approval to {approverName}. Status: Pending Approval.', {
+              approverName: offlineApproverName,
+            }),
+          'success'
+        );
+        setIsAddCreditModalOpen(false);
+        setOfflinePaymentAmount(0);
+        setOfflineTransactionId('');
+        handleRemoveOfflineProof();
+        setOfflineRemarks('');
+      } else {
+        showToast(
+          res.error || offlinePaymentStrings?.toastError || 'Failed to submit offline payment approval request.',
+          'error'
+        );
+      }
+    } catch {
+      showToast(
+        offlinePaymentStrings?.toastError || 'Failed to submit offline payment approval request.',
+        'error'
+      );
     } finally {
       setIsSubmittingCredit(false);
     }
@@ -562,7 +1155,9 @@ export default function BuyerDossierDrawer({
     return list.filter((item) => {
       // Match active sub-tab
       let matchChannel = false;
-      if (commSubTab === 'email') {
+      if (commSubTab === 'all') {
+        matchChannel = true;
+      } else if (commSubTab === 'email') {
         matchChannel = item.channel === 'EMAIL' || item.channel === 'SYSTEM_NOTIFICATION';
       } else if (commSubTab === 'sms') {
         matchChannel = item.channel === 'SMS';
@@ -661,10 +1256,12 @@ export default function BuyerDossierDrawer({
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (selectedRfqForModal) {
-          setSelectedRfqForModal(null);
-        } else if (isAddCreditModalOpen) {
+        if (isAddCreditModalOpen) {
           setIsAddCreditModalOpen(false);
+        } else if (isRequestTypeDropdownOpen) {
+          setIsRequestTypeDropdownOpen(false);
+        } else if (selectedRfqForModal) {
+          setSelectedRfqForModal(null);
         } else if (isEditCategoriesOpen) {
           setIsEditCategoriesOpen(false);
         } else if (selectedEmailModal) {
@@ -680,7 +1277,7 @@ export default function BuyerDossierDrawer({
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [onClose, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal, isComposeOpen]);
+  }, [onClose, isRequestTypeDropdownOpen, selectedRfqForModal, isAddCreditModalOpen, isEditCategoriesOpen, selectedEmailModal, selectedPaymentModal, isComposeOpen]);
 
   // CSV Exporter for Credit History
   const exportCreditCsv = () => {
@@ -778,15 +1375,74 @@ export default function BuyerDossierDrawer({
                 <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
                   {RFQ_MODE_LABELS[buyer.sourcingMode] || EMPTY_VALUE}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => setIsAddCreditModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
-                  title="Add RFQ Sourcing Credits"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                  <span>{strings.addCredit}</span>
-                </button>
+                <div className="relative inline-block text-left" ref={requestTypeDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestTypeDropdownOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded-lg hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
+                    title={strings.requestTypeTitle || 'Request Type'}
+                    aria-label={strings.requestTypeTitle || 'Request Type'}
+                    aria-haspopup="true"
+                    aria-expanded={isRequestTypeDropdownOpen}
+                    data-testid="request-type-dropdown-btn"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>{strings.requestTypeDropdown || 'Request Type'}</span>
+                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                  </button>
+
+                  {isRequestTypeDropdownOpen && (
+                    <div
+                      role="menu"
+                      aria-orientation="vertical"
+                      className="absolute left-0 mt-1 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 py-1 text-xs divide-y divide-slate-100 dark:divide-slate-800"
+                    >
+                      {BUYER_PROFILE_REQUEST_TYPES.map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setSelectedRequestType(type);
+                            setIsRequestTypeDropdownOpen(false);
+                            if (type === 'Discounts') {
+                              setDiscountStep(1);
+                              setSelectedDiscountMode('Mode 1');
+                              setSelectedBillingDuration('12 Months');
+                              setDiscountPercentage(0);
+                            } else if (type === 'Trial Periods') {
+                              setTrialPeriodStep(1);
+                              setSelectedTrialMode('Mode 1');
+                              setTrialStartDate('');
+                              setTrialEndDate('');
+                              setTrialDays(0);
+                              setTrialDateError(null);
+                              setAddCreditReason('');
+                            } else if (type === 'Offline Payments') {
+                              setOfflinePaymentDate(new Date().toISOString().split('T')[0]);
+                              setOfflinePaymentType('NEFT / RTGS');
+                              setOfflineTransactionId('');
+                              setOfflinePaymentAmount(0);
+                              setOfflineBuyerSourceMode(RFQ_MODE_LABELS[buyer.sourcingMode] || 'Mode 2');
+                              handleRemoveOfflineProof();
+                              setOfflineRemarks('');
+                              if (assignees.length > 0) {
+                                setOfflineInitiatorName(assignees[0].name);
+                                setOfflineInitiatorId(assignees[0].id || '');
+                              }
+                              setOfflineApproverName(APPROVER_CONFIG[0]?.name || 'Srinu Sir');
+                              setOfflineApproverId(APPROVER_CONFIG[0]?.id || 'srinu_sir');
+                            }
+                            setIsAddCreditModalOpen(true);
+                          }}
+                          className="w-full text-left px-3.5 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition cursor-pointer flex items-center justify-between"
+                        >
+                          <span>{type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-500 mt-0.5">
                 {formatString(strings.registered, {
@@ -809,30 +1465,27 @@ export default function BuyerDossierDrawer({
         {/* 8. Final Buyer Profile Navigation Tabs in exact required order */}
         <div className="flex items-center gap-1 px-5 border-b border-slate-200 dark:border-slate-800 overflow-x-auto bg-slate-50/30 dark:bg-slate-900">
           {[
-            { id: 'profile', label: strings.profileTab, icon: Building2 },
-            { id: 'rfqs', label: `${strings.rfqsTab} (${buyerRfqs.length})`, icon: Layers },
-            { id: 'credits', label: strings.creditTab, icon: CreditCard },
-            { id: 'communications', label: `${strings.communicationsTab} (${communications.length})`, icon: MessageSquare },
-            { id: 'payments', label: `${strings.paymentsTab} (${payments.length})`, icon: Receipt },
-            { id: 'documents', label: `${strings.documentsTab} (${docCount})`, icon: FileText },
-          ].map((tab) => {
-            const Icon = tab.icon;
-            return (
-              <button
-                key={tab.id}
-                type="button"
-                onClick={() => setDossierTab(tab.id as any)}
-                className={`flex items-center gap-1.5 px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
-                  dossierTab === tab.id
-                    ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
-                }`}
-              >
-                <Icon className="w-4 h-4" />
-                <span>{tab.label}</span>
-              </button>
-            );
-          })}
+            { id: 'profile', label: strings.profileTab },
+            { id: 'rfqs', label: `${strings.rfqsTab} (${buyerRfqs.length})` },
+            { id: 'credits', label: strings.creditTab },
+            { id: 'communications', label: `${strings.communicationsTab} (${communications.length})` },
+            { id: 'payments', label: `${strings.paymentsTab} (${payments.length})` },
+            { id: 'documents', label: `${strings.documentsTab} (${docCount})` },
+            { id: 'uploaded-vendors', label: `${strings.uploadedVendorsTab} (${uploadedVendors.length})` },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              type="button"
+              onClick={() => setDossierTab(tab.id as any)}
+              className={`px-3.5 py-3 border-b-2 text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
+                dossierTab === tab.id
+                  ? 'border-indigo-600 text-indigo-600 dark:text-indigo-400'
+                  : 'border-transparent text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
+              }`}
+            >
+              <span>{tab.label}</span>
+            </button>
+          ))}
         </div>
 
         {/* Dossier Content Body */}
@@ -843,13 +1496,13 @@ export default function BuyerDossierDrawer({
               {/* Snapshot Cards */}
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
-                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total Sourced Spend</p>
+                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{strings.totalSpendLabel || 'Total spend'}</p>
                   <p className="text-xl font-bold text-indigo-700 dark:text-indigo-300 mt-0.5">
                     {buyer.totalSpend ? String(buyer.totalSpend).replace(/\$/g, '₹') : EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-slate-50 dark:bg-slate-800/50 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
-                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Total RFQs Sourced</p>
+                  <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">{strings.totalRfqLabel || 'Total RFQ'}</p>
                   <p className="text-xl font-bold text-slate-900 dark:text-white mt-0.5">
                     {buyer.totalRFQsCreated || buyerRfqs.length}
                   </p>
@@ -1079,7 +1732,7 @@ export default function BuyerDossierDrawer({
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.remainingFree}</p>
                   <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? EMPTY_VALUE}
+                    {creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? EMPTY_VALUE}
                   </p>
                 </div>
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
@@ -1249,9 +1902,10 @@ export default function BuyerDossierDrawer({
           {/* TAB 4: COMMUNICATIONS TAB (EMAIL, SMS, WHATSAPP, CALL LOGS) */}
           {dossierTab === 'communications' && (
             <div className="space-y-4">
-              {/* 4 Compact Sub-tabs in one horizontal row */}
+              {/* Compact Sub-tabs in one horizontal row */}
               <div className="flex items-center gap-2 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl">
                 {[
+                  { id: 'all', label: strings.subTabs.all || 'All', icon: Layers },
                   { id: 'email', label: strings.subTabs.email, icon: Mail },
                   { id: 'sms', label: strings.subTabs.sms, icon: Smartphone },
                   { id: 'whatsapp', label: strings.subTabs.whatsapp, icon: MessageSquare },
@@ -1296,7 +1950,7 @@ export default function BuyerDossierDrawer({
                     type="text"
                     value={commSearch}
                     onChange={(e) => setCommSearch(e.target.value)}
-                    placeholder={`Search ${commSubTab} communications...`}
+                    placeholder={commSubTab === 'all' ? 'Search communications...' : `Search ${commSubTab} communications...`}
                     className="w-full pl-9 pr-3 h-8 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg"
                   />
                 </div>
@@ -1321,7 +1975,7 @@ export default function BuyerDossierDrawer({
                 </div>
               ) : filteredCommunications.length === 0 ? (
                 <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                  <p className="text-xs font-medium">No recorded {commSubTab.toUpperCase()} communications found for this buyer.</p>
+                  <p className="text-xs font-medium">No recorded {commSubTab === 'all' ? '' : commSubTab.toUpperCase() + ' '}communications found for this buyer.</p>
                 </div>
               ) : (
                 <div className="space-y-3">
@@ -1358,7 +2012,7 @@ export default function BuyerDossierDrawer({
                           {comm.sender && <span>From: {comm.sender}</span>}
                           {comm.duration && <span>Duration: {comm.duration}</span>}
                         </div>
-                        {commSubTab === 'email' && (
+                        {(commSubTab === 'email' || comm.channel === 'EMAIL') && (
                           <button
                             type="button"
                             onClick={() => setSelectedEmailModal(comm)}
@@ -1578,8 +2232,140 @@ export default function BuyerDossierDrawer({
               )}
             </div>
           )}
-        </div>
 
+          {/* TAB 7: BUYER UPLOADED VENDORS TAB */}
+          {dossierTab === 'uploaded-vendors' && (
+            <div className="space-y-4">
+              {/* Header / Search Controls */}
+              <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+                <div className="relative flex-1">
+                  <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <input
+                    type="text"
+                    value={uploadedVendorSearch}
+                    onChange={(e) => setUploadedVendorSearch(e.target.value)}
+                    placeholder={strings.uploadedVendors.searchPlaceholder}
+                    className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+                <div className="flex items-center gap-2">
+                  <select
+                    value={uploadedVendorStatusFilter}
+                    onChange={(e) => setUploadedVendorStatusFilter(e.target.value)}
+                    aria-label="Filter by vendor status"
+                    className="px-3 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 focus:outline-none focus:ring-1 focus:ring-indigo-500"
+                  >
+                    <option value="ALL">{strings.uploadedVendors.statusFilterAll}</option>
+                    <option value="ACTIVE">ACTIVE</option>
+                    <option value="PENDING">PENDING</option>
+                    <option value="VERIFIED">VERIFIED</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => void loadUploadedVendors()}
+                    title={strings.uploadedVendors.retry}
+                    aria-label={strings.uploadedVendors.retry}
+                    className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer"
+                  >
+                    <RotateCcw className={`w-4 h-4 ${loadingUploadedVendors ? 'animate-spin' : ''}`} />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content states */}
+              {loadingUploadedVendors ? (
+                <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                  <Loader2 className="w-8 h-8 animate-spin mb-2 text-indigo-600" />
+                  <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+                </div>
+              ) : uploadedVendorsError ? (
+                <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                    <span className="text-xs">{uploadedVendorsError}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => void loadUploadedVendors()}
+                    className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                  >
+                    {strings.uploadedVendors.retry}
+                  </button>
+                </div>
+              ) : filteredUploadedVendors.length === 0 ? (
+                <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                  <Users className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                  <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                    {strings.uploadedVendors.emptyMessage}
+                  </p>
+                  <p className="text-xs text-slate-400 mt-1">{strings.uploadedVendors.subtitle}</p>
+                </div>
+              ) : (
+                <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                      <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                        <tr>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colVendorName}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colCompanyName}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colContactPerson}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colEmail}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colPhone}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colUploadDate}</th>
+                          <th className="py-3 px-4 whitespace-nowrap">{strings.uploadedVendors.colStatus}</th>
+                          <th className="py-3 px-4 text-right whitespace-nowrap">{strings.uploadedVendors.colActions}</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                        {filteredUploadedVendors.map((vendor) => (
+                          <tr key={vendor.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                            <td className="py-3 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                              {vendor.name || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                              {vendor.companyName || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.contactPerson || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 text-indigo-600 dark:text-indigo-400 whitespace-nowrap">
+                              {vendor.email || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.phone || EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              {vendor.createdAt ? formatIndianDateTime(vendor.createdAt) : EMPTY_VALUE}
+                            </td>
+                            <td className="py-3 px-4 whitespace-nowrap">
+                              <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                                (vendor.status || '').toUpperCase().includes('ACTIVE') || (vendor.status || '').toUpperCase().includes('VERIFIED')
+                                  ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                                  : 'bg-amber-100 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300'
+                              }`}>
+                                {vendor.status || EMPTY_VALUE}
+                              </span>
+                            </td>
+                            <td className="py-3 px-4 text-right whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setSelectedVendorForModal(vendor)}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/30 transition-colors cursor-pointer"
+                              >
+                                <Eye className="w-3.5 h-3.5" />
+                                {strings.uploadedVendors.viewDetails}
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
         {/* Modal Footer Controls */}
         <div className="p-4 border-t border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/40">
           <span className="text-xs text-slate-500">{strings.consoleTitle}</span>
@@ -1594,7 +2380,7 @@ export default function BuyerDossierDrawer({
       </div>
 
       {/* ------------------------------------------------------------------------ */}
-      {/* MODAL 1: ADD CREDIT MODAL (WITH APPROVAL WORKFLOW) */}
+      {/* MODAL 1: REQUEST TYPE MODAL (WITH APPROVAL WORKFLOW) */}
       {/* ------------------------------------------------------------------------ */}
       {isAddCreditModalOpen && (
         <div
@@ -1602,132 +2388,1189 @@ export default function BuyerDossierDrawer({
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
+            e.stopPropagation();
             if (e.target === e.currentTarget) setIsAddCreditModalOpen(false);
           }}
         >
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {strings.creditApproval?.modalTitle || 'Request Buyer Sourcing Credits'}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {strings.creditApproval?.modalSubtitle || 'Submit a credit addition request for executive review & approval'}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => setIsAddCreditModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
-              >
-                <X size={18} />
-              </button>
-            </div>
+          <div
+            className={`w-full ${
+              (selectedRequestType === 'Discounts' && discountStep === 3) || selectedRequestType === 'Offline Payments'
+                ? 'max-w-2xl'
+                : 'max-w-lg'
+            } bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 sm:p-5 space-y-3 max-h-[90vh] overflow-y-auto`}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {selectedRequestType === 'Discounts' ? (
+              <>
+                {/* Step 1: Select Sourcing Mode */}
+                {discountStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step1Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {discountStrings.step1Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
 
-            <form onSubmit={handleConfirmAddCredit} className="space-y-3.5 text-xs">
-              {/* Buyer Name (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.buyerNameLabel || 'Buyer Organization'}
-                </label>
-                <input
-                  type="text"
-                  readOnly
-                  value={buyer.organizationName}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                />
-              </div>
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {discountStrings.step1SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {DISCOUNT_SOURCING_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDiscountMode(mode.label);
+                              setDiscountStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedDiscountMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {mode.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
 
-              {/* Current Available Credits (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits'}
-                </label>
-                <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits != null ? `${creditSummary.remainingFreeCredits} Credits` : EMPTY_VALUE}
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                      >
+                        {discountStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Select Billing Duration */}
+                {discountStep === 2 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step2Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {formatString(discountStrings.step2Subtitle, {
+                            mode: selectedDiscountMode,
+                          })}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {discountStrings.step2SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        {DISCOUNT_BILLING_DURATIONS.map((dur) => (
+                          <button
+                            key={dur.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedBillingDuration(dur.label);
+                              setDiscountStep(3);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedBillingDuration === dur.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {dur.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {dur.months} Months
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => setDiscountStep(1)}
+                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                      >
+                        <ArrowLeft size={14} />
+                        {discountStrings.backBtn}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                      >
+                        {discountStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 3: Enter Discount Percentage & Review Breakdown */}
+                {discountStep === 3 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step3Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {discountStrings.step3Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleConfirmAddCredit} className="space-y-3 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                        {/* Left column: form inputs */}
+                        <div className="space-y-2.5">
+                          {/* Buyer Name (Read-Only) */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {discountStrings.buyerNameLabel}
+                            </label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={buyer.organizationName}
+                              className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                            />
+                          </div>
+
+                          {/* Selected Mode & Billing Duration (Read-Only) */}
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.selectedModeLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedDiscountMode}
+                                className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.billingDurationLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedBillingDuration}
+                                className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Original Plan Price & Discount Percentage (2 cols) */}
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.originalPlanPriceLabel}
+                              </label>
+                              <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold text-xs">
+                                ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.discountPercentageLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="any"
+                                value={discountPercentage}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  setDiscountPercentage(isNaN(val) ? 0 : val);
+                                }}
+                                placeholder="0"
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          {/* Initiated By & Approver (2 cols) */}
+                          <div className="grid grid-cols-2 gap-2.5">
+                            <div>
+                              <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="discount-initiator"
+                                value={creditInitiator}
+                                onChange={(e) => {
+                                  const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
+                                  setCreditInitiator(name);
+                                  setCreditInitiatorId(id);
+                                }}
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                                required
+                              >
+                                <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                                {buyerInitiatorSelectOptions.map((user) => (
+                                  <option key={user} value={user}>
+                                    {user}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+
+                            <div>
+                              <label htmlFor="discount-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="discount-approver"
+                                value={creditApprover}
+                                onChange={(e) => {
+                                  const { name, id } = resolveUserOrApprover(e.target.value, authorizedApprovers, APPROVER_CONFIG);
+                                  setCreditApprover(name);
+                                  setCreditApproverId(id);
+                                }}
+                                className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                                required
+                              >
+                                <option value="">{discountStrings.approverPlaceholder}</option>
+                                {buyerApproverSelectOptions.map((appr) => (
+                                  <option key={appr} value={appr}>
+                                    {appr}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Request Reason / Justification - Optional Text */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {discountStrings.reasonLabel}
+                            </label>
+                            <textarea
+                              rows={1.5}
+                              value={addCreditReason}
+                              onChange={(e) => setAddCreditReason(e.target.value)}
+                              placeholder={discountStrings.reasonPlaceholder}
+                              className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Right column: Clear Price Breakdown Table */}
+                        <div className="space-y-1.5">
+                          <span className="block font-semibold text-slate-700 dark:text-slate-300">
+                            {discountStrings.priceBreakdownHeading}
+                          </span>
+                          <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/60 dark:bg-slate-800/40">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                                <tr>
+                                  <th className="px-3 py-1.5 text-left">{discountStrings.colDescription}</th>
+                                  <th className="px-3 py-1.5 text-right">{discountStrings.colAmount}</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowOriginalPrice}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowDiscountPercent}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    {discountBreakdown.discountPercentage}%
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-rose-600 dark:text-rose-400 font-medium">
+                                    {discountStrings.rowDiscountAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-rose-600 dark:text-rose-400">
+                                    −₹{discountBreakdown.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowRemainingAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{discountBreakdown.remainingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-indigo-600 dark:text-indigo-400 font-medium">
+                                    {discountStrings.rowGst}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-indigo-600 dark:text-indigo-400">
+                                    +₹{discountBreakdown.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
+                                  <td className="px-3 py-1.5 text-emerald-900 dark:text-emerald-100">
+                                    {discountStrings.rowFinalPayable}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-emerald-700 dark:text-emerald-300 font-extrabold">
+                                    ₹{discountBreakdown.finalPayableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Step 5: Submission & Navigation Controls */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountStep(2)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                        >
+                          <ArrowLeft size={14} />
+                          {discountStrings.backBtn}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                          >
+                            {discountStrings.cancelBtn}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingCredit || discountPercentage < 0 || discountPercentage > 100 || !creditApprover.trim()}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingCredit
+                              ? (discountStrings.submittingBtn)
+                              : (discountStrings.submitBtn)}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Trial Periods' ? (
+              // Trial Period 2-Step Workflow
+              <>
+                {trialPeriodStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {strings.creditApproval?.trialPeriodWorkflow?.step1Title || 'Select Sourcing Mode'}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {strings.creditApproval?.trialPeriodWorkflow?.step1Subtitle || 'Step 1 of 2: Select sourcing mode for trial period request.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {strings.creditApproval?.trialPeriodWorkflow?.step1SectionLabel || 'Select Sourcing Mode'}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {TRIAL_PERIOD_SOURCING_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTrialMode(mode.label);
+                              setTrialPeriodStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedTrialMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {mode.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {strings.creditApproval?.trialPeriodWorkflow?.cancelBtn || 'Cancel'}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {trialPeriodStep === 2 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {strings.creditApproval?.trialPeriodWorkflow?.step2Title || 'Request Trial Period Approval'}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {strings.creditApproval?.trialPeriodWorkflow?.step2Subtitle || 'Submit trial period extension for authorization by the approver you select below.'}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleConfirmAddCredit} className="space-y-3 text-xs">
+                      {/* Buyer Name & Selected Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.buyerNameLabel || 'Buyer Name'}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={buyer.organizationName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.selectedModeLabel || 'Selected Mode'}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={selectedTrialMode}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Trial Days & Dates (3 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+                        <div>
+                          <label htmlFor="trial-days-input" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.trialDaysLabel || 'Number of Trial Days'} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="trial-days-input"
+                            type="number"
+                            value={trialDays || ''}
+                            onChange={(e) => {
+                              const val = parseInt(e.target.value, 10);
+                              handleTrialDaysChange(isNaN(val) ? 0 : val);
+                            }}
+                            placeholder={strings.creditApproval?.trialPeriodWorkflow?.trialDaysPlaceholder || 'e.g. 30'}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            min="1"
+                            max="365"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.startDateLabel || 'Starting Date'}
+                          </label>
+                          <input
+                            id="trial-start-date"
+                            type="date"
+                            value={trialStartDate}
+                            onChange={(e) => handleTrialDateChange(e.target.value, trialEndDate)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="trial-end-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.endDateLabel || 'Ending Date'}
+                          </label>
+                          <input
+                            id="trial-end-date"
+                            type="date"
+                            value={trialEndDate}
+                            onChange={(e) => handleTrialDateChange(trialStartDate, e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Date Validation Alert Message */}
+                      {trialDateError && (
+                        <div role="alert" className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs flex items-center gap-1.5">
+                          <AlertTriangle size={14} className="shrink-0" />
+                          <span>{trialDateError}</span>
+                        </div>
+                      )}
+
+                      {/* Initiated By & Assigned Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.initiatedByLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="trial-initiator"
+                            value={creditInitiator}
+                            onChange={(e) => {
+                              const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
+                              setCreditInitiator(name);
+                              setCreditInitiatorId(id);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{strings.creditApproval?.trialPeriodWorkflow?.selectUserPlaceholder || 'Select Initiator...'}</option>
+                            {buyerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="trial-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {strings.creditApproval?.trialPeriodWorkflow?.assignedApproverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="trial-approver"
+                            value={creditApprover}
+                            onChange={(e) => {
+                              const { name, id } = resolveUserOrApprover(e.target.value, authorizedApprovers, APPROVER_CONFIG);
+                              setCreditApprover(name);
+                              setCreditApproverId(id);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{strings.creditApproval?.trialPeriodWorkflow?.selectApproverPlaceholder || 'Select Authorized Approver...'}</option>
+                            {buyerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Request Reason / Remarks */}
+                      <div>
+                        <label htmlFor="trial-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {strings.creditApproval?.trialPeriodWorkflow?.reasonLabel || 'Request Reason / Remarks'}
+                        </label>
+                        <textarea
+                          id="trial-remarks"
+                          rows={1.5}
+                          value={addCreditReason}
+                          onChange={(e) => setAddCreditReason(e.target.value)}
+                          placeholder={strings.creditApproval?.trialPeriodWorkflow?.reasonPlaceholder || 'Reason for trial period extension...'}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        />
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setTrialPeriodStep(1)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                        >
+                          <ArrowLeft size={14} />
+                          {strings.creditApproval?.trialPeriodWorkflow?.backBtn || 'Back'}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          >
+                            {strings.creditApproval?.trialPeriodWorkflow?.cancelBtn || 'Cancel'}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingCredit || trialDays <= 0 || !creditApprover.trim() || !creditInitiator.trim() || Boolean(trialDateError)}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingCredit
+                              ? (strings.creditApproval?.trialPeriodWorkflow?.submittingBtn || 'Submitting Request...')
+                              : (strings.creditApproval?.trialPeriodWorkflow?.submitBtn || 'Submit for Approval')}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Offline Payments' ? (
+              // Dedicated Offline Payment Approval Form
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {offlinePaymentStrings.modalTitle}
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      {offlinePaymentStrings.modalSubtitle}
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
                 </div>
-              </div>
 
-              {/* Requested Credits */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={addCreditAmount}
-                  onChange={(e) => setAddCreditAmount(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  required
-                />
-              </div>
+                <form onSubmit={handleConfirmOfflinePayment} className="space-y-3 text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                    {/* Left Column: Payment Details */}
+                    <div className="space-y-2.5">
+                      {/* Buyer Name & Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.buyerNameLabel}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={buyer.organizationName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
 
-              {/* Initiated By Select */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  id="credit-initiator"
-                  type="text"
-                  readOnly
-                  value={creditInitiator}
-                  placeholder={UI_STRINGS.dataLoad.emptyCell}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
-                />
-              </div>
+                        <div>
+                          <label htmlFor="offline-sourcing-mode-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.buyerSourcingModeLabel}
+                          </label>
+                          <select
+                            id="offline-sourcing-mode-select"
+                            value={offlineBuyerSourceMode}
+                            onChange={(e) => setOfflineBuyerSourceMode(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          >
+                            {BUYER_SOURCING_MODES.map((mode) => (
+                              <option key={mode} value={mode}>{mode}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
-              {/* Assigned Approver Select */}
-              <div>
-                <label htmlFor="credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
-                </label>
-                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
-                <input
-                  id="credit-approver"
-                  type="text"
-                  value={creditApprover}
-                  onChange={(e) => setCreditApprover(e.target.value)}
-                  placeholder={strings.creditApproval.approverPlaceholder}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
-              </div>
+                      {/* Payment Date & Type (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-payment-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentDateLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-payment-date"
+                            type="date"
+                            value={offlinePaymentDate}
+                            onChange={(e) => setOfflinePaymentDate(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
 
-              {/* Reason / Remarks */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {strings.creditApproval?.reasonLabel || 'Business Justification / Reason'}
-                </label>
-                <textarea
-                  rows={2}
-                  value={addCreditReason}
-                  onChange={(e) => setAddCreditReason(e.target.value)}
-                  placeholder={strings.creditApproval?.reasonPlaceholder || 'Enter business justification...'}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
-              </div>
+                        <div>
+                          <label htmlFor="offline-payment-type-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentTypeLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-payment-type-select"
+                            value={offlinePaymentType}
+                            onChange={(e) => {
+                              const newType = e.target.value as OfflinePaymentType;
+                              setOfflinePaymentType(newType);
+                              if (newType === 'Cash') {
+                                setOfflineTransactionId('');
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          >
+                            {OFFLINE_PAYMENT_TYPES.map((ptype) => (
+                              <option key={ptype} value={ptype}>{ptype}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
-                <button
-                  type="button"
-                  onClick={() => setIsAddCreditModalOpen(false)}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingCredit || addCreditAmount <= 0}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
-                >
-                  {isSubmittingCredit
-                    ? strings.creditApproval?.submittingBtn || 'Submitting Request...'
-                    : strings.creditApproval?.submitBtn || 'Submit for Approval'}
-                </button>
+                      {/* Transaction ID */}
+                      {offlinePaymentType !== 'Cash' && (
+                        <div>
+                          <label htmlFor="offline-transaction-id" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.transactionIdLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-transaction-id"
+                            type="text"
+                            value={offlineTransactionId}
+                            onChange={(e) => setOfflineTransactionId(e.target.value)}
+                            placeholder={offlinePaymentStrings.transactionIdPlaceholder}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Payment Amount */}
+                      <div>
+                        <label htmlFor="offline-payment-amount" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentAmountLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="offline-payment-amount"
+                          type="number"
+                          min="1"
+                          step="any"
+                          value={offlinePaymentAmount || ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setOfflinePaymentAmount(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder={offlinePaymentStrings.paymentAmountPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    {/* Right Column: Upload Proof, Initiator, Approver, Remarks */}
+                    <div className="space-y-2.5">
+                      {/* Payment Proof Upload */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentProofLabel}
+                        </label>
+                        <input
+                          ref={offlineFileInputRef}
+                          type="file"
+                          accept="image/jpeg,image/png,image/jpg"
+                          className="hidden"
+                          onChange={handleOfflineProofFileSelect}
+                          data-testid="offline-proof-file-input"
+                        />
+                        {offlineProofPreviewUrl ? (
+                          <div className="space-y-1.5 p-2 bg-slate-50 dark:bg-slate-800/80 rounded-xl border border-slate-200 dark:border-slate-700">
+                            <div className="flex items-center justify-between">
+                              <div className="flex items-center gap-2 truncate max-w-[220px]">
+                                <FileText size={14} className="text-emerald-500 shrink-0" />
+                                <span className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                                  {offlineProofFileName}
+                                </span>
+                              </div>
+                              <div className="flex items-center gap-1.5 shrink-0">
+                                <button
+                                  type="button"
+                                  onClick={() => offlineFileInputRef.current?.click()}
+                                  className="text-[11px] font-medium text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                                >
+                                  {offlinePaymentStrings.changeFileBtn}
+                                </button>
+                                <span className="text-slate-300 dark:text-slate-600">•</span>
+                                <button
+                                  type="button"
+                                  onClick={handleRemoveOfflineProof}
+                                  className="text-[11px] font-medium text-rose-600 dark:text-rose-400 hover:underline cursor-pointer"
+                                >
+                                  {offlinePaymentStrings.removeFileBtn}
+                                </button>
+                              </div>
+                            </div>
+                            <div className="relative rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 max-h-24 flex items-center justify-center bg-black/5">
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={offlineProofPreviewUrl}
+                                alt="Payment Proof Preview"
+                                className="object-contain max-h-24 w-auto"
+                              />
+                            </div>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => offlineFileInputRef.current?.click()}
+                            className="w-full py-2.5 px-3 border border-dashed border-slate-300 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl bg-slate-50/50 dark:bg-slate-800/40 flex flex-col items-center justify-center gap-1 text-center transition group cursor-pointer"
+                          >
+                            <Upload size={18} className="text-slate-400 group-hover:text-emerald-500 transition" />
+                            <span className="text-xs font-semibold text-slate-700 dark:text-slate-200 group-hover:text-emerald-600">
+                              {offlinePaymentStrings.uploadFileBtn}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              {offlinePaymentStrings.paymentProofHelp}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Initiated By & Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-initiator-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-initiator-select"
+                            value={offlineInitiatorName}
+                            onChange={(e) => {
+                              const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
+                              setOfflineInitiatorName(name);
+                              setOfflineInitiatorId(id);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder}</option>
+                            {buyerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-approver-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-approver-select"
+                            value={offlineApproverName}
+                            onChange={(e) => {
+                              const { name, id } = resolveUserOrApprover(e.target.value, authorizedApprovers, APPROVER_CONFIG);
+                              setOfflineApproverName(name);
+                              setOfflineApproverId(id);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectApproverPlaceholder}</option>
+                            {buyerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Remarks */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          rows={1.5}
+                          value={offlineRemarks}
+                          onChange={(e) => setOfflineRemarks(e.target.value)}
+                          placeholder={offlinePaymentStrings.reasonPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Action Buttons */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      {offlinePaymentStrings.cancelBtn}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingCredit || offlinePaymentAmount <= 0 || !offlinePaymentDate || !offlineApproverName || !offlineInitiatorName || (offlinePaymentType !== 'Cash' && !offlineTransactionId.trim())}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingCredit
+                        ? (offlinePaymentStrings.submittingBtn)
+                        : (offlinePaymentStrings.submitBtn)}
+                    </button>
+                  </div>
+                </form>
               </div>
-            </form>
+            ) : (
+              // Existing modal for other request types
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {strings.creditApproval?.types?.[selectedRequestType]?.title || strings.creditApproval?.modalTitle || 'Request Buyer Credit Approval'}
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleConfirmAddCredit} className="space-y-2.5 text-xs">
+                  {/* Row 1: Buyer Name & Current Context / Available Credits (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {strings.creditApproval?.buyerNameLabel || 'Buyer Organization'}
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={buyer.organizationName}
+                        className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {strings.creditApproval?.availableCreditsLabel || 'Available Sourcing Credits'}
+                      </label>
+                      <div className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold text-xs">
+                        {(() => {
+                          const credits = creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? 0;
+                          return `${credits} Credits`;
+                        })()}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Value Field & Initiated By (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {creditApprovalStrings.types?.[selectedRequestType]?.valueLabel ||
+                          creditApprovalStrings.requestedCreditsLabel ||
+                          'Requested Credits'} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        type="number"
+                        min="1"
+                        max={100000000}
+                        value={addCreditAmount}
+                        onChange={(e) => setAddCreditAmount(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                        placeholder={creditApprovalStrings.types?.[selectedRequestType]?.placeholder || '0'}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="credit-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {creditApprovalStrings.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="credit-initiator"
+                        value={creditInitiator}
+                        onChange={(e) => {
+                          const { name, id } = resolveUserOrApprover(e.target.value, applicationUsers, assignees);
+                          setCreditInitiator(name);
+                          setCreditInitiatorId(id);
+                        }}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee || 'Select Initiator...'}</option>
+                        {buyerInitiatorSelectOptions.map((user) => (
+                          <option key={user} value={user}>
+                            {user}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Row 3: Assigned Approver & Remarks (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label htmlFor="credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {creditApprovalStrings.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="credit-approver"
+                        value={creditApprover}
+                        onChange={(e) => {
+                          const { name, id } = resolveUserOrApprover(e.target.value, authorizedApprovers, APPROVER_CONFIG);
+                          setCreditApprover(name);
+                          setCreditApproverId(id);
+                        }}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{creditApprovalStrings.approverPlaceholder || 'Select Authorized Approver...'}</option>
+                        {buyerApproverSelectOptions.map((appr) => (
+                          <option key={appr} value={appr}>
+                            {appr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {creditApprovalStrings.reasonLabel || 'Business Justification / Reason'}
+                      </label>
+                      <textarea
+                        rows={1.5}
+                        value={addCreditReason}
+                        onChange={(e) => setAddCreditReason(e.target.value)}
+                        placeholder={creditApprovalStrings.types?.[selectedRequestType]?.reasonPlaceholder || creditApprovalStrings.reasonPlaceholder || 'Enter business justification...'}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingCredit || addCreditAmount <= 0}
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
+                    >
+                      {isSubmittingCredit
+                        ? (creditApprovalStrings.submittingBtn || 'Submitting Request...')
+                        : (creditApprovalStrings.submitBtn || 'Submit for Approval')}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
           </div>
         </div>
       )}
@@ -1741,14 +3584,18 @@ export default function BuyerDossierDrawer({
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
+            e.stopPropagation();
             if (e.target === e.currentTarget) setIsEditCategoriesOpen(false);
           }}
         >
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+          <div
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  Edit Supported Major Categories
+                  Edit Supported Divisions
                 </h3>
                 <p className="text-xs text-slate-500 mt-0.5">
                   Select, add, or remove procurement categories for {buyer.organizationName}.
@@ -1763,51 +3610,121 @@ export default function BuyerDossierDrawer({
               </button>
             </div>
 
-            {/* Standard Category Selection Badges */}
-            <div className="space-y-2">
-              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
-                Standard Taxonomy Categories
-              </span>
-              {majorCategoryError && majorCategoryOptions.length === 0 && (
-                <p role="alert" className="text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
-              )}
-              <div className="flex flex-wrap gap-2 max-h-48 overflow-y-auto p-1">
-                {majorCategoryOptions.map((cat) => {
-                  const isSelected = selectedCategoriesDraft.includes(cat);
-                  return (
-                    <button
-                      key={cat}
-                      type="button"
-                      onClick={() => handleToggleCategory(cat)}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition border cursor-pointer ${
-                        isSelected
-                          ? 'bg-indigo-600 text-white border-indigo-600'
-                          : 'bg-slate-50 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
-                      }`}
-                    >
-                      {isSelected ? `✓ ${cat}` : `+ ${cat}`}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
+            {majorCategoryError && (
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/50">
+                {majorCategoryError}
+              </p>
+            )}
 
-            {/* Add Custom Category Input */}
-            <form onSubmit={handleAddNewCategory} className="flex items-center gap-2 pt-2">
-              <input
-                type="text"
-                value={newCategoryInput}
-                onChange={(e) => setNewCategoryInput(e.target.value)}
-                placeholder="Type custom major category..."
-                className="flex-1 px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
-              />
-              <button
-                type="submit"
-                className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer"
-              >
-                {strings.addCustomCategory}
-              </button>
-            </form>
+            {/* Minor Category Autocomplete Search (>= 3 chars) */}
+            <div className="space-y-2 relative">
+              <label htmlFor="buyer-dossier-category-search-input" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                {UI_STRINGS.vendorCategorySelect.categoryLabel}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="buyer-dossier-category-search-input"
+                    type="text"
+                    value={newCategoryInput}
+                    onChange={(e) => {
+                      setNewCategoryInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (newCategoryInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (newCategoryInput.trim()) {
+                          handleAddCategoryTag(newCategoryInput.trim());
+                        }
+                      } else if (e.key === 'Escape') {
+                        setShowCategorySuggestions(false);
+                      }
+                    }}
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  />
+                  {newCategoryInput && (
+                    <button
+                      type="button"
+                      aria-label="Clear category input"
+                      onClick={() => {
+                        setNewCategoryInput('');
+                        setShowCategorySuggestions(false);
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
+                    >
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                      handleAddCategoryTag(filteredCategorySuggestions[0]);
+                    } else if (newCategoryInput.trim()) {
+                      handleAddCategoryTag(newCategoryInput.trim());
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg cursor-pointer shrink-0"
+                >
+                  {strings.addCustomCategory}
+                </button>
+              </div>
+
+              {newCategoryInput.trim().length > 0 && newCategoryInput.trim().length < 3 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                  {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                </p>
+              )}
+
+              {showCategorySuggestions && newCategoryInput.trim().length >= 3 && (
+                <div
+                  role="listbox"
+                  aria-label={UI_STRINGS.vendorCategorySelect.matchingCategories}
+                  className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                >
+                  <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                    <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                    <span className="text-[9px] text-indigo-600 dark:text-indigo-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                  </div>
+                  {filteredCategorySuggestions.length > 0 ? (
+                    filteredCategorySuggestions.map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        role="option"
+                        aria-selected={selectedCategoriesDraft.includes(category)}
+                        onClick={() => handleAddCategoryTag(category)}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-indigo-50 dark:hover:bg-indigo-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors cursor-pointer"
+                      >
+                        <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                        <span className="text-[10px] text-slate-400 italic">{findMajorForMinor(category)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-3 text-center">
+                      <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleAddCategoryTag(newCategoryInput.trim())}
+                        className="text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
+                      >
+                        {UI_STRINGS.vendorCategorySelect.addCustomTag}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
 
             {/* Currently Selected Summary */}
             <div className="pt-2">
@@ -2041,10 +3958,14 @@ export default function BuyerDossierDrawer({
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
+            e.stopPropagation();
             if (e.target === e.currentTarget) setSelectedEmailModal(null);
           }}
         >
-          <div className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+          <div
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Email Dispatch Details
@@ -2094,7 +4015,10 @@ export default function BuyerDossierDrawer({
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
-          onClick={() => setIsComposeOpen(false)}
+          onClick={(e) => {
+            e.stopPropagation();
+            if (e.target === e.currentTarget) setIsComposeOpen(false);
+          }}
         >
           <div
             className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4 max-h-[90vh] overflow-y-auto"
@@ -2501,10 +4425,14 @@ export default function BuyerDossierDrawer({
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
+            e.stopPropagation();
             if (e.target === e.currentTarget) setSelectedPaymentModal(null);
           }}
         >
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
+          <div
+            className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="flex items-center justify-between">
               <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                 Payment Record Details
@@ -2559,6 +4487,99 @@ export default function BuyerDossierDrawer({
                 className="px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 rounded-lg hover:bg-slate-200"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vendor Details Modal */}
+      {selectedVendorForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedVendorForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-600 dark:text-indigo-400">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedVendorForModal.name || selectedVendorForModal.companyName || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.uploadedVendors.vendorDetailsTitle}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedVendorForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.uploadedVendors.closeModal}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colCompanyName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.companyName || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colContactPerson}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.contactPerson || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colEmail}</span>
+                <span className="text-indigo-600 dark:text-indigo-400 font-medium break-all">{selectedVendorForModal.email || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colPhone}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.phone || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.categoryLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.majorCategory || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.locationLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.location || selectedVendorForModal.city || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.gstinLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedVendorForModal.gstin || selectedVendorForModal.gst || (selectedVendorForModal as any).gstNumber || EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.panLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedVendorForModal.pan || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colUploadDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedVendorForModal.createdAt ? formatIndianDateTime(selectedVendorForModal.createdAt) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.uploadedVendors.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedVendorForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedVendorForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.uploadedVendors.closeModal}
               </button>
             </div>
           </div>

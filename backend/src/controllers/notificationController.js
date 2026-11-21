@@ -41,6 +41,9 @@ async function resolveRecipient(req) {
 
 async function listNotifications(req, res, next) {
   try {
+    if (typeof res.set === 'function') {
+      res.set('Cache-Control', 'no-store');
+    }
     const recipient = await resolveRecipient(req);
     if (!recipient) {
       return res.json({ success: true, data: [], unreadCount: 0 });

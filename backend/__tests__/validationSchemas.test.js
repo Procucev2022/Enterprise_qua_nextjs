@@ -13,6 +13,8 @@ describe('Backend Validation Schemas Unit Tests', () => {
   test('validates category update recipient data and optional idempotency keys', () => {
     const schema = VALIDATION_SCHEMAS.requestVendorCategoryUpdate;
     expect(validatePayload(schema, { vendorEmail: 'vendor@example.test' }).isValid).toBe(true);
+    expect(EMAIL_REGEX.test('http://www.google.co.in/maps/@17.0380803,82.1494328,885a')).toBe(false);
+    expect(validatePayload(schema, { vendorEmail: 'http://www.google.co.in/maps/@17.0380803,82.1494328,885a' }).isValid).toBe(false);
     expect(validatePayload(schema, {
       vendorEmail: 'vendor@example.test',
       idempotencyKey: '9a1e9b1a-18d7-4ab3-8ea0-4a00418df17f',
@@ -33,7 +35,7 @@ describe('Backend Validation Schemas Unit Tests', () => {
 
     const unlisted = validatePayload(schema, { amount: 5, approverName: 'Unlisted Approver' });
     expect(unlisted.isValid).toBe(false);
-    expect(unlisted.errors.approverName).toMatch(/must be one of: Srinu Sir, Sudheer Sir/);
+    expect(unlisted.errors.approverName).toMatch(/must be one of: Srinu Sir, (?:Rao Sir, )?Sudheer Sir/);
   });
 
   test('validates optional credit approval request idempotency UUIDs', () => {
@@ -690,6 +692,106 @@ describe('Ticket and batch chaser schema contract', () => {
         pan: 'AAMCP4349L',
         panNumber: 'BGLPK1234M',
       });
+    });
+
+    test('derivePanFromGstin and parsePrimaryPlantLocation handle real, dummy, and empty values', () => {
+      const { derivePanFromGstin, parsePrimaryPlantLocation } = require('../src/config/validationSchemas');
+      expect(derivePanFromGstin(' 27aaack3921p1z9 ')).toBe('AAACK3921P');
+      expect(derivePanFromGstin('27AAAAA0000A1Z5')).toBe('');
+      expect(derivePanFromGstin('27AAACL1234F1Z5')).toBe('');
+      expect(derivePanFromGstin('INVALID')).toBe('');
+      expect(derivePanFromGstin(null)).toBe('');
+
+      expect(parsePrimaryPlantLocation('Bengaluru, Karnataka (560037)')).toEqual({
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      });
+      expect(parsePrimaryPlantLocation('Pune, Maharashtra')).toEqual({
+        city: 'Pune',
+        state: 'Maharashtra',
+        pincode: '',
+      });
+      expect(parsePrimaryPlantLocation('')).toEqual({ city: '', state: '', pincode: '' });
+      expect(parsePrimaryPlantLocation(undefined)).toEqual({ city: '', state: '', pincode: '' });
+    });
+  });
+
+  describe('validateRFQLineItemsForCreate and custom validators coverage', () => {
+    const { validateRFQLineItemsForCreate } = require('../src/config/validationSchemas');
+
+    test('validates RFQ line items for create with empty, invalid, and category constraints', () => {
+      expect(validateRFQLineItemsForCreate(null).isValid).toBe(false);
+      expect(validateRFQLineItemsForCreate([]).isValid).toBe(false);
+
+      const invalidRow = validateRFQLineItemsForCreate([{}]);
+      expect(invalidRow.isValid).toBe(false);
+
+      const allCatWithMinor = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'All Categories',
+        minorCategory: 'Pipes',
+      }]);
+      expect(allCatWithMinor.isValid).toBe(false);
+      expect(allCatWithMinor.errors['lineItems[0].minorCategory']).toContain('does not apply to All Categories');
+
+      const majorWithoutMinor = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'Metals',
+      }]);
+      expect(majorWithoutMinor.isValid).toBe(false);
+      expect(majorWithoutMinor.errors['lineItems[0].minorCategory']).toContain('needs a minor category');
+
+      const validItems = validateRFQLineItemsForCreate([{
+        itemName: 'Steel Pipe',
+        technicalSpecs: 'Steel Grade A',
+        quantity: 10,
+        unit: 'Nos',
+        majorCategory: 'Metals',
+        minorCategory: 'Steel Bars',
+      }]);
+      expect(validItems.isValid).toBe(true);
+    });
+
+    test('validates sellerAddQuoteCredits amount custom validator', () => {
+      const custom = VALIDATION_SCHEMAS.sellerAddQuoteCredits.amount.custom;
+      expect(custom(0)).toContain('must be an integer');
+      expect(custom(1.5)).toContain('must be an integer');
+      expect(custom(6)).toContain('must be an integer');
+      expect(custom(3)).toBeNull();
+    });
+
+    test('validates createRFQLineItem quantity custom validator', () => {
+      const custom = VALIDATION_SCHEMAS.createRFQLineItem.quantity.custom;
+      expect(custom(0)).toContain('needs a quantity above zero');
+      expect(custom(-5)).toContain('needs a quantity above zero');
+      expect(custom(10)).toBeNull();
+    });
+
+    test('validates bot email attachment byte size limit', () => {
+      const custom = VALIDATION_SCHEMAS.botBridgeEmail.attachments.custom;
+      // 5 MB = 5242880 bytes. Create base64 string exceeding this size.
+      const largeBase64 = 'AAAA'.repeat(1800000); // ~7.2 MB
+      const result = custom([{ fileName: 'large.bin', contentType: 'application/octet-stream', fileData: largeBase64 }]);
+      expect(result).toContain('smaller');
+    });
+
+    test('validates registrationList schema with date parameters', () => {
+      const res = validatePayload(VALIDATION_SCHEMAS.registrationList, {
+        startDate: '2026-11-06',
+        endDate: '2026-11-16',
+        dateRangePreset: 'last10',
+      });
+      expect(res.isValid).toBe(true);
+      expect(res.sanitizedData.startDate).toBe('2026-11-06');
+      expect(res.sanitizedData.endDate).toBe('2026-11-16');
+      expect(res.sanitizedData.dateRangePreset).toBe('last10');
     });
   });
 });

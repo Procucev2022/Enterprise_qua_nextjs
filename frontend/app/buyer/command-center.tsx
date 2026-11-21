@@ -2,13 +2,15 @@
 
 import React, { useState, useMemo } from 'react';
 import { useApp } from '@/lib/store';
-import { SOURCING_MODES, formatIndianDateTime } from '@/lib/constants';
+import { SOURCING_MODES, formatIndianDateTime, isBuyerUploadedVendor, isBuyerQuotesSealed } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { RFQItem } from '@/lib/types';
 import {
   RFQFollowUpDeepDiveModal,
   ActivePipelineModal,
   IntakeSourcesModal,
   SupplierQuotesModal,
+  LiveOutreachModal,
 } from '@/app/components/Modals';
 import {
   FileText,
@@ -47,10 +49,19 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
     setDeepDiveModalOpen,
     openRFQDeepDive,
     activeBuyerAccount,
+    buyerVendors,
+    currentUserSession,
     setInitialSetupModalOpen,
     initialSetupCompleted,
     isLoadingRFQs,
   } = useApp();
+
+  const hasCompletedVendorSetup = Boolean(
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true ||
+    (Array.isArray(buyerVendors) && buyerVendors.some((v) => isBuyerUploadedVendor(v)))
+  );
 
   const [feedChannelFilter, setFeedChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email' | 'system'>('all');
   const [rfqSourceFilter, setRfqSourceFilter] = useState<'all' | 'email_gateway' | 'web_portal' | 'manual_entry' | 'ai_extraction'>('all');
@@ -58,6 +69,7 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
   const [activePipelineModalOpen, setActivePipelineModalOpen] = useState(false);
   const [intakeSourcesModalOpen, setIntakeSourcesModalOpen] = useState(false);
   const [supplierQuotesModalOpen, setSupplierQuotesModalOpen] = useState(false);
+  const [liveOutreachModalOpen, setLiveOutreachModalOpen] = useState(false);
 
   // GET /api/rfqs is itself scoped to the signed-in buyer's own account now
   // (server-side, via the same buyer_accounts record RFQs are stamped with —
@@ -72,7 +84,10 @@ export default function CommandCenter({ onNavigateToWizard, onNavigateToMatrix, 
 
   const totalActiveRFQs = rfqs.length;
   const totalPendingQuotes = rfqs.reduce(
-    (acc, r) => acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesHidden ? 0 : (r.quotesCount || 0))),
+    (acc, r) => {
+      if (isBuyerQuotesSealed(r, 'buyer')) return acc;
+      return acc + (Array.isArray(r.quotes) ? r.quotes.length : (r.quotesCount || 0));
+    },
     0
   );
   const inEvaluationCount = rfqs.filter((r) => r.status === 'In Evaluation').length;
@@ -315,6 +330,7 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
     setActivePipelineModalOpen(false);
     setIntakeSourcesModalOpen(false);
     setSupplierQuotesModalOpen(false);
+    setLiveOutreachModalOpen(false);
   };
 
   const handleOpenDeepDiveFromModal = (rfq: RFQItem) => {
@@ -352,25 +368,25 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
       </div>
 
       {/* ── KPI Cards (4 Column Grid with RFQ Intake Source Breakdown) ── */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
         {/* Active RFQs */}
         <div
           onClick={() => setActivePipelineModalOpen(true)}
-          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-indigo-400 dark:hover:border-indigo-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[96px] h-full min-w-0 group"
           title="Click to view Active Pipeline details"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">Active Pipeline</span>
-            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors truncate">Active Pipeline</span>
+            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold shrink-0">
               <FileText size={15} />
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="flex items-baseline justify-between mt-1.5">
-            <div className="flex items-baseline gap-2">
+          <div className="flex items-baseline justify-between mt-1.5 flex-wrap gap-1">
+            <div className="flex items-baseline gap-2 flex-wrap">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalActiveRFQs}</span>
               {totalActiveRFQs === 0 && (
-                <span className="text-[10px] text-slate-500 dark:text-gray-400 font-bold bg-slate-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-full border border-slate-200 dark:border-gray-700">
+                <span className="text-[10px] text-slate-500 dark:text-gray-400 font-bold bg-slate-100 dark:bg-gray-800 px-1.5 py-0.5 rounded-full border border-slate-200 dark:border-gray-700 whitespace-nowrap">
                   {isLoadingRFQs ? 'Syncing...' : 'No Active RFQs'}
                 </span>
               )}
@@ -382,37 +398,37 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         {/* Requisitions by Intake Source */}
         <div
           onClick={() => setIntakeSourcesModalOpen(true)}
-          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-amber-200 dark:border-amber-900/50 relative overflow-hidden hover:border-amber-400 dark:hover:border-amber-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[96px] h-full min-w-0 group"
           title="Click to view Intake Sources breakdown"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400">Intake Sources</span>
-            <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-bold">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-amber-700 dark:text-amber-400 truncate">Intake Sources</span>
+            <div className="flex items-center gap-1 text-[10px] text-amber-600 dark:text-amber-400 font-bold shrink-0">
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
           <div className="space-y-1 my-1">
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 font-medium">
+            <div className="flex items-center justify-between text-[11px] gap-2">
+              <span className="text-slate-600 dark:text-gray-400 font-medium truncate">
                 via Email Upload:
               </span>
-              <span className="font-bold text-amber-700 dark:text-amber-300 font-mono">
+              <span className="font-bold text-amber-700 dark:text-amber-300 font-mono whitespace-nowrap shrink-0">
                 {emailGatewayRFQs.length} ({totalActiveRFQs > 0 ? Math.round((emailGatewayRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 font-medium">
+            <div className="flex items-center justify-between text-[11px] gap-2">
+              <span className="text-slate-600 dark:text-gray-400 font-medium truncate">
                 AI RFQ Create:
               </span>
-              <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono">
+              <span className="font-bold text-indigo-700 dark:text-indigo-300 font-mono whitespace-nowrap shrink-0">
                 {webPortalRFQs.length} ({totalActiveRFQs > 0 ? Math.round((webPortalRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
-            <div className="flex items-center justify-between text-[11px]">
-              <span className="text-slate-600 dark:text-gray-400 font-medium">
+            <div className="flex items-center justify-between text-[11px] gap-2">
+              <span className="text-slate-600 dark:text-gray-400 font-medium truncate">
                 Manual RFQ:
               </span>
-              <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono">
+              <span className="font-bold text-emerald-700 dark:text-emerald-300 font-mono whitespace-nowrap shrink-0">
                 {manualRFQs.length} ({totalActiveRFQs > 0 ? Math.round((manualRFQs.length / totalActiveRFQs) * 100) : 0}%)
               </span>
             </div>
@@ -423,20 +439,20 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         {/* Pending Quotes */}
         <div
           onClick={() => setSupplierQuotesModalOpen(true)}
-          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px] group"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 relative overflow-hidden hover:border-sky-400 dark:hover:border-sky-500 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[96px] h-full min-w-0 group"
           title="Click to view Supplier Quotes"
         >
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-sky-600 dark:group-hover:text-cyan-400 transition-colors">Supplier Quotes</span>
-            <div className="flex items-center gap-1 text-[10px] text-sky-600 dark:text-cyan-400 font-bold">
+          <div className="flex items-center justify-between gap-1">
+            <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 group-hover:text-sky-600 dark:group-hover:text-cyan-400 transition-colors truncate">Supplier Quotes</span>
+            <div className="flex items-center gap-1 text-[10px] text-sky-600 dark:text-cyan-400 font-bold shrink-0">
               <Clock size={15} />
               <ChevronRight size={11} className="opacity-0 group-hover:opacity-100 transition-opacity" />
             </div>
           </div>
-          <div className="flex items-baseline justify-between mt-1.5">
-            <div className="flex items-baseline gap-2">
+          <div className="flex items-baseline justify-between mt-1.5 flex-wrap gap-1">
+            <div className="flex items-baseline gap-2 flex-wrap">
               <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{totalPendingQuotes}</span>
-              <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800">
+              <span className="text-[10px] text-sky-600 dark:text-cyan-400 font-bold bg-sky-50 dark:bg-cyan-950/60 px-1.5 py-0.5 rounded-full border border-sky-200 dark:border-cyan-800 whitespace-nowrap">
                 {inEvaluationCount} in evaluation
               </span>
             </div>
@@ -448,33 +464,33 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         <div
           onClick={() => {
             if (rfqs.length > 0) {
-              openRFQDeepDive(rfqs[0]);
+              setLiveOutreachModalOpen(true);
             } else {
               showToast('No Active RFQs', 'Create or ingest an RFQ to view multi-channel follow-up telemetry.', 'info');
             }
           }}
-          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[92px]"
+          className="rounded-xl p-3 bg-white dark:bg-gray-900/80 border border-emerald-200 dark:border-emerald-500/30 relative overflow-hidden hover:border-emerald-400 dark:hover:border-emerald-400 cursor-pointer transition-all shadow-xs flex flex-col justify-between min-h-[96px] h-full min-w-0"
           title="Click to open vendor follow-up details"
         >
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-1">
             <div className="flex items-center gap-1.5">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500">Live Outreach</span>
+              <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-500 whitespace-nowrap">Live Outreach</span>
             </div>
-            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline">
+            <div className="flex items-center gap-1 text-[10px] text-indigo-600 dark:text-indigo-400 font-bold hover:underline whitespace-nowrap shrink-0">
               <span>Vendor Follow-Up Details</span>
               <ChevronRight size={11} />
             </div>
           </div>
-          <div className="flex items-center justify-between mt-1.5">
-            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono">{hasOutreachStats ? totalFollowupsToday : '—'}</span>
+          <div className="flex items-center justify-between mt-1.5 flex-wrap gap-2">
+            <span className="text-2xl sm:text-3xl font-black text-slate-900 dark:text-white mono shrink-0">{hasOutreachStats ? totalFollowupsToday : '—'}</span>
             <div className="flex items-center gap-1 flex-wrap">
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800 flex items-center gap-1 whitespace-nowrap">
                 <MessageSquare size={10} /> {hasOutreachStats ? totalWhatsApp : '—'}
               </span>
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-sky-50 dark:bg-cyan-950/60 text-sky-600 dark:text-cyan-300 border border-sky-200 dark:border-cyan-800 flex items-center gap-1 whitespace-nowrap">
                 <Smartphone size={10} /> {hasOutreachStats ? totalSMS : '—'}
               </span>
-              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1">
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-300 border border-amber-200 dark:border-amber-800 flex items-center gap-1 whitespace-nowrap">
                 <Mail size={10} /> {hasOutreachStats ? totalEmail : '—'}
               </span>
             </div>
@@ -484,10 +500,10 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
       </div>
 
       {/* ── Main Grid: Pipeline + Vendor Follow Up Status ── */}
-      <div className="grid grid-cols-1 lg:grid-cols-5 gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-5 gap-3 min-w-0">
 
         {/* ── Left: Pipeline Table (3 cols) ── */}
-        <div className="lg:col-span-3 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+        <div className="xl:col-span-3 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col min-w-0">
           {/* Table Header & Intake Source Filter Tabs */}
           <div className="px-3.5 py-2.5 border-b border-slate-100 dark:border-gray-800 space-y-2">
             <div className="flex items-center justify-between gap-2">
@@ -645,56 +661,16 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
                     <div className="flex items-center gap-1.5 flex-wrap">
                       {(() => {
                         const followUp = rfq.followUpData;
-                        const vCount = Math.max(
-                          rfq.assignedVendors?.length || 0,
-                          rfq.procucevVendorCount || 0,
-                          followUp?.totalInvited || 0,
-                          followUp?.whatsappStats?.total || 0,
-                          followUp?.smsStats?.total || 0,
-                          followUp?.emailStats?.total || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                        );
-
-                        // Read and delivered counts come only from the server's
-                        // stats and per-vendor statuses. Time since creation is
-                        // not evidence that a message was read or delivered.
-                        const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                        const waRead = Math.max(
-                          followUp?.whatsappStats?.read || 0,
-                          followUp?.whatsappStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-                        );
-
-                        const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                        const smsDelivered = Math.max(
-                          followUp?.smsStats?.delivered || 0,
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-                        );
-
-                        const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                        const emailDelivered = Math.max(
-                          followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                          Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
-                        );
-                        const totalInvited = Math.max(
-                          followUp?.totalInvited || 0,
-                          vCount,
-                          waTotal,
-                          smsTotal,
-                          emailTotal
-                        );
-                        const quotesCount = Math.max(
-                          Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
-                          rfq.quotesCount || 0
-                        );
-                        const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                          ? followUp.vendors.filter((v) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-                          : 0;
-                        const responded = Math.max(
-                          followUp?.respondedCount || 0,
-                          quotesCount,
-                          vendorRespondedCount
-                        );
+                        const metrics = computeRFQFollowUpMetrics(rfq);
+                        const vCount = metrics.totalVendors;
+                        const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+                        const waRead = metrics.waDelivered ?? 0;
+                        const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+                        const smsDelivered = metrics.smsDelivered ?? 0;
+                        const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+                        const emailDelivered = metrics.emailDelivered ?? 0;
+                        const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
+                        const responded = metrics.responded;
 
                         if (!followUp && vCount === 0) {
                           return <span className="text-[10px] text-slate-300 dark:text-gray-600 italic">Queued</span>;
@@ -732,7 +708,7 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         </div>
 
         {/* ── Right: Vendor Follow Up Status (2 cols) ── */}
-        <div className="lg:col-span-2 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col overflow-hidden">
+        <div className="xl:col-span-2 rounded-xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col overflow-hidden min-w-0">
           {/* Header */}
           <div className="flex items-center justify-between px-3.5 py-2 border-b border-slate-100 dark:border-gray-800">
             <div className="flex items-center gap-2">
@@ -871,6 +847,15 @@ if (rfqSourceFilter === 'web_portal' && (isEmailRfqSource(rfq.source) || rfq.sou
         rfqs={rfqs}
         onNavigateToMatrix={handleNavigateToMatrixFromModal}
         onOpenDeepDive={handleOpenDeepDiveFromModal}
+      />
+
+      {/* Live Multi-Channel Outreach Overview Modal */}
+      <LiveOutreachModal
+        isOpen={liveOutreachModalOpen}
+        onClose={handleCloseModals}
+        rfqs={rfqs}
+        onOpenDeepDive={handleOpenDeepDiveFromModal}
+        onNavigateToMatrix={handleNavigateToMatrixFromModal}
       />
     </div>
   );

@@ -381,6 +381,93 @@ describe('BuyerDetailsModal', () => {
       expect(screen.getByText(/Alternative Brand/i)).toBeInTheDocument();
     });
   });
+
+  test('handles onOpenDossier in header and footer, and category object formatting', async () => {
+    const handleClose = jest.fn();
+    const handleOpenDossier = jest.fn();
+
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: () =>
+        Promise.resolve({
+          success: true,
+          data: {
+            companyName: 'Larsen & Toubro Limited',
+            categories: [
+              { major: 'Machinery', minor: 'Pumps' },
+              { major: 'Electrical' },
+              'Chemicals',
+            ],
+          },
+        }),
+    } as any);
+
+    render(
+      <BuyerDetailsModal
+        isOpen={true}
+        onClose={handleClose}
+        buyerAccountId="buyer-1"
+        onOpenDossier={handleOpenDossier}
+      />
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText('Machinery - Pumps')).toBeInTheDocument();
+      expect(screen.getByText('Electrical')).toBeInTheDocument();
+      expect(screen.getByText('Chemicals')).toBeInTheDocument();
+    });
+
+    const dossierBtns = screen.getAllByRole('button', { name: new RegExp(UI_STRINGS.actionCenter.paymentDues.modals.view360Dossier, 'i') });
+    fireEvent.click(dossierBtns[0]);
+    expect(handleClose).toHaveBeenCalled();
+    expect(handleOpenDossier).toHaveBeenCalled();
+
+    fireEvent.click(dossierBtns[1]);
+    expect(handleOpenDossier).toHaveBeenCalledTimes(2);
+  });
+
+  test('handles retry button when profile loading fails', async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({
+        ok: false,
+        json: () => Promise.resolve({ success: false, error: 'Database unavailable' }),
+      } as any)
+      .mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: { companyName: 'Recovered Buyer Ltd' } }),
+      } as any);
+
+    render(
+      <BuyerDetailsModal
+        isOpen={true}
+        onClose={jest.fn()}
+        buyerAccountId="buyer-1"
+      />
+    );
+
+    expect(await screen.findByText('Database unavailable')).toBeInTheDocument();
+
+    const retryBtn = screen.getByRole('button', { name: new RegExp(UI_STRINGS.buyerProfile.retryDetails, 'i') });
+    fireEvent.click(retryBtn);
+
+    expect(await screen.findByText('Recovered Buyer Ltd')).toBeInTheDocument();
+  });
+
+  test('shows identifier missing error when no email, name or id is passed', async () => {
+    (storeModule.useApp as jest.Mock).mockReturnValue({
+      buyerAccounts: [],
+      buyerVendors: [],
+    });
+
+    render(
+      <BuyerDetailsModal
+        isOpen={true}
+        onClose={jest.fn()}
+      />
+    );
+
+    expect(await screen.findByText(UI_STRINGS.buyerProfile.detailsIdentifierMissing)).toBeInTheDocument();
+  });
 });
 
 describe('VendorDetailsModal', () => {

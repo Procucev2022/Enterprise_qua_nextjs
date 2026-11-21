@@ -11,11 +11,15 @@ const {
   BUYER_SUBSCRIPTION_PLANS,
   getSubscriptionPricingConfig,
   PERSISTENCE_MESSAGES,
+  DOSSIER_MESSAGES,
+  formatMessage,
 } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const pool = require('../db/pool');
-const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const { VALIDATION_SCHEMAS, validatePayload, derivePanFromGstin } = require('../config/validationSchemas');
 
 /** A stored number, or null when the record holds no usable value. */
 function numberOrNull(value) {
@@ -224,25 +228,53 @@ async function createBuyerAccount(req, res, next) {
     }
     const normalizedEmail = String(body.corporateEmail).trim().toLowerCase();
     const sessionUserId = req.user && (req.user.sub || req.user.id);
+    const sessionOrgId = req.user && (req.user.orgId || req.user.organizationId);
     const sessionEmail = String((req.user && req.user.email) || '').trim().toLowerCase();
     const isSelfRegistrationMirrorSync = !body.id && Boolean(sessionUserId) && sessionEmail === normalizedEmail;
     const existing = isSelfRegistrationMirrorSync
       ? await storeService.getBuyerAccountByEmail(normalizedEmail)
       : null;
-    if (existing && existing.id === sessionUserId) {
+    if (existing) {
       const sanitizedUpdates = sanitizeBuyerAccountUpdates(body, res);
       if (!sanitizedUpdates) return;
       logger.info(`Merging buyer account update into existing mirror: ${body.organizationName}`, { id: existing.id, email: normalizedEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-      const merged = await storeService.updateBuyerAccountDurably(existing.id, {
+      const mergePayload = {
         ...sanitizedUpdates,
-        organizationId: sanitizedUpdates.organizationId || existing.organizationId || null,
-      });
+        userId: existing.userId || sessionUserId || undefined,
+        organizationId: sanitizedUpdates.organizationId || existing.organizationId || sessionOrgId || null,
+      };
+      const merged =
+        (existing.id ? await storeService.updateBuyerAccountDurably(existing.id, mergePayload) : null) ||
+        (await storeService.updateBuyerAccountDurably(normalizedEmail, mergePayload));
       if (merged) {
+        await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
         return res.status(201).json({ success: true, data: merged });
       }
     }
     logger.info(`Creating new buyer account: ${body.organizationName}`, { organizationName: body.organizationName, email: body.corporateEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-    const created = await storeService.addBuyerAccountDurably(body);
+    const createPayload = isSelfRegistrationMirrorSync
+      ? {
+          ...body,
+          userId: body.userId || sessionUserId,
+          organizationId: body.organizationId || sessionOrgId || null,
+        }
+      : body;
+    let created;
+    try {
+      created = await storeService.addBuyerAccountDurably(createPayload);
+    } catch (createErr) {
+      if (createErr?.statusCode === 409 && isSelfRegistrationMirrorSync) {
+        const sanitizedUpdates = sanitizeBuyerAccountUpdates(createPayload, res);
+        if (!sanitizedUpdates) return;
+        const merged = await storeService.updateBuyerAccountDurably(normalizedEmail, sanitizedUpdates);
+        if (merged) {
+          await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
+          return res.status(201).json({ success: true, data: merged });
+        }
+      }
+      throw createErr;
+    }
+    await syncOrganizationFromBuyerAccount(created, sessionUserId, sessionEmail || normalizedEmail);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -269,6 +301,49 @@ function sanitizeBuyerAccountUpdates(updates, res) {
   return null;
 }
 
+/**
+ * Keep the canonical `organization` row aligned whenever statutory tax or
+ * address fields are saved through the buyer-account APIs.
+ */
+async function syncOrganizationFromBuyerAccount(account, userId = null, actorEmail = null) {
+  const organizationId = account && account.organizationId;
+  if (!pool.hasStorage() || !organizationId || typeof buyerProfileQueries.updateProfile !== 'function') {
+    return;
+  }
+  const patch = {};
+  if (account.organizationName) patch.companyName = account.organizationName;
+  if (account.brandName) patch.brandName = account.brandName;
+  if (account.contactPerson) patch.contactName = account.contactPerson;
+  if (account.contactDesignation) patch.contactDesignation = account.contactDesignation;
+  const street = account.street || account.streetAddress || account.address1 || account.address || account.registeredAddress || '';
+  if (street) patch.street = street;
+  if (account.city) patch.city = account.city;
+  if (account.state) patch.state = account.state;
+  const pincode = account.pincode || account.zip_code || account.zipCode || '';
+  if (pincode) patch.pincode = pincode;
+  if (account.country) patch.country = account.country;
+  const gstin = (account.gstin || account.gstNumber || account.gst || '').trim().toUpperCase();
+  if (gstin) patch.gstNumber = gstin;
+  const pan = (account.pan || account.panNumber || '').trim().toUpperCase() || derivePanFromGstin(gstin);
+  if (pan) patch.panNumber = pan;
+  if (Object.keys(patch).length === 0) return;
+
+  try {
+    await buyerProfileQueries.updateProfile({
+      organizationId,
+      userId: userId || account.userId || null,
+      patch,
+      actor: actorEmail || account.corporateEmail || 'buyer-account-sync',
+    });
+  } catch (err) {
+    logger.warn('Failed to synchronize organization profile from buyer account write', {
+      error: err.message,
+      organizationId,
+      accountId: account.id,
+    }, 'BUYER_ACCOUNT_CONTROLLER');
+  }
+}
+
 async function updateBuyerAccount(req, res, next) {
   try {
     const { id } = req.params;
@@ -281,6 +356,7 @@ async function updateBuyerAccount(req, res, next) {
       logger.warn(`Buyer account not found for update: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    await syncOrganizationFromBuyerAccount(updated, req.user && (req.user.sub || req.user.id), req.user && req.user.email);
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error('Error updating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -536,6 +612,14 @@ async function ingestHistoricalData(req, res, next) {
       (await storeService.ensureBuyerAccountForUser?.(req.user)) ||
       (await storeService.getBuyerAccountByEmail(req.user.email));
     const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
+    if (result?.success !== false && (result?.importedCount > 0 || (Array.isArray(vendorRecords) && vendorRecords.length > 0))) {
+      const organizationId = req.user?.orgId || req.user?.organizationId || requestingBuyerAccount?.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after historical ingestion', { error: markErr, organizationId }, 'BUYER_ACCOUNT_CONTROLLER');
+        });
+      }
+    }
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -634,6 +718,10 @@ async function getCreditHistory(req, res, next) {
     if (!buyer && req.user.role === 'buyer') {
       buyer = await storeService.getBuyerAccountByEmail(req.user.email);
     }
+    if (!buyer && pool.hasStorage()) {
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -643,7 +731,12 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
-    const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+    let transactions = [];
+    try {
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+    } catch (dbErr) {
+      logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
 
     let totalAllocated = 0;
     let totalConsumed = 0;
@@ -665,9 +758,13 @@ async function getCreditHistory(req, res, next) {
       if (type.includes('Adjustment') || type.includes('Refund')) {
         adjustedCredits += added;
       }
-      if (consumed > 0) {
+      if (consumed > 0 || type.includes('Consumed') || type.includes('RFQ_CREATE')) {
         totalConsumed += consumed;
       }
+    }
+
+    if (transactions.length > 0 && totalAllocated === 0 && remainingFree !== null) {
+      totalAllocated = remainingFree + totalConsumed;
     }
 
     const summary = {
@@ -730,7 +827,12 @@ async function addCredit(req, res, next) {
     // The guard above guarantees an authenticated caller, so the actor is the session.
     const actorEmail = req.user.email;
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -806,66 +908,222 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    const {
+      amount,
+      reason,
+      approverName,
+      approverId,
+      initiatorName,
+      initiatorId,
+      startDate,
+      endDate,
+      paymentDate,
+      paymentType,
+      transactionId,
+      buyerSourceMode,
+      paymentAmount,
+      proofFileName,
+      proofFileUrl,
+      proofFileType,
+      proofFileSize,
+      idempotencyKey,
+      requestType = 'Buyer Credit Addition',
+      discountPercentage,
+      durationDays,
+      paymentReference,
+      selectedMode,
+      billingDuration,
+      originalPrice,
+      discountAmount,
+      remainingAmount,
+      gstAmount,
+      finalPayableAmount,
+    } = validation.sanitizedData;
 
     // The maker is the signed-in account, not a name typed into the form.
     const makerEmail = req.user.email;
     const makerRole = req.user.role;
     const makerName = req.user.fullName || req.user.name || req.user.email;
+    const makerId = req.user.uuid || req.user.id || null;
 
     // The approver decides against the balance this request is made on. A buyer
     // with no balance on record is refused, not shown an assumed balance.
     const balance = knownCreditBalance(buyer);
-    if (balance === null) {
+    if (balance === null && (requestType === 'Buyer Credit Addition' || requestType === 'Buyer Credit Deletion')) {
       return res.status(422).json({
         success: false,
         error: `The credit balance for ${buyer.organizationName} is not on record, so the approver cannot see the balance this request is made against. Refresh the buyer account and try again.`,
       });
     }
 
+    const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      if (numAmount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'A positive credit amount is required for Buyer Credit Deletion.',
+        });
+      }
+      if (balance !== null && numAmount > balance) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete ${numAmount} credits: ${buyer.organizationName} only has ${balance} credits available.`,
+        });
+      }
+    }
+
+    let taskCategory = 'CREDIT_MANAGEMENT';
+    let taskType = 'Add Credits';
+    let title = `Credit Allocation Request: ${numAmount} Credits for ${buyer.organizationName}`;
+    let description = reason || `Requested credit top-up for ${buyer.organizationName}`;
+    let valueImpact = `${numAmount} RFQ Credits (${buyer.organizationName})`;
+    let quantity = numAmount || 1;
+    let effectiveAmount = numAmount;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Credit Deletion';
+      title = `Credit Deduction Request: ${numAmount} Credits from ${buyer.organizationName}`;
+      description = reason || `Requested credit deduction for ${buyer.organizationName}`;
+      valueImpact = `-${numAmount} RFQ Credits (${buyer.organizationName})`;
+      quantity = numAmount;
+      effectiveAmount = numAmount;
+    } else if (requestType === 'Discounts') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Discounts';
+      const pct = discountPercentage !== undefined ? discountPercentage : (amount || 0);
+      title = `Discount Approval Request: ${pct}% for ${buyer.organizationName}`;
+      description = reason || `Requested ${pct}% discount for ${buyer.organizationName}`;
+      valueImpact = `${pct}% Subscription Discount (${buyer.organizationName})`;
+      effectiveAmount = pct;
+      quantity = 1;
+    } else if (requestType === 'Trial Periods') {
+      taskCategory = 'ONBOARDING';
+      taskType = 'Trial Periods';
+      const days = durationDays || amount || 30;
+      title = `Trial Period Request: ${days} Days for ${buyer.organizationName}`;
+      description = reason || `Requested ${days} days trial extension for ${buyer.organizationName}`;
+      valueImpact = `${days} Days Free Trial (${buyer.organizationName})`;
+      effectiveAmount = days;
+      quantity = 1;
+    } else if (requestType === 'Offline Payments') {
+      taskCategory = 'PAYMENT';
+      taskType = 'Offline Payments';
+      effectiveAmount = paymentAmount !== undefined ? paymentAmount : numAmount;
+      const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
+      const mode = buyerSourceMode || selectedMode || 'Mode 2';
+      title = `Offline Payment Verification: ₹${effectiveAmount.toLocaleString('en-IN')} for ${buyer.organizationName}`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${buyer.organizationName}`;
+      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
+      quantity = 1;
+    }
+
+    const discountPct = discountPercentage !== undefined ? discountPercentage : (requestType === 'Discounts' ? (amount || 0) : undefined);
+
+    const taskAttachments = [];
+    if (proofFileName) {
+      taskAttachments.push({
+        name: proofFileName,
+        url: proofFileUrl || '',
+        size: proofFileSize || 0,
+        type: proofFileType || 'image/jpeg',
+      });
+    }
+
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
-        taskCategory: 'CREDIT_MANAGEMENT',
-        taskType: 'Add Credits',
-        title: `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`,
-        description: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        taskCategory,
+        taskType,
+        title,
+        description,
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
+        assignedToUserId: approverId || null,
         assignedToName: approverName,
         assignedTeam: 'Management Approvers',
+        createdByName: makerName,
+        createdByUserId: makerId || null,
         creditAccountType: 'buyer',
         creditAccountId: buyer.id,
         creditAccountName: buyer.organizationName,
-        creditQuantity: amount,
+        creditQuantity: effectiveAmount,
         creditReason: reason,
         notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
+        attachments: taskAttachments,
+        raw: {
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          assigned_approver: approverName,
+          assigned_approver_id: approverId,
+        },
       },
       {
+        uuid: makerId,
         fullName: makerName,
         name: makerName,
         email: makerEmail,
         role: makerRole,
       },
       {
-        module: 'Buyer Credit Addition',
+        module: requestType,
         idempotencyKey,
-        request_type: 'Buyer Credit Addition',
+        request_type: requestType,
         project: buyer.organizationName,
         applicant_name: buyer.organizationName,
         applicant_email: buyer.corporateEmail || '',
-        value_impact: `${amount} RFQ Credits (${buyer.organizationName})`,
-        amount,
-        quantity: amount,
+        value_impact: valueImpact,
+        amount: effectiveAmount,
+        quantity,
         available_balance: balance,
         maker_name: makerName,
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        details: requestType === 'Offline Payments'
+          ? [
+              reason,
+              `[${buyerSourceMode || selectedMode || 'Mode 2'} • ${paymentType || 'Offline'}${paymentType !== 'Cash' && (transactionId || paymentReference) ? ` • Txn ID: ${transactionId || paymentReference}` : ''}${paymentDate ? ` • Date: ${paymentDate}` : ''}${proofFileName ? ` • Proof: ${proofFileName}` : ''}]`,
+            ].filter(Boolean).join(' ')
+          : requestType === 'Trial Periods'
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${durationDays || effectiveAmount} Days | ${startDate || ''} to ${endDate || ''}]`,
+            ].filter(Boolean).join(' ')
+          : originalPrice !== undefined
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${billingDuration || '12 Months'} | Original: ₹${Number(originalPrice).toLocaleString('en-IN')}, Discount: ${discountPct}%, Discount Amount: -₹${Number(discountAmount || 0).toLocaleString('en-IN')}, Remaining: ₹${Number(remainingAmount || 0).toLocaleString('en-IN')}, GST: +₹${Number(gstAmount || 0).toLocaleString('en-IN')}, Final: ₹${Number(finalPayableAmount || 0).toLocaleString('en-IN')}]`,
+            ].filter(Boolean).join(' ')
+          : (reason || description),
+        attachments: taskAttachments,
         buyer_id: buyer.id,
         history: [
           {
@@ -873,25 +1131,74 @@ async function requestCreditApproval(req, res, next) {
             actor_name: makerName,
             actor_role: makerRole,
             timestamp: new Date().toISOString(),
-            remarks: reason || `Submitted for credit approval by ${approverName}.`,
+            remarks: reason || (requestType === 'Buyer Credit Addition'
+              ? `Submitted for credit approval by ${approverName}.`
+              : `Submitted for ${requestType} approval by ${approverName}.`),
           },
         ],
         raw: {
           buyer_id: buyer.id,
-          amount,
-          quantity: amount,
+          amount: effectiveAmount,
+          quantity,
           available_balance: balance,
           assigned_approver: approverName,
-          request_type: 'Buyer Credit Addition',
+          assigned_approver_id: approverId,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
         },
       }
     );
 
-    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
+    if (proofFileName && proofFileUrl) {
+      try {
+        const accountDocumentQueries = require('../db/accountDocumentQueries');
+        await accountDocumentQueries.createAccountDocument(
+          {
+            accountType: 'buyer',
+            accountId: buyer.id,
+            documentName: `Offline Payment Proof - ${proofFileName}`,
+            category: 'Financial Documents',
+            description: `Payment proof uploaded for Offline Payment approval (${paymentType || 'Offline'}, ₹${effectiveAmount})`,
+            fileName: proofFileName,
+            fileUrl: proofFileUrl,
+            mimeType: proofFileType || 'image/jpeg',
+            fileSize: proofFileSize || 0,
+          },
+          { name: makerName, email: makerEmail, role: makerRole, uuid: makerId }
+        );
+      } catch (docErr) {
+        logger.warn('Could not auto-register offline payment document in vault', { error: docErr?.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    logger.info(`Approval request created for ${requestType}: ${task.task_number} (${valueImpact}) assigned to ${approverName}`, { buyerId: id, requestType, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 
     return res.status(201).json({
       success: true,
-      message: `Credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      message: `${requestType} request submitted for approval by ${approverName}. Status: Pending Approval.`,
       task,
     });
   } catch (err) {
@@ -917,7 +1224,12 @@ async function updateSupportedCategories(req, res, next) {
       return res.status(400).json({ success: false, error: 'categories must be an array of strings.' });
     }
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -950,13 +1262,24 @@ async function getBuyerCommunications(req, res, next) {
     const { id } = req.params;
     const paymentDuesQueries = require('../db/paymentDuesQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    const comms = await paymentDuesQueries.getCommunicationHistory(id);
+    let comms = [];
+    try {
+      comms = (await paymentDuesQueries.getCommunicationHistory(id)) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load communication history from database, returning empty list', { id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      comms = [];
+    }
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching buyer communications', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -986,7 +1309,12 @@ async function recordBuyerCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      const domainQueries = require('../db/domainQueries');
+      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
+      if (snapshot?.account) buyer = snapshot.account;
+    }
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1286,6 +1614,89 @@ function getSubscriptionPricing(req, res) {
   }
 }
 
+async function getBuyerUploadedVendors(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+
+    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    if (!buyer && pool.hasStorage()) {
+      buyer = await domainQueries.getBuyerAccountByIdFromDB(id);
+    }
+    if (!buyer && req.user.role === 'buyer') {
+      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+    }
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.BUYER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    let dbVendors = [];
+    if (pool.hasStorage()) {
+      dbVendors = await domainQueries.getVendorsUploadedByBuyerFromDB(
+        buyer.id,
+        buyer.corporateEmail || buyer.email,
+        buyer.organizationName || buyer.companyName
+      );
+    }
+
+    const inMemVendors = (storeService.vendors || []).filter((v) => {
+      if (!v) return false;
+      const bId = String(buyer.id).toLowerCase();
+      const bEmail = buyer.corporateEmail ? String(buyer.corporateEmail).toLowerCase() : '';
+      const bOrg = buyer.organizationName ? String(buyer.organizationName).toLowerCase() : '';
+      const vBuyerId = v.buyerId ? String(v.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = v.buyerAccountId ? String(v.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = v.buyerEmail ? String(v.buyerEmail).toLowerCase() : '';
+      const vAddedBy = v.addedByBuyerCompany ? String(v.addedByBuyerCompany).toLowerCase() : '';
+      return (
+        (vBuyerId && vBuyerId === bId) ||
+        (vBuyerAccountId && vBuyerAccountId === bId) ||
+        (bEmail && vBuyerEmail && vBuyerEmail === bEmail) ||
+        (bOrg && vAddedBy && vAddedBy === bOrg)
+      );
+    });
+
+    const vendorMap = new Map();
+    for (const v of [...dbVendors, ...inMemVendors]) {
+      if (v?.id && !vendorMap.has(v.id)) {
+        vendorMap.set(v.id, {
+          id: v.id,
+          name: v.name || v.brandName || 'Unnamed Vendor',
+          companyName: v.companyName || v.name || v.brandName || 'Unnamed Vendor',
+          contactPerson: v.contactPerson || v.name || 'Primary Contact',
+          email: v.email || '',
+          phone: v.phone || v.contactPhone || v.mobileNumber || v.mobile || '',
+          createdAt: v.createdAt || v.created_at || new Date().toISOString(),
+          status: v.status || 'PENDING EVALUATION',
+          majorCategory: v.majorCategory || v.category || 'General',
+          minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : ''),
+          city: v.city || '',
+          state: v.state || '',
+          pincode: v.pincode || '',
+          source: v.source || 'buyer_uploaded',
+          score: v.score ?? v.score360 ?? null,
+          rating: v.rating ?? null,
+          gstin: v.gstin || v.gstNumber || '',
+          pan: v.pan || v.panNumber || '',
+          ...v,
+        });
+      }
+    }
+
+    const vendors = Array.from(vendorMap.values());
+    return res.status(200).json({
+      success: true,
+      count: vendors.length,
+      data: vendors,
+    });
+  } catch (err) {
+    logger.error('Error fetching buyer uploaded vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    return next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -1306,6 +1717,7 @@ module.exports = {
   getBuyerCommunications,
   recordBuyerCommunication,
   getBuyerPaymentHistory,
+  getBuyerUploadedVendors,
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrBuyer,
 };

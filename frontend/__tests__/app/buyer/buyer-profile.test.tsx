@@ -408,12 +408,12 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
   it('restores the stored category selection and shows count badge', async () => {
     await renderLoaded();
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
   it('filters categories using the search bar', async () => {
     await renderLoaded();
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'Pumps' } });
     expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
     fireEvent.change(searchInput, { target: { value: '' } });
@@ -424,10 +424,10 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     fireEvent.click(screen.getByText('Logistics'));
-    expect(selectionSummary()).toBe('3 Major • 3 Minor Selected');
+    expect(selectionSummary()).toBe('3 Divisions • 3 Categories Selected');
 
     fireEvent.click(screen.getByText('Logistics'));
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
   it('blocks a save with no procurement category selected', async () => {
@@ -722,11 +722,11 @@ describe('app/buyer/buyer-profile.tsx', () => {
     const excavationInput = excavationLabel.querySelector('input')!;
     fireEvent.click(excavationInput);
 
-    expect(selectionSummary()).toBe('2 Major • 3 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 3 Categories Selected');
 
     // Deselect 'Excavation'
     fireEvent.click(excavationInput);
-    expect(selectionSummary()).toBe('2 Major • 2 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
 
     // Deselect 'Piling' (the only selected minor in Civil Works)
     const pilingLabel = screen.getByText('Piling').closest('label')!;
@@ -734,7 +734,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     fireEvent.click(pilingInput);
 
     // Deselecting all minors should deselect the major
-    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+    expect(selectionSummary()).toBe('1 Division • 1 Category Selected');
   });
 
   it('supports Select All and Clear buttons within a major category', async () => {
@@ -742,7 +742,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // Select All in Civil Works (5 minors)
     selectAllIn('Civil Works');
-    expect(selectionSummary()).toBe('2 Major • 6 Minor Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 6 Categories Selected');
 
     // Clear Civil Works
     const panel = majorPanel('Civil Works');
@@ -751,21 +751,20 @@ describe('app/buyer/buyer-profile.tsx', () => {
     )!;
     fireEvent.click(clearBtn);
 
-    expect(selectionSummary()).toBe('1 Major • 1 Minor Selected');
+    expect(selectionSummary()).toBe('1 Division • 1 Category Selected');
   });
 
   it('filters by minor category keyword in search bar', async () => {
     await renderLoaded();
 
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'Laptop' } });
 
     expect(screen.getByText('IT')).toBeInTheDocument();
     expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
   });
 
-  it('enforces major category limit cap and shows toast', async () => {
-    // 7 taxonomy items to exceed MAX_MAJOR_CATEGORIES (5)
+  it('blocks a 6th major category once the 5-division cap is reached', async () => {
     const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
       majorCategory: `Category ${i + 1}`,
       minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
@@ -778,23 +777,24 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({ ...PROFILE, categories: initialMajors }, bigTaxonomy);
     await renderLoaded();
 
-    expect(selectionSummary()).toBe('5 Major • 5 Minor Selected');
+    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
 
-    // Try to toggle 6th category
+    // At the 5-division cap: selecting a 6th is blocked with a toast and the
+    // selection is left exactly as it was.
     fireEvent.click(screen.getByText('Category 6'));
 
+    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
     expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('5'),
+      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: 5 }),
       'warning'
     );
   });
 
-  it('enforces minor category limit cap and shows toast', async () => {
-    // 1 major category with 45 minors, exceeding MAX_MINOR_CATEGORIES (40)
-    const minors = Array.from({ length: 45 }, (_, i) => `Subcat ${i + 1}`);
+  it('blocks a 11th minor category once the 10-category cap is reached', async () => {
+    const minors = Array.from({ length: 15 }, (_, i) => `Subcat ${i + 1}`);
     const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
-    const initialCategories = minors.slice(0, 40).map((m) => ({
+    const initialCategories = minors.slice(0, 9).map((m) => ({
       major: 'Huge Category',
       minor: m,
     }));
@@ -802,13 +802,20 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
     await renderLoaded();
 
-    // Try to select 41st minor
-    const subcat41 = screen.getByText('Subcat 41').closest('label')!.querySelector('input')!;
-    fireEvent.click(subcat41);
+    // The 10th minor is still under the cap and succeeds.
+    const subcat10 = screen.getByText('Subcat 10').closest('label')!.querySelector('input')!;
+    fireEvent.click(subcat10);
+    expect(subcat10).toBeChecked();
+    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
 
+    // The 11th is blocked outright, with no partial addition and no toggle.
+    const subcat11 = screen.getByText('Subcat 11').closest('label')!.querySelector('input')!;
+    fireEvent.click(subcat11);
+    expect(subcat11).not.toBeChecked();
+    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
     expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('40'),
+      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
       'warning'
     );
   });
@@ -867,6 +874,57 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
 
+  it('lets the buyer clear a backfilled PAN/GSTIN and leaves it blank, instead of snapping back on every keystroke', async () => {
+    const mockAccount = {
+      organizationName: 'Clearable Org',
+      gstin: '27AAACL1234F1Z5',
+      panNumber: 'AAACL1234F',
+      corporateEmail: 'clearable@buyer.com',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(PROFILE);
+    await renderLoaded();
+
+    const panField = screen.getByText(/^PAN Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    const gstField = screen.getByText(/^GSTIN \/ GST Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    expect(panField).toHaveValue(PROFILE.panNumber);
+    expect(gstField).toHaveValue(PROFILE.gstNumber);
+
+    // Clearing either field used to re-run the activeBuyerAccount backfill effect
+    // (panNumber/gstNumber were in its dependency array), which saw the field was
+    // now empty and immediately refilled it from activeBuyerAccount — the field
+    // could never actually be cleared. It must stay blank across re-renders now.
+    fireEvent.change(panField, { target: { value: '' } });
+    fireEvent.change(gstField, { target: { value: '' } });
+    expect(panField).toHaveValue('');
+    expect(gstField).toHaveValue('');
+
+    // Give any stray effect a chance to run and confirm it still doesn't refill.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(panField).toHaveValue('');
+    expect(gstField).toHaveValue('');
+  });
+
+  it('flags a stored pincode that fails the format pattern outright, unreachable by typing since the input strips non-digits', async () => {
+    // The PIN input's onChange strips non-digit characters, so this branch (3+
+    // chars that fail PINCODE_PATTERN, and are not a dummy or 6 plain digits)
+    // can only be reached by a value that arrives pre-populated from the
+    // loaded profile, not by simulating a keystroke.
+    mockLoad({ ...PROFILE, pincode: '12-3@5' });
+    await renderLoaded();
+    await waitFor(() => {
+      expect(screen.getByText('Invalid PIN code format')).toBeInTheDocument();
+    });
+  });
+
   it('covers pincode invalid patterns, catch block and save blocked by pincode error', async () => {
     // Mount with dummy pincode 111111: passes regex schema but fails dummy check (setting pincodeError)
     mockLoad({
@@ -905,10 +963,9 @@ describe('app/buyer/buyer-profile.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('covers category major and minor selection cap edge cases', async () => {
-    // Return a mock taxonomy with 10 majors, each having 5 minors
+  it('blocks any further bulk addition — toggling a whole major, a lone minor, or Select All — once the 10-minor cap is already reached', async () => {
     const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const largeTaxonomy = Array.from({ length: 10 }, (_, i) => ({
+    const largeTaxonomy = Array.from({ length: 6 }, (_, i) => ({
       majorCategory: `Major Cat ${i + 1}`,
       minorCategories: [`Minor ${i + 1}-A`, `Minor ${i + 1}-B`, `Minor ${i + 1}-C`, `Minor ${i + 1}-D`, `Minor ${i + 1}-E`],
     }));
@@ -917,7 +974,6 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({
       ...PROFILE,
       categories: [
-        // 2 majors with 5 minors each = 10 minors total! (MAX_MINOR_CATEGORIES is 10)
         { major: 'Major Cat 1', minor: 'Minor 1-A' },
         { major: 'Major Cat 1', minor: 'Minor 1-B' },
         { major: 'Major Cat 1', minor: 'Minor 1-C' },
@@ -932,119 +988,32 @@ describe('app/buyer/buyer-profile.tsx', () => {
     }, largeTaxonomy);
 
     await renderLoaded();
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
 
-    // Toggle 3rd major when remainingSlots <= 0 (lines 381-383)
-    const major3Title = screen.getByText('Major Cat 3');
-    fireEvent.click(major3Title);
+    // Selecting Major Cat 3 would auto-add all 5 of its minors, pushing the
+    // total to 15 — blocked outright rather than partially filled.
+    fireEvent.click(screen.getByText('Major Cat 3'));
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
     expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('minor'),
+      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
       'warning'
     );
 
-    // Expand accordion for Major Cat 3 and click Select All when remainingSlots <= 0 (lines 438-439)
-    expandMajor('Major Cat 3');
-    const panel3 = majorPanel('Major Cat 3');
-    const selectAllBtn3 = Array.from(panel3.querySelectorAll('button')).find(
+    // A single additional minor under a new major is blocked the same way.
+    expandMajor('Major Cat 4');
+    fireEvent.click(screen.getByText('Minor 4-A'));
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+
+    // Select All on another major's minors is blocked the same way too.
+    const panel5 = majorPanel('Major Cat 5');
+    expandMajor('Major Cat 5');
+    const selectAllBtn5 = Array.from(panel5.querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'Select All'
     );
-    if (selectAllBtn3) {
-      fireEvent.click(selectAllBtn3);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('minor'),
-        'warning'
-      );
-    }
-  });
-
-  it('covers major category cap in toggleMinorCategory and selectAllMinorInMajor', async () => {
-    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const largeTaxonomy = Array.from({ length: 8 }, (_, i) => ({
-      majorCategory: `Major Cap ${i + 1}`,
-      minorCategories: [`Sub ${i + 1}-A`, `Sub ${i + 1}-B`],
-    }));
-    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
-
-    // 5 majors with 1 minor each = 5 majors (MAX_MAJOR_CATEGORIES = 5), but only 5 minors (< 10)
-    mockLoad({
-      ...PROFILE,
-      categories: [
-        { major: 'Major Cap 1', minor: 'Sub 1-A' },
-        { major: 'Major Cap 2', minor: 'Sub 2-A' },
-        { major: 'Major Cap 3', minor: 'Sub 3-A' },
-        { major: 'Major Cap 4', minor: 'Sub 4-A' },
-        { major: 'Major Cap 5', minor: 'Sub 5-A' },
-      ],
-    }, largeTaxonomy);
-
-    await renderLoaded();
-
-    // Expand Major Cap 6 (unselected major)
-    expandMajor('Major Cap 6');
-
-    // 1. Toggle minor in unselected major when major cap (5) is reached (lines 416-417)
-    const sub6A = screen.getByText('Sub 6-A');
-    fireEvent.click(sub6A);
-    expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.stringContaining('5 major'),
-      'warning'
-    );
-
-    // 2. Select all in unselected major when major cap (5) is reached (lines 430-431)
-    const panel6 = majorPanel('Major Cap 6');
-    const selectAllBtn6 = Array.from(panel6.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    if (selectAllBtn6) {
-      fireEvent.click(selectAllBtn6);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('5 major'),
-        'warning'
-      );
-    }
-  });
-
-  it('covers selecting minor in unselected major when caps allow and partial select all', async () => {
-    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const customTaxonomy = [
-      { majorCategory: 'Cat A', minorCategories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'] },
-      { majorCategory: 'Cat B', minorCategories: ['B1', 'B2', 'B3', 'B4', 'B5'] },
-    ];
-    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: customTaxonomy });
-
-    // 1 major with 8 minors (8 out of 10 slots filled, 2 remaining slots)
-    mockLoad({
-      ...PROFILE,
-      categories: ['A1', 'A2', 'A3', 'A4', 'A5', 'A6', 'A7', 'A8'].map((m) => ({ major: 'Cat A', minor: m })),
-    }, customTaxonomy);
-
-    await renderLoaded();
-
-    // Expand Cat B (which has 5 minors, but only 2 slots remain)
-    expandMajor('Cat B');
-
-    // 1. Toggle minor in unselected major when slots are available (line 421)
-    const b1 = screen.getByText('B1');
-    fireEvent.click(b1);
-    // Now 9 minors selected across 2 majors
-    expect(selectionSummary()).toBe('2 Major • 9 Minor Selected');
-
-    // 2. Click select all on Cat B when allMinor.length (5) > remainingSlots (line 444 & 448)
-    const panelB = majorPanel('Cat B');
-    const selectAllBtnB = Array.from(panelB.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    if (selectAllBtnB) {
-      fireEvent.click(selectAllBtnB);
-      expect(mockShowToast).toHaveBeenCalledWith(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        expect.stringContaining('minor'),
-        'warning'
-      );
-    }
+    expect(selectAllBtn5).toBeTruthy();
+    fireEvent.click(selectAllBtn5!);
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
   });
 
   it('covers postal pincode successful resolution with post office auto-populating city and state', async () => {
@@ -1096,7 +1065,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad();
     await renderLoaded();
 
-    const searchInput = screen.getByPlaceholderText(/Search across all 13 Major and 120\+ Minor categories/i);
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
     fireEvent.change(searchInput, { target: { value: 'NONEXISTENT_KEYWORD_XYZ' } });
 
     expect(screen.getByText(/No categories found matching "NONEXISTENT_KEYWORD_XYZ"./i)).toBeInTheDocument();
@@ -1368,7 +1337,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       fireEvent.click(selectAllBtn);
     }
     // Now Raw Material is selected in selectedMajor (line 447 branch 100.0)
-    expect(selectionSummary()).toContain('3 Major');
+    expect(selectionSummary()).toContain('3 Divisions');
   });
 
   it('hydrates GSTIN and registered address from legacy alias fields on activeBuyerAccount', async () => {
@@ -1402,6 +1371,183 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('29ABCDE1234F1Z5')).toBeInTheDocument();
     expect(screen.getByDisplayValue('42 Tech Park Road')).toBeInTheDocument();
     expect(screen.getByDisplayValue('560103')).toBeInTheDocument();
+  });
+
+  it('hydrates address from primaryPlantLocation, derives PAN from GSTIN, and refreshes store after save', async () => {
+    const mockRefreshActiveBuyerAccount = jest.fn().mockResolvedValue(undefined);
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      refreshActiveBuyerAccount: mockRefreshActiveBuyerAccount,
+      activeBuyerAccount: {
+        organizationName: 'Veera solutions pvt ltd',
+        corporateEmail: 'veerababuv2002@gmail.com',
+        gstin: '27AAACK3921P1Z9',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+      },
+    });
+
+    mockLoad({
+      ...PROFILE,
+      companyName: 'Veera solutions pvt ltd',
+      gstNumber: '',
+      panNumber: '',
+      street: '',
+      city: '',
+      state: '',
+      pincode: '',
+    });
+
+    await renderLoaded();
+
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Bengaluru, Karnataka')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
+
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 2,
+      data: {
+        ...PROFILE,
+        companyName: 'Veera solutions pvt ltd',
+        gstNumber: '27AAACK3921P1Z9',
+        panNumber: 'AAACK3921P',
+        street: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(screen.getByDisplayValue('302 Sharada, AECS Layout')).toBeInTheDocument();
+    expect(mockRefreshActiveBuyerAccount).toHaveBeenCalledTimes(1);
+  });
+
+  it('auto-populates empty PAN when a genuine GSTIN is entered on the form', async () => {
+    mockLoad({
+      ...PROFILE,
+      panNumber: '',
+      gstNumber: '',
+    });
+    await renderLoaded();
+
+    const gstInput = screen.getAllByRole('textbox').find((el) => (el as HTMLInputElement).maxLength === 15) as HTMLInputElement;
+    fireEvent.change(gstInput, { target: { value: '27aaack3921p1z9' } });
+
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+  });
+
+  it('retains local values when server returns partial fields and resets saving state if save throws', async () => {
+    await renderLoaded();
+
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 2,
+      data: {
+        companyName: 'Normalized Corp',
+      },
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(screen.getByDisplayValue('Normalized Corp')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('400001')).toBeInTheDocument();
+
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Unexpected transport error'));
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Unexpected transport error',
+      'warning'
+    );
+    expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled();
+  });
+
+  it('ignores mismatched activeBuyerAccount when currentUserSession belongs to another email, and hydrates registeredAddress for matching session', async () => {
+    // 1. Mismatched session email should NOT bleed another buyer's GSTIN/address into the form
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      categoryTaxonomy: [],
+      currentUserSession: { email: 'veera@example.com' },
+      activeBuyerAccount: {
+        id: 'other-buyer',
+        corporateEmail: 'other@example.com',
+        gstin: '29OTHER0000A1Z5',
+        registeredAddress: 'Wrong Street 99',
+      },
+    });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...PROFILE,
+        contactEmail: 'veera@example.com',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      },
+    });
+
+    const { unmount } = render(<BuyerProfilePage />);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('veera@example.com')).toBeInTheDocument();
+    });
+    expect(screen.queryByDisplayValue('29OTHER0000A1Z5')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Wrong Street 99')).not.toBeInTheDocument();
+    unmount();
+
+    // 2. Matching session email hydrates registeredAddress and GSTIN/derived PAN
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      categoryTaxonomy: [],
+      currentUserSession: { email: 'veera@example.com' },
+      activeBuyerAccount: {
+        id: 'veera-buyer',
+        corporateEmail: 'veera@example.com',
+        gstin: '27AAACK3921P1Z9',
+        registeredAddress: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+      },
+    });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: {
+        ...PROFILE,
+        contactEmail: 'veera@example.com',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      },
+    });
+
+    render(<BuyerProfilePage />);
+    await waitFor(() => {
+      expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('302 Sharada, AECS Layout')).toBeInTheDocument();
+      expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
+    });
   });
 });
 

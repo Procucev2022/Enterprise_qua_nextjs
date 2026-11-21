@@ -329,12 +329,19 @@ function buildEmail1_RfqCreatedAccountAutoCreated(params = {}) {
   const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
   const rfqTitle = optionalText(params.rfq_title);
   const email = requireText(params.email, 'email', templateId);
-  const mobileNumber = optionalText(params.mobile_number || params.mobileNumber);
+  const rawMobile = optionalText(params.mobile_number || params.mobileNumber);
+  const PLACEHOLDER_MOBILE = '9999999999';
+  const isPlaceholderMobile = Boolean(rawMobile && rawMobile !== TEMPLATE_MESSAGES.NOT_SPECIFIED && rawMobile.replace(/\D/g, '').endsWith(PLACEHOLDER_MOBILE));
+  const mobileNumber = rawMobile;
   const tempPassword = requireText(params.temp_password, 'temp_password', templateId);
   const loginUrl = params.login_url || `${getPublicFrontendUrl()}/login`;
   const reviewUrl = params.review_url || `${loginUrl}?redirect=/buyer/rfq-summary`;
 
   const subject = `Congratulations, your RFQ ${rfqId} is live on Qua AI`;
+
+  const mobileLine = isPlaceholderMobile
+    ? `Registered Mobile: ${mobileNumber} (placeholder — please update after login)`
+    : `Registered Mobile: ${mobileNumber}`;
 
   const text = `Hi ${firstName},
 
@@ -344,13 +351,13 @@ To save you time, we created a free Qua AI account for you with this email addre
 
 Your login details
 Login ID: ${email}
-Registered Mobile: ${mobileNumber}
+${mobileLine}
 Temporary password: ${tempPassword} (valid for 48 hours)
 Login page: ${loginUrl}
 
 Three quick steps to finish
 1. Log in and set your own password.
-2. Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.
+2. Complete your profile: company name, GSTIN, delivery address and phone number.${isPlaceholderMobile ? ` (Your mobile number is currently set to a system placeholder: ${mobileNumber} — please update it after sign in.)` : ''} Suppliers quote more accurately when these details are correct.
 3. Go to RFQ Summary to review ${rfqId}.
 
 [ Log in & review my RFQ ]: ${reviewUrl}
@@ -385,7 +392,10 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
         </tr>
         <tr>
           <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Registered Mobile:</td>
-          <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">${escapeHtml(mobileNumber)}</td>
+          <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">
+            ${escapeHtml(mobileNumber)}
+            ${isPlaceholderMobile ? `<span style="font-size: 11px; color: #d97706; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; padding: 1px 6px; margin-left: 8px; font-family: Arial, sans-serif; font-weight: 600;">Placeholder — update after login</span>` : ''}
+          </td>
         </tr>
         <tr>
           <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Temporary password:</td>
@@ -403,7 +413,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       <h3 style="margin: 0 0 12px 0; font-size: 15px; color: #0f172a;">Three quick steps to finish</h3>
       <ol style="margin: 0; padding-left: 20px; font-size: 14px; color: #334155;">
         <li style="margin-bottom: 8px;">Log in and set your own password.</li>
-        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.</li>
+        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number.${isPlaceholderMobile ? ` (Your mobile is currently set to placeholder <strong>${escapeHtml(mobileNumber)}</strong> — please update it after sign in.)` : ''} Suppliers quote more accurately when these details are correct.</li>
         <li style="margin-bottom: 8px;">Go to RFQ Summary to review <strong>${escapeHtml(rfqId)}</strong>.</li>
       </ol>
     </div>

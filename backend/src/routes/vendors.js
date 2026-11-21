@@ -9,8 +9,9 @@ router.post('/', authenticate, vendorController.createVendor);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
 router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkImportInvitations);
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
+router.post('/bulk-status', authenticate, vendorController.bulkUpdateVendorStatus);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
-router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendorsPresence);
+router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorsPresence);
 router.post('/heartbeat', authenticate, requireRole('vendor'), vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
 // Protected Vendor Directory — Category Manager with active directory session only.
@@ -22,6 +23,8 @@ router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);
+router.patch('/:id/status', authenticate, vendorController.updateVendorStatus);
+router.post('/:id/status', authenticate, vendorController.updateVendorStatus);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
 router.post('/:id/rating-revision', authenticate, vendorController.reviseRating);
 router.post('/:id/request-evaluation', authenticate, vendorController.requestEvaluation);
@@ -38,6 +41,8 @@ router.post('/:id/request-credit-approval', authenticate, vendorController.reque
 router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
 router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);
 router.get('/:id/payment-history', authenticate, vendorController.getVendorPaymentHistory);
+router.get('/:id/buyer-uploads', authenticate, vendorController.getSellerBuyerUploads);
+router.get('/:id/active-rfqs', authenticate, vendorController.getSellerActiveRFQs);
 
 // Seller Dossier Documents
 router.get('/:id/documents', authenticate, accountDocumentController.getSellerDocuments);

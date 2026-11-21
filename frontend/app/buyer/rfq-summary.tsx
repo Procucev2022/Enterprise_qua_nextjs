@@ -3,7 +3,23 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
-import { SOURCING_MODES, formatCurrency, formatIndianDate } from '@/lib/constants';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
+import {
+  BUYER_RFQ_SUMMARY_COLUMNS,
+  SOURCING_MODES,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  formatCurrency,
+  formatIndianDate,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
+  sortTableRows,
+  type TableColumnOption,
+  type TableSortState,
+} from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { RFQItem, RFQPortfolioSummary, RFQSource, SourcingMode } from '@/lib/types';
 import {
@@ -25,6 +41,7 @@ import {
   Trash2,
   Sparkles,
   Loader2,
+  Settings,
 } from 'lucide-react';
 
 const SCREEN = UI_STRINGS.screens.rfqSummary;
@@ -121,13 +138,13 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
       bySourcingMode: countBy((r) => r.sourcingMode),
       bySource: countBy((r) => r.source),
       followUps: {
-        vendorsInvited: sumChannel((r) => r.followUpData?.totalInvited),
-        vendorsResponded: sumChannel((r) => r.followUpData?.respondedCount),
-        calls: sumChannel((r) => r.followUpData?.callStats?.total),
-        callsConnected: sumChannel((r) => r.followUpData?.callStats?.connected),
-        whatsapp: sumChannel((r) => r.followUpData?.whatsappStats?.total),
-        whatsappRead: sumChannel((r) => r.followUpData?.whatsappStats?.read),
-        sms: sumChannel((r) => r.followUpData?.smsStats?.total),
+        vendorsInvited: sumChannel((r) => computeRFQFollowUpMetrics(r).totalInvited),
+        vendorsResponded: sumChannel((r) => computeRFQFollowUpMetrics(r).responded),
+        calls: sumChannel((r) => computeRFQFollowUpMetrics(r).callTotal),
+        callsConnected: sumChannel((r) => computeRFQFollowUpMetrics(r).callConnected),
+        whatsapp: sumChannel((r) => computeRFQFollowUpMetrics(r).waTotal),
+        whatsappRead: sumChannel((r) => computeRFQFollowUpMetrics(r).waRead),
+        sms: sumChannel((r) => computeRFQFollowUpMetrics(r).smsDelivered ?? computeRFQFollowUpMetrics(r).smsTotal),
       },
     };
   }, [rfqs]);
@@ -171,11 +188,19 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
     });
   }, [rfqs, search, statusFilter, modeFilter, sourceFilter]);
 
+  const [tableSort, setTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [columns, setColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_RFQ_SUMMARY_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showColumnSettings, setShowColumnSettings] = useState(false);
+
+  const sortedRFQs = useMemo(() => sortTableRows(filteredRFQs, tableSort), [filteredRFQs, tableSort]);
+
   // Clamp the page so removing rows via a filter can never leave a blank page.
-  const totalPages = Math.max(1, Math.ceil(filteredRFQs.length / pageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedRFQs.length / pageSize));
   const currentPage = Math.min(page, totalPages);
   const startIndex = (currentPage - 1) * pageSize;
-  const visibleRFQs = filteredRFQs.slice(startIndex, startIndex + pageSize);
+  const visibleRFQs = sortedRFQs.slice(startIndex, startIndex + pageSize);
 
   const resetToFirstPage = () => setPage(1);
 
@@ -448,10 +473,30 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
           </div>
         </div>
 
-        <div className="text-[11px] text-slate-500 dark:text-gray-400">
-          {formatString(RFQ.resultCount, { shown: filteredRFQs.length, total: summary.totalRFQs })}
+        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400">
+          <span>{formatString(RFQ.resultCount, { shown: filteredRFQs.length, total: summary.totalRFQs })}</span>
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowColumnSettings, true)}
+            data-testid="rfq-summary-column-settings-btn"
+            aria-label={RFQ.columnSettings}
+            title={RFQ.columnSettings}
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+          >
+            <Settings size={12} />
+            <span>{RFQ.columnSettings}</span>
+          </button>
         </div>
       </div>
+
+      <ColumnSettingsPopup
+        isOpen={showColumnSettings}
+        onClose={createBooleanSetterHandler(setShowColumnSettings, false)}
+        columns={columns}
+        onSave={setColumns}
+        onReset={createColumnResetHandler(BUYER_RFQ_SUMMARY_COLUMNS, setColumns)}
+        title={RFQ.columnSettings}
+      />
 
       {/* ── Portfolio table ── */}
       {rfqs.length === 0 ? (
@@ -465,66 +510,142 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
         </div>
       ) : (
         <div className="glass-panel rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
-          {/* Six columns instead of nine. RFQ number and title were two columns
-              describing the same thing, as were items and quotes; folding each
-              pair into one cell with a sub-line drops the minimum width from
-              1040px to 760px, so the table stops scrolling sideways on a laptop
-              and the title has room not to truncate. */}
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs min-w-[760px]">
+            <table className="w-full text-left text-xs min-w-[980px] border-collapse">
               <caption className="sr-only">{RFQ.tableCaption}</caption>
               <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
                 <tr>
-                  <th scope="col" className="px-3 py-2">{RFQ.colRfqNumber}</th>
-                  <th scope="col" className="px-3 py-2">{RFQ.colStatus}</th>
-                  <th scope="col" className="px-3 py-2 text-center">{RFQ.colItems}</th>
-                  <th scope="col" className="px-3 py-2 text-right">{RFQ.colBudget}</th>
-                  <th scope="col" className="px-3 py-2">{RFQ.colDelivery}</th>
-                  <th scope="col" className="px-3 py-2 text-right">{RFQ.colActions}</th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('rfqNumber', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'rfqNumber')}
+                    className={getTableColumnClass(columns, 'rfqNumber', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colRfqNumber} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'rfqNumber')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('title', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'title')}
+                    className={getTableColumnClass(columns, 'title', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colTitle} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'title')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('category', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'category')}
+                    className={getTableColumnClass(columns, 'category', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colCategory} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'category')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('sourcingMode', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'sourcingMode')}
+                    className={getTableColumnClass(columns, 'sourcingMode', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colMode} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'sourcingMode')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('source', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'source')}
+                    className={getTableColumnClass(columns, 'source', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colSource} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'source')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('status', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'status')}
+                    className={getTableColumnClass(columns, 'status', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colStatus} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'status')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('items', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'items')}
+                    className={getTableColumnClass(columns, 'items', 'px-2.5 py-2 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center justify-center gap-1">{RFQ.colItems} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'items')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('quotes', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'quotes')}
+                    className={getTableColumnClass(columns, 'quotes', 'px-2.5 py-2 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center justify-center gap-1">{RFQ.colQuotes} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'quotes')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('budget', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'budget')}
+                    className={getTableColumnClass(columns, 'budget', 'px-2.5 py-2 text-right cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center justify-end gap-1">{RFQ.colBudget} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'budget')}</span></span>
+                  </th>
+                  <th
+                    scope="col"
+                    onClick={createColumnSortClickHandler('delivery', setTableSort)}
+                    aria-sort={getTableAriaSort(tableSort, 'delivery')}
+                    className={getTableColumnClass(columns, 'delivery', 'px-2.5 py-2 cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                  >
+                    <span className="inline-flex items-center gap-1">{RFQ.colDelivery} <span aria-hidden="true">{getSortIndicatorSymbol(tableSort, 'delivery')}</span></span>
+                  </th>
+                  <th scope="col" className={getTableColumnClass(columns, 'actions', 'px-2.5 py-2 text-right whitespace-nowrap')}>
+                    {RFQ.colActions}
+                  </th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-gray-800 text-slate-800 dark:text-gray-200">
                 {visibleRFQs.map((rfq) => (
                   <tr key={rfq.id} className="hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors">
-                    {/* Number, title and category in one cell: they identify the
-                        same record, and the title now has the width not to truncate. */}
-                    <td className="px-3 py-2.5 align-top">
+                    <td className={getTableColumnClass(columns, 'rfqNumber', 'px-2.5 py-2 align-middle whitespace-nowrap')}>
                       <span className="mono font-bold text-indigo-700 dark:text-indigo-300">{rfq.rfqNumber}</span>
-                      <span className="block font-bold text-slate-900 dark:text-white mt-0.5 leading-snug">
+                    </td>
+                    <td className={getTableColumnClass(columns, 'title', 'px-2.5 py-2 align-middle max-w-[220px]')}>
+                      <span className="block truncate font-bold text-slate-900 dark:text-white" title={rfq.title}>
                         {rfq.title}
                       </span>
-                      <span className="flex items-center gap-1.5 flex-wrap mt-1">
-                        {modeBadge(rfq.sourcingMode)}
-                        {sourceBadge(rfq.source)}
-                        <span className="text-[10px] text-slate-500 dark:text-gray-400">{rfq.category}</span>
+                    </td>
+                    <td className={getTableColumnClass(columns, 'category', 'px-2.5 py-2 align-middle max-w-[160px]')}>
+                      <span className="block truncate text-[11px] text-slate-600 dark:text-gray-300" title={rfq.category}>
+                        {rfq.category}
                       </span>
                     </td>
-                    <td className="px-3 py-2.5 align-top">
+                    <td className={getTableColumnClass(columns, 'sourcingMode', 'px-2.5 py-2 align-middle whitespace-nowrap')}>
+                      {modeBadge(rfq.sourcingMode)}
+                    </td>
+                    <td className={getTableColumnClass(columns, 'source', 'px-2.5 py-2 align-middle whitespace-nowrap')}>
+                      {sourceBadge(rfq.source)}
+                    </td>
+                    <td className={getTableColumnClass(columns, 'status', 'px-2.5 py-2 align-middle whitespace-nowrap')}>
                       {statusBadge(rfq.status)}
                     </td>
-                    {/* Line items and quotations received, stacked: both count what
-                        is on the RFQ, and quotes are only meaningful against items. */}
-                    <td className="px-3 py-2.5 align-top text-center whitespace-nowrap">
+                    <td className={getTableColumnClass(columns, 'items', 'px-2.5 py-2 align-middle text-center whitespace-nowrap')}>
                       <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
                         {(rfq.extractedEntities || []).length}
                       </span>
-                      <span className="block text-[10px] text-slate-500 dark:text-gray-400">
+                    </td>
+                    <td className={getTableColumnClass(columns, 'quotes', 'px-2.5 py-2 align-middle text-center whitespace-nowrap')}>
+                      <span className="text-[11px] text-slate-600 dark:text-gray-300">
                         {formatString(RFQ.quotesReceivedLabel, { count: rfq.quotesCount || 0 })}
                       </span>
                     </td>
-                    {/* A zero budget means none was stated, so it reads as unset
-                        rather than as a real ceiling of nil. */}
-                    <td className="px-3 py-2.5 align-top text-right mono font-semibold tabular-nums whitespace-nowrap">
+                    <td className={getTableColumnClass(columns, 'budget', 'px-2.5 py-2 align-middle text-right mono font-semibold tabular-nums whitespace-nowrap')}>
                       {rfq.budget > 0 ? (
                         formatCurrency(rfq.budget)
                       ) : (
                         <span className="text-slate-400 dark:text-gray-500 font-normal">{RFQ.budgetUnset}</span>
                       )}
                     </td>
-                    <td className="px-3 py-2.5 align-top mono tabular-nums whitespace-nowrap">
+                    <td className={getTableColumnClass(columns, 'delivery', 'px-2.5 py-2 align-middle mono tabular-nums whitespace-nowrap')}>
                       {formatIndianDate(rfq.targetDeliveryDate) || RFQ.deliveryDateUnset}
                     </td>
-                    <td className="px-3 py-2.5 align-top">
+                    <td className={getTableColumnClass(columns, 'actions', 'px-2.5 py-2 align-middle whitespace-nowrap')}>
                       <div className="flex items-center justify-end gap-1">
                         <button
                           type="button"
@@ -542,8 +663,6 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
                         >
                           {RFQ.quotesAction} <ArrowRight size={11} />
                         </button>
-                        {/* Icon-only from here: three labelled buttons per row read
-                            as a wall of text, and each carries its own aria-label. */}
                         <button
                           type="button"
                           onClick={() => openRFQDeepDive(rfq)}
@@ -560,7 +679,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
 
                 {isLoadingRFQs && filteredRFQs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-10 text-center text-slate-400 dark:text-gray-500">
+                    <td colSpan={11} className="p-10 text-center text-slate-400 dark:text-gray-500">
                       <div className="flex items-center justify-center gap-2">
                         <Loader2 size={16} className="animate-spin text-indigo-600 dark:text-indigo-400" />
                         <span className="text-xs font-semibold text-slate-700 dark:text-slate-300">Loading procurement RFQs...</span>
@@ -571,7 +690,7 @@ export default function RFQSummary({ onViewQuotes, onCreateRFQ, onViewDetails }:
 
                 {!isLoadingRFQs && filteredRFQs.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="p-8 text-center text-slate-400 dark:text-gray-500">
+                    <td colSpan={11} className="p-8 text-center text-slate-400 dark:text-gray-500">
                       {RFQ.noMatchesMessage}
                     </td>
                   </tr>

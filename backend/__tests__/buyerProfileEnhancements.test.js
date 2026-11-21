@@ -297,7 +297,9 @@ describe('buyerProfileEnhancements & buyerAccountController 360 Dossier APIs', (
     });
 
     test('handles exceptions by delegating to next(err)', async () => {
-      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockRejectedValue(new Error('DB read error'));
+      jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => {
+        throw new Error('Store lookup failed');
+      });
 
       const req = { user: adminUser, params: { id: 'buyer-test-1' } };
       const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };

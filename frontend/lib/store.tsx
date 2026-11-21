@@ -61,11 +61,16 @@ import {
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
   isPlaceholderVendorCategory,
+  isBuyerUploadedVendor,
   normalizeVendorCategoryList,
   loadVendorUploadHistoryFromStorage,
   reconcileBuyerVendorsWithUploadHistory,
   updateVendorInUploadHistoryStorage,
   removeVendorsFromUploadHistoryInStorage,
+  setVendorsActiveStateInStorage,
+  isVendorActive,
+  resolveVendorDisplayName,
+  VENDOR_ACTIVE_STATUSES,
 } from './constants';
 
 function logApiResponseFailure(
@@ -154,6 +159,7 @@ function buildOpportunityFromRFQ(rfq: RFQItem): VendorOpportunity {
     category: rfq.category || rfq.extractedEntities?.[0]?.majorCategory || '',
     sourcingMode: rfq.sourcingMode,
     assignedVendors: rfq.assignedVendors,
+    createdAt: rfq.createdAt,
     lineItems: (rfq.extractedEntities || []).map((ent: ExtractedEntity, idx: number) => ({
       id: ent.id || `item-${idx}`,
       description: ent.itemName,
@@ -248,6 +254,12 @@ interface AppContextType {
   buyerVendors: VendorEntry[];
   addBuyerVendor: (vendor: Omit<VendorEntry, 'id'>) => Promise<VendorEntry | null>;
   updateBuyerVendor: (vendorId: string, updates: Partial<VendorEntry>) => Promise<boolean>;
+  setBuyerVendorActiveStatus: (vendorId: string, isActive: boolean, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
+  setMultipleBuyerVendorsActiveStatus: (
+    vendorIds: string[],
+    isActive: boolean,
+    targetVendors?: Array<Partial<VendorEntry>>
+  ) => Promise<boolean>;
   deleteBuyerVendor: (vendorId: string, targetVendor?: Partial<VendorEntry>) => Promise<boolean>;
   deleteMultipleBuyerVendors: (vendorIds: string[], targetVendors?: Array<Partial<VendorEntry>>) => Promise<void>;
   matchSuitableVendors: (entities: ExtractedEntity[], mode: SourcingMode, customList?: VendorEntry[]) => VendorEntry[];
@@ -258,7 +270,7 @@ interface AppContextType {
   setOnboardingEmailModalOpen: (open: boolean) => void;
   openOnboardingEmailModal: (vendor: VendorEntry) => void;
 
-  // Dual-Stream Category Reconciliation (Client-Mapped vs Vendor-Selected up to 10)
+  // Dual-Stream Category Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories: string[];
   setClientMappedCategories: React.Dispatch<React.SetStateAction<string[]>>;
   vendorSelectedCategories: string[];
@@ -400,7 +412,7 @@ interface AppContextType {
   vendorFreeCreditsUsed: number | null;
   vendorUnlockedRfqIds: string[];
   refreshVendorCredits: () => Promise<void>;
-  unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean }>;
+  unlockRFQForVendor: (rfqIdOrNumber: string) => Promise<{ success: boolean; error?: string; exhausted?: boolean; alreadyUnlocked?: boolean; data?: unknown }>;
 
   // Vendor 360° AI Self-Evaluation & Infra Fee ($5 or $0 with Connect/Select)
   vendorSelfEvaluationCompleted: boolean;
@@ -411,7 +423,7 @@ interface AppContextType {
   isVendorEvaluationFeeWaived: boolean;
 }
 
-const AppContext = createContext<AppContextType | undefined>(undefined);
+export const AppContext = createContext<AppContextType | undefined>(undefined);
 
 /** Whole days from today until a target date, or 0 when there is no date. */
 function daysUntilDate(target?: string): number {
@@ -706,7 +718,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
 
   // Balances are copied from the server response. A failed read clears them to null, so the header
   // shows "not loaded" instead of the last figure or a plan default.
-  const refreshVendorCredits = async () => {
+  // Wrapped in useCallback so that its reference remains stable across re-renders and does not cause infinite fetch loops in effect dependencies.
+  const refreshVendorCredits = useCallback(async () => {
     if (!authClient.getToken()) return;
     try {
       const res = await fetchVendorRfqCredits();
@@ -726,7 +739,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setVendorFreeCreditsUsed(null);
       logger.log('ERROR', 'Failed to refresh vendor RFQ credits', { error: err }, 'VENDOR_CREDITS');
     }
-  };
+  }, []);
 
   // Reads the vendor's own rfqDownloadsUsed from its record, which is the only source for that counter.
   const refreshOwnVendorDownloadsUsed = async () => {
@@ -757,7 +770,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         const norm = String(rfqIdOrNumber);
         return prev.includes(norm) ? prev : [...prev, norm];
       });
-      return { success: true, alreadyUnlocked: res.alreadyUnlocked };
+      return { success: true, alreadyUnlocked: res.alreadyUnlocked, data: res.data };
     }
     return {
       success: false,
@@ -815,11 +828,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         return;
       }
 
-      setRfqs(result.rfqs);
-      setSessionCache('rfqs', result.rfqs);
-      setSelectedRFQForMatrix((prev) => prev || result.rfqs[0] || null);
-      setSelectedRFQForDeepDive((prev) => prev || result.rfqs[0] || null);
-      setVendorOpportunities(result.rfqs.map(buildOpportunityFromRFQ));
+      const sortedRfqs = [...result.rfqs].sort(
+        (a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime()
+      );
+      const reconcileSelectedRfq = (prev: RFQItem | null) =>
+        prev
+          ? sortedRfqs.find((item) => item.rfqNumber === prev.rfqNumber || item.id === prev.id) || prev
+          : sortedRfqs[0] || null;
+      setRfqs(sortedRfqs);
+      setSessionCache('rfqs', sortedRfqs);
+      setSelectedRFQForMatrix(reconcileSelectedRfq);
+      setSelectedRFQForDeepDive(reconcileSelectedRfq);
+      setVendorOpportunities(sortedRfqs.map(buildOpportunityFromRFQ));
       loadedEntitiesRef.current.rfqs = true;
     } finally {
       setIsLoadingRFQs(false);
@@ -1162,7 +1182,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         tasks.push(loaders.ensureRFQs());
         tasks.push(loaders.ensureVendors());
       } else if (path.startsWith('/buyer/vendor-summary')) {
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendors(true));
         tasks.push(loaders.ensureVendorEvaluations());
       } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
         tasks.push(loaders.ensureVendorEvaluations());
@@ -1203,9 +1223,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // In unit test environment without browser routing shell, hydrate test fixtures:
     if (process.env.NODE_ENV === 'test') {
       void dataLoadersRef.current.refreshFromDB();
-      void dataLoadersRef.current.refreshActiveBuyerAccount();
+      if (currentRole === 'buyer') {
+        void dataLoadersRef.current.refreshActiveBuyerAccount();
+      }
       void dataLoadersRef.current.refreshCategoryTaxonomy();
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const lastUserSessionIdRef = useRef<string | null>(null);
@@ -1239,7 +1262,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
     lastUserSessionIdRef.current = currentUserSession?.id || null;
 
-    void loaders.ensureActiveBuyerAccount(true);
+    if (currentRole === 'buyer') {
+      void loaders.ensureActiveBuyerAccount(true);
+    }
 
     if (currentRole === 'vendor') {
       void loaders.refreshVendorCredits();
@@ -1312,6 +1337,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const created: BuyerAccount = json.data;
     setBuyerAccounts((prev) => [created, ...prev]);
     setActiveBuyerAccount(created);
+    setSessionCache('activeBuyerAccount', created);
     loadedEntitiesRef.current.activeBuyerAccount = true;
 
     void addAuditLog(`Created buyer account for ${created.organizationName}`);
@@ -1353,6 +1379,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setBuyerAccounts((prev) => prev.map((acc) => (acc.id === id ? updatedAcc : acc)));
         if (activeBuyerAccount?.id === id) {
           setActiveBuyerAccount(updatedAcc);
+          setSessionCache('activeBuyerAccount', updatedAcc);
         }
         addAuditLog(`Updated account specifications for buyer ID ${id}`);
         showToast('Account Updated', 'Buyer account details successfully saved.', 'info');
@@ -1460,8 +1487,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [vendorCatalogue, setVendorCatalogue] = useState<any[]>([]);
 
   const openRFQDeepDive = (rfq: RFQItem) => {
-    setSelectedRFQForDeepDive(rfq);
+    const latestRfq = rfqs.find((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id) || rfq;
+    setSelectedRFQForDeepDive(latestRfq);
     setDeepDiveModalOpen(true);
+    if (authClient.getToken()) {
+      void refreshRFQs();
+    }
   };
 
   const openVendorEvaluationSummary = (evalRecord: VendorEvaluationRecord) => {
@@ -1574,18 +1605,18 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       subject = `[Action Required] Set Up Categories: ${buyerCompany} added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network from their vendor master records. Because no past pre-purchase orders were found in their historical dump, the buyer did not map any product categories for your company. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in to complete your enterprise compliance profile (factory specs, GSTIN/PAN, plant location, capacity).`;
-      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across the Major and Minor Category taxonomy in order to receive enquiries and RFQ opportunities.`;
+      categoryUpdateInstructions = `ATTENTION: The buyer didn't map any categories for you because no historical PO items were found in their purchase dump. Please log in and map your categories yourself across the Division and Category taxonomy in order to receive enquiries and RFQ opportunities.`;
       unmappedSelfServiceMessage = `The buyer didn't map any categories for you, so please map yourself in order to receive enquiries.`;
     } else if (isExisting) {
       subject = `[Network Association] ${buyerCompany} has added you to their Preferred Vendor Network on Procucev`;
       authInstructions = `A buyer from ${buyerCompany} has associated your verified enterprise profile into their private preferred supplier network. Sign in using your existing credentials or follow the account verification and password recovery steps on the portal.`;
       profileUpdateInstructions = `Please log in to review the buyer association and verify that your plant locations, operational capabilities, and statutory certifications are up to date.`;
-      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across the standard minor categories.`;
+      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their past purchase records and mapped your company to the following taxonomy:\n• 1st Set (Primary Division): ${assignedMajor}\n• 2nd Set (Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease log in to review, confirm, or expand your category specializations across the standard categories.`;
     } else {
       subject = `[Action Required] Welcome to Procucev: ${buyerCompany} has added you to their Preferred Vendor Network`;
       authInstructions = `You have been added by ${buyerContact} from ${buyerCompany} into their private preferred vendor network based on their past pre-purchase orders. Sign in with your registered email and follow the verification steps shown on the portal.`;
       profileUpdateInstructions = `Please log in and complete your enterprise profile, including plant location, turnover, machinery, and statutory tax credentials (GSTIN / PAN).`;
-      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Major Category): ${assignedMajor}\n• 2nd Set (Minor Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
+      categoryUpdateInstructions = `The buyer (${buyerCompany}) analyzed their purchase history and assigned your company to:\n• 1st Set (Primary Division): ${assignedMajor}\n• 2nd Set (Categories & Product Lines): ${assignedMinors.join(', ')}\nPlease confirm these categories upon login so you receive incoming RFQ invitations matching your product lines.`;
     }
 
     return {
@@ -1631,6 +1662,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [lastIngestionSummary, setLastIngestionSummary] = useState<IngestionSummary | null>(null);
   const [lastIngestionError, setLastIngestionError] = useState<string | null>(null);
 
+  const markBuyerVendorSetupCompleted = useCallback(() => {
+    setInitialSetupCompleted(true);
+    setCurrentUserSession((prev) => {
+      if (!prev || prev.vendorMasterUploaded) return prev;
+      const updated = { ...prev, vendorMasterUploaded: true };
+      authClient.setSession(updated, authClient.getToken());
+      return updated;
+    });
+    setActiveBuyerAccount((prev) => (prev && !prev.initialSetupCompleted ? { ...prev, initialSetupCompleted: true } : prev));
+  }, []);
+
   const processHistoricalPurchaseData = async (
     period: '1_year' | '2_years' | '3_years',
     vendors: HistoricalPurchaseVendorRecord[]
@@ -1663,6 +1705,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
             email: v.email,
             phone: v.phone,
             location: v.address,
+            vendorCode: v.vendorCode,
+            gstin: (v as any).gstin || v.gstNumber || (v as any).gst || undefined,
+            gstNumber: v.gstNumber || (v as any).gstin || (v as any).gst || undefined,
+            city: (v as any).city,
+            state: (v as any).state,
+            pincode: (v as any).pincode,
             // Sent explicitly rather than left for the backend to infer from
             // majorCategory's sentinel string below — storeService branches
             // the onboarding email (Template A vs B) on this flag directly.
@@ -1723,7 +1771,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     setLastIngestionSummary(summary);
 
     await refreshFromDB();
-    setInitialSetupCompleted(true);
+    markBuyerVendorSetupCompleted();
     // Note: Modal remains open so InitialSetupModal can display the Completion Summary to the user
 
     const deliverySummary = formatString(UI_STRINGS.historicalIngestion.deliverySummary, {
@@ -1772,8 +1820,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const [vendorSelectedCategories, setVendorSelectedCategories] = useState<string[]>([]);
 
   const saveVendorProfileCategories = (email: string, clientCats: string[], vendorCats: string[]) => {
-    // Limit to max 10 categories
-    const limitedVendorCats = vendorCats.slice(0, 10);
+    // Preserve all vendor-selected categories without artificial cap
+    const limitedVendorCats = Array.from(new Set(vendorCats.map((c) => (c || '').trim()).filter(Boolean)));
     setClientMappedCategories(clientCats);
     setVendorSelectedCategories(limitedVendorCats);
 
@@ -1819,7 +1867,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // records a saved change. The page writes the audit line and the toast itself.
     void addFeedItem(
       `Vendor Category Reconciliation Saved: ${email}`,
-      `Client Mapped: [${clientCats.join(', ')}] | Vendor Selected (Max 10): [${limitedVendorCats.join(', ')}]. ${isAligned ? 'Status: 100% Aligned.' : `Status: Dual-Stream Stored (${common.length} matching, ${vendorOnly.length} vendor-extended). RFQs will be dispatched across both sets.`}`,
+      `Client Mapped: [${clientCats.join(', ')}] | Vendor Selected: [${limitedVendorCats.join(', ')}]. ${isAligned ? 'Status: 100% Aligned.' : `Status: Dual-Stream Stored (${common.length} matching, ${vendorOnly.length} vendor-extended). RFQs will be dispatched across both sets.`}`,
       'system',
       undefined,
       email,
@@ -2174,6 +2222,9 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', updated);
       return updated;
     });
+    if (currentRole === 'buyer') {
+      markBuyerVendorSetupCompleted();
+    }
 
     addFeedItem(
       `Vendor Added: ${newV.name}`,
@@ -2212,43 +2263,102 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return newV;
   };
 
-  // The local list changes only after the server confirms the write, and it takes the record the server returns.
-  const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+  const resolveVendorMutationTarget = (vendorId: string, hintVendor?: Partial<VendorEntry>) => {
     const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
     const matchedVendor =
       directVendor ||
       (isSyntheticId
         ? reconcileBuyerVendorsWithUploadHistory(
-            buyerVendors,
-            loadVendorUploadHistoryFromStorage(),
-            activeBuyerAccount
-          ).find((v) => v.id === vendorId)
-        : undefined);
-    const resolvedEmailLower = String(matchedVendor?.email || updates.email || '').trim().toLowerCase();
-    const persistedByEmail =
-      isSyntheticId && resolvedEmailLower
+          buyerVendors,
+          loadVendorUploadHistoryFromStorage(),
+          activeBuyerAccount
+        ).find((v) => v.id === vendorId)
+        : undefined) ||
+      hintVendor;
+    const resolvedEmailLower = String(matchedVendor?.email || hintVendor?.email || '').trim().toLowerCase();
+    const masterIdSuffix = vendorId.startsWith('v-master-') ? vendorId.slice('v-master-'.length) : '';
+    const persistedMatch =
+      isSyntheticId
         ? buyerVendors.find(
-            (v) =>
-              !String(v.id || '').startsWith('v-master-') &&
-              !String(v.id || '').startsWith('v-hist-local-') &&
-              String(v.email || '').trim().toLowerCase() === resolvedEmailLower
-          )
+          (v) =>
+            !String(v.id || '').startsWith('v-master-') &&
+            !String(v.id || '').startsWith('v-hist-local-') &&
+            ((masterIdSuffix && v.masterRecordId === masterIdSuffix) ||
+              (resolvedEmailLower && String(v.email || '').trim().toLowerCase() === resolvedEmailLower))
+        )
         : undefined;
-    const targetVendorId = persistedByEmail?.id || vendorId;
-    const payload: Record<string, unknown> = { ...updates };
-    if (isSyntheticId && !persistedByEmail && matchedVendor) {
-      if (matchedVendor.email && !payload.vendorEmail) payload.vendorEmail = matchedVendor.email;
-      if (matchedVendor.name && !payload.vendorName) payload.vendorName = matchedVendor.name;
-      if (matchedVendor.contactPerson && !payload.contactPerson) payload.contactPerson = matchedVendor.contactPerson;
-      if (matchedVendor.vendorCode && !payload.vendorCode) payload.vendorCode = matchedVendor.vendorCode;
-      if (matchedVendor.phone && !payload.phone) payload.phone = matchedVendor.phone;
-      if (matchedVendor.location && !payload.location) payload.location = matchedVendor.location;
-      if (matchedVendor.city && !payload.city) payload.city = matchedVendor.city;
-      if (matchedVendor.state && !payload.state) payload.state = matchedVendor.state;
-      if (matchedVendor.pincode && !payload.pincode) payload.pincode = matchedVendor.pincode;
-      if (matchedVendor.gstin && !payload.gstin) payload.gstin = matchedVendor.gstin;
+    const targetVendorId = persistedMatch?.id || vendorId;
+    const syntheticHints: Record<string, unknown> = {};
+    if (isSyntheticId && !persistedMatch && matchedVendor) {
+      const hintMapping: ReadonlyArray<readonly [keyof VendorEntry, string]> = [
+        ['email', 'vendorEmail'],
+        ['name', 'vendorName'],
+        ['contactPerson', 'contactPerson'],
+        ['vendorCode', 'vendorCode'],
+        ['phone', 'phone'],
+        ['location', 'location'],
+        ['city', 'city'],
+        ['state', 'state'],
+        ['pincode', 'pincode'],
+        ['gstin', 'gstin'],
+        ['gst', 'gst'],
+      ];
+      for (const [sourceKey, targetKey] of hintMapping) {
+        const value = matchedVendor[sourceKey];
+        if (value) syntheticHints[targetKey] = value;
+      }
+      const gstinVal = matchedVendor.gstin || matchedVendor.gst || (matchedVendor as any).gstNumber;
+      if (gstinVal) {
+        syntheticHints.gstin = gstinVal;
+        syntheticHints.gst = gstinVal;
+      }
+      if (masterIdSuffix) {
+        syntheticHints.masterRecordId = masterIdSuffix;
+      }
     }
+    return { targetVendorId, matchedVendor, syntheticHints };
+  };
+
+  /**
+   * A buyer-vendor action can 404 ("Vendor with ID ... not found.") for a
+   * vendor the buyer's own list is still showing: the record the list was
+   * built from (a durable-save or an ingestion response that can race or
+   * double-submit — see storeService.processHistoricalPurchaseData on the
+   * backend) stops existing server-side, but nothing ever told the
+   * already-rendered list that. Left alone, that row stays in `buyerVendors`
+   * and in the upload-history cache forever, failing the same 404 on every
+   * click with no way for the buyer to dismiss it short of a hard refresh.
+   *
+   * Every mutation below calls this when the response is a 404 for the
+   * vendor it targeted, so the ghost row is dropped from local state and
+   * from the upload-history cache instead of staying there to fail again.
+   */
+  const pruneGhostVendorOn404 = (res: Response, identifiers: ReadonlyArray<string | undefined | null>): void => {
+    if (res.status !== 404) return;
+    const idSet = new Set(
+      identifiers
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim().toLowerCase())
+    );
+    if (idSet.size === 0) return;
+    setBuyerVendors((prev) => {
+      const next = prev.filter((v) => {
+        const matches =
+          (v.id && idSet.has(v.id.trim().toLowerCase())) ||
+          (v.email && idSet.has(v.email.trim().toLowerCase()));
+        return !matches;
+      });
+      if (next.length !== prev.length) setSessionCache('vendors', next);
+      return next;
+    });
+    removeVendorsFromUploadHistoryInStorage(Array.from(idSet));
+  };
+
+  // The local list changes only after the server confirms the write, and it takes the record the server returns.
+  const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
+    const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(vendorId, updates);
+    const payload: Record<string, unknown> = { ...syntheticHints, ...updates };
 
     let res: Response;
     try {
@@ -2266,6 +2376,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.success) {
       logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId: targetVendorId, responseError: json?.error });
+      pruneGhostVendorOn404(res, [vendorId, targetVendorId, matchedVendor?.email]);
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, json?.error || STORE_MESSAGES.vendorUpdateFailed, 'warning');
       return false;
     }
@@ -2276,10 +2387,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
       const next = hasMatch
         ? prev.map((v) =>
-            v.id === vendorId || v.id === targetVendorId || v.id === savedId
-              ? { ...v, ...updates, ...saved, id: savedId }
-              : v
-          )
+          v.id === vendorId || v.id === targetVendorId || v.id === savedId
+            ? { ...v, ...updates, ...saved, id: savedId }
+            : v
+        )
         : [{ ...(matchedVendor || {}), ...updates, ...saved, id: savedId } as VendorEntry, ...prev];
       setSessionCache('vendors', next);
       return next;
@@ -2302,6 +2413,358 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     );
     void addAuditLog(`Updated vendor profile record for ID ${savedId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
+    return true;
+  };
+
+  // Non-destructive status toggle: marks a buyer-uploaded vendor INACTIVE (excluded from future flows) or ACTIVE.
+  const setBuyerVendorActiveStatus = async (
+    vendorId: string,
+    isActive: boolean,
+    targetVendor?: Partial<VendorEntry>
+  ): Promise<boolean> => {
+    const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(vendorId, targetVendor);
+    let res: Response;
+    try {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendorId)}/status`, {
+        method: 'PATCH',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ ...syntheticHints, isActive }),
+      });
+    } catch (err) {
+      logger.log('ERROR', 'Failed to sync vendor active status to backend', { error: err, vendorId: targetVendorId, isActive }, 'VENDOR_PROFILE');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.networkErrorMessage, 'warning');
+      return false;
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Vendor active status update request failed', res, 'VENDOR_PROFILE', {
+        vendorId: targetVendorId,
+        isActive,
+        responseError: json?.error,
+      });
+      pruneGhostVendorOn404(res, [vendorId, targetVendorId, matchedVendor?.email]);
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.singleUpdateFailedMessage,
+        'warning'
+      );
+      return false;
+    }
+
+    const saved: Partial<VendorEntry> = json.data && typeof json.data === 'object'
+      ? json.data
+      : { isActive, disabled: !isActive, status: isActive ? 'REGISTERED / NOT EVALUATED' : VENDOR_ACTIVE_STATUSES.INACTIVE };
+    const savedId = typeof saved.id === 'string' && saved.id ? saved.id : targetVendorId;
+
+    setBuyerVendors((prev) => {
+      const hasMatch = prev.some((v) => v.id === vendorId || v.id === targetVendorId || v.id === savedId);
+      const next = hasMatch
+        ? prev.map((v) =>
+          v.id === vendorId || v.id === targetVendorId || v.id === savedId
+            ? { ...v, ...saved, isActive, disabled: !isActive, id: savedId }
+            : v
+        )
+        : [{ ...(matchedVendor || {}), ...saved, isActive, disabled: !isActive, id: savedId } as VendorEntry, ...prev];
+      setSessionCache('vendors', next);
+      return next;
+    });
+
+    const identifiersToSync = [
+      vendorId,
+      targetVendorId,
+      savedId,
+      String(saved.email || matchedVendor?.email || targetVendor?.email || ''),
+      String(saved.name || matchedVendor?.name || targetVendor?.name || ''),
+    ].filter(Boolean);
+    setVendorsActiveStateInStorage(identifiersToSync, isActive);
+
+    const displayName = resolveVendorDisplayName(
+      { ...matchedVendor, ...saved, id: savedId },
+      UI_STRINGS.vendorStatusControl.genericVendorLabel,
+      matchedVendor?.name,
+      targetVendor?.name
+    );
+    void addAuditLog(
+      isActive
+        ? `Reactivated vendor ${displayName} (${savedId}) for future sourcing workflows.`
+        : `Marked vendor ${displayName} (${savedId}) INACTIVE (historical data preserved; excluded from future RFQs).`
+    );
+    showToast(
+      UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
+      formatString(
+        isActive ? UI_STRINGS.vendorStatusControl.singleEnabledToast : UI_STRINGS.vendorStatusControl.singleDisabledToast,
+        { vendorName: displayName }
+      ),
+      isActive ? 'success' : 'info'
+    );
+    return true;
+  };
+
+  // Bulk non-destructive active/inactive toggle across selected buyer-uploaded vendors.
+  const setMultipleBuyerVendorsActiveStatus = async (
+    vendorIds: string[],
+    isActive: boolean,
+    targetVendors?: Array<Partial<VendorEntry>>
+  ): Promise<boolean> => {
+    if (!Array.isArray(vendorIds) || vendorIds.length === 0) return false;
+    const extraVendors = Array.isArray(targetVendors) ? targetVendors : [];
+    const targetResolutions = vendorIds.map((rawId) => {
+      const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(
+        rawId,
+        extraVendors.find((item) => item?.id === rawId)
+      );
+      return { rawId, targetVendorId, matchedVendor, syntheticHints };
+    });
+
+    const requestVendorIds = Array.from(
+      new Set(targetResolutions.map((item) => item.targetVendorId).filter(Boolean))
+    );
+
+    const hintByTargetId = new Map<string, Record<string, unknown>>();
+    for (const item of targetResolutions) {
+      if (!hintByTargetId.has(item.targetVendorId)) {
+        hintByTargetId.set(item.targetVendorId, {
+          id: item.targetVendorId,
+          ...(item.matchedVendor
+            ? {
+              vendorName: item.matchedVendor.name,
+              vendorEmail: item.matchedVendor.email,
+              vendorCode: item.matchedVendor.vendorCode,
+            }
+            : {}),
+          ...item.syntheticHints,
+        });
+      }
+    }
+    const hintPayload = Array.from(hintByTargetId.values());
+
+    let res: Response;
+    try {
+      res = await fetch('/api/vendors/bulk-status', {
+        method: 'POST',
+        headers: authFetchHeaders(),
+        body: JSON.stringify({ vendorIds: requestVendorIds, isActive, vendors: hintPayload }),
+      });
+    } catch (err) {
+      logger.log('ERROR', 'Failed to sync bulk vendor status update to backend', { error: err, isActive }, 'VENDOR_PROFILE');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.networkErrorMessage, 'warning');
+      return false;
+    }
+
+    const json = await res.json().catch(() => null);
+    if (!res.ok || !json?.success) {
+      logApiResponseFailure('Bulk vendor active status update request failed', res, 'VENDOR_PROFILE', {
+        requestedCount: requestVendorIds.length,
+        isActive,
+        responseError: json?.error,
+      });
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.bulkUpdateFailedMessage,
+        'warning'
+      );
+      return false;
+    }
+
+    const hasExplicitUpdatedIds = Array.isArray(json.updatedIds);
+    const hasExplicitUpdatedCount = typeof json.updatedCount === 'number';
+    const updatedRows: Partial<VendorEntry>[] = Array.isArray(json.data) ? json.data : [];
+    const updatedIds: string[] = hasExplicitUpdatedIds ? json.updatedIds : [];
+    const skippedSet = new Set<string>(Array.isArray(json.skippedIds) ? json.skippedIds : []);
+    const idMappings: Record<string, string> =
+      json.idMappings && typeof json.idMappings === 'object' ? json.idMappings : {};
+
+    const mappedUpdatedTargets = Object.entries(idMappings)
+      .filter(([, persistedId]) => Boolean(persistedId))
+      .map(([requestedId]) => requestedId);
+    const fallbackUnskippedIds = requestVendorIds.filter((id) => !skippedSet.has(id));
+    const hasZeroUpdates =
+      json.updatedCount === 0 ||
+      (hasExplicitUpdatedIds && updatedIds.length === 0 && updatedRows.length === 0);
+
+    if (hasZeroUpdates) {
+      logger.log(
+        'WARN',
+        'Bulk vendor active status update returned zero updated vendors',
+        { requestedCount: requestVendorIds.length, skippedIds: Array.from(skippedSet), isActive },
+        'VENDOR_PROFILE'
+      );
+      showToast(
+        UI_STRINGS.vendorStatusControl.updateFailedTitle,
+        json?.error || UI_STRINGS.vendorStatusControl.bulkUpdateNoneUpdatedMessage,
+        'warning'
+      );
+      return false;
+    }
+
+    const updatedById = new Map<string, Partial<VendorEntry>>();
+    const updatedByEmail = new Map<string, Partial<VendorEntry>>();
+    const updatedByMasterId = new Map<string, Partial<VendorEntry>>();
+    updatedRows.forEach((row) => {
+      if (row.id) updatedById.set(row.id, row);
+      if (row.email) updatedByEmail.set(row.email.trim().toLowerCase(), row);
+      if (row.masterRecordId) {
+        const masterKey = String(row.masterRecordId);
+        updatedByMasterId.set(masterKey, row);
+        updatedById.set(`v-master-${masterKey}`, row);
+      }
+    });
+    Object.entries(idMappings).forEach(([requestedId, persistedId]) => {
+      const matchedRow = updatedById.get(persistedId);
+      if (matchedRow) updatedById.set(requestedId, matchedRow);
+    });
+
+    const unskippedResolutions = targetResolutions.filter(
+      (item) => !skippedSet.has(item.targetVendorId) && !skippedSet.has(item.rawId)
+    );
+    const updatedIdSet = new Set(updatedIds);
+    const confirmedResolutions = hasExplicitUpdatedIds && updatedIds.length > 0
+      ? unskippedResolutions.filter((item) =>
+        [idMappings[item.targetVendorId], idMappings[item.rawId], item.targetVendorId, item.rawId].some(
+          (cand) => Boolean(cand && updatedIdSet.has(cand))
+        ) ||
+        (item.matchedVendor?.email && updatedByEmail.has(item.matchedVendor.email.trim().toLowerCase())) ||
+        (item.rawId.startsWith('v-master-') && updatedByMasterId.has(item.rawId.slice('v-master-'.length)))
+      )
+      : unskippedResolutions;
+
+    const affectedIds = updatedIds.length > 0
+      ? Array.from(new Set([...updatedIds, ...mappedUpdatedTargets]))
+      : fallbackUnskippedIds;
+    const affectedSet = new Set([
+      ...affectedIds,
+      ...confirmedResolutions.flatMap((item) => [item.targetVendorId, item.rawId]),
+    ]);
+
+    const findMatchingUpdatedRow = (vendor: Partial<VendorEntry>): Partial<VendorEntry> | undefined => {
+      const vMasterSuffix =
+        typeof vendor.id === 'string' && vendor.id.startsWith('v-master-')
+          ? vendor.id.slice('v-master-'.length)
+          : vendor.masterRecordId
+            ? String(vendor.masterRecordId)
+            : '';
+      return (
+        (vendor.id ? updatedById.get(vendor.id) : undefined) ||
+        (vMasterSuffix ? updatedByMasterId.get(vMasterSuffix) : undefined) ||
+        (vendor.email ? updatedByEmail.get(vendor.email.trim().toLowerCase()) : undefined)
+      );
+    };
+
+    const syncedVendorsFromResolutions = confirmedResolutions
+      .map((item) => item.matchedVendor)
+      .filter((v): v is Partial<VendorEntry> => Boolean(v));
+    const matchedVendors = buyerVendors.filter(
+      (v) =>
+        Boolean(findMatchingUpdatedRow(v)) ||
+        affectedSet.has(v.id) ||
+        Boolean(v.email && affectedSet.has(v.email))
+    );
+    const identifiersToSync = Array.from(
+      new Set(
+        [
+          ...affectedIds,
+          ...[...matchedVendors, ...updatedRows, ...syncedVendorsFromResolutions].flatMap((v) => [
+            v.id,
+            v.email,
+            v.name,
+            v.masterRecordId ? `v-master-${v.masterRecordId}` : '',
+          ]),
+        ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      )
+    );
+    setVendorsActiveStateInStorage(identifiersToSync, isActive);
+
+    const buildActiveEntry = (base: Partial<VendorEntry>, patch: Partial<VendorEntry>, resolvedId: string): VendorEntry => {
+      const nextStatus = isActive
+        ? (patch.status || base.previousStatus || 'REGISTERED / NOT EVALUATED')
+        : VENDOR_ACTIVE_STATUSES.INACTIVE;
+      return {
+        ...base,
+        ...patch,
+        id: resolvedId,
+        isActive,
+        disabled: !isActive,
+        status: nextStatus as VendorEntry['status'],
+      } as VendorEntry;
+    };
+
+    setBuyerVendors((prev) => {
+      const matchedRowIds = new Set<string>();
+      const next = prev.map((v) => {
+        const directMatch = findMatchingUpdatedRow(v);
+        const isTargeted =
+          Boolean(directMatch) || affectedSet.has(v.id) || Boolean(v.email && affectedSet.has(v.email));
+        if (!isTargeted) return v;
+        if (directMatch?.id) matchedRowIds.add(directMatch.id);
+        return buildActiveEntry(v, directMatch || {}, directMatch?.id || v.id);
+      });
+
+      const seenIds = new Set(next.map((v) => v.id).filter(Boolean));
+      const seenEmails = new Set(
+        next.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
+      );
+      const additions: VendorEntry[] = [];
+      const pushIfMissing = (entry: VendorEntry) => {
+        const entryEmail = String(entry.email || '').trim().toLowerCase();
+        if (
+          matchedRowIds.has(entry.id) ||
+          seenIds.has(entry.id) ||
+          (entryEmail && seenEmails.has(entryEmail))
+        ) {
+          return;
+        }
+        seenIds.add(entry.id);
+        if (entryEmail) seenEmails.add(entryEmail);
+        additions.push(entry);
+      };
+
+      for (const row of updatedRows) {
+        const rowId = String(row.id || '');
+        const rowEmail = String(row.email || '').trim().toLowerCase();
+        const sourceResolution = confirmedResolutions.find(
+          (item) =>
+            item.targetVendorId === rowId ||
+            item.rawId === rowId ||
+            (rowEmail && String(item.matchedVendor?.email || '').trim().toLowerCase() === rowEmail) ||
+            (row.masterRecordId && item.rawId === `v-master-${row.masterRecordId}`)
+        );
+        const targetId = rowId || sourceResolution?.targetVendorId || '';
+        pushIfMissing(buildActiveEntry(sourceResolution?.matchedVendor || {}, row, targetId));
+      }
+
+      for (const item of confirmedResolutions) {
+        if (!item.matchedVendor) continue;
+        const resolvedId = idMappings[item.targetVendorId] || idMappings[item.rawId] || item.targetVendorId;
+        if (seenIds.has(resolvedId) || seenIds.has(item.rawId)) continue;
+        pushIfMissing(buildActiveEntry(item.matchedVendor, {}, resolvedId));
+      }
+
+      const combined = additions.length > 0 ? [...additions, ...next] : next;
+      setSessionCache('vendors', combined);
+      return combined;
+    });
+
+    const changedCount = updatedIds.length || fallbackUnskippedIds.length;
+    void addAuditLog(
+      isActive
+        ? `Reactivated ${changedCount} buyer vendor(s) for future sourcing workflows.`
+        : `Marked ${changedCount} buyer vendor(s) INACTIVE (historical data preserved; excluded from future RFQs).`
+    );
+    const hasPartialSkips = skippedSet.size > 0 && hasExplicitUpdatedCount;
+    showToast(
+      UI_STRINGS.vendorStatusControl.statusUpdatedTitle,
+      hasPartialSkips
+        ? formatString(UI_STRINGS.vendorStatusControl.bulkPartialUpdateToast, {
+          updatedCount: changedCount,
+          skippedCount: skippedSet.size,
+        })
+        : formatString(
+          isActive ? UI_STRINGS.vendorStatusControl.bulkEnabledToast : UI_STRINGS.vendorStatusControl.bulkDisabledToast,
+          { count: changedCount }
+        ),
+      hasPartialSkips ? 'warning' : isActive ? 'success' : 'info'
+    );
     return true;
   };
 
@@ -2456,7 +2919,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     mode: SourcingMode,
     customList?: VendorEntry[]
   ): VendorEntry[] => {
-    const vendorPool = customList && customList.length > 0 ? customList : buyerVendors;
+    const rawPool = customList && customList.length > 0 ? customList : buyerVendors;
+    const vendorPool = rawPool.filter((v) => isVendorActive(v));
     const targetMinorCategories = entities.map(e => (e.minorCategory || '').toLowerCase().trim()).filter(Boolean);
     const targetMajorCategories = entities.map(e => (e.majorCategory || e.category || '').toLowerCase().trim()).filter(Boolean);
 
@@ -2527,12 +2991,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     if (mode === 'mode_1') {
       return vendorPool
         .filter(v => isRosterSource(v) && matchInfo(v).matched)
-        .map(v => withMatchReason(v, 'Buyer Approved Roster (Minor Category Match)'));
+        .map(v => withMatchReason(v, 'Buyer Approved Roster (Category Match)'));
     } else if (mode === 'mode_2') {
       // Buyer roster matches only. The hardcoded Procucev network vendors and the first-four fallback were removed.
       const matchedBuyer = vendorPool
         .filter(v => matchInfo(v).matched)
-        .map(v => withMatchReason(v, 'Buyer Roster (Minor Category Match)'));
+        .map(v => withMatchReason(v, 'Buyer Roster (Category Match)'));
       return dedupeAndRank(matchedBuyer);
     } else {
       const matched = vendorPool
@@ -3198,6 +3662,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         buyerVendors,
         addBuyerVendor,
         updateBuyerVendor,
+        setBuyerVendorActiveStatus,
+        setMultipleBuyerVendorsActiveStatus,
         deleteBuyerVendor,
         deleteMultipleBuyerVendors,
         matchSuitableVendors,
@@ -3243,4 +3709,8 @@ export function useApp() {
     throw new Error('useApp must be used within an AppProvider');
   }
   return context;
+}
+
+export function useOptionalApp(): AppContextType | null {
+  return useContext(AppContext) ?? null;
 }

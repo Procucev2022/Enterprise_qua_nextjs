@@ -19,6 +19,8 @@ import {
   ArrowUpDown,
   ArrowUp,
   ArrowDown,
+  ArrowLeft,
+  Percent,
   CheckCircle2,
   Clock,
   AlertTriangle,
@@ -27,7 +29,6 @@ import {
   Loader2,
   PhoneCall,
   Smartphone,
-  Star,
   Sparkles,
   ShieldCheck,
   Calendar,
@@ -37,6 +38,10 @@ import {
   Upload,
   Plus,
   FileText,
+  Users,
+  Layers,
+  Eye,
+  RotateCcw,
 } from 'lucide-react';
 import { getScenariosForEntityType, interpolateScenarioTemplate, getScenarioForCallOutcome } from '@/lib/emailScenarioTemplates';
 import { fetchDocuments } from '@/lib/documentVaultClient';
@@ -52,6 +57,8 @@ import type {
   SupplierPaymentSummary,
   SupplierPaymentTransaction,
   InternalTeamMember,
+  SellerBuyerUploadItem,
+  SellerActiveRFQItem,
 } from '@/lib/types';
 import {
   formatCurrency,
@@ -61,25 +68,41 @@ import {
   getVendorCreditBalance,
   VENDOR_PLAN_RFQ_QUOTA,
   SELLER_QUOTE_CREDITS_ALLOWED,
+  SELLER_PROFILE_REQUEST_TYPES,
+  APPROVER_CONFIG,
+  CREDIT_APPROVAL_APPROVERS,
+  INTERNAL_TASK_USERS,
+  SELLER_DISCOUNT_MODES,
+  SELLER_TRIAL_PERIOD_MODES,
+  OFFLINE_PAYMENT_TYPES,
+  calculateDiscountBreakdown,
+  calculateTrialDaysFromDates,
+  getStandardDiscountPlanPrice,
+  type SellerProfileRequestType,
+  type OfflinePaymentType,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { usablePan } from '@/lib/validationSchemas';
+import { usablePan, OFFLINE_PAYMENT_UPLOAD_SCHEMA } from '@/lib/validationSchemas';
+import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import {
   fetchSupplierCreditHistory,
   updateSupplierCategories,
   fetchSupplierCommunications,
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
+  fetchSellerBuyerUploads,
+  fetchSellerActiveRFQs,
 } from '@/lib/supplierProfileClient';
 import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
-import { getMajorCategories } from '@/lib/categoryTaxonomy';
+import { getMajorCategories, getAllUniqueMinorCategories, findMajorForMinor, setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
 import {
   addSellerQuoteCredits,
   createCreditApprovalIdempotencyKey,
   requestSellerQuoteCreditApproval,
+  type RequestSellerQuoteCreditApprovalPayload,
 } from '@/lib/accountDocumentsClient';
 import AccountDocumentsTab from './AccountDocumentsTab';
 
@@ -120,8 +143,8 @@ export interface SupplierDossierDrawerProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   sellerRfqs?: RFQItem[];
   rfqs?: RFQItem[];
-  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents';
-  onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => void;
+  initialTab?: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs';
+  onTabChange?: (tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs') => void;
 }
 
 // Shown wherever a value is missing from the record. Never a substitute value.
@@ -141,23 +164,245 @@ export default function SupplierDossierDrawer({
   const effectiveRfqs = useMemo(() => (sellerRfqs.length > 0 ? sellerRfqs : (rfqs || [])), [sellerRfqs, rfqs]);
 
   // Active Main Tab
-  const [dossierTab, setDossierTabState] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents'>(initialTab || 'profile');
-  const setDossierTab = useCallback((tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents') => {
+  const [dossierTab, setDossierTabState] = useState<'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs'>(initialTab || 'profile');
+  const setDossierTab = useCallback((tab: 'profile' | 'quotes' | 'credit' | 'communications' | 'payments' | 'documents' | 'buyer-uploads' | 'active-rfqs') => {
     setDossierTabState(tab);
     if (onTabChange) onTabChange(tab);
   }, [onTabChange]);
+
+  // Buyer Uploads state
+  const [buyerUploads, setBuyerUploads] = useState<SellerBuyerUploadItem[]>([]);
+  const [loadingBuyerUploads, setLoadingBuyerUploads] = useState<boolean>(false);
+  const [buyerUploadsError, setBuyerUploadsError] = useState<string | null>(null);
+  const [buyerUploadSearch, setBuyerUploadSearch] = useState<string>('');
+  const [selectedBuyerForModal, setSelectedBuyerForModal] = useState<SellerBuyerUploadItem | null>(null);
+
+  // Active RFQs state
+  const [activeRfqs, setActiveRfqs] = useState<SellerActiveRFQItem[]>([]);
+  const [loadingActiveRfqs, setLoadingActiveRfqs] = useState<boolean>(false);
+  const [activeRfqsError, setActiveRfqsError] = useState<string | null>(null);
+  const [activeRfqSearch, setActiveRfqSearch] = useState<string>('');
+  const [selectedActiveRfqForModal, setSelectedActiveRfqForModal] = useState<SellerActiveRFQItem | null>(null);
+
+  const loadBuyerUploads = useCallback(async () => {
+    if (!seller?.id) return;
+    setLoadingBuyerUploads(true);
+    setBuyerUploadsError(null);
+    try {
+      const res = await fetchSellerBuyerUploads(seller.id);
+      if (res.success && Array.isArray(res.data)) {
+        setBuyerUploads(res.data);
+      } else {
+        setBuyerUploadsError(res.error || strings.buyerUploads.loadError);
+      }
+    } catch (err: unknown) {
+      setBuyerUploadsError(err instanceof Error ? err.message : strings.buyerUploads.loadError);
+    } finally {
+      setLoadingBuyerUploads(false);
+    }
+  }, [seller?.id, strings.buyerUploads.loadError]);
+
+  const loadActiveRfqs = useCallback(async () => {
+    if (!seller?.id) return;
+    setLoadingActiveRfqs(true);
+    setActiveRfqsError(null);
+    try {
+      const res = await fetchSellerActiveRFQs(seller.id);
+      if (res.success && Array.isArray(res.data)) {
+        setActiveRfqs(res.data);
+      } else {
+        setActiveRfqsError(res.error || strings.activeRfqs.loadError);
+      }
+    } catch (err: unknown) {
+      setActiveRfqsError(err instanceof Error ? err.message : strings.activeRfqs.loadError);
+    } finally {
+      setLoadingActiveRfqs(false);
+    }
+  }, [seller?.id, strings.activeRfqs.loadError]);
+
+  useEffect(() => {
+    void loadBuyerUploads();
+    void loadActiveRfqs();
+  }, [loadBuyerUploads, loadActiveRfqs]);
+
+  const filteredBuyerUploads = useMemo(() => {
+    return buyerUploads.filter((b) => {
+      if (buyerUploadSearch.trim()) {
+        const q = buyerUploadSearch.toLowerCase();
+        const matchName = (b.name || '').toLowerCase().includes(q);
+        const matchComp = (b.companyName || '').toLowerCase().includes(q);
+        const matchContact = (b.contactPerson || '').toLowerCase().includes(q);
+        const matchEmail = (b.email || '').toLowerCase().includes(q);
+        const matchPhone = (b.phone || '').toLowerCase().includes(q);
+        return matchName || matchComp || matchContact || matchEmail || matchPhone;
+      }
+      return true;
+    });
+  }, [buyerUploads, buyerUploadSearch]);
+
+  const filteredActiveRfqs = useMemo(() => {
+    return activeRfqs.filter((r) => {
+      if (activeRfqSearch.trim()) {
+        const q = activeRfqSearch.toLowerCase();
+        const matchId = (r.rfqNumber || r.id || '').toLowerCase().includes(q);
+        const matchTitle = (r.title || '').toLowerCase().includes(q);
+        const matchBuyer = (r.buyerCompanyName || r.buyerCompany || r.buyerName || '').toLowerCase().includes(q);
+        const matchCat = (r.category || r.procurementCategory || '').toLowerCase().includes(q);
+        const matchLoc = (r.location || '').toLowerCase().includes(q);
+        return matchId || matchTitle || matchBuyer || matchCat || matchLoc;
+      }
+      return true;
+    });
+  }, [activeRfqs, activeRfqSearch]);
   const [docCount, setDocCount] = useState<number>(0);
   const [isAddQuoteCreditsModalOpen, setIsAddQuoteCreditsModalOpen] = useState<boolean>(false);
+  const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
+  const [selectedRequestType, setSelectedRequestType] = useState<SellerProfileRequestType>('Seller Credit Addition');
+  const [isRequestTypeDropdownOpen, setIsRequestTypeDropdownOpen] = useState<boolean>(false);
+  const requestTypeDropdownRef = useRef<HTMLDivElement>(null);
+
   const [selectedQuoteCredits, setSelectedQuoteCredits] = useState<number>(0);
   const [requestedQuoteCredits, setRequestedQuoteCredits] = useState<number>(0);
-  // The initiator is the signed-in user. The name comes from the session, never from a list.
-  const quoteCreditInitiator = authClient.getSessionUser()?.name ?? '';
+  const [quoteCreditInitiator, setQuoteCreditInitiator] = useState<string>(() => {
+    const name = authClient.getSessionUser()?.name;
+    return name && name.toLowerCase() !== 'category manager' ? name : 'Govardhan';
+  });
   const [quoteCreditApprover, setQuoteCreditApprover] = useState<string>('');
+
+  useEffect(() => {
+    const name = authClient.getSessionUser()?.name;
+    if (name && name.toLowerCase() !== 'category manager' && !quoteCreditInitiator) {
+      setQuoteCreditInitiator(name);
+    }
+  }, [quoteCreditInitiator]);
   const [quoteCreditsReason, setQuoteCreditsReason] = useState<string>('');
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
 
+  // Discount Workflow state
+  const [discountStep, setDiscountStep] = useState<1 | 2>(1);
+  const [selectedDiscountMode, setSelectedDiscountMode] = useState<string>('Connect Model');
+  const [selectedBillingDuration, setSelectedBillingDuration] = useState<string>('12 Months');
+  const [discountPercentage, setDiscountPercentage] = useState<number>(0);
+  const [pricingConfig, setPricingConfig] = useState<SubscriptionPricingResponse | null>(null);
+
+  useEffect(() => {
+    let isMounted = true;
+    void fetchSubscriptionPricing().then((config) => {
+      if (isMounted && config) {
+        setPricingConfig(config);
+      }
+    });
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  const discountPlanId = useMemo(() => {
+    if (selectedDiscountMode === 'Select Model' || selectedDiscountMode === 'select') return 'select';
+    return 'connect';
+  }, [selectedDiscountMode]);
+
+  const discountDurationId = '12_months';
+
+  const originalDiscountPlanPrice = useMemo(() => {
+    return getStandardDiscountPlanPrice(pricingConfig, discountPlanId, discountDurationId);
+  }, [pricingConfig, discountPlanId]);
+
+  const discountBreakdown = useMemo(() => {
+    return calculateDiscountBreakdown(originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate ?? 0.18);
+  }, [originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate]);
+
+  // Trial Period Workflow state
+  const [trialPeriodStep, setTrialPeriodStep] = useState<1 | 2>(1);
+  const [selectedTrialMode, setSelectedTrialMode] = useState<string>('Connect Model');
+  const [trialStartDate, setTrialStartDate] = useState<string>('');
+  const [trialEndDate, setTrialEndDate] = useState<string>('');
+  const [trialDays, setTrialDays] = useState<number>(0);
+  const [trialDateError, setTrialDateError] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (trialStartDate && trialEndDate) {
+      const days = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+      if (days < 0) {
+        setTrialDateError('End date cannot be earlier than start date.');
+        setTrialDays(0);
+      } else if (days === 0) {
+        setTrialDateError('Trial period must be at least 1 day.');
+        setTrialDays(0);
+      } else if (days > 365) {
+        setTrialDateError('Trial extension cannot exceed 365 days.');
+        setTrialDays(days);
+      } else {
+        setTrialDateError(null);
+        setTrialDays(days);
+      }
+    } else {
+      setTrialDateError(null);
+    }
+  }, [trialStartDate, trialEndDate]);
+
+  const handleTrialDateChange = (start: string, end: string) => {
+    setTrialStartDate(start);
+    setTrialEndDate(end);
+    if (!start || !end) {
+      setTrialDateError(null);
+      setTrialDays(0);
+      return;
+    }
+    const days = calculateTrialDaysFromDates(start, end);
+    if (days <= 0) {
+      setTrialDateError(trialPeriodStrings.validationEndBeforeStart);
+      setTrialDays(0);
+    } else {
+      setTrialDateError(null);
+      setTrialDays(days);
+    }
+  };
+
+  const handleTrialStartDateChange = (val: string) => {
+    setTrialStartDate(val);
+    handleTrialDateChange(val, trialEndDate);
+  };
+
+  const handleTrialEndDateChange = (val: string) => {
+    setTrialEndDate(val);
+    handleTrialDateChange(trialStartDate, val);
+  };
+
+  // Offline Payment Workflow state
+  const [offlinePaymentDate, setOfflinePaymentDate] = useState<string>('');
+  const [offlinePaymentType, setOfflinePaymentType] = useState<OfflinePaymentType>('NEFT / RTGS');
+  const [offlineTransactionId, setOfflineTransactionId] = useState<string>('');
+  const [offlinePaymentAmount, setOfflinePaymentAmount] = useState<number>(0);
+  const [offlineSellerSourceMode, setOfflineSellerSourceMode] = useState<string>('Connect Model');
+  const [offlineRemarks, setOfflineRemarks] = useState<string>('');
+  const [offlineProofFile, setOfflineProofFile] = useState<File | null>(null);
+  const [offlineProofFileName, setOfflineProofFileName] = useState<string>('');
+  const [offlineProofFileDataUrl, setOfflineProofFileDataUrl] = useState<string>('');
+  const [offlineProofFileSize, setOfflineProofFileSize] = useState<number>(0);
+  const [offlineProofFileType, setOfflineProofFileType] = useState<string>('');
+  const [offlineProofPreviewUrl, setOfflineProofPreviewUrl] = useState<string | null>(null);
+  const offlineFileInputRef = useRef<HTMLInputElement>(null);
+  const [offlineInitiatorName, setOfflineInitiatorName] = useState<string>('');
+  const [offlineApproverName, setOfflineApproverName] = useState<string>('Srinu Sir');
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (requestTypeDropdownRef.current && !requestTypeDropdownRef.current.contains(e.target as Node)) {
+        setIsRequestTypeDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const creditApprovalStrings = UI_STRINGS.buyerDirectory.dossier.creditApproval;
+  const discountStrings = creditApprovalStrings.discountWorkflow;
+  const trialPeriodStrings = creditApprovalStrings.trialPeriodWorkflow;
+  const offlinePaymentStrings = creditApprovalStrings.offlinePaymentWorkflow;
+
   // Active Communications Sub-Tab
-  const [commSubTab, setCommSubTab] = useState<'email' | 'sms' | 'whatsapp' | 'call'>('email');
+  const [commSubTab, setCommSubTab] = useState<'all' | 'email' | 'sms' | 'whatsapp' | 'call'>('all');
 
   // Toast feedback
   const [toast, setToast] = useState<{ message: string; type: 'success' | 'error' } | null>(null);
@@ -179,11 +424,34 @@ export default function SupplierDossierDrawer({
   const [isCategoryModalOpen, setIsCategoryModalOpen] = useState<boolean>(false);
   const [editingCategories, setEditingCategories] = useState<string[]>([]);
   const [newCategoryInput, setNewCategoryInput] = useState<string>('');
+  const [showCategorySuggestions, setShowCategorySuggestions] = useState<boolean>(false);
   const [isSavingCategories, setIsSavingCategories] = useState<boolean>(false);
+  const categoryDropdownRef = useRef<HTMLDivElement>(null);
+
+  const allAvailableMinorCategories = useMemo(() => {
+    return getAllUniqueMinorCategories();
+  }, []);
+
+  const filteredCategorySuggestions = useMemo(() => {
+    const q = newCategoryInput.trim().toLowerCase();
+    if (q.length < 3) return [];
+    return allAvailableMinorCategories.filter((cat) => cat.toLowerCase().includes(q));
+  }, [newCategoryInput, allAvailableMinorCategories]);
+
+  useEffect(() => {
+    const handleCategoryClickOutside = (e: MouseEvent) => {
+      if (categoryDropdownRef.current && !categoryDropdownRef.current.contains(e.target as Node)) {
+        setShowCategorySuggestions(false);
+      }
+    };
+    document.addEventListener('mousedown', handleCategoryClickOutside);
+    return () => document.removeEventListener('mousedown', handleCategoryClickOutside);
+  }, []);
 
   const openCategoryModal = () => {
     setEditingCategories([...supportedCategories]);
     setNewCategoryInput('');
+    setShowCategorySuggestions(false);
     setIsCategoryModalOpen(true);
   };
 
@@ -193,19 +461,27 @@ export default function SupplierDossierDrawer({
     );
   };
 
-  const handleAddNewCategory = (e: React.FormEvent) => {
-    e.preventDefault();
-    const trimmed = newCategoryInput.trim();
-    if (!trimmed) return;
-    if (!editingCategories.includes(trimmed)) {
-      setEditingCategories((prev) => [...prev, trimmed]);
+  const handleAddCategoryTag = (cat: string) => {
+    const clean = cat.trim();
+    if (clean && !editingCategories.includes(clean)) {
+      setEditingCategories((prev) => [...prev, clean]);
     }
     setNewCategoryInput('');
+    setShowCategorySuggestions(false);
+  };
+
+  const handleAddNewCategory = (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+      handleAddCategoryTag(filteredCategorySuggestions[0]);
+    } else if (newCategoryInput.trim()) {
+      handleAddCategoryTag(newCategoryInput.trim());
+    }
   };
 
   const handleSaveCategories = async () => {
     if (editingCategories.length === 0) {
-      showToast('Please select at least one major category.', 'error');
+      showToast('Please select at least one division.', 'error');
       return;
     }
     setIsSavingCategories(true);
@@ -250,11 +526,14 @@ export default function SupplierDossierDrawer({
       if (e.key === 'Escape') {
         if (selectedQuoteForModal) setSelectedQuoteForModal(null);
         if (isCategoryModalOpen) setIsCategoryModalOpen(false);
+        if (isAddQuoteCreditsModalOpen) setIsAddQuoteCreditsModalOpen(false);
+        if (isAddCreditModalOpen) setIsAddCreditModalOpen(false);
+        if (isRequestTypeDropdownOpen) setIsRequestTypeDropdownOpen(false);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [selectedQuoteForModal, isCategoryModalOpen]);
+  }, [selectedQuoteForModal, isCategoryModalOpen, isAddQuoteCreditsModalOpen, isAddCreditModalOpen, isRequestTypeDropdownOpen]);
 
   const supplierQuotesList = useMemo(() => {
     const list: Array<{ rfq: RFQItem; quote?: any }> = [];
@@ -311,20 +590,68 @@ export default function SupplierDossierDrawer({
 
   const handleAddQuoteCreditsSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
-    if (amount <= 0) {
-      showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
-      return;
+    if (isSubmittingQuoteCredits) return;
+
+    const isDiscount = selectedRequestType === 'Discount' || selectedRequestType === 'Discounts';
+    const isTrial = selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods';
+    const isDeletion = selectedRequestType === 'Seller Credit Deletion';
+
+    const currentBalance = creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 0;
+
+    if (isDiscount) {
+      if (isNaN(discountPercentage) || discountPercentage < 0 || discountPercentage > 100) {
+        showToast(discountStrings.validationInvalidDiscount, 'error');
+        return;
+      }
+    } else if (isTrial) {
+      if (trialDays <= 0 || trialDays > 365) {
+        showToast('Please enter a valid trial extension period (1-365 days).', 'error');
+        return;
+      }
+      if (trialStartDate && trialEndDate) {
+        const days = calculateTrialDaysFromDates(trialStartDate, trialEndDate);
+        if (days <= 0 || days > 365) {
+          showToast(trialDateError || 'End date must be after start date and not exceed 365 days.', 'error');
+          return;
+        }
+      }
+    } else if (isDeletion) {
+      const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
+      if (amount <= 0) {
+        showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
+        return;
+      }
+      if (amount > currentBalance) {
+        showToast(`Cannot delete ${amount} credits: ${displayName} only has ${currentBalance} credits available.`, 'error');
+        return;
+      }
+    } else {
+      const amount = requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits;
+      if (amount <= 0) {
+        showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.invalidCreditsError, 'error');
+        return;
+      }
     }
+
     if (!quoteCreditApprover.trim() || !quoteCreditInitiator) {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverRequired, 'error');
       return;
     }
+
     setIsSubmittingQuoteCredits(true);
+    const amountVal = isDiscount ? discountPercentage : (isTrial ? trialDays : (requestedQuoteCredits > 0 ? requestedQuoteCredits : selectedQuoteCredits));
+
     const requestFingerprint = JSON.stringify([
       seller.id,
       seller.name,
-      amount,
+      selectedRequestType,
+      amountVal,
+      selectedDiscountMode,
+      selectedBillingDuration,
+      selectedTrialMode,
+      trialStartDate,
+      trialEndDate,
+      trialDays,
       quoteCreditsReason,
       quoteCreditApprover,
       quoteCreditInitiator,
@@ -334,28 +661,62 @@ export default function SupplierDossierDrawer({
       creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
     }
     try {
-      const res = await requestSellerQuoteCreditApproval(seller.id, {
-        amount,
+      const payload: RequestSellerQuoteCreditApprovalPayload = {
+        amount: amountVal,
         reason: quoteCreditsReason.trim(),
         approverName: quoteCreditApprover.trim(),
         initiatorName: quoteCreditInitiator,
         idempotencyKey: creditApprovalRequestKey.current,
-      });
+        ...(selectedRequestType !== 'Seller Credit Addition' ? { requestType: selectedRequestType } : {}),
+        discountPercentage: isDiscount ? discountPercentage : undefined,
+        durationDays: isTrial ? trialDays : undefined,
+        startDate: isTrial ? trialStartDate : undefined,
+        endDate: isTrial ? trialEndDate : undefined,
+        selectedMode: isDiscount ? selectedDiscountMode : (isTrial ? selectedTrialMode : undefined),
+        billingDuration: isDiscount ? selectedBillingDuration : undefined,
+        originalPrice: isDiscount ? discountBreakdown.originalPlanPrice : undefined,
+        discountAmount: isDiscount ? discountBreakdown.discountAmount : undefined,
+        remainingAmount: isDiscount ? discountBreakdown.remainingAmount : undefined,
+        gstAmount: isDiscount ? discountBreakdown.gstAmount : undefined,
+        finalPayableAmount: isDiscount ? discountBreakdown.finalPayableAmount : undefined,
+      };
+
+      const res = await requestSellerQuoteCreditApproval(seller.id, payload);
       if (res.success) {
         creditApprovalRequestKey.current = '';
         creditApprovalRequestFingerprint.current = '';
         showToast(
           res.message ||
-            formatString(
-              UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess ||
-                'Quote credit request submitted for approval to {approverName}. Status: Pending Approval.',
-              { approverName: quoteCreditApprover }
-            ),
+            (isDiscount
+              ? formatString(discountStrings.toastSuccess, {
+                  approverName: quoteCreditApprover,
+                })
+              : isTrial
+              ? formatString(trialPeriodStrings.toastSuccess, {
+                  approverName: quoteCreditApprover,
+                })
+              : isDeletion
+              ? formatString('Credit deduction request submitted for approval to {approverName}. Status: Pending Approval.', {
+                  approverName: quoteCreditApprover,
+                })
+              : formatString(
+                  UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastSuccess ||
+                    'Quote credit request submitted for approval to {approverName}. Status: Pending Approval.',
+                  { approverName: quoteCreditApprover }
+                )),
           'success'
         );
         setIsAddQuoteCreditsModalOpen(false);
+        setIsAddCreditModalOpen(false);
         setRequestedQuoteCredits(0);
         setSelectedQuoteCredits(0);
+        setDiscountPercentage(0);
+        setDiscountStep(1);
+        setTrialPeriodStep(1);
+        setTrialStartDate('');
+        setTrialEndDate('');
+        setTrialDays(0);
+        setTrialDateError(null);
         setQuoteCreditsReason('');
         loadCreditHistory();
       } else {
@@ -363,6 +724,161 @@ export default function SupplierDossierDrawer({
       }
     } catch {
       showToast(UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.toastError, 'error');
+    } finally {
+      setIsSubmittingQuoteCredits(false);
+    }
+  };
+
+  const handleOfflineProofFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const lowerName = file.name.toLowerCase();
+    const isValidFormat =
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedExtensions.some((ext) => lowerName.endsWith(ext)) ||
+      OFFLINE_PAYMENT_UPLOAD_SCHEMA.allowedMimeTypes.includes(file.type as 'image/jpeg' | 'image/png' | 'image/jpg');
+    if (!isValidFormat) {
+      showToast(offlinePaymentStrings.validationProofFormat, 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    if (file.size > OFFLINE_PAYMENT_UPLOAD_SCHEMA.maxFileSize) {
+      showToast(offlinePaymentStrings.validationProofSize, 'error');
+      if (offlineFileInputRef.current) offlineFileInputRef.current.value = '';
+      return;
+    }
+
+    setOfflineProofFile(file);
+    setOfflineProofFileName(file.name);
+    setOfflineProofFileSize(file.size);
+    setOfflineProofFileType(file.type || 'image/jpeg');
+    setOfflineProofPreviewUrl('data:image/png;base64,placeholder');
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const result = String(reader.result || '');
+      setOfflineProofPreviewUrl(result);
+      setOfflineProofFileDataUrl(result);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleRemoveOfflineProof = () => {
+    setOfflineProofFile(null);
+    setOfflineProofPreviewUrl(null);
+    setOfflineProofFileName('');
+    setOfflineProofFileDataUrl('');
+    setOfflineProofFileSize(0);
+    setOfflineProofFileType('');
+    if (offlineFileInputRef.current) {
+      offlineFileInputRef.current.value = '';
+    }
+  };
+
+  const handleConfirmOfflinePayment = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (isSubmittingQuoteCredits) return;
+    if (!offlinePaymentDate) {
+      showToast(offlinePaymentStrings.validationPaymentDateRequired, 'error');
+      return;
+    }
+    if (!offlinePaymentType) {
+      showToast(offlinePaymentStrings.validationPaymentTypeRequired, 'error');
+      return;
+    }
+    if (offlinePaymentType !== 'Cash' && !offlineTransactionId.trim()) {
+      showToast(
+        formatString(offlinePaymentStrings.validationTransactionIdRequired, {
+          paymentType: offlinePaymentType,
+        }),
+        'error'
+      );
+      return;
+    }
+    if (offlinePaymentAmount <= 0) {
+      showToast(offlinePaymentStrings.validationAmountRequired, 'error');
+      return;
+    }
+    const effectiveInitiator = offlineInitiatorName.trim();
+    if (!effectiveInitiator) {
+      showToast(offlinePaymentStrings.validationInitiatorRequired, 'error');
+      return;
+    }
+    const effectiveApprover = offlineApproverName.trim();
+    if (!effectiveApprover) {
+      showToast(offlinePaymentStrings.validationApproverRequired, 'error');
+      return;
+    }
+
+    setIsSubmittingQuoteCredits(true);
+    const requestFingerprint = JSON.stringify([
+      seller.id,
+      seller.name,
+      'Offline Payments',
+      offlinePaymentAmount,
+      offlinePaymentDate,
+      offlinePaymentType,
+      offlineTransactionId,
+      offlineSellerSourceMode,
+      offlineProofFileName,
+      offlineRemarks,
+      effectiveApprover,
+      effectiveInitiator,
+    ]);
+    if (creditApprovalRequestFingerprint.current !== requestFingerprint || !creditApprovalRequestKey.current) {
+      creditApprovalRequestFingerprint.current = requestFingerprint;
+      creditApprovalRequestKey.current = createCreditApprovalIdempotencyKey();
+    }
+    try {
+      const payload: RequestSellerQuoteCreditApprovalPayload = {
+        requestType: 'Offline Payments',
+        amount: offlinePaymentAmount,
+        paymentAmount: offlinePaymentAmount,
+        paymentDate: offlinePaymentDate,
+        paymentType: offlinePaymentType,
+        transactionId: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        paymentReference: offlinePaymentType !== 'Cash' ? offlineTransactionId.trim() : undefined,
+        sellerSourceMode: offlineSellerSourceMode,
+        selectedMode: offlineSellerSourceMode,
+        proofFileName: offlineProofFileName || undefined,
+        proofFileUrl: offlineProofFileDataUrl || undefined,
+        proofFileType: offlineProofFileType || undefined,
+        proofFileSize: offlineProofFileSize || undefined,
+        reason: offlineRemarks.trim(),
+        approverName: effectiveApprover,
+        initiatorName: effectiveInitiator,
+        idempotencyKey: creditApprovalRequestKey.current,
+      };
+
+      const res = await requestSellerQuoteCreditApproval(seller.id, payload);
+      if (res.success) {
+        creditApprovalRequestKey.current = '';
+        creditApprovalRequestFingerprint.current = '';
+        showToast(
+          res.message ||
+            formatString(offlinePaymentStrings.toastSuccess, {
+              approverName: effectiveApprover,
+            }),
+          'success'
+        );
+        setIsAddCreditModalOpen(false);
+        setIsAddQuoteCreditsModalOpen(false);
+        setOfflinePaymentAmount(0);
+        setOfflineTransactionId('');
+        handleRemoveOfflineProof();
+        setOfflineRemarks('');
+      } else {
+        showToast(
+          res.error || offlinePaymentStrings.toastError,
+          'error'
+        );
+      }
+    } catch {
+      showToast(
+        offlinePaymentStrings.toastError,
+        'error'
+      );
     } finally {
       setIsSubmittingQuoteCredits(false);
     }
@@ -488,6 +1004,38 @@ export default function SupplierDossierDrawer({
   const [composeFollowupAssigneeName, setComposeFollowupAssigneeName] = useState<string>('');
   const [assignees, setAssignees] = useState<InternalTeamMember[]>([]);
   const [assigneesError, setAssigneesError] = useState<string | null>(null);
+  const internalTaskUserOptions = useMemo(() => {
+    const list: string[] = [...INTERNAL_TASK_USERS];
+    for (const a of assignees) {
+      if (a?.name && !list.some((name) => name.toLowerCase() === a.name.toLowerCase())) {
+        list.push(a.name);
+      }
+    }
+    return list;
+  }, [assignees]);
+
+  const sellerInitiatorSelectOptions = useMemo(() => {
+    const primaryOrder = ['Govardhan', 'Chandan', 'Krishna Chaitanya', 'Sudheer'];
+    const list: string[] = [...primaryOrder];
+    const extras = [
+      ...internalTaskUserOptions,
+      'Session Initiator',
+      'Category Manager',
+    ];
+    if (quoteCreditInitiator) extras.push(quoteCreditInitiator);
+    if (offlineInitiatorName) extras.push(offlineInitiatorName);
+
+    for (const item of extras) {
+      if (!list.some((u) => u.toLowerCase() === item.toLowerCase())) {
+        list.push(item);
+      }
+    }
+    return list;
+  }, [internalTaskUserOptions, quoteCreditInitiator, offlineInitiatorName]);
+
+  const sellerApproverSelectOptions = useMemo(() => {
+    return ['Srinu Sir', 'Rao Sir', 'Sudheer Sir'];
+  }, []);
   const [majorCategoryOptions, setMajorCategoryOptions] = useState<string[]>(() => getMajorCategories());
   const [majorCategoryError, setMajorCategoryError] = useState<string | null>(null);
   const [composeFollowupNotes, setComposeFollowupNotes] = useState<string>('');
@@ -520,6 +1068,7 @@ export default function SupplierDossierDrawer({
       .then((result) => {
         if (!isSubscribed) return;
         if (result.success && Array.isArray(result.data) && result.data.length > 0) {
+          setCategoryTaxonomy(result.data);
           setMajorCategoryOptions(result.data.map((c) => c.majorCategory).filter(Boolean));
           setMajorCategoryError(null);
         } else {
@@ -801,7 +1350,6 @@ export default function SupplierDossierDrawer({
 
   const displayName = seller.companyName || seller.name || EMPTY_VALUE;
   const isNetwork = seller.source === 'procucev_network' || String(seller.id).startsWith('v-net-') || Boolean((seller as any).isNetwork);
-  const ratingVal = seller.rating ?? null;
   const scoreVal = seller.score360 ?? seller.score ?? null;
   const regDate = seller.createdAt || seller.created_at || null;
 
@@ -851,19 +1399,70 @@ export default function SupplierDossierDrawer({
                   <Sparkles className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
                   {scoreVal === null ? `${strings.score360Label}: ${EMPTY_VALUE}` : `${strings.score360Label}: ${scoreVal}/100`}
                 </span>
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-950/40 dark:text-amber-300 dark:border-amber-800">
-                  <Star className="w-3 h-3 fill-amber-500 text-amber-500" />
-                  {ratingVal === null ? `${strings.ratingLabel}: ${EMPTY_VALUE}` : `${strings.ratingLabel}: ★ ${ratingVal}`}
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setIsAddQuoteCreditsModalOpen(true)}
-                  className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
-                  title="Add Quote Credits (1-5)"
-                >
-                  <Plus className="w-3 h-3" />
-                  <span>{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.addCreditsBtn}</span>
-                </button>
+                <div className="relative inline-block text-left" ref={requestTypeDropdownRef}>
+                  <button
+                    type="button"
+                    onClick={() => setIsRequestTypeDropdownOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1 px-2.5 py-0.5 text-xs font-semibold text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-800 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/50 transition cursor-pointer"
+                    title={UI_STRINGS.buyerDirectory.dossier.requestTypeTitle}
+                    aria-label={UI_STRINGS.buyerDirectory.dossier.requestTypeTitle}
+                    aria-haspopup="true"
+                    aria-expanded={isRequestTypeDropdownOpen}
+                    data-testid="request-type-dropdown-btn"
+                  >
+                    <Plus className="w-3 h-3" />
+                    <span>{UI_STRINGS.buyerDirectory.dossier.requestTypeDropdown}</span>
+                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                  </button>
+
+                  {isRequestTypeDropdownOpen && (
+                    <div
+                      role="menu"
+                      aria-orientation="vertical"
+                      className="absolute left-0 mt-1 w-52 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-xl z-50 py-1 text-xs divide-y divide-slate-100 dark:divide-slate-800"
+                    >
+                      {SELLER_PROFILE_REQUEST_TYPES.map((type) => (
+                        <button
+                          key={type}
+                          type="button"
+                          role="menuitem"
+                          onClick={() => {
+                            setSelectedRequestType(type);
+                            setIsRequestTypeDropdownOpen(false);
+                            if (type === 'Discount' || (type as string) === 'Discounts') {
+                              setDiscountStep(1);
+                              setSelectedDiscountMode('Connect Model');
+                              setSelectedBillingDuration('12 Months');
+                              setDiscountPercentage(0);
+                            } else if (type === 'Trial Period' || (type as string) === 'Trial Periods') {
+                              setTrialPeriodStep(1);
+                              setSelectedTrialMode('Connect Model');
+                              setTrialStartDate('');
+                              setTrialEndDate('');
+                              setTrialDays(0);
+                              setTrialDateError(null);
+                              setQuoteCreditsReason('');
+                            } else if (type === 'Offline Payments') {
+                              setOfflinePaymentDate('');
+                              setOfflinePaymentType('NEFT / RTGS');
+                              setOfflineTransactionId('');
+                              setOfflinePaymentAmount(0);
+                              setOfflineSellerSourceMode('Connect Model');
+                              handleRemoveOfflineProof();
+                              setOfflineRemarks('');
+                              setOfflineInitiatorName(quoteCreditInitiator);
+                              setOfflineApproverName(APPROVER_CONFIG[0]?.name || 'Srinu Sir');
+                            }
+                            setIsAddQuoteCreditsModalOpen(true);
+                          }}
+                          className="w-full text-left px-3.5 py-2 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-800 hover:text-emerald-600 dark:hover:text-emerald-400 font-medium transition cursor-pointer flex items-center justify-between"
+                        >
+                          <span>{type}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
                 {formatString(strings.registered, { date: regDate ? formatIndianDateTime(regDate) : EMPTY_VALUE })}
@@ -880,83 +1479,99 @@ export default function SupplierDossierDrawer({
           </button>
         </div>
 
-        {/* 5 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS */}
-        <div className="flex items-center gap-2 mt-6 border-b border-slate-200 dark:border-slate-700">
+        {/* 8 NAVIGATION TABS: PROFILE, QUOTES, CREDIT, COMMUNICATIONS, PAYMENTS, DOCUMENTS, BUYER UPLOADS, ACTIVE RFQS */}
+        <div className="flex items-center gap-1 mt-6 border-b border-slate-200 dark:border-slate-700 overflow-x-auto scrollbar-thin">
           <button
             type="button"
             onClick={() => setDossierTab('profile')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'profile'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Building2 className="w-4 h-4" />
-            {strings.profileTab}
+            <span>{strings.profileTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('quotes')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'quotes'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileCheck className="w-4 h-4" />
-            {strings.quotesTab} ({supplierQuotesList.length})
+            <span>{strings.quotesTab} ({supplierQuotesList.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('credit')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'credit'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <CreditCard className="w-4 h-4" />
-            {strings.creditTab}
+            <span>{strings.creditTab}</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('communications')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'communications'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <MessageSquare className="w-4 h-4" />
-            {strings.communicationsTab} ({communications.length})
+            <span>{strings.communicationsTab} ({communications.length})</span>
           </button>
 
           <button
             type="button"
             onClick={() => setDossierTab('payments')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'payments'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <Receipt className="w-4 h-4" />
-            {strings.paymentsTab} ({payments.length})
+            <span>{strings.paymentsTab} ({payments.length})</span>
           </button>
           <button
             type="button"
             onClick={() => setDossierTab('documents')}
-            className={`flex items-center gap-2 pb-3 px-1 text-sm font-semibold border-b-2 transition-colors ${
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
               dossierTab === 'documents'
                 ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
                 : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            {strings.documentsTab || 'Documents'} ({docCount})
+            <span>{strings.documentsTab || 'Documents'} ({docCount})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDossierTab('buyer-uploads')}
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+              dossierTab === 'buyer-uploads'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <span>{strings.buyerUploadsTab} ({buyerUploads.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setDossierTab('active-rfqs')}
+            className={`px-3 py-2.5 text-xs sm:text-sm font-semibold border-b-2 whitespace-nowrap transition-colors shrink-0 cursor-pointer ${
+              dossierTab === 'active-rfqs'
+                ? 'border-emerald-600 text-emerald-600 dark:text-emerald-400'
+                : 'border-transparent text-slate-500 hover:text-slate-700 dark:hover:text-slate-300'
+            }`}
+          >
+            <span>{strings.activeRfqsTab} ({activeRfqs.length})</span>
           </button>
         </div>
       </div>
@@ -1017,7 +1632,7 @@ export default function SupplierDossierDrawer({
                   <div>
                     <span className="text-slate-400">GSTIN:</span>{' '}
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {seller.gstin || seller.gstNumber || EMPTY_VALUE}
+                      {seller.gstin || seller.gstNumber || seller.gst || EMPTY_VALUE}
                     </span>
                   </div>
                   <div>
@@ -1063,7 +1678,7 @@ export default function SupplierDossierDrawer({
                     key={cat}
                     className="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 text-emerald-700 border border-emerald-200 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-800"
                   >
-                    Major: {cat}
+                    {cat}
                   </span>
                 ))}
               </div>
@@ -1374,8 +1989,20 @@ export default function SupplierDossierDrawer({
         {dossierTab === 'communications' && (
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-              {/* 4 SUB-TABS */}
+              {/* SUB-TABS */}
               <div className="inline-flex p-1 bg-slate-100 dark:bg-slate-800 rounded-lg text-xs font-semibold">
+                <button
+                  type="button"
+                  onClick={() => setCommSubTab('all')}
+                  className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md transition-colors ${
+                    commSubTab === 'all'
+                      ? 'bg-white dark:bg-slate-700 text-emerald-600 dark:text-emerald-400 shadow-sm'
+                      : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                  }`}
+                >
+                  <Layers className="w-3.5 h-3.5" />
+                  {strings.subTabs.all || 'All'}
+                </button>
                 <button
                   type="button"
                   onClick={() => setCommSubTab('email')}
@@ -1447,7 +2074,9 @@ export default function SupplierDossierDrawer({
                         ? 'SMS'
                         : commSubTab === 'whatsapp'
                         ? 'WHATSAPP'
-                        : 'CALL'
+                        : commSubTab === 'call'
+                        ? 'CALL'
+                        : 'EMAIL'
                     );
                     setIsComposeOpen(true);
                   }}
@@ -1472,7 +2101,7 @@ export default function SupplierDossierDrawer({
                 </div>
               ) : filteredCommunications.length === 0 ? (
                 <div className="p-8 text-center text-slate-400 text-xs border border-dashed border-slate-200 dark:border-slate-800 rounded-xl">
-                  No {commSubTab.toUpperCase()} communication records found.
+                  No {commSubTab === 'all' ? '' : commSubTab.toUpperCase() + ' '}communication records found.
                 </div>
               ) : (
                 filteredCommunications.map((comm) => (
@@ -1730,6 +2359,250 @@ export default function SupplierDossierDrawer({
             </div>
           </div>
         )}
+
+        {/* =================================================================== */}
+        {/* TAB 7: BUYER UPLOADS TAB                                            */}
+        {/* =================================================================== */}
+        {dossierTab === 'buyer-uploads' && (
+          <div className="space-y-4">
+            {/* Header / Search Controls */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={buyerUploadSearch}
+                  onChange={(e) => setBuyerUploadSearch(e.target.value)}
+                  placeholder={strings.buyerUploads.searchPlaceholder}
+                  className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadBuyerUploads()}
+                title={strings.buyerUploads.retry}
+                aria-label={strings.buyerUploads.retry}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer self-end sm:self-auto"
+              >
+                <RotateCcw className={`w-4 h-4 ${loadingBuyerUploads ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {/* Content states */}
+            {loadingBuyerUploads ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 text-emerald-600" />
+                <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+              </div>
+            ) : buyerUploadsError ? (
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-xs">{buyerUploadsError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadBuyerUploads()}
+                  className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                >
+                  {strings.buyerUploads.retry}
+                </button>
+              </div>
+            ) : filteredBuyerUploads.length === 0 ? (
+              <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                <Users className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                  {strings.buyerUploads.emptyMessage}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">{strings.buyerUploads.subtitle}</p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colBuyerName}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colCompanyName}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colContactPerson}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colEmail}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colPhone}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colUploadDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.buyerUploads.colStatus}</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">{strings.buyerUploads.colActions}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredBuyerUploads.map((buyerItem) => (
+                        <tr key={buyerItem.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                          <td className="py-3 px-4 font-semibold text-slate-900 dark:text-slate-100 whitespace-nowrap">
+                            {buyerItem.name || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {buyerItem.companyName || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.contactPerson || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                            {buyerItem.email || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.phone || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {buyerItem.uploadDate ? formatIndianDateTime(buyerItem.uploadDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold ${
+                              (buyerItem.status || '').toUpperCase().includes('ACTIVE') || (buyerItem.status || '').toUpperCase().includes('VERIFIED')
+                                ? 'bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300'
+                            }`}>
+                              {buyerItem.status || EMPTY_VALUE}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedBuyerForModal(buyerItem)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              {strings.buyerUploads.viewDetails}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* =================================================================== */}
+        {/* TAB 8: ACTIVE RFQS TAB                                              */}
+        {/* =================================================================== */}
+        {dossierTab === 'active-rfqs' && (
+          <div className="space-y-4">
+            {/* Header / Search Controls */}
+            <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
+              <div className="relative flex-1">
+                <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                <input
+                  type="text"
+                  value={activeRfqSearch}
+                  onChange={(e) => setActiveRfqSearch(e.target.value)}
+                  placeholder={strings.activeRfqs.searchPlaceholder}
+                  className="w-full pl-9 pr-4 py-2 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => void loadActiveRfqs()}
+                title={strings.activeRfqs.retry}
+                aria-label={strings.activeRfqs.retry}
+                className="p-2 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors cursor-pointer self-end sm:self-auto"
+              >
+                <RotateCcw className={`w-4 h-4 ${loadingActiveRfqs ? 'animate-spin' : ''}`} />
+              </button>
+            </div>
+
+            {/* Content states */}
+            {loadingActiveRfqs ? (
+              <div className="flex flex-col items-center justify-center py-16 text-slate-400">
+                <Loader2 className="w-8 h-8 animate-spin mb-2 text-emerald-600" />
+                <p className="text-xs">{UI_STRINGS.dataLoad.loading}</p>
+              </div>
+            ) : activeRfqsError ? (
+              <div className="p-4 rounded-xl border border-rose-200 dark:border-rose-900 bg-rose-50/50 dark:bg-rose-950/20 text-rose-700 dark:text-rose-300 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+                  <span className="text-xs">{activeRfqsError}</span>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void loadActiveRfqs()}
+                  className="px-3 py-1 text-xs font-semibold rounded bg-rose-600 text-white hover:bg-rose-700 cursor-pointer"
+                >
+                  {strings.activeRfqs.retry}
+                </button>
+              </div>
+            ) : filteredActiveRfqs.length === 0 ? (
+              <div className="text-center py-16 border border-dashed border-slate-200 dark:border-slate-800 rounded-xl bg-slate-50/50 dark:bg-slate-900/40">
+                <Layers className="w-10 h-10 mx-auto text-slate-400 mb-2" />
+                <p className="text-sm font-medium text-slate-600 dark:text-slate-300">
+                  {strings.activeRfqs.emptyMessage}
+                </p>
+                <p className="text-xs text-slate-400 mt-1">{strings.activeRfqs.subtitle}</p>
+              </div>
+            ) : (
+              <div className="border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden bg-white dark:bg-slate-900 shadow-sm">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs text-slate-600 dark:text-slate-300">
+                    <thead className="bg-slate-50 dark:bg-slate-800/80 text-[11px] uppercase font-bold text-slate-500 dark:text-slate-400 border-b border-slate-200 dark:border-slate-800">
+                      <tr>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colRfqId}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colRfqTitle}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colCategory}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colBuyerCompany}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colLocation}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colPublishedDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colClosingDate}</th>
+                        <th className="py-3 px-4 whitespace-nowrap">{strings.activeRfqs.colStatus}</th>
+                        <th className="py-3 px-4 text-right whitespace-nowrap">{strings.activeRfqs.colActions}</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {filteredActiveRfqs.map((rfq) => (
+                        <tr key={rfq.id} className="hover:bg-slate-50/70 dark:hover:bg-slate-800/50 transition-colors">
+                          <td className="py-3 px-4 font-mono font-semibold text-emerald-600 dark:text-emerald-400 whitespace-nowrap">
+                            {rfq.rfqNumber || rfq.id || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-900 dark:text-slate-100 max-w-xs truncate whitespace-nowrap">
+                            {rfq.title || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                            {rfq.procurementCategory || rfq.category || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 font-medium text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                            {rfq.buyerCompanyName || rfq.buyerCompany || rfq.buyerName || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.location || EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.publishedDate ? formatIndianDateTime(rfq.publishedDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            {rfq.closingDate ? formatIndianDateTime(rfq.closingDate) : EMPTY_VALUE}
+                          </td>
+                          <td className="py-3 px-4 whitespace-nowrap">
+                            <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-100 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                              {rfq.status || EMPTY_VALUE}
+                            </span>
+                          </td>
+                          <td className="py-3 px-4 text-right whitespace-nowrap">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedActiveRfqForModal(rfq)}
+                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/30 transition-colors cursor-pointer"
+                            >
+                              <Eye className="w-3.5 h-3.5" />
+                              {strings.activeRfqs.viewDetails}
+                            </button>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* FOOTER */}
@@ -1753,78 +2626,182 @@ export default function SupplierDossierDrawer({
         <div
           role="dialog"
           aria-modal="true"
-          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm"
-          onClick={() => setIsCategoryModalOpen(false)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/50 backdrop-blur-sm animate-in fade-in duration-150"
+          onClick={(e) => {
+            e.stopPropagation();
+            if (e.target === e.currentTarget) setIsCategoryModalOpen(false);
+          }}
         >
           <div
-            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-5"
+            className="w-full max-w-lg bg-white dark:bg-slate-900 rounded-2xl shadow-2xl border border-slate-200 dark:border-slate-800 p-6 space-y-4"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
-                <Pencil className="w-4 h-4 text-emerald-600" />
-                {strings.procurementCategoriesMaster}
-              </h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  {strings.procurementCategoriesMaster || 'Procurement Categories Master'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Select, add, or remove procurement categories for {displayName}.
+                </p>
+              </div>
               <button
                 type="button"
+                aria-label="Close categories modal"
                 onClick={() => setIsCategoryModalOpen(false)}
-                className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
               >
-                <X className="w-5 h-5" />
+                <X size={18} />
               </button>
             </div>
 
-            {/* QUICK SELECTION CHECKBOXES */}
-            <div className="space-y-2">
-              <span className="text-xs font-semibold text-slate-600 dark:text-slate-300">
-                Select Major Procurement Categories:
-              </span>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 max-h-56 overflow-y-auto p-2 border border-slate-200 dark:border-slate-700 rounded-lg">
-                {majorCategoryError && majorCategoryOptions.length === 0 && (
-                  <p role="alert" className="col-span-full text-[11px] text-rose-600 dark:text-rose-400">{majorCategoryError}</p>
-                )}
-                {Array.from(new Set([...majorCategoryOptions, ...editingCategories])).map((cat) => {
-                  const isChecked = editingCategories.includes(cat);
-                  return (
-                    <label
-                      key={cat}
-                      className="flex items-center gap-2 p-1.5 rounded hover:bg-slate-50 dark:hover:bg-slate-800 text-xs cursor-pointer"
+            {majorCategoryError && (
+              <p className="text-xs text-rose-600 dark:text-rose-400 bg-rose-50 dark:bg-rose-950/40 p-2.5 rounded-lg border border-rose-200 dark:border-rose-900/50">
+                {majorCategoryError}
+              </p>
+            )}
+
+            {/* Minor Category Autocomplete Search (>= 3 chars) */}
+            <div className="space-y-2 relative" ref={categoryDropdownRef}>
+              <label htmlFor="seller-dossier-category-search-input" className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block">
+                {UI_STRINGS.vendorCategorySelect.categoryLabel}
+              </label>
+              <div className="flex items-center gap-2">
+                <div className="relative flex-1">
+                  <input
+                    id="seller-dossier-category-search-input"
+                    type="text"
+                    value={newCategoryInput}
+                    onChange={(e) => {
+                      setNewCategoryInput(e.target.value);
+                      setShowCategorySuggestions(true);
+                    }}
+                    onFocus={() => {
+                      if (newCategoryInput.trim().length >= 3) {
+                        setShowCategorySuggestions(true);
+                      }
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') {
+                        e.preventDefault();
+                        if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                          handleAddCategoryTag(filteredCategorySuggestions[0]);
+                        } else if (newCategoryInput.trim()) {
+                          handleAddCategoryTag(newCategoryInput.trim());
+                        }
+                      } else if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        setShowCategorySuggestions(false);
+                      }
+                    }}
+                    placeholder={UI_STRINGS.vendorCategorySelect.searchPlaceholder}
+                    className="w-full px-3 py-2 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white"
+                  />
+                  {newCategoryInput && (
+                    <button
+                      type="button"
+                      aria-label="Clear category input"
+                      onClick={() => {
+                        setNewCategoryInput('');
+                        setShowCategorySuggestions(false);
+                      }}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 cursor-pointer"
                     >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={() => handleToggleCategory(cat)}
-                        className="rounded border-slate-300 text-emerald-600 focus:ring-emerald-500"
-                      />
-                      <span className="text-slate-700 dark:text-slate-300 truncate">{cat}</span>
-                    </label>
-                  );
-                })}
+                      <X size={13} />
+                    </button>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (filteredCategorySuggestions.length > 0 && showCategorySuggestions) {
+                      handleAddCategoryTag(filteredCategorySuggestions[0]);
+                    } else if (newCategoryInput.trim()) {
+                      handleAddCategoryTag(newCategoryInput.trim());
+                    }
+                  }}
+                  className="px-3.5 py-2 text-xs font-semibold bg-emerald-600 hover:bg-emerald-700 text-white rounded-lg cursor-pointer shrink-0"
+                >
+                  {strings.addCustomCategory}
+                </button>
+              </div>
+
+              {newCategoryInput.trim().length > 0 && newCategoryInput.trim().length < 3 && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400 font-medium">
+                  {UI_STRINGS.vendorCategorySelect.minCharsHint}
+                </p>
+              )}
+
+              {showCategorySuggestions && newCategoryInput.trim().length >= 3 && (
+                <div
+                  role="listbox"
+                  aria-label={UI_STRINGS.vendorCategorySelect.matchingCategories}
+                  className="absolute z-30 left-0 right-0 mt-1 max-h-52 overflow-y-auto rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 shadow-xl divide-y divide-slate-100 dark:divide-gray-700/60"
+                >
+                  <div className="px-3 py-1.5 bg-slate-50 dark:bg-gray-900/80 text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400 flex items-center justify-between">
+                    <span>{UI_STRINGS.vendorCategorySelect.matchingCategories} ({filteredCategorySuggestions.length})</span>
+                    <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">{UI_STRINGS.vendorCategorySelect.masterCountBadge}</span>
+                  </div>
+                  {filteredCategorySuggestions.length > 0 ? (
+                    filteredCategorySuggestions.map((category) => (
+                      <button
+                        key={category}
+                        type="button"
+                        role="option"
+                        aria-selected={editingCategories.includes(category)}
+                        onClick={() => handleAddCategoryTag(category)}
+                        className="w-full text-left px-3 py-2 text-xs hover:bg-emerald-50 dark:hover:bg-emerald-950/60 flex items-center justify-between text-slate-700 dark:text-gray-200 transition-colors cursor-pointer"
+                      >
+                        <span className="font-medium text-slate-800 dark:text-slate-100">{category}</span>
+                        <span className="text-[10px] text-slate-400 italic">{findMajorForMinor(category)}</span>
+                      </button>
+                    ))
+                  ) : (
+                    <div className="p-3 text-center">
+                      <p className="text-xs text-slate-500 dark:text-gray-400 mb-1.5">{UI_STRINGS.vendorCategorySelect.noMatches}</p>
+                      <button
+                        type="button"
+                        onClick={() => handleAddCategoryTag(newCategoryInput.trim())}
+                        className="text-[11px] font-semibold text-emerald-600 dark:text-emerald-400 hover:underline cursor-pointer"
+                      >
+                        {UI_STRINGS.vendorCategorySelect.addCustomTag}
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Currently Selected Summary */}
+            <div className="pt-2">
+              <span className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider block mb-1.5">
+                Selected Categories ({editingCategories.length})
+              </span>
+              <div className="flex flex-wrap gap-1.5">
+                {editingCategories.map((cat) => (
+                  <span
+                    key={cat}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-medium bg-emerald-50 dark:bg-emerald-950/50 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800"
+                  >
+                    <span>{cat}</span>
+                    <button
+                      type="button"
+                      aria-label={`Remove ${cat}`}
+                      onClick={() => handleToggleCategory(cat)}
+                      className="hover:text-rose-600 ml-0.5 cursor-pointer"
+                    >
+                      <X size={12} />
+                    </button>
+                  </span>
+                ))}
               </div>
             </div>
 
-            {/* ADD CUSTOM CATEGORY */}
-            <form onSubmit={handleAddNewCategory} className="flex gap-2">
-              <input
-                type="text"
-                placeholder="Enter custom category..."
-                value={newCategoryInput}
-                onChange={(e) => setNewCategoryInput(e.target.value)}
-                className="flex-1 px-3 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              />
-              <button
-                type="submit"
-                className="px-3 py-1.5 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-lg transition-colors"
-              >
-                {strings.addCustomCategory}
-              </button>
-            </form>
-
-            <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex items-center justify-end gap-2 pt-4 border-t border-slate-200 dark:border-slate-800">
               <button
                 type="button"
                 onClick={() => setIsCategoryModalOpen(false)}
-                className="px-4 py-2 text-xs font-semibold text-slate-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition-colors"
+                className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg cursor-pointer"
               >
                 Cancel
               </button>
@@ -1832,7 +2809,7 @@ export default function SupplierDossierDrawer({
                 type="button"
                 disabled={isSavingCategories}
                 onClick={handleSaveCategories}
-                className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5"
+                className="px-3.5 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-sm transition-colors flex items-center gap-1.5 cursor-pointer"
               >
                 {isSavingCategories && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
                 {strings.saveCategories}
@@ -2424,140 +3401,1416 @@ export default function SupplierDossierDrawer({
       )}
 
       {/* =================================================================== */}
-      {/* MODAL: REQUEST SELLER QUOTE CREDIT APPROVAL                         */}
+      {/* MODAL: REQUEST SELLER APPROVAL WORKFLOWS                            */}
       {/* =================================================================== */}
-      {isAddQuoteCreditsModalOpen && (
+      {(isAddQuoteCreditsModalOpen || isAddCreditModalOpen) && (
         <div
           role="dialog"
           aria-modal="true"
           className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setIsAddQuoteCreditsModalOpen(false);
+            if (e.target === e.currentTarget) {
+              setIsAddQuoteCreditsModalOpen(false);
+              setIsAddCreditModalOpen(false);
+            }
           }}
         >
-          <div className="w-full max-w-md bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
-              <div>
-                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalSubtitle}
-                </p>
+          <div
+            className={`w-full ${
+              (selectedRequestType === 'Discount' || selectedRequestType === 'Discounts') && discountStep === 2
+                ? 'max-w-2xl'
+                : selectedRequestType === 'Offline Payments'
+                ? 'max-w-2xl'
+                : 'max-w-lg'
+            } bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl p-4 sm:p-5 space-y-3 max-h-[90vh] overflow-y-auto`}
+          >
+            {selectedRequestType === 'Discount' || selectedRequestType === 'Discounts' ? (
+              <>
+                {/* Step 1: Select Sourcing Mode (Connect Model & Select Model ONLY) */}
+                {discountStep === 1 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step1Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">{discountStrings.step1SubtitleSeller || 'Step 1 of 2: Select sourcing mode for discount request.'}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {discountStrings.step1SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {SELLER_DISCOUNT_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedDiscountMode(mode.label);
+                              setDiscountStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedDiscountMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                  {mode.label}
+                                </span>
+                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                  ₹{mode.price.toLocaleString('en-IN')} / yr
+                                </span>
+                              </div>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {discountStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Step 2: Enter Discount Percentage & Review Price Breakdown */}
+                {discountStep === 2 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {discountStrings.step2Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {formatString(discountStrings.step2SubtitleSeller || 'Step 2 of 2: Submit discount authorization for {mode}.', { mode: selectedDiscountMode })}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3 text-xs">
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                        {/* Form Inputs (Left Column on Desktop) */}
+                        <div className="space-y-2.5">
+                          {/* Seller Name (Read-Only) */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              Seller Name
+                            </label>
+                            <input
+                              type="text"
+                              readOnly
+                              value={displayName}
+                              className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                            />
+                          </div>
+
+                          {/* Selected Mode & Billing Duration (Read-Only) */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.selectedModeLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedDiscountMode}
+                                className="w-full px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed truncate"
+                              />
+                            </div>
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.billingDurationLabel}
+                              </label>
+                              <input
+                                type="text"
+                                readOnly
+                                value={selectedBillingDuration}
+                                className="w-full px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
+                              />
+                            </div>
+                          </div>
+
+                          {/* Original Plan Price & Discount Percentage */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.originalPlanPriceLabel}
+                              </label>
+                              <div className="px-2.5 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold">
+                                ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                              </div>
+                            </div>
+                            <div>
+                              <label htmlFor="seller-discount-percentage" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.discountPercentageLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <input
+                                id="seller-discount-percentage"
+                                type="number"
+                                min="0"
+                                max="100"
+                                step="any"
+                                value={discountPercentage}
+                                onChange={(e) => {
+                                  const val = parseFloat(e.target.value);
+                                  setDiscountPercentage(isNaN(val) ? 0 : val);
+                                }}
+                                placeholder="0"
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                                required
+                              />
+                            </div>
+                          </div>
+
+                          {/* Initiated By & Assigned Approver */}
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label htmlFor="discount-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="discount-initiator"
+                                value={quoteCreditInitiator}
+                                onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                                required
+                              >
+                                <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                                {sellerInitiatorSelectOptions.map((user) => (
+                                  <option key={user} value={user}>
+                                    {user}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                            <div>
+                              <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                                {discountStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                              </label>
+                              <select
+                                id="quote-credit-approver"
+                                value={quoteCreditApprover}
+                                onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                                className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer"
+                                required
+                              >
+                                <option value="">{discountStrings.approverPlaceholder}</option>
+                                {sellerApproverSelectOptions.map((appr) => (
+                                  <option key={appr} value={appr}>
+                                    {appr}
+                                  </option>
+                                ))}
+                              </select>
+                            </div>
+                          </div>
+
+                          {/* Request Reason / Justification */}
+                          <div>
+                            <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                              {discountStrings.reasonLabel}
+                            </label>
+                            <textarea
+                              rows={1.5}
+                              value={quoteCreditsReason}
+                              onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                              placeholder={discountStrings.reasonPlaceholder}
+                              className="w-full px-2.5 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
+                            />
+                          </div>
+                        </div>
+
+                        {/* Price Breakdown Table (Right Column on Desktop) */}
+                        <div className="space-y-1.5">
+                          <span className="block font-semibold text-slate-700 dark:text-slate-300">
+                            {discountStrings.priceBreakdownHeading}
+                          </span>
+                          <div className="border border-slate-200 dark:border-slate-700 rounded-xl overflow-hidden bg-slate-50/60 dark:bg-slate-800/40">
+                            <table className="w-full text-xs">
+                              <thead className="bg-slate-100 dark:bg-slate-800 text-[11px] font-semibold text-slate-600 dark:text-slate-400 border-b border-slate-200 dark:border-slate-700">
+                                <tr>
+                                  <th className="px-3 py-1.5 text-left">{discountStrings.colDescription}</th>
+                                  <th className="px-3 py-1.5 text-right">{discountStrings.colAmount}</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowOriginalPrice}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{originalDiscountPlanPrice.toLocaleString('en-IN')}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowDiscountPercent}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    {discountBreakdown.discountPercentage}%
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-rose-600 dark:text-rose-400 font-medium">
+                                    {discountStrings.rowDiscountAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-rose-600 dark:text-rose-400">
+                                    −₹{discountBreakdown.discountAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-slate-700 dark:text-slate-300 font-medium">
+                                    {discountStrings.rowRemainingAmount}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-medium text-slate-900 dark:text-white">
+                                    ₹{discountBreakdown.remainingAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr>
+                                  <td className="px-3 py-1 text-indigo-600 dark:text-indigo-400 font-medium">
+                                    {discountStrings.rowGst}
+                                  </td>
+                                  <td className="px-3 py-1 text-right font-semibold text-indigo-600 dark:text-indigo-400">
+                                    +₹{discountBreakdown.gstAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                                <tr className="bg-emerald-50 dark:bg-emerald-950/50 font-bold border-t border-emerald-200 dark:border-emerald-800/60">
+                                  <td className="px-3 py-1.5 text-emerald-900 dark:text-emerald-100">
+                                    {discountStrings.rowFinalPayable}
+                                  </td>
+                                  <td className="px-3 py-1.5 text-right text-emerald-700 dark:text-emerald-300 font-extrabold">
+                                    ₹{discountBreakdown.finalPayableAmount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                                  </td>
+                                </tr>
+                              </tbody>
+                            </table>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Controls */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setDiscountStep(1)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                        >
+                          <ArrowLeft size={14} />
+                          {discountStrings.backBtn}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddQuoteCreditsModalOpen(false);
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          >
+                            {discountStrings.cancelBtn}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingQuoteCredits || discountPercentage < 0 || discountPercentage > 100 || !quoteCreditApprover.trim()}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingQuoteCredits
+                              ? (discountStrings.submittingBtn)
+                              : (discountStrings.submitBtn)}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Trial Period' || selectedRequestType === 'Trial Periods' ? (
+              // Trial Period 2-Step Workflow (Connect Model & Select Model ONLY)
+              <>
+                {trialPeriodStep === 1 && (
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {trialPeriodStrings.step1Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">{trialPeriodStrings.step1Subtitle}</p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <div className="space-y-2 text-xs">
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
+                        {trialPeriodStrings.step1SectionLabel}
+                      </label>
+                      <div className="grid grid-cols-1 gap-2.5">
+                        {SELLER_TRIAL_PERIOD_MODES.map((mode) => (
+                          <button
+                            key={mode.id}
+                            type="button"
+                            onClick={() => {
+                              setSelectedTrialMode(mode.label);
+                              setTrialPeriodStep(2);
+                            }}
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                              selectedTrialMode === mode.label
+                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
+                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
+                            }`}
+                          >
+                            <div className="space-y-0.5">
+                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                {mode.label}
+                              </span>
+                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
+                                {mode.description}
+                              </span>
+                            </div>
+                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                      >
+                        {trialPeriodStrings.cancelBtn}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {trialPeriodStep === 2 && (
+                  <div className="space-y-3">
+                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                      <div>
+                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                          {trialPeriodStrings.step2Title}
+                        </h3>
+                        <p className="text-xs text-slate-500 mt-0.5">
+                          {trialPeriodStrings.step2Subtitle}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsAddQuoteCreditsModalOpen(false);
+                          setIsAddCreditModalOpen(false);
+                        }}
+                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                        aria-label="Close"
+                      >
+                        <X size={18} />
+                      </button>
+                    </div>
+
+                    <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3 text-xs">
+                      {/* 1. Seller Name & Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Name
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={displayName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.selectedModeLabel}
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={selectedTrialMode}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Starting Date & Ending Date */}
+                      <div className="grid grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="trial-start-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.startDateLabel}
+                          </label>
+                          <input
+                            id="trial-start-date"
+                            type="date"
+                            value={trialStartDate}
+                            onChange={(e) => handleTrialStartDateChange(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                        </div>
+                        <div>
+                          <label htmlFor="trial-end-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.endDateLabel}
+                          </label>
+                          <input
+                            id="trial-end-date"
+                            type="date"
+                            value={trialEndDate}
+                            onChange={(e) => handleTrialEndDateChange(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          />
+                        </div>
+                      </div>
+
+                      {trialDateError && (
+                        <div className="p-2 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300 text-xs">
+                          {trialDateError}
+                        </div>
+                      )}
+
+                      {/* Initiated By & Assigned Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="trial-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="trial-initiator"
+                            value={quoteCreditInitiator}
+                            onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{trialPeriodStrings.selectUserPlaceholder}</option>
+                            {sellerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label htmlFor="quote-credit-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {trialPeriodStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="quote-credit-approver"
+                            value={quoteCreditApprover}
+                            onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{trialPeriodStrings.selectApproverPlaceholder}</option>
+                            {sellerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Remarks */}
+                      <div>
+                        <label htmlFor="trial-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {trialPeriodStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          id="trial-remarks"
+                          rows={1.5}
+                          value={quoteCreditsReason}
+                          onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                          placeholder={trialPeriodStrings.reasonPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        />
+                      </div>
+
+                      {/* Actions */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
+                        <button
+                          type="button"
+                          onClick={() => setTrialPeriodStep(1)}
+                          className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                        >
+                          <ArrowLeft size={14} />
+                          {trialPeriodStrings.backBtn}
+                        </button>
+                        <div className="flex items-center gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setIsAddQuoteCreditsModalOpen(false);
+                              setIsAddCreditModalOpen(false);
+                            }}
+                            className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                          >
+                            {trialPeriodStrings.cancelBtn}
+                          </button>
+                          <button
+                            type="submit"
+                            disabled={isSubmittingQuoteCredits || trialDays <= 0 || !quoteCreditApprover.trim() || !quoteCreditInitiator.trim() || Boolean(trialDateError)}
+                            className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                          >
+                            {isSubmittingQuoteCredits
+                              ? (trialPeriodStrings.submittingBtn)
+                              : (trialPeriodStrings.submitBtn)}
+                          </button>
+                        </div>
+                      </div>
+                    </form>
+                  </div>
+                )}
+              </>
+            ) : selectedRequestType === 'Offline Payments' ? (
+              // Dedicated Offline Payment Approval Form
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {offlinePaymentStrings.modalTitle}
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleConfirmOfflinePayment} className="space-y-3 text-xs">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 items-start">
+                    {/* Left Column: Payment Details */}
+                    <div className="space-y-2.5">
+                      {/* Seller Name & Mode (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Name
+                          </label>
+                          <input
+                            type="text"
+                            readOnly
+                            value={displayName}
+                            className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-sourcing-mode-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            Seller Sourcing Mode
+                          </label>
+                          <select
+                            id="offline-sourcing-mode-select"
+                            value={offlineSellerSourceMode}
+                            onChange={(e) => setOfflineSellerSourceMode(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-800 dark:text-emerald-200 font-semibold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          >
+                            <option value="Connect Model">Connect Model</option>
+                            <option value="Select Model">Select Model</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Payment Date & Type (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-payment-date" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentDateLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-payment-date"
+                            type="date"
+                            value={offlinePaymentDate}
+                            onChange={(e) => setOfflinePaymentDate(e.target.value)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-payment-type-select" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.paymentTypeLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-payment-type-select"
+                            data-testid="offline-payment-type-select"
+                            value={offlinePaymentType}
+                            onChange={(e) => setOfflinePaymentType(e.target.value as OfflinePaymentType)}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          >
+                            {OFFLINE_PAYMENT_TYPES.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Transaction ID */}
+                      {offlinePaymentType !== 'Cash' && (
+                        <div>
+                          <label htmlFor="offline-transaction-id" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.transactionIdLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            id="offline-transaction-id"
+                            type="text"
+                            value={offlineTransactionId}
+                            onChange={(e) => setOfflineTransactionId(e.target.value)}
+                            placeholder={offlinePaymentStrings.transactionIdPlaceholder}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            required
+                          />
+                        </div>
+                      )}
+
+                      {/* Payment Amount */}
+                      <div>
+                        <label htmlFor="offline-payment-amount" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentAmountLabel} <span className="text-rose-500">*</span>
+                        </label>
+                        <input
+                          id="offline-payment-amount"
+                          type="number"
+                          min="1"
+                          step="any"
+                          value={offlinePaymentAmount || ''}
+                          onChange={(e) => {
+                            const val = parseFloat(e.target.value);
+                            setOfflinePaymentAmount(isNaN(val) ? 0 : val);
+                          }}
+                          placeholder={offlinePaymentStrings.paymentAmountPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    {/* Right Column: Upload Proof, Initiator, Approver, Remarks */}
+                    <div className="space-y-2.5">
+                      {/* Payment Image Proof Upload */}
+                      <div>
+                        <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.paymentProofLabel}
+                        </label>
+                        <input
+                          ref={offlineFileInputRef}
+                          type="file"
+                          accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+                          onChange={handleOfflineProofFileSelect}
+                          className="hidden"
+                          id="seller-offline-proof-file-input"
+                          data-testid="offline-proof-file-input"
+                        />
+
+                        {offlineProofPreviewUrl ? (
+                          <div className="p-2 bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1.5">
+                            <div className="flex items-center justify-between">
+                              <span className="font-medium text-slate-700 dark:text-slate-300 truncate max-w-[200px]" title={offlineProofFileName}>
+                                {offlineProofFileName}
+                              </span>
+                              <button
+                                type="button"
+                                onClick={handleRemoveOfflineProof}
+                                className="p-1 text-rose-500 hover:text-rose-700 hover:bg-rose-50 dark:hover:bg-rose-950/40 rounded transition cursor-pointer"
+                                title="Remove attachment"
+                              >
+                                <X size={14} />
+                              </button>
+                            </div>
+                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                            <img
+                              src={offlineProofPreviewUrl}
+                              alt="Proof preview"
+                              className="max-h-24 w-auto rounded border border-slate-200 dark:border-slate-700 object-contain mx-auto"
+                            />
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            onClick={() => offlineFileInputRef.current?.click()}
+                            className="w-full py-2.5 px-3 border-2 border-dashed border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-500 rounded-xl bg-slate-50/50 dark:bg-slate-800/30 text-center transition cursor-pointer flex flex-col items-center justify-center gap-1"
+                          >
+                            <Upload className="w-4 h-4 text-slate-400" />
+                            <span className="text-slate-600 dark:text-slate-300 font-medium text-[11px]">
+                              {offlinePaymentStrings.paymentProofHelp}
+                            </span>
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Initiated By & Approver (2 cols) */}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                        <div>
+                          <label htmlFor="offline-initiator" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.initiatedByLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-initiator"
+                            value={offlineInitiatorName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOfflineInitiatorName(val);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectInitiatorPlaceholder}</option>
+                            {sellerInitiatorSelectOptions.map((user) => (
+                              <option key={user} value={user}>
+                                {user}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div>
+                          <label htmlFor="offline-approver" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                            {offlinePaymentStrings.assignedApproverLabel} <span className="text-rose-500">*</span>
+                          </label>
+                          <select
+                            id="offline-approver"
+                            value={offlineApproverName}
+                            onChange={(e) => {
+                              const val = e.target.value;
+                              setOfflineApproverName(val);
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                            required
+                          >
+                            <option value="">{offlinePaymentStrings.selectApproverPlaceholder}</option>
+                            {sellerApproverSelectOptions.map((appr) => (
+                              <option key={appr} value={appr}>
+                                {appr}
+                              </option>
+                            ))}
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Remarks */}
+                      <div>
+                        <label htmlFor="offline-remarks" className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                          {offlinePaymentStrings.reasonLabel}
+                        </label>
+                        <textarea
+                          id="offline-remarks"
+                          rows={1.5}
+                          value={offlineRemarks}
+                          onChange={(e) => setOfflineRemarks(e.target.value)}
+                          placeholder={offlinePaymentStrings.reasonPlaceholder}
+                          className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      {offlinePaymentStrings.cancelBtn}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits}
+                      className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? (offlinePaymentStrings.submittingBtn)
+                        : (offlinePaymentStrings.submitBtn)}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : selectedRequestType === 'Seller Credit Deletion' ? (
+              // Seller Credit Deletion Modal
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      Request Seller Credit Deletion
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-2.5 text-xs">
+                  {/* Row 1: Seller Name & Available Credits (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={displayName}
+                        className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                      </label>
+                      <div className="px-3 py-1.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 rounded-lg text-rose-700 dark:text-rose-300 font-bold text-xs">
+                        {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits Available
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Deduction Credits & Initiated By (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        Credits to Deduct <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id="quote-credits-requested"
+                        type="number"
+                        min="1"
+                        max={creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? 1000}
+                        value={requestedQuoteCredits}
+                        onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                        placeholder="0"
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-initiator"
+                        value={quoteCreditInitiator}
+                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {sellerInitiatorSelectOptions.map((user) => (
+                          <option key={user} value={user}>
+                            {user}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Row 3: Assigned Approver & Remarks (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-approver"
+                        value={quoteCreditApprover}
+                        onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}</option>
+                        {sellerApproverSelectOptions.map((appr) => (
+                          <option key={appr} value={appr}>
+                            {appr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                      </label>
+                      <textarea
+                        rows={1.5}
+                        value={quoteCreditsReason}
+                        onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                        placeholder="Reason for credit deletion..."
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-rose-600 hover:bg-rose-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
+                        : 'Submit for Approval'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            ) : (
+              // Default: Seller Credit Addition Modal
+              <div className="space-y-3">
+                <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                      {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.modalTitle}
+                    </h3>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsAddQuoteCreditsModalOpen(false);
+                      setIsAddCreditModalOpen(false);
+                    }}
+                    className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                    aria-label="Close"
+                  >
+                    <X size={18} />
+                  </button>
+                </div>
+
+                <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-2.5 text-xs">
+                  {/* Row 1: Seller Name & Current Available Credits (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
+                      </label>
+                      <input
+                        type="text"
+                        readOnly
+                        value={displayName}
+                        className="w-full px-3 py-1.5 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed text-xs"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
+                      </label>
+                      <div className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold text-xs">
+                        {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Row 2: Requested Credits & Initiated By (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <input
+                        id="quote-credits-requested"
+                        type="number"
+                        min="1"
+                        max="1000"
+                        value={requestedQuoteCredits}
+                        onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                        required
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-initiator"
+                        value={quoteCreditInitiator}
+                        onChange={(e) => setQuoteCreditInitiator(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.actionCenter.tasks.selectAssignee}</option>
+                        {sellerInitiatorSelectOptions.map((user) => (
+                          <option key={user} value={user}>
+                            {user}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+
+                  {/* Row 3: Assigned Approver & Remarks (2 cols) */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        id="quote-credit-approver"
+                        value={quoteCreditApprover}
+                        onChange={(e) => setQuoteCreditApprover(e.target.value)}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 cursor-pointer text-xs"
+                        required
+                      >
+                        <option value="">{UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}</option>
+                        {sellerApproverSelectOptions.map((appr) => (
+                          <option key={appr} value={appr}>
+                            {appr}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
+                        {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
+                      </label>
+                      <textarea
+                        rows={1.5}
+                        value={quoteCreditsReason}
+                        onChange={(e) => setQuoteCreditsReason(e.target.value)}
+                        placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
+                        className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsAddQuoteCreditsModalOpen(false);
+                        setIsAddCreditModalOpen(false);
+                      }}
+                      className="px-3.5 py-1.5 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
+                      className="px-4 py-1.5 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50 cursor-pointer"
+                    >
+                      {isSubmittingQuoteCredits
+                        ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
+                        : 'Submit for Approval'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* Buyer Details Modal */}
+      {selectedBuyerForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedBuyerForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-lg w-full p-6 space-y-4">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                  <Building2 className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedBuyerForModal.companyName || selectedBuyerForModal.name || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.buyerUploads.buyerDetailsTitle}
+                  </p>
+                </div>
               </div>
               <button
                 type="button"
-                onClick={() => setIsAddQuoteCreditsModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200"
+                onClick={() => setSelectedBuyerForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.buyerUploads.closeModal}
               >
-                <X size={18} />
+                <X className="w-4 h-4" />
               </button>
             </div>
 
-            <form onSubmit={handleAddQuoteCreditsSubmit} className="space-y-3.5 text-xs">
-              {/* Seller Name (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.sellerNameLabel}
-                </label>
-                <input
-                  type="text"
-                  readOnly
-                  value={displayName}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-800 dark:text-slate-200 font-semibold cursor-not-allowed"
-                />
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colBuyerName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.name || EMPTY_VALUE}</span>
               </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colCompanyName}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.companyName || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colContactPerson}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.contactPerson || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colEmail}</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-medium break-all">{selectedBuyerForModal.email || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colPhone}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.phone || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.sourcingModeLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.sourcingMode || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.locationLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.location || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.subscriptionPlanLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedBuyerForModal.subscriptionPlan || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colUploadDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedBuyerForModal.uploadDate ? formatIndianDateTime(selectedBuyerForModal.uploadDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.buyerUploads.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedBuyerForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
 
-              {/* Current Available Credits (Read-Only) */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.currentCreditsLabel}
-                </label>
-                <div className="px-3 py-2 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold">
-                  {creditSummary?.remainingFreeCredits ?? getVendorCreditBalance(seller) ?? EMPTY_VALUE} Credits
+            <div className="flex justify-end pt-2 border-t border-slate-200 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => setSelectedBuyerForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.buyerUploads.closeModal}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Active RFQ Details Modal */}
+      {selectedActiveRfqForModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-sm"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedActiveRfqForModal(null);
+          }}
+        >
+          <div className="bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-800 shadow-xl max-w-xl w-full p-6 space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-200 dark:border-slate-800 pb-3">
+              <div className="flex items-center gap-2">
+                <div className="p-2 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-600 dark:text-emerald-400">
+                  <Layers className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                    {selectedActiveRfqForModal.rfqNumber || selectedActiveRfqForModal.id} — {selectedActiveRfqForModal.title || EMPTY_VALUE}
+                  </h3>
+                  <p className="text-xs text-slate-500">
+                    {strings.activeRfqs.rfqDetailsTitle}
+                  </p>
                 </div>
               </div>
+              <button
+                type="button"
+                onClick={() => setSelectedActiveRfqForModal(null)}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                aria-label={strings.activeRfqs.closeModal}
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
-              {/* Requested Credits */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.requestedCreditsLabel || 'Requested Credits'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  type="number"
-                  min="1"
-                  max="1000"
-                  value={requestedQuoteCredits}
-                  onChange={(e) => setRequestedQuoteCredits(isNaN(parseInt(e.target.value, 10)) ? 0 : parseInt(e.target.value, 10))}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-bold focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                  required
-                />
+            <div className="grid grid-cols-2 gap-3 text-xs">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colCategory}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.procurementCategory || selectedActiveRfqForModal.category || EMPTY_VALUE}</span>
               </div>
-
-              {/* Initiated By Select */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.initiatorLabel || 'Initiated By'} <span className="text-rose-500">*</span>
-                </label>
-                <input
-                  id="quote-credit-initiator"
-                  type="text"
-                  readOnly
-                  value={quoteCreditInitiator}
-                  placeholder={UI_STRINGS.dataLoad.emptyCell}
-                  className="w-full px-3 py-2 bg-slate-100 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium"
-                />
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colBuyerCompany}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.buyerCompanyName || selectedActiveRfqForModal.buyerCompany || selectedActiveRfqForModal.buyerName || EMPTY_VALUE}</span>
               </div>
-
-              {/* Assigned Approver Select */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverLabel || 'Assigned Approver'} <span className="text-rose-500">*</span>
-                </label>
-                {/* No approver list is served by the API. The server checks the name against its configured approvers. */}
-                <input
-                  id="quote-credit-approver"
-                  type="text"
-                  value={quoteCreditApprover}
-                  onChange={(e) => setQuoteCreditApprover(e.target.value)}
-                  placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.approverPlaceholder}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colLocation}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.location || EMPTY_VALUE}</span>
               </div>
-
-              {/* Reason / Remarks */}
-              <div>
-                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">
-                  {UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonLabel}
-                </label>
-                <textarea
-                  rows={2}
-                  value={quoteCreditsReason}
-                  onChange={(e) => setQuoteCreditsReason(e.target.value)}
-                  placeholder={UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.reasonPlaceholder}
-                  className="w-full px-3 py-2 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500"
-                />
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.budgetLabel}</span>
+                <span className="text-emerald-600 dark:text-emerald-400 font-bold">
+                  {selectedActiveRfqForModal.budget != null && selectedActiveRfqForModal.budget > 0
+                    ? formatCurrency(selectedActiveRfqForModal.budget)
+                    : EMPTY_VALUE}
+                </span>
               </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colPublishedDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedActiveRfqForModal.publishedDate ? formatIndianDateTime(selectedActiveRfqForModal.publishedDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colClosingDate}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">
+                  {selectedActiveRfqForModal.closingDate ? formatIndianDateTime(selectedActiveRfqForModal.closingDate) : EMPTY_VALUE}
+                </span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.sourcingModeLabel}</span>
+                <span className="text-slate-800 dark:text-slate-200 font-medium">{selectedActiveRfqForModal.sourcingMode || EMPTY_VALUE}</span>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/50 border border-slate-100 dark:border-slate-800">
+                <span className="text-[10px] uppercase font-bold text-slate-400 block">{strings.activeRfqs.colStatus}</span>
+                <span className="text-emerald-600 font-semibold">{selectedActiveRfqForModal.status || EMPTY_VALUE}</span>
+              </div>
+            </div>
 
-              <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            {/* Line items if available */}
+            <div className="space-y-2">
+              <span className="text-xs font-bold text-slate-700 dark:text-slate-300">
+                {strings.activeRfqs.lineItemsLabel}
+              </span>
+              {Array.isArray(selectedActiveRfqForModal.extractedEntities) && selectedActiveRfqForModal.extractedEntities.length > 0 ? (
+                <div className="border border-slate-200 dark:border-slate-800 rounded-lg overflow-hidden max-h-40 overflow-y-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-[10px] uppercase text-slate-500 font-bold">
+                      <tr>
+                        <th className="p-2">Item Description</th>
+                        <th className="p-2">Qty</th>
+                        <th className="p-2">Unit</th>
+                        <th className="p-2">Target Price</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {selectedActiveRfqForModal.extractedEntities.map((ent, i) => (
+                        <tr key={i} className="text-slate-700 dark:text-slate-300">
+                          <td className="p-2 font-medium">{ent.itemName || ent.itemDescription || ent.rawText || ent.technicalSpecs || EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.quantity ?? EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.unit || EMPTY_VALUE}</td>
+                          <td className="p-2">{ent.targetPrice != null ? formatCurrency(ent.targetPrice) : EMPTY_VALUE}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                <p className="text-xs text-slate-400 italic p-2 border border-dashed border-slate-200 dark:border-slate-800 rounded-lg">
+                  {strings.activeRfqs.noLineItems}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center justify-between pt-2 border-t border-slate-200 dark:border-slate-800">
+              {onSelectRFQ ? (
                 <button
                   type="button"
-                  onClick={() => setIsAddQuoteCreditsModalOpen(false)}
-                  className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition"
+                  onClick={() => {
+                    const rfqToSelect = selectedActiveRfqForModal as unknown as RFQItem;
+                    setSelectedActiveRfqForModal(null);
+                    onSelectRFQ(rfqToSelect);
+                  }}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-700 transition-colors cursor-pointer"
                 >
-                  Cancel
+                  <ExternalLink className="w-3.5 h-3.5" />
+                  <span>Open in RFQ Workspace</span>
                 </button>
-                <button
-                  type="submit"
-                  disabled={isSubmittingQuoteCredits || requestedQuoteCredits <= 0}
-                  className="px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition disabled:opacity-50"
-                >
-                  {isSubmittingQuoteCredits
-                    ? UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submittingBtn
-                    : UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.submitBtn || UI_STRINGS.sellerDirectory.dossier.sellerQuoteCredits.confirmBtn}
-                </button>
-              </div>
-            </form>
+              ) : (
+                <div />
+              )}
+              <button
+                type="button"
+                onClick={() => setSelectedActiveRfqForModal(null)}
+                className="px-4 py-2 rounded-lg bg-slate-200 dark:bg-slate-700 text-slate-800 dark:text-slate-200 text-xs font-semibold hover:bg-slate-300 dark:hover:bg-slate-600 transition-colors cursor-pointer"
+              >
+                {strings.activeRfqs.closeModal}
+              </button>
+            </div>
           </div>
         </div>
       )}

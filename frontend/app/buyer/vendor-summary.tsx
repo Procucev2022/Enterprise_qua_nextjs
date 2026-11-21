@@ -7,16 +7,33 @@ import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories, findMajorForMinor, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
+  BUYER_VENDOR_DIRECTORY_COLUMNS,
+  createBooleanSetterHandler,
+  createColumnResetHandler,
+  createColumnSortClickHandler,
+  getSortIndicatorSymbol,
+  getTableAriaSort,
+  getTableColumnClass,
   isBuyerUploadedVendor,
+  canBuyerManageVendor,
   isPlaceholderVendorCategory,
   isProcucevNetworkVendor,
+  isVendorActive,
+  isVendorInactive,
+  resolveVendorDisplayName,
   loadVendorUploadHistoryFromStorage,
-  removeVendorsFromUploadHistoryInStorage,
+  setVendorsActiveStateInStorage,
   normalizeVendorCategoryList,
   reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
+  sortTableRows,
+  normalizeVendorRating,
+  VENDOR_ACTIVE_STATUSES,
+  type TableColumnOption,
+  type TableSortState,
 } from '@/lib/constants';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
+import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
   Search,
   Building2,
@@ -36,7 +53,8 @@ import {
   Users,
   Eye,
   Pencil,
-  Trash2,
+  Power,
+  PowerOff,
   Phone,
   Globe,
   FileText,
@@ -52,6 +70,7 @@ import {
   Clock,
   Filter,
   ArrowLeft,
+  Settings,
 } from 'lucide-react';
 import {
   validatePincode,
@@ -79,6 +98,36 @@ const statutoryText = (value: unknown): string => {
   return clean === '' ? UI_STRINGS.recordPlaceholders.notApplicable : clean;
 };
 
+/**
+ * Matches a vendor row to an evaluation record by vendor ID first, then email,
+ * falling back to vendor name only when stored emails do not conflict.
+ */
+function findMatchingEvaluation(
+  evaluations: VendorEvaluationRecord[],
+  vendor: VendorEntry
+): VendorEvaluationRecord | undefined {
+  const vendorId = String(vendor.id || '').trim();
+  if (vendorId) {
+    const byId = evaluations.find((e) => e.vendorId && e.vendorId === vendorId);
+    if (byId) return byId;
+  }
+
+  const vendorEmail = String(vendor.email || '').trim().toLowerCase();
+  if (vendorEmail) {
+    const byEmail = evaluations.find((e) => e.email && e.email.trim().toLowerCase() === vendorEmail);
+    if (byEmail) return byEmail;
+  }
+
+  const vendorName = String(vendor.name || '').trim().toLowerCase();
+  if (!vendorName) return undefined;
+  return evaluations.find((e) => {
+    const evalName = String(e.vendorName || '').trim().toLowerCase();
+    if (!evalName || evalName !== vendorName) return false;
+    const evalEmail = String(e.email || '').trim().toLowerCase();
+    return !(vendorEmail && evalEmail && evalEmail !== vendorEmail);
+  });
+}
+
 // Classification helpers shared across Buyer Vendor Directory and Evaluation Summary.
 export const isBuyerUploaded = isBuyerUploadedVendor;
 export const isProcucevVendor = isProcucevNetworkVendor;
@@ -92,21 +141,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     buyerVendors,
     addBuyerVendor,
     updateBuyerVendor,
-    deleteBuyerVendor,
-    deleteMultipleBuyerVendors,
+    setBuyerVendorActiveStatus,
+    setMultipleBuyerVendorsActiveStatus,
     categoryTaxonomy,
     ensureCategoryTaxonomy,
     reviseVendorRating,
     requestVendorEvaluation,
     openRatingRevisionEmailModal,
     activeBuyerAccount,
+    currentUserSession,
+    initialSetupCompleted,
+    setInitialSetupCompleted,
     isLoadingVendors,
     fetchVendorEvaluation,
   } = useApp();
 
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
-  const [bulkDeleteModalOpen, setBulkDeleteModalOpen] = useState(false);
-  const [isDeletingBulk, setIsDeletingBulk] = useState(false);
+  const [bulkStatusModalOpen, setBulkStatusModalOpen] = useState(false);
+  const [bulkTargetIsActive, setBulkTargetIsActive] = useState(false);
+  const [isUpdatingBulkStatus, setIsUpdatingBulkStatus] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('ALL');
   const [selectedStatus, setSelectedStatus] = useState('ALL');
@@ -124,6 +177,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       setBuyerPincode(String(activeBuyerAccount.pincode).trim() || null);
       return;
     }
+    if (currentUserSession?.role && currentUserSession.role !== 'buyer') {
+      return;
+    }
     void fetchBuyerProfile({ signal: controller.signal }).then((result) => {
       if (cancelled) return;
       if (result.success && result.data?.pincode) {
@@ -134,7 +190,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       cancelled = true;
       controller.abort();
     };
-  }, [activeBuyerAccount?.pincode]);
+  }, [activeBuyerAccount?.pincode, currentUserSession?.role]);
 
   useEffect(() => {
     if (ensureCategoryTaxonomy) {
@@ -174,7 +230,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     source: string;
   } | null>(null);
   const [viewModalOpen, setViewModalOpen] = useState(false);
-  const [deleteModalOpen, setDeleteModalOpen] = useState(false);
+  const [statusModalOpen, setStatusModalOpen] = useState(false);
+  const [targetStatusIsActive, setTargetStatusIsActive] = useState(false);
+  const [isUpdatingSingleStatus, setIsUpdatingSingleStatus] = useState(false);
   const [selectedVendorForCrud, setSelectedVendorForCrud] = useState<any | null>(null);
 
   // Rating Revision State
@@ -292,6 +350,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [uploadHistoryList, setUploadHistoryList] = useState<any[]>([]);
   const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  const [vendorTableSort, setVendorTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
+  const [vendorColumns, setVendorColumns] = useState<TableColumnOption[]>(() =>
+    BUYER_VENDOR_DIRECTORY_COLUMNS.map((col) => ({ ...col }))
+  );
+  const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
   const loadUploadHistory = useCallback(() => {
     setUploadHistoryList(loadVendorUploadHistoryFromStorage());
@@ -315,7 +378,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const handleDownloadBatchCsv = (batch: any) => {
     if (!batch) return;
     const records = batch.records || [];
-    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Major Category,Rating\n';
+    let csv = 'Vendor Code,Company Name,Contact Person,Email ID,Phone,Address,GSTIN,Division,Rating\n';
     // Only the batch's real records become rows. A batch without records exports the header alone.
     records.forEach((r: any) => {
       csv += `"${r.vendorCode || ''}","${r.name || ''}","${r.contactPerson || ''}","${r.email || ''}","${r.phone || ''}","${r.city || ''}","${r.gstin || ''}","${r.category || ''}","${r.rating ?? ''}"\n`;
@@ -333,7 +396,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // the vendor record holds; nothing is added.
   const handleExportSelectedCsv = () => {
     const rows = buyerFilteredVendors.filter((v) => selectedVendorIds.includes(v.id));
-    const header = 'Vendor ID,Company Name,Major Category,Contact Person,Email ID,Phone,Location,Rating\n';
+    const header = 'Vendor ID,Company Name,Division,Contact Person,Email ID,Phone,Location,Rating\n';
     const body = rows
       .map((v) =>
         [v.id, v.name, v.majorCategory, v.contactPerson, v.email, v.phone, v.location, v.rating]
@@ -464,11 +527,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         onChange={(e) => handleVendorPhoneChange(e.target.value)}
         aria-invalid={Boolean(phoneFieldError)}
         aria-describedby={phoneFieldError ? `${id}-error` : undefined}
-        className={`w-full text-xs p-2 rounded-lg border bg-white dark:bg-gray-900 ${
-          phoneFieldError
-            ? 'border-rose-400 dark:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30'
-            : 'border-slate-200 dark:border-gray-700'
-        }`}
+        className={`w-full text-xs p-2 rounded-lg border bg-white dark:bg-gray-900 ${phoneFieldError
+          ? 'border-rose-400 dark:border-rose-600 focus:outline-none focus:ring-2 focus:ring-rose-500/30'
+          : 'border-slate-200 dark:border-gray-700'
+          }`}
       />
       {phoneFieldError && (
         <p id={`${id}-error`} className="mt-1 text-[11px] font-medium text-rose-600 dark:text-rose-400">
@@ -781,7 +843,25 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (!initialMajor && cleanedMinors.length > 0) {
       initialMajor = getMajorForCategory(cleanedMinors[0]) || '';
     }
-    setSelectedVendorForCrud(vendor);
+    const richer =
+      mergedVendors.find((v) => (vendor.id && v.id === vendor.id) || (vendor.email && v.email === vendor.email)) ||
+      vendor;
+    const resolvedGstin = String(
+      richer.gstin ||
+      richer.gst ||
+      (richer as any).gstNumber ||
+      (richer as any).raw?.gstin ||
+      (richer as any).raw?.gstNumber ||
+      (richer as any).storeRecord?.gstin ||
+      vendor.gstin ||
+      vendor.gst ||
+      vendor.gstNumber ||
+      ''
+    ).trim().toUpperCase();
+    setSelectedVendorForCrud({
+      ...richer,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
+    });
     setFormName(vendor.name || '');
     setFormBrandName(vendor.brandName || vendor.name || '');
     setFormMajorCategory(initialMajor);
@@ -903,6 +983,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       country: selectedVendorForCrud.country,
       pincode: selectedVendorForCrud.pincode,
       gstin: selectedVendorForCrud.gstin || selectedVendorForCrud.gst,
+      vendorCode: selectedVendorForCrud.vendorCode,
       source: selectedVendorForCrud.source,
     });
     setIsSavingCategories(false);
@@ -915,14 +996,43 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   // Open View Profile Modal
   const handleOpenViewModal = (vendor: any) => {
-    setSelectedVendorForCrud(vendor);
+    const richer =
+      mergedVendors.find((v) => (vendor.id && v.id === vendor.id) || (vendor.email && v.email === vendor.email)) ||
+      vendor;
+    const resolvedGstin = String(
+      richer.gstin ||
+      richer.gst ||
+      (richer as any).gstNumber ||
+      (richer as any).raw?.gstin ||
+      (richer as any).raw?.gstNumber ||
+      (richer as any).storeRecord?.gstin ||
+      vendor.gstin ||
+      vendor.gst ||
+      vendor.gstNumber ||
+      ''
+    ).trim().toUpperCase();
+    const hasEvalRequest = Boolean(richer.evaluationRequested || richer.evaluationRequestedAt);
+    const resolvedStatus = isVendorInactive(richer)
+      ? VENDOR_ACTIVE_STATUSES.INACTIVE
+      : hasEvalRequest
+      ? 'PENDING EVALUATION'
+      : richer.status && richer.status !== 'PENDING EVALUATION'
+      ? richer.status
+      : 'REGISTERED / NOT EVALUATED';
+
+    setSelectedVendorForCrud({
+      ...richer,
+      status: resolvedStatus,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
+    });
     setViewModalOpen(true);
   };
 
-  // Open Delete Vendor Modal
-  const handleOpenDeleteModal = (vendor: any) => {
+  // Open Mark Inactive / Activate Vendor Confirmation Modal
+  const handleOpenStatusModal = (vendor: VendorEntry, nextIsActive: boolean) => {
     setSelectedVendorForCrud(vendor);
-    setDeleteModalOpen(true);
+    setTargetStatusIsActive(nextIsActive);
+    setStatusModalOpen(true);
   };
 
   // Add Minor Category Tag
@@ -1021,67 +1131,111 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     }
   };
 
-  // Confirm Delete Vendor
-  const handleDeleteVendorConfirm = async () => {
-    if (!selectedVendorForCrud) return;
+  const updateSingleVendorStatus = async (vendor: Partial<VendorEntry>, nextIsActive: boolean): Promise<boolean> => {
+    const vendorId = String(vendor.id || '');
+    if (typeof setBuyerVendorActiveStatus === 'function') {
+      return setBuyerVendorActiveStatus(vendorId, nextIsActive, vendor);
+    }
+    const nextStatus = (
+      nextIsActive
+        ? (vendor.previousStatus || 'REGISTERED / NOT EVALUATED')
+        : VENDOR_ACTIVE_STATUSES.INACTIVE
+    ) as VendorEntry['status'];
+    return updateBuyerVendor(vendorId, {
+      isActive: nextIsActive,
+      disabled: !nextIsActive,
+      status: nextStatus,
+    });
+  };
+
+  // Confirm Single Vendor Active/Inactive Update
+  const handleConfirmSingleStatusChange = async () => {
+    if (!selectedVendorForCrud || isUpdatingSingleStatus) return;
     const vendorId = selectedVendorForCrud.id;
+    setIsUpdatingSingleStatus(true);
     try {
       const identifiers = [
         selectedVendorForCrud.id,
         selectedVendorForCrud.email,
         selectedVendorForCrud.name,
       ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
-      removeVendorsFromUploadHistoryInStorage(identifiers);
-      loadUploadHistory();
-      const res = await deleteBuyerVendor(vendorId);
+      const res = await updateSingleVendorStatus(selectedVendorForCrud, targetStatusIsActive);
       if (res !== false) {
-        setDeleteModalOpen(false);
-        setSelectedVendorForCrud(null);
+        setVendorsActiveStateInStorage(identifiers, targetStatusIsActive);
         loadUploadHistory();
+        setStatusModalOpen(false);
+        setSelectedVendorForCrud(null);
       }
     } catch (err) {
-      logger.log('ERROR', 'Failed to delete vendor', { error: err, vendorId }, 'VENDOR_DIRECTORY');
+      logger.log('ERROR', 'Failed to update vendor status', { error: err, vendorId, nextIsActive: targetStatusIsActive }, 'VENDOR_DIRECTORY');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.singleUpdateFailedMessage, 'warning');
+    } finally {
+      setIsUpdatingSingleStatus(false);
     }
   };
 
-  // Open Bulk Delete Modal
-  const handleOpenBulkDeleteModal = () => {
+  // Open Bulk Status Modal (Mark Inactive / Reactivate)
+  const handleOpenBulkStatusModal = (nextIsActive: boolean) => {
     if (selectedVendorIds.length === 0) return;
-    setBulkDeleteModalOpen(true);
+    setBulkTargetIsActive(nextIsActive);
+    setBulkStatusModalOpen(true);
   };
 
-  // Confirm Bulk Delete Vendors
-  const handleBulkDeleteConfirm = async () => {
-    if (selectedVendorIds.length === 0) return;
-    setIsDeletingBulk(true);
+  // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
+  const resolveBulkTargetVendors = (targetIsActive: boolean): VendorEntry[] => {
+    const selectedVendors = mergedVendors.filter(
+      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount)
+    );
+    const targetedVendors = selectedVendors.filter((v) =>
+      targetIsActive ? isVendorInactive(v) : isVendorActive(v)
+    );
+    return targetedVendors.length > 0 ? targetedVendors : selectedVendors;
+  };
+
+  const handleBulkStatusConfirm = async () => {
+    if (selectedVendorIds.length === 0 || isUpdatingBulkStatus) return;
+    setIsUpdatingBulkStatus(true);
     try {
-      const idsToDelete = [...selectedVendorIds];
-      const selectedVendors = mergedVendors.filter((v) => idsToDelete.includes(v.id));
+      const effectiveVendors = resolveBulkTargetVendors(bulkTargetIsActive);
+      const idsToUpdate = effectiveVendors.length > 0
+        ? effectiveVendors.map((v) => v.id)
+        : [...selectedVendorIds];
       const identifiers = Array.from(
         new Set(
           [
-            ...idsToDelete,
-            ...selectedVendors.map((v) => v.id),
-            ...selectedVendors.map((v) => v.email || ''),
-            ...selectedVendors.map((v) => v.name || ''),
+            ...idsToUpdate,
+            ...effectiveVendors.map((v) => v.email || ''),
+            ...effectiveVendors.map((v) => v.name || ''),
           ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
         )
       );
-      removeVendorsFromUploadHistoryInStorage(identifiers);
-      loadUploadHistory();
-      if (typeof deleteMultipleBuyerVendors === 'function') {
-        await deleteMultipleBuyerVendors(idsToDelete);
-      } else if (typeof deleteBuyerVendor === 'function') {
-        await Promise.all(idsToDelete.map((id) => deleteBuyerVendor(id)));
+
+      let updated = false;
+      if (typeof setMultipleBuyerVendorsActiveStatus === 'function') {
+        updated = await setMultipleBuyerVendorsActiveStatus(idsToUpdate, bulkTargetIsActive, effectiveVendors);
+      } else {
+        const results = await Promise.all(
+          idsToUpdate.map((id) => {
+            const vendorRecord = effectiveVendors.find((v) => v.id === id) || { id };
+            return updateSingleVendorStatus(vendorRecord, bulkTargetIsActive);
+          })
+        );
+        updated = results.every((r) => r !== false);
+        if (updated) {
+          setVendorsActiveStateInStorage(identifiers, bulkTargetIsActive);
+        }
       }
-      loadUploadHistory();
-      setSelectedVendorIds([]);
-      setBulkDeleteModalOpen(false);
+
+      if (updated !== false) {
+        loadUploadHistory();
+        setSelectedVendorIds([]);
+        setBulkStatusModalOpen(false);
+      }
     } catch (err) {
-      logger.log('ERROR', 'Failed to bulk delete vendors', { error: err }, 'VENDOR_DIRECTORY');
-      showToast('Error', 'Failed to delete selected vendors. Please try again.', 'warning');
+      logger.log('ERROR', 'Failed to bulk update vendor status', { error: err, bulkTargetIsActive }, 'VENDOR_DIRECTORY');
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.bulkUpdateFailedMessage, 'warning');
     } finally {
-      setIsDeletingBulk(false);
+      setIsUpdatingBulkStatus(false);
     }
   };
 
@@ -1198,9 +1352,46 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorForCrud(null);
   };
 
+  const closeAddModal = () => setAddModalOpen(false);
+  const closeEditModal = () => {
+    setEditModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeViewModal = () => {
+    setViewModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeCategoryModal = () => {
+    setCategoryModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeStatusModal = () => {
+    setStatusModalOpen(false);
+    setSelectedVendorForCrud(null);
+  };
+  const closeBulkStatusModal = () => setBulkStatusModalOpen(false);
+  const closeRevisionModal = () => setSelectedVendorForRevision(null);
+  const closeUploadHistoryModal = () => {
+    setShowUploadHistoryModal(false);
+    setSelectedHistoryBatch(null);
+    setBatchSearchQuery('');
+  };
+
+  const handleBackdropClick =
+    (onClose: () => void, blocked = false) =>
+      (e: React.MouseEvent<HTMLDivElement>) => {
+        if (!blocked && e.target === e.currentTarget) {
+          onClose();
+        }
+      };
+
   const handleRequestVendorEvaluation = async (vendorToRequest?: any) => {
     const targetVendor = vendorToRequest || selectedVendorForRevision;
     if (!targetVendor || isRequestingEvaluation) return;
+    if (isVendorInactive(targetVendor)) {
+      showToast(UI_STRINGS.vendorStatusControl.updateFailedTitle, UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked, 'warning');
+      return;
+    }
 
     setIsRequestingEvaluation(true);
     try {
@@ -1277,11 +1468,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const allEvaluations = [...vendorEvaluations];
   const mergeWithEvaluations = (list: VendorEntry[]) =>
     list.map((bv) => {
-      const storeEval = allEvaluations.find(
-        (e) =>
-          (e.vendorId && e.vendorId === bv.id) ||
-          (e.vendorName && e.vendorName.toLowerCase() === (bv.name || '').toLowerCase())
-      );
+      const storeEval = findMatchingEvaluation(allEvaluations, bv);
       if (storeEval && typeof storeEval.overallScore === 'number') {
         return {
           ...bv,
@@ -1301,8 +1488,19 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           hasRecord: true,
         };
       }
+      const hasEvaluationRequest = Boolean(bv.evaluationRequested || bv.evaluationRequestedAt);
+      const isInactive = isVendorInactive(bv);
+      const resolvedStatus = isInactive
+        ? VENDOR_ACTIVE_STATUSES.INACTIVE
+        : hasEvaluationRequest
+        ? 'PENDING EVALUATION'
+        : bv.status && bv.status !== 'PENDING EVALUATION'
+        ? bv.status
+        : 'REGISTERED / NOT EVALUATED';
+
       return {
         ...bv,
+        status: resolvedStatus as VendorEntry['status'],
         score: null,
         evaluated: false,
         hasRecord: false,
@@ -1328,14 +1526,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     if (currentMinors.length === 0) {
       if (Array.isArray(vendor.clientMappedCategories) && vendor.clientMappedCategories.length > 0) {
         currentMinors = normalizeVendorCategoryList(vendor.clientMappedCategories);
-      } else if (Array.isArray((vendor as any).poMinorCategories) && (vendor as any).poMinorCategories.length > 0) {
-        currentMinors = normalizeVendorCategoryList((vendor as any).poMinorCategories);
+      } else if (Array.isArray(vendor.poMinorCategories) && vendor.poMinorCategories.length > 0) {
+        currentMinors = normalizeVendorCategoryList(vendor.poMinorCategories);
       } else if (Array.isArray(vendor.vendorSelectedCategories) && vendor.vendorSelectedCategories.length > 0) {
         currentMinors = normalizeVendorCategoryList(vendor.vendorSelectedCategories);
-      } else if (Array.isArray((vendor as any).itemsSupplied) && (vendor as any).itemsSupplied.length > 0) {
+      } else if (Array.isArray(vendor.itemsSupplied) && vendor.itemsSupplied.length > 0) {
         currentMinors = Array.from(
           new Set(
-            ((vendor as any).itemsSupplied as string[])
+            vendor.itemsSupplied
               .map((it) => resolveMinorCategory(String(it), '', vendor.majorCategory))
               .filter((m) => Boolean(m) && !isPlaceholderVendorCategory(m))
           )
@@ -1350,6 +1548,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       finalMajor = findMajorForMinor(currentMinors[0]) || '';
     }
 
+    const resolvedGstin = String(
+      vendor.gstin ||
+      vendor.gst ||
+      (vendor as any).gstNumber ||
+      (vendor as any).raw?.gstin ||
+      (vendor as any).raw?.gstNumber ||
+      (vendor as any).raw?.gst ||
+      (vendor as any).storeRecord?.gstin ||
+      ''
+    ).trim().toUpperCase();
+
     const hasLocChanges =
       loc.location !== (vendor.location || '') ||
       loc.city !== (vendor.city || '') ||
@@ -1358,13 +1567,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const hasCategoryChanges =
       currentMinors.length !== (vendor.minorCategories || []).length ||
       (finalMajor && finalMajor !== (vendor.majorCategory || ''));
+    const hasGstinChanges =
+      Boolean(resolvedGstin) && (vendor.gstin !== resolvedGstin || vendor.gst !== resolvedGstin);
 
-    if (!hasLocChanges && !hasCategoryChanges) {
+    if (!hasLocChanges && !hasCategoryChanges && !hasGstinChanges) {
       return vendor;
     }
 
     return {
       ...vendor,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
       ...(loc.location ? { location: loc.location } : {}),
       ...(loc.city ? { city: loc.city } : {}),
       ...(loc.state ? { state: loc.state } : {}),
@@ -1399,7 +1611,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const vCategory = rawCategory.toLowerCase();
     const vMinors = (v.minorCategories || []).join(' ').toLowerCase();
     const vLocation = (v.location || v.city || v.state || '').toLowerCase();
-    const vGstin = (v.gstin || '').toLowerCase();
+    const vGstin = (v.gstin || v.gst || v.gstNumber || '').toLowerCase();
 
     const matchesSearch =
       !q ||
@@ -1415,6 +1627,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const matchesCategory = selectedCategory === 'ALL' || rawCategory.toLowerCase() === selectedCategory.toLowerCase();
     const matchesStatus =
       selectedStatus === 'ALL' ||
+      (selectedStatus === 'ACTIVE' && isVendorActive(v)) ||
+      (selectedStatus === 'INACTIVE' && isVendorInactive(v)) ||
       (selectedStatus === 'EVALUATED' && v.evaluated) ||
       (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
       (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
@@ -1423,7 +1637,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return matchesSearch && matchesCategory && matchesStatus;
   };
 
-  const buyerFilteredVendors = sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem));
+  const buyerFilteredVendors = sortTableRows(
+    sortByPincodeMatch(buyerUploadedVendorsList.filter(filterVendorItem)),
+    vendorTableSort
+  );
+  const hasUploadedVendors = Boolean(
+    initialSetupCompleted ||
+    currentUserSession?.vendorMasterUploaded === true ||
+    activeBuyerAccount?.initialSetupCompleted === true ||
+    buyerUploadedVendorsList.length > 0
+  );
 
   // Multi-Selection Controls
   const handleToggleSelectVendor = (id: string) => {
@@ -1457,6 +1680,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
+    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount);
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
@@ -1502,15 +1726,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     const engagement = getVendorRfqEngagement(vendor);
     const isSelected = selectedVendorIds.includes(vendor.id);
+    const vendorInactive = isVendorInactive(vendor);
 
     return (
       <tr
         key={vendor.id}
-        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''
-          }`}
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
-        <td className="py-2.5 px-3 w-10 text-center align-middle">
+        <td className="py-1.5 px-2.5 w-10 text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
@@ -1521,69 +1745,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           />
         </td>
 
-        {/* Supplier & Details */}
-        <td className="py-2.5 px-3 min-w-[240px] align-middle">
-          <div className="space-y-1">
-            <div className="flex items-center gap-1.5 flex-wrap">
-              <span
-                className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${
-                  isPlaceholderVendorCategory(vendor.majorCategory)
-                    ? 'text-amber-600 dark:text-amber-400 italic'
-                    : 'text-slate-500 dark:text-gray-400'
-                }`}
-                title={
-                  isPlaceholderVendorCategory(vendor.majorCategory)
-                    ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-                    : vendor.majorCategory
-                }
-              >
-                {isPlaceholderVendorCategory(vendor.majorCategory)
-                  ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-                  : vendor.majorCategory}
-              </span>
-              <span className="text-slate-300 dark:text-gray-600">•</span>
-
-              {/* Primary Source Badge */}
-              {isUploaded ? (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
-                  <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
-                  Internal Vendor
-                </span>
-              ) : (
-                <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
-                  <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
-                  Procucev Vendor
-                </span>
-              )}
-
-              {/* Secondary Origin Tag */}
-              <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
-                {originDetails.origin}
-              </span>
-
-              {/* RFQ Engagement & Upload Status Badge */}
-              {engagement.isEngaged ? (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
-                  <CheckCircle2 size={9} /> {engagement.qualificationReason}
-                </span>
-              ) : (
-                <span
-                  className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
-                  title="Vendor neither uploaded nor used in any RFQs by your organization"
-                >
-                  <Lock size={9} /> No RFQs / Not Uploaded
-                </span>
-              )}
-
-              {isLockedForProcucevV2 && (
-                <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
-                  <Lock size={9} /> Quote Submission Pending
-                </span>
-              )}
-            </div>
-
+        {/* 1. Supplier Name */}
+        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[180px] max-w-[240px] align-middle')}>
+          <div className="space-y-0.5">
             <h3
-              className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[280px]"
+              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[220px]"
               title={vendor.name}
             >
               <span className="truncate block" title={vendor.name}>
@@ -1596,7 +1762,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Performance Rating Revision Badge / History Line */}
             {vendor.latestRatingRevision && (
-              <div className="mt-1 p-2 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
+              <div className="mt-1 p-1.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
                 <div className="flex items-center justify-between gap-1">
                   <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
                     <Star size={11} className="fill-amber-500 text-amber-500" />
@@ -1628,50 +1794,40 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </td>
 
-        {/* Contact & Location */}
-        <td className="py-2.5 px-3 min-w-[200px] align-middle">
-          <div className="space-y-0.5 text-[11px] text-slate-600 dark:text-gray-300">
-            <div
-              className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[190px]"
-              title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
-            >
-              👤 Contact: {vendor.contactPerson}
-            </div>
-            <div
-              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
-              title={vendor.email}
-            >
-              ✉️ {vendor.email}
-            </div>
-            <div
-              className="truncate text-slate-500 dark:text-gray-400 max-w-[190px]"
-              title={vendor.phone}
-            >
-              📞 {vendor.phone}
-            </div>
-            {(() => {
-              const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
-              return (
-                <div
-                  className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[190px]"
-                  title={vendorAddress || undefined}
-                >
-                  <MapPin size={11} className="shrink-0" />
-                  <span className="truncate">{vendorAddress || '—'}</span>
-                </div>
-              );
-            })()}
-          </div>
+        {/* 2. Vendor Code */}
+        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
+          <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
+            {vendor.vendorCode}
+          </span>
         </td>
 
-        {/* Category */}
-        <td className="py-2.5 px-3 min-w-[150px] align-middle">
+        {/* 3. Division (Major Category) */}
+        <td className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-1.5 px-2.5 min-w-[140px] max-w-[180px] align-middle')}>
+          <span
+            className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
+              ? 'text-amber-600 dark:text-amber-400 italic'
+              : 'text-slate-600 dark:text-gray-300'
+              }`}
+            title={
+              isPlaceholderVendorCategory(vendor.majorCategory)
+                ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+                : vendor.majorCategory
+            }
+          >
+            {isPlaceholderVendorCategory(vendor.majorCategory)
+              ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+              : vendor.majorCategory}
+          </span>
+        </td>
+
+        {/* 4. Category (Minor Categories) */}
+        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[150px] align-middle')}>
           {(() => {
             const normalizedRowMinors = normalizeVendorCategoryList(vendor.minorCategories);
             return (
-              <div className="space-y-1">
+              <div className="flex items-center gap-1 flex-wrap max-w-[200px]">
                 {normalizedRowMinors.length > 0 ? (
-                  <div className="flex flex-wrap items-center gap-1 max-w-[200px]">
+                  <>
                     <span className="text-[9px] text-slate-400 font-semibold">{UI_STRINGS.vendorCategorySelect.categoryBadgePrefix}</span>
                     {normalizedRowMinors.map((m: string) => (
                       <span
@@ -1682,7 +1838,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         {m}
                       </span>
                     ))}
-                  </div>
+                  </>
                 ) : (
                   <div className="space-y-0.5">
                     <span className="text-[10px] text-slate-400 italic">None</span>
@@ -1700,11 +1856,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         ? `edit-category-vendor-${vendor.id}`
                         : `add-category-vendor-${vendor.id}`
                     }
-                    className={`inline-flex items-center gap-1 text-[10px] font-bold rounded-md px-1.5 py-0.5 transition-colors ${
-                      normalizedRowMinors.length === 0
-                        ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100'
-                        : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50'
-                    }`}
+                    className={`inline-flex items-center gap-1 text-[10px] font-bold rounded-md px-1.5 py-0.5 transition-colors ${normalizedRowMinors.length === 0
+                      ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border border-amber-200 dark:border-amber-800 hover:bg-amber-100'
+                      : 'text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50'
+                      }`}
                   >
                     <Tag size={10} />
                     {normalizedRowMinors.length > 0
@@ -1717,17 +1872,104 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })()}
         </td>
 
-        {/* AI Score & Rating */}
-        <td className="py-2.5 px-3 min-w-[140px] text-center align-middle">
+        {/* 5. Primary Source Badge */}
+        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          {isUploaded ? (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
+              <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
+              Internal Vendor
+            </span>
+          ) : (
+            <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/70 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/60 inline-flex items-center gap-1 shadow-xs">
+              <ShieldCheck size={10} className="text-emerald-600 dark:text-emerald-400" />
+              Procucev Vendor
+            </span>
+          )}
+        </td>
+
+        {/* 6. Secondary Origin Tag */}
+        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
+            {originDetails.origin}
+          </span>
+        </td>
+
+        {/* 7. RFQ Engagement */}
+        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+          <div className="flex items-center gap-1 flex-wrap">
+            {engagement.isEngaged ? (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
+                <CheckCircle2 size={9} /> {engagement.qualificationReason}
+              </span>
+            ) : (
+              <span
+                className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-400 border border-slate-200 dark:border-gray-700 inline-flex items-center gap-0.5"
+                title="Vendor neither uploaded nor used in any RFQs by your organization"
+              >
+                <Lock size={9} /> No RFQs / Not Uploaded
+              </span>
+            )}
+            {isLockedForProcucevV2 && (
+              <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-400 border border-amber-200 dark:border-amber-900/50 inline-flex items-center gap-0.5">
+                <Lock size={9} /> Quote Submission Pending
+              </span>
+            )}
+          </div>
+        </td>
+
+        {/* 8. Contact Person */}
+        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 max-w-[160px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
+          <div
+            className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
+            title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
+          >
+            👤 Contact: {vendor.contactPerson}
+          </div>
+        </td>
+
+        {/* 9. Email */}
+        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 max-w-[190px] align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
+            title={vendor.email}
+          >
+            ✉️ {vendor.email}
+          </div>
+        </td>
+
+        {/* 10. Phone */}
+        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 whitespace-nowrap align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
+            title={vendor.phone}
+          >
+            📞 {vendor.phone}
+          </div>
+        </td>
+
+        {/* 11. Location */}
+        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 max-w-[180px] align-middle text-[11px]')}>
+          {(() => {
+            const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
+            return (
+              <div
+                className="flex items-center gap-1 text-slate-500 dark:text-gray-400 truncate max-w-[170px]"
+                title={vendorAddress || undefined}
+              >
+                <MapPin size={11} className="shrink-0" />
+                <span className="truncate">{vendorAddress || '—'}</span>
+              </div>
+            );
+          })()}
+        </td>
+
+        {/* 12. AI Score */}
+        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
           {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
             <div className="space-y-0.5">
               <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
-              <div className="text-base font-mono font-black text-indigo-600 dark:text-indigo-400">
+              <div className="text-sm font-mono font-black text-indigo-600 dark:text-indigo-400">
                 {vendor.score}%
-              </div>
-              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
-                <Star size={10} className="fill-amber-500 text-amber-500" />{' '}
-                {vendor.rating || (vendor.score / 20).toFixed(1)} / 5.0
               </div>
             </div>
           ) : (
@@ -1742,31 +1984,49 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       ? 'Locked (Buyer Roster Only)'
                       : 'Not Evaluated'}
               </div>
-              {vendor.rating && (
-                <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 flex items-center justify-center gap-0.5">
-                  <Star size={10} className="fill-amber-500 text-amber-500" /> {vendor.rating} / 5.0
-                </div>
-              )}
             </div>
           )}
         </td>
 
-        {/* Status */}
-        <td className="py-2.5 px-3 min-w-[130px] text-center align-middle">
-          <span
-            className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
+        {/* 13. Rating */}
+        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+          {(() => {
+            const displayRating = normalizeVendorRating(vendor.rating, vendor.score);
+            return displayRating !== null ? (
+              <div className="text-[10px] font-bold text-amber-600 dark:text-amber-400 inline-flex items-center justify-center gap-0.5">
+                <Star size={10} className="fill-amber-500 text-amber-500" /> {displayRating.toFixed(1)} / 5.0
+              </div>
+            ) : null;
+          })()}
+        </td>
+
+        {/* 14. Status */}
+        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+          {vendorInactive ? (
+            <span
+              data-testid={`status-badge-inactive-${vendor.id}`}
+              title={UI_STRINGS.vendorStatusControl.inactiveTooltip}
+              className="px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center gap-1 bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-300 border-rose-200 dark:border-rose-900/60"
+            >
+              <PowerOff size={10} />
+              {UI_STRINGS.vendorStatusControl.inactiveBadge}
+            </span>
+          ) : (
+            <span
+              className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
                 ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
                 : getStatusStyle(vendor.status || '')
-              }`}
-          >
-            {currentMode === 'mode_1' && !isUploaded
-              ? 'UNAVAILABLE IN V1'
-              : isLockedForProcucevV2
-                ? 'LOCKED (PENDING BID)'
-                : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                  ? 'BUYER ROSTER (NO EVAL)'
-                  : vendor.status}
-          </span>
+                }`}
+            >
+              {currentMode === 'mode_1' && !isUploaded
+                ? 'UNAVAILABLE IN V1'
+                : isLockedForProcucevV2
+                  ? 'LOCKED (PENDING BID)'
+                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
+                    ? 'BUYER ROSTER (NO EVAL)'
+                    : vendor.status}
+            </span>
+          )}
           {vendor.evaluationRequested && (
             <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
               {vendor.evaluationRequestedAt
@@ -1779,7 +2039,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* Action Buttons Toolbar (CRUD + Evaluation + Revision) */}
-        <td className="py-2.5 px-3 min-w-[200px] text-right align-middle">
+        <td className={getTableColumnClass(vendorColumns, 'actions', 'py-1.5 px-2.5 min-w-[200px] text-right align-middle whitespace-nowrap')}>
           <div className="flex items-center gap-1.5 flex-wrap justify-end">
             {/* View Profile Modal Button */}
             <button
@@ -1791,8 +2051,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
             </button>
 
-            {/* Edit Vendor Button - Only for buyer-uploaded vendors */}
-            {isUploaded && (
+            {/* Edit Vendor Button - Only for buyer-owned vendors */}
+            {canManage && (
               <button
                 type="button"
                 onClick={() => handleOpenEditModal(vendor)}
@@ -1803,15 +2063,27 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </button>
             )}
 
-            {/* Delete Vendor Button - Only for buyer-uploaded vendors */}
-            {isUploaded && (
+            {/* Mark Inactive / Reactivate Button - Only for buyer-owned vendors */}
+            {canManage && (
               <button
                 type="button"
-                onClick={() => handleOpenDeleteModal(vendor)}
-                className="btn btn-ghost btn-xs text-rose-600 dark:text-rose-400 hover:bg-rose-50 dark:hover:bg-rose-950/40 flex items-center gap-1"
-                title="Delete vendor from directory and database"
+                data-testid={vendorInactive ? `enable-vendor-${vendor.id}` : `disable-vendor-${vendor.id}`}
+                onClick={() => handleOpenStatusModal(vendor, vendorInactive)}
+                className={
+                  vendorInactive
+                    ? 'btn btn-ghost btn-xs text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1'
+                    : 'btn btn-ghost btn-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1'
+                }
+                title={
+                  vendorInactive
+                    ? UI_STRINGS.vendorStatusControl.markActiveTitle
+                    : UI_STRINGS.vendorStatusControl.markInactiveTitle
+                }
               >
-                <Trash2 size={11} /> Delete
+                {vendorInactive ? <Power size={11} /> : <PowerOff size={11} />}
+                {vendorInactive
+                  ? UI_STRINGS.vendorStatusControl.markActiveButton
+                  : UI_STRINGS.vendorStatusControl.markInactiveButton}
               </button>
             )}
 
@@ -1832,11 +2104,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   // Opens only a stored evaluation record. No record means no evaluation.
                   let evalRec =
                     (vendor as any).storeRecord ||
-                    vendorEvaluations.find(
-                      (e) =>
-                        (e.vendorId && e.vendorId === vendor.id) ||
-                        (e.vendorName && e.vendorName.toLowerCase() === (vendor.name || '').toLowerCase())
-                    );
+                    findMatchingEvaluation(vendorEvaluations, vendor);
                   if (!evalRec && fetchVendorEvaluation) {
                     try {
                       evalRec = await fetchVendorEvaluation(vendor.id || vendor.name);
@@ -1896,6 +2164,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         {onNavigateToWizard && (
           <button
             type="button"
+            data-testid="open-upload-vendor-modal"
             onClick={onNavigateToWizard}
             className="btn btn-secondary btn-sm flex items-center gap-1.5 shadow-sm"
           >
@@ -1907,29 +2176,35 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Stats Counter Bar */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Total Empanelled</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">OCR &amp; 360° Evaluated</div>
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
+          </div>
           <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Preferred Status</div>
-          <div className="text-xl sm:text-2xl font-black text-indigo-700 dark:text-indigo-300 mt-0.5">
-            {buyerFilteredVendors.filter(
-              (v) => v.status === 'PREFERRED ENTERPRISE SUPPLIER'
-            ).length}
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+            {buyerFilteredVendors.filter((v) => isVendorActive(v)).length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">Selected Suppliers</div>
-          <div className="text-xl sm:text-2xl font-black text-purple-600 dark:text-purple-400 mt-0.5">
-            {selectedVendorIds.length}
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.inactiveVendorLabel}
+          </div>
+          <div className="text-xl sm:text-2xl font-black text-rose-600 dark:text-rose-400 mt-0.5">
+            {buyerFilteredVendors.filter((v) => isVendorInactive(v)).length}
           </div>
         </div>
       </div>
@@ -1969,7 +2244,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             onChange={(e) => setSelectedStatus(e.target.value)}
             className="select-field text-xs py-1.5"
           >
-            <option value="ALL">All Statuses</option>
+            <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
+            <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
+            <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
             <option value="EVALUATED">Evaluated Only</option>
             <option value="NOT_EVALUATED">Pending Evaluation</option>
             <option value="PREFERRED">Preferred Status</option>
@@ -1996,6 +2273,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               {selectedVendorIds.length} Selected
             </span>
           )}
+          <button
+            type="button"
+            onClick={createBooleanSetterHandler(setShowVendorColumnSettings, true)}
+            data-testid="vendor-directory-column-settings-btn"
+            aria-label="Column Settings"
+            title="Column Settings"
+            className="btn btn-secondary btn-xs inline-flex items-center gap-1 font-semibold"
+          >
+            <Settings size={12} />
+            <span>Column Settings</span>
+          </button>
         </div>
         {selectedVendorIds.length > 0 && (
           <div className="flex items-center gap-2 flex-wrap">
@@ -2013,36 +2301,163 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             >
               Export Selected ({selectedVendorIds.length})
             </button>
-            <button
-              type="button"
-              data-testid="bulk-delete-vendors-button"
-              onClick={handleOpenBulkDeleteModal}
-              className="btn btn-rose btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-rose-600 hover:bg-rose-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-            >
-              <Trash2 size={12} />
-              Delete Selected ({selectedVendorIds.length})
-            </button>
+            {(() => {
+              const selectedSet = new Set(selectedVendorIds);
+              const selectedRecords = buyerUploadedVendorsList.filter((v) => selectedSet.has(v.id));
+              const inactiveSelectedCount = selectedRecords.filter((v) => isVendorInactive(v)).length;
+              const activeSelectedCount = Math.max(0, selectedVendorIds.length - inactiveSelectedCount);
+              return (
+                <>
+                  {activeSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-disable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(false)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markInactiveTitle}
+                    >
+                      <PowerOff size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkDisableButton, { count: activeSelectedCount })}
+                    </button>
+                  )}
+                  {inactiveSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-enable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(true)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markActiveTitle}
+                    >
+                      <Power size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkEnableButton, { count: inactiveSelectedCount })}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
       </div>
+
+      <ColumnSettingsPopup
+        isOpen={showVendorColumnSettings}
+        onClose={createBooleanSetterHandler(setShowVendorColumnSettings, false)}
+        columns={vendorColumns}
+        onSave={setVendorColumns}
+        onReset={createColumnResetHandler(BUYER_VENDOR_DIRECTORY_COLUMNS, setVendorColumns)}
+        title="Column Settings"
+      />
 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
           <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
             <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse min-w-[1100px]">
+              <table className="w-full text-left text-xs border-collapse min-w-[1380px]">
                 <thead>
                   <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="py-2.5 px-3 w-10 text-center">
+                    <th className="py-2 px-2.5 w-10 text-center">
                       <span className="sr-only">Select</span>
                     </th>
-                    <th className="py-2.5 px-3 min-w-[240px]">Supplier &amp; Details</th>
-                    <th className="py-2.5 px-3 min-w-[200px]">Contact &amp; Location</th>
-                    <th className="py-2.5 px-3 min-w-[150px]">{UI_STRINGS.vendorCategorySelect.categoryHeader}</th>
-                    <th className="py-2.5 px-3 min-w-[140px] text-center">AI Score &amp; Rating</th>
-                    <th className="py-2.5 px-3 min-w-[130px] text-center">Status</th>
-                    <th className="py-2.5 px-3 min-w-[200px] text-right">Actions</th>
+                    <th
+                      onClick={createColumnSortClickHandler('name', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'name')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[180px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('majorCategory', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'majorCategory')}
+                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'majorCategory')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
+                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('source', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'source')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
+                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('email', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'email')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
+                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('location', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'location')}
+                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('score', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'score')}
+                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
+                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
+                    </th>
+                    <th
+                      onClick={createColumnSortClickHandler('status', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'status')}
+                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
+                    </th>
+                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap')}>Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
@@ -2101,7 +2516,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ADD VENDOR MODAL */}
       {/* ========================================================================= */}
       {addModalOpen && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="add-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeAddModal, isSubmittingAdd)}
+        >
           <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
               <div className="flex items-center gap-2.5">
@@ -2118,7 +2537,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <button
                 type="button"
                 data-testid="close-add-vendor-modal"
-                onClick={() => setAddModalOpen(false)}
+                onClick={closeAddModal}
                 disabled={isSubmittingAdd}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
               >
@@ -2314,13 +2733,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* private roster (buyerId/addedByBuyerCompany, source 'buyer_excel')     */}
       {/* rather than the shared Procucev network.                              */}
       {/* ========================================================================= */}
-      <VendorUploadModal isOpen={bulkUploadModalOpen} onClose={() => setBulkUploadModalOpen(false)} />
+      <VendorUploadModal
+        isOpen={bulkUploadModalOpen}
+        onClose={() => setBulkUploadModalOpen(false)}
+        onImportComplete={() => {
+          loadUploadHistory();
+          setInitialSetupCompleted?.(true);
+        }}
+      />
 
       {/* ========================================================================= */}
       {/* EDIT VENDOR MODAL */}
       {/* ========================================================================= */}
       {editModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="edit-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeEditModal, isSubmittingEdit)}
+        >
           <div className="modal-content max-w-2xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -2339,10 +2769,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setEditModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeEditModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
               >
                 <X size={20} />
@@ -2563,7 +2990,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       data-testid="edit-statutory-gstin"
                       className="block w-full text-xs p-2 font-mono rounded-lg border border-slate-200 dark:border-gray-700 bg-slate-100/70 dark:bg-gray-800/50 text-slate-600 dark:text-gray-400"
                     >
-                      {statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}
+                      {statutoryText(
+                        selectedVendorForCrud.gstin ||
+                        selectedVendorForCrud.gst ||
+                        (selectedVendorForCrud as any).gstNumber ||
+                        (selectedVendorForCrud as any).raw?.gstin ||
+                        (selectedVendorForCrud as any).raw?.gstNumber ||
+                        (selectedVendorForCrud as any).storeRecord?.gstin
+                      )}
                     </span>
                   </div>
                   <div>
@@ -2630,7 +3064,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* VIEW VENDOR DETAILS / PROFILE MODAL */}
       {/* ========================================================================= */}
       {viewModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="view-vendor-modal-backdrop"
+          onClick={handleBackdropClick(closeViewModal)}
+        >
           <div className="modal-content max-w-2xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col">
             {/* Modal Header */}
             <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -2641,6 +3079,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div>
                   <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
                     {selectedVendorForCrud.name}
+                    {isVendorInactive(selectedVendorForCrud) && (
+                      <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-rose-50 dark:bg-rose-950/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800">
+                        {UI_STRINGS.vendorStatusControl.inactiveBadge}
+                      </span>
+                    )}
                   </h3>
                   <p className="text-xs text-slate-500 dark:text-gray-400">
                     Comprehensive supplier registration, compliance, and taxonomy profile.
@@ -2649,10 +3092,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               </div>
               <button
                 type="button"
-                onClick={() => {
-                  setViewModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeViewModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
               >
                 <X size={20} />
@@ -2667,7 +3107,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
                   <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
                     <Star size={13} className="fill-amber-500 text-amber-500" />
-                    {typeof selectedVendorForCrud.rating === 'number' ? `${selectedVendorForCrud.rating} / 5.0` : '—'}
+                    {normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) !== null
+                      ? `${normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score)!.toFixed(1)} / 5.0`
+                      : '—'}
                   </div>
                 </div>
 
@@ -2692,10 +3134,30 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
-                  <div className="font-bold text-[10.5px] text-emerald-600 dark:text-emerald-400 mt-0.5 truncate">
-                    {selectedVendorForCrud.status || '—'}
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
+                    {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
+                  </span>
+                  <div
+                    className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
+                      ? 'text-rose-600 dark:text-rose-400'
+                      : 'text-emerald-600 dark:text-emerald-400'
+                      }`}
+                  >
+                    {isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.inactiveBadge
+                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' && !selectedVendorForCrud.evaluationRequested && !selectedVendorForCrud.evaluationRequestedAt
+                        ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
+                        : selectedVendorForCrud.status || '—')}
                   </div>
+                  {selectedVendorForCrud.evaluationRequested && (
+                    <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
+                      {selectedVendorForCrud.evaluationRequestedAt
+                        ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+                          date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
+                        })
+                        : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+                    </span>
+                  )}
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
@@ -2712,7 +3174,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
                     <Layers size={13} className="text-indigo-600" /> Procurement Taxonomy &amp; Products
                   </span>
-                  {isBuyerUploaded(selectedVendorForCrud) && (
+                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
                     <button
                       type="button"
                       data-testid="view-profile-edit-category-button"
@@ -2740,7 +3202,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </strong>
                   </div>
                   <div>
-                    <span className="text-slate-400 block text-[10px] font-semibold">Minor Line Items:</span>
+                    <span className="text-slate-400 block text-[10px] font-semibold">Categories:</span>
                     <div className="flex flex-wrap gap-1 mt-1">
                       {(() => {
                         const viewMinors = normalizeVendorCategoryList(selectedVendorForCrud.minorCategories);
@@ -2754,7 +3216,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             </span>
                           ))
                         ) : (
-                          <span className="text-slate-400 italic">No specific minors tagged</span>
+                          <span className="text-slate-400 italic">No specific categories tagged</span>
                         );
                       })()}
                     </div>
@@ -2808,7 +3270,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-slate-700 dark:text-gray-300 font-mono text-[11px]">
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.gstLabel}</span>
-                    <strong data-testid="view-statutory-gstin">{statutoryText(selectedVendorForCrud.gst || selectedVendorForCrud.gstin)}</strong>
+                    <strong data-testid="view-statutory-gstin">
+                      {statutoryText(
+                        selectedVendorForCrud.gstin ||
+                        selectedVendorForCrud.gst ||
+                        (selectedVendorForCrud as any).gstNumber ||
+                        (selectedVendorForCrud as any).raw?.gstin ||
+                        (selectedVendorForCrud as any).raw?.gstNumber ||
+                        (selectedVendorForCrud as any).storeRecord?.gstin
+                      )}
+                    </strong>
                   </div>
                   <div>
                     <span className="text-slate-400 font-sans block text-[10px] font-semibold">{UI_STRINGS.vendorStatutory.panLabel}</span>
@@ -2853,23 +3324,50 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
-              <div className="flex items-center gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setViewModalOpen(false);
-                    handleOpenEditModal(selectedVendorForCrud);
-                  }}
-                  className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
-                >
-                  <Pencil size={13} /> Edit Profile
-                </button>
+              <div className="flex items-center gap-2 flex-wrap">
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setViewModalOpen(false);
+                      handleOpenEditModal(selectedVendorForCrud);
+                    }}
+                    className="btn btn-secondary btn-sm font-semibold flex items-center gap-1.5"
+                  >
+                    <Pencil size={13} /> Edit Profile
+                  </button>
+                )}
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                  <button
+                    type="button"
+                    data-testid="view-profile-status-toggle-button"
+                    onClick={() => {
+                      const target = selectedVendorForCrud;
+                      setViewModalOpen(false);
+                      handleOpenStatusModal(target, isVendorInactive(target));
+                    }}
+                    className={
+                      isVendorInactive(selectedVendorForCrud)
+                        ? 'btn btn-secondary btn-sm font-semibold text-emerald-700 dark:text-emerald-300 flex items-center gap-1.5'
+                        : 'btn btn-secondary btn-sm font-semibold text-amber-700 dark:text-amber-300 flex items-center gap-1.5'
+                    }
+                  >
+                    {isVendorInactive(selectedVendorForCrud) ? <Power size={13} /> : <PowerOff size={13} />}
+                    {isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.markActiveButton
+                      : UI_STRINGS.vendorStatusControl.markInactiveButton}
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
-                  disabled={isRequestingEvaluation}
-                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs"
-                  title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                  disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
+                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                  title={
+                    isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                      : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                  }
                 >
                   {isRequestingEvaluation ? (
                     <Loader2 size={13} className="animate-spin" />
@@ -2899,7 +3397,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* ASSIGN / UPDATE VENDOR CATEGORY MODAL */}
       {/* ========================================================================= */}
       {categoryModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="vendor-category-modal-backdrop"
+          onClick={handleBackdropClick(closeCategoryModal, isSavingCategories)}
+        >
           <div
             data-testid="vendor-category-modal"
             className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-indigo-200 dark:border-indigo-800 animate-fade-in max-h-[92vh] flex flex-col"
@@ -2924,10 +3426,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 type="button"
                 data-testid="close-vendor-category-modal"
                 disabled={isSavingCategories}
-                onClick={() => {
-                  setCategoryModalOpen(false);
-                  setSelectedVendorForCrud(null);
-                }}
+                onClick={closeCategoryModal}
                 className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
               >
                 <X size={20} />
@@ -3017,27 +3516,61 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       )}
 
       {/* ========================================================================= */}
-      {/* DELETE VENDOR CONFIRMATION MODAL */}
+      {/* SINGLE VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
       {/* ========================================================================= */}
-      {deleteModalOpen && selectedVendorForCrud && (
-        <div className="modal-overlay !z-[1100]">
-          <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-rose-200 dark:border-rose-900/60 animate-fade-in flex flex-col">
+      {statusModalOpen && selectedVendorForCrud && (
+        <div
+          className="modal-overlay !z-[1100]"
+          data-testid="single-vendor-status-modal"
+          onClick={handleBackdropClick(closeStatusModal, isUpdatingSingleStatus)}
+        >
+          <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col">
             <div className="flex items-start gap-3 pb-3 border-b border-slate-200 dark:border-gray-800">
-              <div className="p-3 rounded-full bg-rose-50 dark:bg-rose-950 text-rose-600 dark:text-rose-400 shrink-0">
-                <Trash2 size={22} />
+              <div
+                className={`p-3 rounded-full shrink-0 ${targetStatusIsActive
+                  ? 'bg-emerald-50 dark:bg-emerald-950 text-emerald-600 dark:text-emerald-400'
+                  : 'bg-amber-50 dark:bg-amber-950 text-amber-600 dark:text-amber-400'
+                  }`}
+              >
+                {targetStatusIsActive ? <Power size={22} /> : <PowerOff size={22} />}
               </div>
               <div>
-                <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete Vendor Record</h3>
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {targetStatusIsActive
+                    ? UI_STRINGS.vendorStatusControl.singleEnableTitle
+                    : UI_STRINGS.vendorStatusControl.singleDisableTitle}
+                </h3>
                 <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                  Are you sure you want to delete <strong>{selectedVendorForCrud.name}</strong> from your vendor directory?
+                  {formatString(
+                    targetStatusIsActive
+                      ? UI_STRINGS.vendorStatusControl.singleEnableDescription
+                      : UI_STRINGS.vendorStatusControl.singleDisableDescription,
+                    {
+                      vendorName: resolveVendorDisplayName(
+                        selectedVendorForCrud,
+                        UI_STRINGS.vendorStatusControl.genericVendorLabel
+                      ),
+                    }
+                  )}
                 </p>
               </div>
             </div>
 
-            <div className="my-4 p-3 rounded-xl bg-rose-50/60 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-900/40 text-[11px] text-rose-800 dark:text-rose-300">
+            <div
+              className={`my-4 p-3 rounded-xl border text-[11px] space-y-1 ${targetStatusIsActive
+                ? 'bg-emerald-50/60 dark:bg-emerald-950/30 border-emerald-200 dark:border-emerald-900/40 text-emerald-900 dark:text-emerald-300'
+                : 'bg-amber-50/60 dark:bg-amber-950/30 border-amber-200 dark:border-amber-900/40 text-amber-900 dark:text-amber-300'
+                }`}
+            >
+              <p className="font-bold">
+                {targetStatusIsActive
+                  ? UI_STRINGS.vendorStatusControl.singleEnableBanner
+                  : UI_STRINGS.vendorStatusControl.singleDisableBanner}
+              </p>
               <p>
-                This action will permanently delete supplier ID <strong>{selectedVendorForCrud.id}</strong> (
-                {selectedVendorForCrud.email}) from your private buyer master list and synchronised database records.
+                {targetStatusIsActive
+                  ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
+                  : UI_STRINGS.vendorStatusControl.singleDisableImpactNote}
               </p>
             </div>
 
@@ -3045,129 +3578,35 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <button
                 type="button"
                 onClick={() => {
-                  setDeleteModalOpen(false);
+                  setStatusModalOpen(false);
                   setSelectedVendorForCrud(null);
                 }}
-                className="btn btn-ghost btn-sm font-semibold"
+                disabled={isUpdatingSingleStatus}
+                className="btn btn-ghost btn-sm font-semibold disabled:opacity-50"
               >
                 Cancel
               </button>
               <button
                 type="button"
-                onClick={handleDeleteVendorConfirm}
-                className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl"
+                data-testid="confirm-vendor-status-button"
+                onClick={handleConfirmSingleStatusChange}
+                disabled={isUpdatingSingleStatus}
+                className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${targetStatusIsActive
+                  ? 'bg-emerald-600 hover:bg-emerald-700'
+                  : 'bg-amber-600 hover:bg-amber-700'
+                  }`}
               >
-                <Trash2 size={13} /> Delete Vendor
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* ========================================================================= */}
-      {/* BULK DELETE VENDORS CONFIRMATION MODAL */}
-      {/* ========================================================================= */}
-      {bulkDeleteModalOpen && (
-        <div className="modal-overlay !z-[1100]">
-          <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-rose-200 dark:border-rose-900/60 animate-fade-in flex flex-col gap-4">
-            <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
-              <div className="flex items-center gap-3">
-                <div className="p-3 rounded-2xl bg-rose-50 dark:bg-rose-950/60 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800/60 shrink-0">
-                  <Trash2 size={22} />
-                </div>
-                <div>
-                  <h3 className="text-base font-bold text-slate-900 dark:text-white">
-                    Delete Multiple Vendors ({selectedVendorIds.length})
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    Are you sure you want to permanently delete these {selectedVendorIds.length} supplier records?
-                  </p>
-                </div>
-              </div>
-              <button
-                type="button"
-                data-testid="close-bulk-delete-modal"
-                onClick={() => setBulkDeleteModalOpen(false)}
-                disabled={isDeletingBulk}
-                className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
-              >
-                <X size={18} />
-              </button>
-            </div>
-
-            <div className="p-3 rounded-xl bg-rose-50/70 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900/50 text-xs text-rose-800 dark:text-rose-300 flex items-start gap-2.5">
-              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
-              <div>
-                <p className="font-semibold">Irreversible Action</p>
-                <p className="text-[11px] mt-0.5 text-rose-700/90 dark:text-rose-300/90">
-                  This will permanently delete {selectedVendorIds.length} selected vendor records from your private buyer master list and backend database.
-                </p>
-              </div>
-            </div>
-
-            {/* List Preview of Selected Vendors */}
-            <div className="space-y-1.5">
-              <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
-                <span>Selected Suppliers ({selectedVendorIds.length})</span>
-                <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
-              </div>
-              <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
-                {selectedVendorIds.map((id) => {
-                  const vendor = buyerFilteredVendors.find((v) => v.id === id) || buyerVendors.find((v) => v.id === id);
-                  return (
-                    <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
-                      <div className="min-w-0 flex-1">
-                        <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
-                          {vendor ? vendor.name : id}
-                        </div>
-                        <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
-                          <span>{id}</span>
-                          {vendor?.majorCategory && (
-                            <>
-                              <span>•</span>
-                              <span>{vendor.majorCategory}</span>
-                            </>
-                          )}
-                          {vendor?.email && (
-                            <>
-                              <span>•</span>
-                              <span>{vendor.email}</span>
-                            </>
-                          )}
-                        </div>
-                      </div>
-                      <span className="badge badge-rose text-[9px] font-bold shrink-0">
-                        To Delete
-                      </span>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
-              <button
-                type="button"
-                onClick={() => setBulkDeleteModalOpen(false)}
-                disabled={isDeletingBulk}
-                className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                data-testid="confirm-bulk-delete-button"
-                onClick={handleBulkDeleteConfirm}
-                disabled={isDeletingBulk}
-                className="btn btn-rose btn-sm font-bold flex items-center gap-1.5 shadow-md bg-rose-600 hover:bg-rose-700 text-white px-4 py-2 rounded-xl disabled:opacity-50"
-              >
-                {isDeletingBulk ? (
+                {isUpdatingSingleStatus ? (
                   <>
-                    <Loader2 size={13} className="animate-spin" /> Deleting...
+                    <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
+                  </>
+                ) : targetStatusIsActive ? (
+                  <>
+                    <Power size={13} /> {UI_STRINGS.vendorStatusControl.confirmEnableButton}
                   </>
                 ) : (
                   <>
-                    <Trash2 size={13} /> Delete {selectedVendorIds.length} Vendor{selectedVendorIds.length === 1 ? '' : 's'}
+                    <PowerOff size={13} /> {UI_STRINGS.vendorStatusControl.confirmDisableButton}
                   </>
                 )}
               </button>
@@ -3177,16 +3616,193 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       )}
 
       {/* ========================================================================= */}
+      {/* BULK VENDOR MARK INACTIVE / REACTIVATE CONFIRMATION MODAL */}
+      {/* ========================================================================= */}
+      {bulkStatusModalOpen && (() => {
+        const modalTargetVendors = resolveBulkTargetVendors(bulkTargetIsActive);
+        const modalTargetIds = modalTargetVendors.length > 0
+          ? modalTargetVendors.map((v) => v.id)
+          : selectedVendorIds;
+        const targetCount = modalTargetIds.length;
+        return (
+          <div
+            className="modal-overlay !z-[1100]"
+            data-testid="bulk-vendor-status-modal"
+            onClick={handleBackdropClick(closeBulkStatusModal, isUpdatingBulkStatus)}
+          >
+            <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-200 dark:border-amber-900/60 animate-fade-in flex flex-col gap-4">
+              <div className="flex items-start justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
+                <div className="flex items-center gap-3">
+                  <div
+                    className={`p-3 rounded-2xl border shrink-0 ${bulkTargetIsActive
+                      ? 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 border-emerald-200 dark:border-emerald-800/60'
+                      : 'bg-amber-50 dark:bg-amber-950/60 text-amber-600 dark:text-amber-400 border-amber-200 dark:border-amber-800/60'
+                      }`}
+                  >
+                    {bulkTargetIsActive ? <Power size={22} /> : <PowerOff size={22} />}
+                  </div>
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      {formatString(
+                        bulkTargetIsActive
+                          ? UI_STRINGS.vendorStatusControl.bulkEnableModalTitle
+                          : UI_STRINGS.vendorStatusControl.bulkDisableModalTitle,
+                        {
+                          count: targetCount,
+                          plural: targetCount === 1 ? '' : 's',
+                        }
+                      )}
+                    </h3>
+                    <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                      {UI_STRINGS.vendorStatusControl.bulkModalSubtitle}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  data-testid="close-bulk-status-modal"
+                  onClick={() => setBulkStatusModalOpen(false)}
+                  disabled={isUpdatingBulkStatus}
+                  className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-40"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div
+                className={`p-3 rounded-xl border text-xs flex items-start gap-2.5 ${bulkTargetIsActive
+                  ? 'bg-emerald-50/70 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900/50 text-emerald-900 dark:text-emerald-300'
+                  : 'bg-amber-50/70 dark:bg-amber-950/40 border-amber-200 dark:border-amber-900/50 text-amber-900 dark:text-amber-300'
+                  }`}
+              >
+                <AlertCircle
+                  size={16}
+                  className={`shrink-0 mt-0.5 ${bulkTargetIsActive
+                    ? 'text-emerald-600 dark:text-emerald-400'
+                    : 'text-amber-600 dark:text-amber-400'
+                    }`}
+                />
+                <div>
+                  <p className="font-semibold">
+                    {bulkTargetIsActive
+                      ? UI_STRINGS.vendorStatusControl.bulkEnableBannerTitle
+                      : UI_STRINGS.vendorStatusControl.bulkDisableBannerTitle}
+                  </p>
+                  <p className="text-[11px] mt-0.5 opacity-90">
+                    {bulkTargetIsActive
+                      ? UI_STRINGS.vendorStatusControl.bulkEnableBannerText
+                      : UI_STRINGS.vendorStatusControl.bulkDisableBannerText}
+                  </p>
+                </div>
+              </div>
+
+              {/* List Preview of Selected Vendors */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-[11px] font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider px-1">
+                  <span>
+                    {formatString(UI_STRINGS.vendorStatusControl.bulkSelectedListHeading, { count: targetCount })}
+                  </span>
+                  <span className="text-[10px] lowercase text-slate-400 font-normal">scroll to view all</span>
+                </div>
+                <div className="max-h-48 overflow-y-auto space-y-1.5 p-2 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 divide-y divide-slate-100 dark:divide-gray-800/60">
+                  {modalTargetIds.map((id) => {
+                    const vendor =
+                      mergedVendors.find((v) => v.id === id) ||
+                      buyerFilteredVendors.find((v) => v.id === id) ||
+                      buyerVendors.find((v) => v.id === id);
+                    return (
+                      <div key={id} className="pt-1.5 first:pt-0 flex items-center justify-between gap-2 text-xs">
+                        <div className="min-w-0 flex-1">
+                          <div className="font-semibold text-slate-900 dark:text-slate-100 truncate">
+                            {vendor ? vendor.name : id}
+                          </div>
+                          <div className="text-[10px] text-slate-400 truncate flex items-center gap-1.5">
+                            {vendor?.majorCategory && (
+                              <span>{vendor.majorCategory}</span>
+                            )}
+                            {vendor?.majorCategory && vendor?.email && (
+                              <span>•</span>
+                            )}
+                            {vendor?.email && (
+                              <span>{vendor.email}</span>
+                            )}
+                          </div>
+                        </div>
+                        <span
+                          className={`badge text-[9px] font-bold shrink-0 ${bulkTargetIsActive ? 'badge-emerald' : 'badge-amber'
+                            }`}
+                        >
+                          {bulkTargetIsActive
+                            ? UI_STRINGS.vendorStatusControl.confirmEnableButton
+                            : UI_STRINGS.vendorStatusControl.confirmDisableButton}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-200 dark:border-gray-800">
+                <button
+                  type="button"
+                  onClick={() => setBulkStatusModalOpen(false)}
+                  disabled={isUpdatingBulkStatus}
+                  className="btn btn-ghost btn-sm font-semibold text-slate-600 dark:text-slate-300"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  data-testid="confirm-bulk-status-button"
+                  onClick={handleBulkStatusConfirm}
+                  disabled={isUpdatingBulkStatus}
+                  className={`btn btn-sm font-bold flex items-center gap-1.5 shadow-md text-white px-4 py-2 rounded-xl disabled:opacity-50 ${bulkTargetIsActive
+                    ? 'bg-emerald-600 hover:bg-emerald-700'
+                    : 'bg-amber-600 hover:bg-amber-700'
+                    }`}
+                >
+                  {isUpdatingBulkStatus ? (
+                    <>
+                      <Loader2 size={13} className="animate-spin" /> {UI_STRINGS.vendorStatusControl.bulkUpdatingButton}
+                    </>
+                  ) : bulkTargetIsActive ? (
+                    <>
+                      <Power size={13} />{' '}
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmEnableButton, {
+                        count: targetCount,
+                        plural: targetCount === 1 ? '' : 's',
+                      })}
+                    </>
+                  ) : (
+                    <>
+                      <PowerOff size={13} />{' '}
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkConfirmDisableButton, {
+                        count: targetCount,
+                        plural: targetCount === 1 ? '' : 's',
+                      })}
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ========================================================================= */}
       {/* BUYER VENDOR RATING REVISION MODAL */}
       {/* ========================================================================= */}
       {selectedVendorForRevision &&
         (() => {
           const vendor = selectedVendorForRevision;
           // Previous figures are the vendor's recorded values. A missing value shows a dash.
+          const previousRating: number | null = normalizeVendorRating(vendor.rating, vendor.score);
           const previousScore: number | null =
-            typeof vendor.score === 'number' ? vendor.score : typeof vendor.rating === 'number' ? Math.round(vendor.rating * 20) : null;
-          const previousRating: number | null =
-            typeof vendor.rating === 'number' ? vendor.rating : previousScore !== null ? Number((previousScore / 20).toFixed(1)) : null;
+            typeof vendor.score === 'number' && vendor.score > 5
+              ? Math.round(vendor.score)
+              : previousRating !== null
+              ? Math.round(previousRating * 20)
+              : null;
           const scoresEntered = [qualityScore, costScore, deliveryScore].every((s) => s !== '');
           const buyerAverage = scoresEntered
             ? parseFloat(((Number(qualityScore) + Number(costScore) + Number(deliveryScore)) / 3).toFixed(2))
@@ -3208,7 +3824,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           const buyerCompany = activeBuyerAccount?.organizationName || '—';
 
           return (
-            <div className="modal-overlay !z-[1100]">
+            <div
+              className="modal-overlay !z-[1100]"
+              data-testid="revision-modal-backdrop"
+              onClick={handleBackdropClick(closeRevisionModal, isSubmittingRevision)}
+            >
               <div className="modal-content max-w-xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-amber-300 dark:border-amber-500/40 animate-fade-in max-h-[92vh] flex flex-col">
                 {/* Modal Header */}
                 <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800 shrink-0">
@@ -3227,7 +3847,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                   <button
                     type="button"
-                    onClick={() => setSelectedVendorForRevision(null)}
+                    onClick={closeRevisionModal}
                     className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800"
                   >
                     <X size={20} />
@@ -3261,9 +3881,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <button
                         type="button"
                         onClick={() => handleRequestVendorEvaluation(vendor)}
-                        disabled={isRequestingEvaluation}
-                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all"
-                        title={UI_STRINGS.vendorEvaluationRequest.buttonTooltip}
+                        disabled={isRequestingEvaluation || isVendorInactive(vendor)}
+                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        title={
+                          isVendorInactive(vendor)
+                            ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                            : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                        }
                       >
                         {isRequestingEvaluation ? (
                           <Loader2 size={11} className="animate-spin" />
@@ -3472,7 +4096,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* VENDOR TEMPLATE UPLOAD HISTORY MODAL */}
       {/* ========================================================================= */}
       {showUploadHistoryModal && (
-        <div className="modal-overlay !z-[1100] animate-fade-in">
+        <div
+          className="modal-overlay !z-[1100] animate-fade-in"
+          data-testid="upload-history-modal-backdrop"
+          onClick={handleBackdropClick(closeUploadHistoryModal)}
+        >
           <div
             data-testid="upload-history-modal"
             className="modal-content max-w-5xl p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-3xl shadow-2xl border-2 border-indigo-500/30 dark:border-indigo-500/40 animate-scale-up max-h-[92vh] flex flex-col space-y-4"
@@ -3492,11 +4120,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       {selectedHistoryBatch ? 'Full Step Audit' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
                     </span>
                   </div>
-                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    {selectedHistoryBatch
-                      ? 'Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.'
-                      : 'View previous vendor template batches, inspect uploaded supplier records, and re-download template data.'}
-                  </p>
+                  {selectedHistoryBatch && (
+                    <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                      Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -3515,11 +4143,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 )}
                 <button
                   type="button"
-                  onClick={() => {
-                    setShowUploadHistoryModal(false);
-                    setSelectedHistoryBatch(null);
-                    setBatchSearchQuery('');
-                  }}
+                  onClick={closeUploadHistoryModal}
                   className="p-1.5 rounded-xl text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
                   title="Close upload history"
                 >

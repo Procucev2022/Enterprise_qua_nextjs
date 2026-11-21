@@ -506,7 +506,7 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       expect(screen.getAllByRole('button', { name: new RegExp(`^${REMOVE_CHIP}:`) })).toHaveLength(2);
       expect(chipRemoveButton('Pumps & Accessories')).toBeInTheDocument();
       expect(chipRemoveButton('Hand-Forged Gadgets')).toBeInTheDocument();
-      expect(screen.getByText('2 / 10 Selected')).toBeInTheDocument();
+      expect(screen.getAllByText('2 Selected').length).toBeGreaterThanOrEqual(1);
       expect(screen.getByRole('heading', { level: 3, name: OTHER_GROUP })).toBeInTheDocument();
       expect(screen.getByRole('checkbox', { name: /Hand-Forged Gadgets/ })).toBeChecked();
     });
@@ -645,26 +645,26 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       expect(customCategoryInput()).toHaveValue('');
     });
 
-    it('refuses an existing category once ten categories are selected', async () => {
+    it('allows adding an existing catalog category even when ten or more categories are selected', async () => {
       useAppState({ categoryTaxonomy: ELECTRICAL_ONLY });
       installVendorApi({
         loadProfile: reply({ success: true, data: { ...VENDOR_RECORD, vendorSelectedCategories: TEN_CUSTOM_CATEGORIES } }),
       });
       await renderPage();
-      expect(screen.getByText('10 / 10 Categories Selected')).toBeInTheDocument();
+      expect(screen.getByText('10 Categories Selected')).toBeInTheDocument();
 
       addCustomCategory('Motors');
 
       expect(showToast).toHaveBeenCalledWith(
-        'Maximum 10 Categories Reached',
-        'You have selected 10/10 categories. Please uncheck a category to select "Motors".',
-        'warning'
+        'Category Selected',
+        `Found and automatically selected "Motors" under "${ELECTRICAL}".`,
+        'success'
       );
-      expect(screen.queryByRole('button', { name: `${REMOVE_CHIP}: Motors` })).not.toBeInTheDocument();
-      expect(customCategoryInput()).toHaveValue('Motors');
+      expect(screen.getByRole('button', { name: `${REMOVE_CHIP}: Motors` })).toBeInTheDocument();
+      expect(screen.getByText('11 Categories Selected')).toBeInTheDocument();
     });
 
-    it('refuses a brand-new category once ten categories are selected', async () => {
+    it('allows adding a brand-new custom category even when ten or more categories are selected', async () => {
       useAppState({ categoryTaxonomy: ELECTRICAL_ONLY });
       installVendorApi({
         loadProfile: reply({ success: true, data: { ...VENDOR_RECORD, vendorSelectedCategories: TEN_CUSTOM_CATEGORIES } }),
@@ -674,12 +674,12 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       addCustomCategory('Zyx Widgets');
 
       expect(showToast).toHaveBeenCalledWith(
-        'Maximum 10 Categories Reached',
-        'You have selected 10/10 categories. Please uncheck a category to add "Zyx Widgets".',
-        'warning'
+        'Added to Other',
+        '"Zyx Widgets" has been added under Other and selected for your profile.',
+        'success'
       );
-      expect(screen.queryByRole('button', { name: `${REMOVE_CHIP}: Zyx Widgets` })).not.toBeInTheDocument();
-      expect(customCategoryInput()).toHaveValue('Zyx Widgets');
+      expect(screen.getByRole('button', { name: `${REMOVE_CHIP}: Zyx Widgets` })).toBeInTheDocument();
+      expect(screen.getByText('11 Categories Selected')).toBeInTheDocument();
     });
   });
 
@@ -696,7 +696,7 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       expect(screen.getByRole('checkbox', { name: /Motors/ })).toBeChecked();
       expect(screen.getByRole('checkbox', { name: /Cables/ })).toBeChecked();
       expect(chipRemoveButton('Motors')).toBeInTheDocument();
-      expect(screen.getByText('2 / 10 Selected')).toBeInTheDocument();
+      expect(screen.getAllByText('2 Selected').length).toBeGreaterThanOrEqual(1);
     });
 
     it('expands and collapses a category group from its chevron', async () => {
@@ -725,7 +725,7 @@ describe('VendorProfilePage extended coverage (mocked store)', () => {
       fireEvent.click(chipRemoveButton('Bearings & Accessories'));
 
       expect(screen.queryByRole('button', { name: `${REMOVE_CHIP}: Bearings & Accessories` })).not.toBeInTheDocument();
-      expect(screen.getByText('2 / 10 Selected')).toBeInTheDocument();
+      expect(screen.getAllByText('2 Selected').length).toBeGreaterThanOrEqual(1);
 
       await saveProfile();
 

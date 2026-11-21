@@ -31,6 +31,9 @@ export interface ExtractedEntity {
   technicalSpecs: string;
   confidence: number;
   category: string;
+  itemDescription?: string;
+  rawText?: string;
+  targetPrice?: number;
   /**
    * Required rather than optional: every producer sets both. Extraction gets them
    * from the taxonomy classifier, and a row keyed by hand starts with empty
@@ -140,6 +143,8 @@ export interface VendorChannelEmail {
 }
 
 export interface VendorFollowUpRecord {
+  id?: string;
+  name?: string;
   vendorId: string;
   vendorName: string;
   phone: string;
@@ -147,7 +152,7 @@ export interface VendorFollowUpRecord {
   call: VendorChannelCall;
   whatsapp: VendorChannelWhatsApp;
   sms: VendorChannelSMS;
-  email?: VendorChannelEmail;
+  email?: string | VendorChannelEmail;
   email24h?: VendorChannelEmail;
   emailSent?: boolean;
   overallStatus: 'Responded' | 'Follow-up Active' | 'Awaiting Bid' | 'Escalated' | 'Pending';
@@ -168,12 +173,14 @@ export interface RFQFollowUpBreakdown {
   };
   whatsappStats: {
     total: number;
+    sent?: number;
     delivered: number;
     read: number;
     replied: number;
   };
   smsStats: {
     total: number;
+    sent?: number;
     delivered: number;
     clicked: number;
   };
@@ -186,6 +193,24 @@ export interface RFQFollowUpBreakdown {
   vendors: VendorFollowUpRecord[];
   nextScheduledChaser?: string;
   autoChasingEnabled: boolean;
+}
+
+export interface RFQFollowUpMetrics {
+  hasFollowUp: boolean;
+  totalVendors: number;
+  totalInvited: number | undefined;
+  responded: number;
+  callConnected: number | undefined;
+  callTotal: number | undefined;
+  waRead: number | undefined;
+  waDelivered: number | undefined;
+  waReplied: number | undefined;
+  waTotal: number | undefined;
+  smsDelivered: number | undefined;
+  smsTotal: number | undefined;
+  emailEscalationsSent: number | undefined;
+  emailDelivered: number | undefined;
+  emailTotal: number | undefined;
 }
 
 /**
@@ -857,6 +882,7 @@ export interface VendorOpportunity {
   sourcingMode?: string;
   category?: string;
   assignedVendors?: RFQAssignedVendor[];
+  createdAt?: string;
 }
 
 export interface AuditLogEntry {
@@ -1194,7 +1220,22 @@ export interface VendorEntry {
     | 'self_onboarded'
     | 'category_manager_upload'
     | string;
-  status?: 'PREFERRED ENTERPRISE SUPPLIER' | 'CONDITIONAL / UNDER REVIEW' | 'REGISTERED / NOT EVALUATED';
+  status?:
+    | 'PREFERRED ENTERPRISE SUPPLIER'
+    | 'CONDITIONAL / UNDER REVIEW'
+    | 'REGISTERED / NOT EVALUATED'
+    | 'DISQUALIFIED SUPPLIER'
+    | 'INACTIVE'
+    | 'ACTIVE'
+    | 'PENDING EVALUATION';
+  isActive?: boolean;
+  disabled?: boolean;
+  disabledAt?: string | null;
+  disabledBy?: string | null;
+  previousStatus?: string | null;
+  reactivatedAt?: string | null;
+  reactivatedBy?: string | null;
+  masterRecordId?: string | null;
   score?: number | null;
   evaluated?: boolean;
   evaluationRequested?: boolean;
@@ -1227,11 +1268,16 @@ export interface VendorEntry {
   addedByBuyerName?: string;
   buyerId?: string;
   buyerAccountId?: string;
+  buyerEmail?: string;
+  isProcucevNetwork?: boolean;
   profileCompletionStatus?: 'pending' | 'completed';
 
   // Dual-Stream Category Mapping & Reconciliation (Client-Mapped vs Vendor-Selected)
   clientMappedCategories?: string[]; // Categories assigned by buyer (from PO / vendor master upload)
-  vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (max 10)
+  vendorSelectedCategories?: string[]; // Categories chosen by vendor from profile page (unlimited)
+  poMajorCategory?: string; // Major category derived from historical PO records
+  poMinorCategories?: string[]; // Minor categories derived from historical PO records
+  itemsSupplied?: string[]; // Historical item descriptions supplied by vendor
   isCategoryAligned?: boolean; // True if vendor selected matches client mapped
   categoryMismatchDetails?: {
     clientOnly: string[];
@@ -1301,6 +1347,9 @@ export interface VendorUploadRow {
   };
   isValid: boolean;
   errors: string[];
+  isDuplicate?: boolean;
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR';
+  duplicateReason?: string;
   /**
    * True when the row has no email at all. Not treated as invalid — the row
    * still uploads (email is nullable in Postgres, never fabricated) — but
@@ -1347,6 +1396,8 @@ export interface VendorBulkInvitationResponse {
 export interface VendorUploadImportResponse {
   /** Ties every chunk of one upload run together — see bulkImportVendorRows. */
   sessionId?: string;
+  /** Raw uploaded rows before duplicate removal (optional when client auto-deduped). */
+  uploadedTotal?: number;
   total: number;
   imported: number;
   /** Successfully imported rows that carried no email. */
@@ -1413,17 +1464,134 @@ export interface VendorMasterUploadRecord {
   vendorRatingScore?: number; // 0 to 100 (Optional)
 }
 
+export interface VendorDuplicatePartitionCandidate {
+  vendor: VendorMasterUploadRecord;
+  rowNumber: number;
+  explicitVendorCode?: string;
+}
+
+export interface ExistingVendorDedupeCandidate {
+  vendorCode?: string | null;
+  companyName?: string | null;
+  name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  gstNumber?: string | null;
+  gstin?: string | null;
+}
+
+export interface SkippedDuplicateVendorRecord {
+  rowNumber: number;
+  vendorCode?: string;
+  companyName: string;
+  email: string;
+  phone?: string;
+  gstNumber?: string;
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_VENDOR';
+}
+
+export interface VendorDuplicatePartitionResult {
+  uniqueRecords: VendorMasterUploadRecord[];
+  skippedDuplicates: SkippedDuplicateVendorRecord[];
+}
+
+export interface ExistingPoDedupeCandidate {
+  poNumber?: string | null;
+  poDate?: string | null;
+  vendorCode?: string | null;
+  vendorName?: string | null;
+  vendorIdentifier?: string | null;
+  itemDescription?: string | null;
+  itemName?: string | null;
+  specification?: string | null;
+  specs?: string | null;
+  quantity?: number | null;
+  spend?: number | null;
+  totalSpend?: number | null;
+}
+
+export interface PoDuplicatePartitionCandidate {
+  record: PurchaseOrderLineItemRecord;
+  rowNumber: number;
+}
+
+export interface SkippedDuplicatePoRecord {
+  rowNumber: number;
+  poNumber?: string;
+  poDate?: string;
+  vendorName: string;
+  itemDescription: string;
+  specification?: string;
+  quantity?: number;
+  spend?: number;
+  reason: string;
+  matchedAgainst: 'FILE' | 'EXISTING_PO';
+}
+
+export interface PoDuplicatePartitionResult {
+  uniqueRecords: PurchaseOrderLineItemRecord[];
+  skippedDuplicates: SkippedDuplicatePoRecord[];
+}
+
+export interface IngestionJobErrorDetail {
+  rowNumber?: number;
+  vendorCode?: string;
+  companyName?: string;
+  vendorName?: string;
+  email?: string;
+  phone?: string;
+  gstNumber?: string;
+  poNumber?: string;
+  poDate?: string;
+  itemDescription?: string;
+  specification?: string;
+  quantity?: number;
+  spend?: number;
+  status?: string;
+  reason?: string;
+  matchedAgainst?: 'FILE' | 'EXISTING_VENDOR' | 'EXISTING_PO';
+}
+
+export interface IngestionJobState {
+  id: string;
+  jobType: 'VENDOR_MASTER' | 'PO_DUMP' | 'AI_CATEGORY';
+  fileName: string;
+  status: 'PENDING' | 'PROCESSING' | 'COMPLETED' | 'PARTIAL_FAILURE' | 'FAILED';
+  totalRecords: number;
+  uploadedRecords?: number;
+  processedRecords: number;
+  importedRecords: number;
+  skippedRecords: number;
+  failedRecords: number;
+  errorMessage?: string | null;
+  errorDetails?: IngestionJobErrorDetail[];
+}
+
+export interface VendorDedupeSummary {
+  fileName: string;
+  totalCount: number;
+  skippedCount: number;
+  isExcelOnly: boolean;
+  allSkippedClientSide: boolean;
+}
+
 export interface PurchaseOrderLineItemRecord {
   id: string;
   poNumber: string;
   poDate: string;
   vendorIdentifier: string; // Matches vendor code, company name or email
+  vendorName?: string;
   itemName: string;
+  itemDescription?: string;
   specs?: string;
+  specification?: string;
   quantity: number;
   unit: string;
+  uom?: string;
   unitPrice: number;
   totalSpend: number;
+  spend?: number;
   department?: string;
   category?: string;
   minorCategory?: string;
@@ -1458,6 +1626,8 @@ export interface VendorUploadHistoryBatch {
   id?: string | number;
   fileName?: string;
   uploadedAt?: string;
+  buyerId?: string;
+  buyerEmail?: string;
   records?: Array<Record<string, unknown>> | null;
 }
 
@@ -1467,6 +1637,8 @@ export interface VendorOwnershipShape {
   buyerId?: string | null;
   buyerAccountId?: string | null;
   addedByBuyerCompany?: string | boolean | null;
+  buyerEmail?: string | null;
+  isProcucevNetwork?: boolean | null;
 }
 
 export interface IngestionFailedEmail {
@@ -2071,6 +2243,8 @@ export interface StandardRFQEmailPayload {
 
 export interface BuyerAccount {
   id: string;
+  userId?: string;
+  organizationId?: string | null;
   organizationName: string;
   brandName?: string;
   corporateEmail: string;
@@ -2085,6 +2259,7 @@ export interface BuyerAccount {
   industrySector: string;
   sourcingMode: SourcingMode;
   subscriptionPlan: 'free_trial' | 'version_1' | 'version_2' | 'version_3' | 'unlimited';
+  subscriptionTier?: string;
   remainingFreeRFQs: number;
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
@@ -2094,8 +2269,10 @@ export interface BuyerAccount {
   verificationStatus?: string;
   primaryPlantLocation: string;
   street?: string;
+  streetAddress?: string;
   address1?: string;
   address?: string;
+  registeredAddress?: string;
   city?: string;
   state?: string;
   pincode?: string;
@@ -2485,6 +2662,7 @@ export interface RegisterPayload {
   role?: UserRole;
   orgName?: string;
   street?: string;
+  streetAddress?: string;
   address?: string;
   registeredAddress?: string;
   city?: string;
@@ -2492,7 +2670,9 @@ export interface RegisterPayload {
   pincode?: string;
   country?: string;
   gstin?: string;
+  gstNumber?: string;
   pan?: string;
+  panNumber?: string;
   emailOtp?: string;
   mobileOtp?: string;
   code?: string;
@@ -2667,7 +2847,7 @@ export type ActionCenterTabKey =
   | 'document_vault'
   | 'login_logs';
 
-export type LoginLogUserType = 'buyer' | 'vendor';
+export type LoginLogUserType = 'buyer' | 'vendor' | 'category_manager';
 export type LoginLogStatus = 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
 
 export interface LoginLogEntry {
@@ -2699,7 +2879,7 @@ export interface LoginLogsSummary {
 }
 
 export interface LoginLogsFilterParams {
-  userType?: 'all' | 'buyer' | 'vendor';
+  userType?: 'all' | 'buyer' | 'vendor' | 'category_manager';
   status?: 'all' | 'ACTIVE' | 'LOGGED_OUT' | 'TIMED_OUT';
   search?: string;
   startDate?: string;
@@ -3414,6 +3594,65 @@ export interface SupplierPaymentTransaction {
   receiptUrl?: string;
 }
 
+export interface BuyerUploadedVendorItem {
+  id: string;
+  name: string;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  createdAt: string;
+  status: string;
+  majorCategory?: string;
+  minorCategories?: string[];
+  location?: string;
+  city?: string;
+  state?: string;
+  pincode?: string;
+  source?: string;
+  rating?: number;
+  score?: number;
+  gstin?: string;
+  pan?: string;
+  [key: string]: unknown;
+}
+
+export interface SellerBuyerUploadItem {
+  id: string;
+  name: string;
+  companyName: string;
+  contactPerson: string;
+  email: string;
+  phone: string;
+  uploadDate: string;
+  status: string;
+  sourcingMode?: string;
+  subscriptionPlan?: string;
+  location?: string;
+  [key: string]: unknown;
+}
+
+export interface SellerActiveRFQItem {
+  id: string;
+  rfqNumber: string;
+  title: string;
+  category: string;
+  procurementCategory?: string;
+  buyerCompanyName: string;
+  buyerCompany?: string;
+  buyerName?: string;
+  location: string;
+  publishedDate: string;
+  closingDate?: string;
+  status: string;
+  budget?: number;
+  sourcingMode?: string;
+  extractedEntities?: ExtractedEntity[];
+  lineItems?: unknown[];
+  description?: string;
+  [key: string]: unknown;
+}
+
 
 
 export type RegistrationColumnKey =
@@ -3463,14 +3702,25 @@ export interface InternalTeamMember {
 // ==============================================================================
 
 export type InternalTaskCategory =
+  | 'CALL_TASK'
+  | 'EMAIL_TASK'
+  | 'SMS_TASK'
+  | 'DEMO_SCHEDULE'
+  | 'CREDIT_MANAGEMENT'
+  | 'SITE_VISITING_MEETING_CLIENTS'
+  | 'INTERNAL_OPERATIONS'
   | 'COMMUNICATION'
   | 'DEMO_SCHEDULING'
-  | 'CREDIT_MANAGEMENT'
   | 'BUSINESS_DEVELOPMENT'
-  | 'INTERNAL_OPERATIONS'
   | 'ONBOARDING';
 
 export type InternalTaskStatus =
+  | 'Open'
+  | 'Pending'
+  | 'Closed'
+  | 'open'
+  | 'pending'
+  | 'closed'
   | 'New'
   | 'Assigned'
   | 'In Progress'
@@ -3478,7 +3728,6 @@ export type InternalTaskStatus =
   | 'Completed'
   | 'Rejected'
   | 'Cancelled'
-  | 'Pending'
   | 'Blocked'
   | 'Escalated';
 

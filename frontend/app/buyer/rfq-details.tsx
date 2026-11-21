@@ -22,6 +22,9 @@ import {
   formatFileSize,
   formatIndianDate,
   formatIndianDateTime,
+  isBuyerQuotesSealed,
+  resolveQuotesUnsealIso,
+  createBackdropClickHandler,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
@@ -59,6 +62,7 @@ import {
   Pencil,
   Search,
   Download,
+  Loader2,
   Paperclip,
   Trash2,
   ExternalLink,
@@ -503,9 +507,225 @@ function ConfidenceBadge({ confidence }: { confidence: number }) {
       }`}
     >
       <span className={`w-1.5 h-1.5 rounded-full ${highConfidence ? 'bg-emerald-500' : 'bg-amber-500'}`} />
-      {formatString(highConfidence ? DETAILS.confidenceHigh : DETAILS.confidenceReview, { confidence })}
+      {highConfidence ? DETAILS.confidenceHigh : DETAILS.confidenceReview}
     </span>
   );
+}
+
+/**
+ * Detects whether an RFQ is considered a public / marketplace opportunity for a vendor.
+ * Mode 0, Mode 3, and any RFQs where the vendor is not directly invited/assigned or is
+ * viewing marketplace opportunities are treated as public RFQs.
+ */
+export function isPublicRfqForVendor(
+  rfq: RFQItem | null,
+  options?: {
+    vendorOpportunities?: any[];
+    rfqs?: RFQItem[];
+    currentUserSession?: any;
+    buyerVendors?: any[];
+  }
+): boolean {
+  if (!rfq) return false;
+
+  const mode = String(rfq.sourcingMode || '').toLowerCase().trim();
+  if (
+    mode === 'mode_0' ||
+    mode === 'v0' ||
+    mode === 'version_0' ||
+    mode === 'mode_3' ||
+    mode === 'v3' ||
+    mode === 'version_3'
+  ) {
+    return true;
+  }
+
+  if (Boolean((rfq as any).isPublic)) {
+    return true;
+  }
+
+  const rfqNum = String(rfq.rfqNumber || rfq.id || '').toLowerCase().trim();
+
+  // Check vendorOpportunities if available
+  const opp = options?.vendorOpportunities?.find(
+    (o) => String(o.rfqNumber || o.id || '').toLowerCase().trim() === rfqNum
+  );
+  if (opp) {
+    const oppMode = String(opp.sourcingMode || '').toLowerCase().trim();
+    if (
+      oppMode === 'mode_0' ||
+      oppMode === 'v0' ||
+      oppMode === 'version_0' ||
+      oppMode === 'mode_3' ||
+      oppMode === 'v3' ||
+      oppMode === 'version_3'
+    ) {
+      return true;
+    }
+    if (opp.type === 'marketplace' || opp.type === 'network_open' || opp.type === 'public_enquiry' || Boolean(opp.isPublic)) {
+      return true;
+    }
+    if (opp.type === 'direct_invitation') {
+      return false;
+    }
+  }
+
+  // Check store RFQs if present
+  const storeRfq = options?.rfqs?.find(
+    (r) => String(r.rfqNumber || r.id || '').toLowerCase().trim() === rfqNum
+  );
+  if (storeRfq) {
+    const storeMode = String(storeRfq.sourcingMode || '').toLowerCase().trim();
+    if (
+      storeMode === 'mode_0' ||
+      storeMode === 'v0' ||
+      storeMode === 'version_0' ||
+      storeMode === 'mode_3' ||
+      storeMode === 'v3' ||
+      storeMode === 'version_3'
+    ) {
+      return true;
+    }
+    if (Boolean((storeRfq as any).isPublic)) {
+      return true;
+    }
+  }
+
+  // Check explicit assignedVendors
+  const session = options?.currentUserSession;
+  const sessionEmail = String(session?.email || '').toLowerCase().trim();
+  const myVendorId = String(session?.orgId || session?.vendorId || '').toLowerCase().trim();
+  const myVendorName = String(session?.orgName || session?.name || '').toLowerCase().trim();
+
+  const assignedList = rfq.assignedVendors || storeRfq?.assignedVendors;
+  if (Array.isArray(assignedList) && assignedList.length > 0) {
+    const isExplicitlyAssigned = assignedList.some((v: any) => {
+      if (!v) return false;
+      const vEmail = String(v.email || '').toLowerCase().trim();
+      if (vEmail && sessionEmail && vEmail === sessionEmail) return true;
+      const vId = String(v.id || v.vendorId || '').toLowerCase().trim();
+      if (vId && myVendorId && vId === myVendorId) return true;
+      const vName = String(v.name || v.vendorName || '').toLowerCase().trim();
+      if (vName && myVendorName && vName === myVendorName) return true;
+      return false;
+    });
+    if (isExplicitlyAssigned) {
+      return false;
+    }
+    return true;
+  }
+
+  // Check client roster
+  const buyerCompany = String(rfq.buyerAccountName || (rfq as any).buyerCompany || opp?.buyer || '').toLowerCase().trim();
+  const buyerId = String(rfq.buyerAccountId || (opp as any)?.buyerAccountId || '').toLowerCase().trim();
+  const buyerVendors = options?.buyerVendors;
+  if (Array.isArray(buyerVendors) && buyerVendors.length > 0) {
+    const isDirectClient = buyerVendors.some((bv: any) => {
+      if (!bv) return false;
+      const bvBuyerCompany = String(bv.addedByBuyerCompany || bv.buyerCompany || '').toLowerCase().trim();
+      const bvBuyerId = String(bv.buyerId || bv.buyerAccountId || '').toLowerCase().trim();
+      if (buyerCompany && bvBuyerCompany && buyerCompany === bvBuyerCompany) return true;
+      if (buyerId && bvBuyerId && buyerId === bvBuyerId) return true;
+      return false;
+    });
+    if (isDirectClient) return false;
+  }
+
+  return true;
+}
+
+/**
+ * Checks whether this RFQ has already been downloaded/unlocked by the authenticated vendor.
+ */
+export function isRfqDownloadedByVendor(
+  rfq: RFQItem | null,
+  options?: {
+    vendorUnlockedRfqIds?: string[];
+    localUnlockedIds?: string[];
+    vendorEmail?: string;
+    vendorId?: string;
+  }
+): boolean {
+  if (!rfq) return false;
+
+  const rfqNum = String(rfq.rfqNumber || '').toLowerCase().trim();
+  const rfqId = String(rfq.id || '').toLowerCase().trim();
+
+  // If vendor context is provided, check if THIS vendor has already submitted a quote
+  const vEmail = (options?.vendorEmail || '').toLowerCase().trim();
+  const vId = (options?.vendorId || '').toLowerCase().trim();
+  if (Array.isArray(rfq.quotes) && rfq.quotes.length > 0) {
+    if (vEmail || vId) {
+      const hasMyQuote = rfq.quotes.some((q: any) => {
+        if (!q) return false;
+        const qEmail = String(q.vendorEmail || q.submittedBy || '').toLowerCase().trim();
+        const qId = String(q.vendorId || '').toLowerCase().trim();
+        return (vEmail && qEmail && qEmail === vEmail) || (vId && qId && qId === vId);
+      });
+      if (hasMyQuote) return true;
+    } else {
+      // Fallback for callers/tests without vendor session options
+      return true;
+    }
+  }
+
+  const isUnlockedInStore = (options?.vendorUnlockedRfqIds || []).some((id) => {
+    const norm = String(id).toLowerCase().trim();
+    return norm === rfqNum || norm === rfqId;
+  });
+  if (isUnlockedInStore) return true;
+
+  const isUnlockedLocally = (options?.localUnlockedIds || []).some((id) => {
+    const norm = String(id).toLowerCase().trim();
+    return norm === rfqNum || norm === rfqId;
+  });
+  return isUnlockedLocally;
+}
+
+/**
+ * Generates standard fallback HTML specification for client-side download when offline or before preview API responds.
+ */
+export function generateRfqSpecHtml(rfq: RFQItem): string {
+  const lineItemsHtml = (rfq.extractedEntities || [])
+    .map(
+      (item, idx) => `
+    <tr>
+      <td style="padding: 8px; border: 1px solid #cbd5e1;">${idx + 1}</td>
+      <td style="padding: 8px; border: 1px solid #cbd5e1;"><strong>${item.itemName || (item as any).description || ''}</strong>${item.technicalSpecs ? `<br><small style="color: #64748b;">${item.technicalSpecs}</small>` : ''}</td>
+      <td style="padding: 8px; border: 1px solid #cbd5e1;">${item.category || item.minorCategory || ''}</td>
+      <td style="padding: 8px; border: 1px solid #cbd5e1;">${item.quantity || ''} ${item.unit || ''}</td>
+      <td style="padding: 8px; border: 1px solid #cbd5e1;">${(item as any).targetPrice ? `₹${(item as any).targetPrice.toLocaleString('en-IN')}` : 'Not provided'}</td>
+    </tr>`
+    )
+    .join('');
+
+  return `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>RFQ Specification - ${rfq.rfqNumber}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 24px; color: #1e293b; background: #fff; }
+    h1 { color: #0f172a; margin-bottom: 4px; font-size: 22px; }
+    p { margin: 4px 0; font-size: 13px; color: #475569; }
+    table { width: 100%; border-collapse: collapse; margin-top: 16px; font-size: 13px; }
+    th { background: #f8fafc; padding: 10px 8px; border: 1px solid #cbd5e1; text-align: left; font-weight: 700; color: #334155; }
+  </style>
+</head>
+<body>
+  <h1>${rfq.rfqNumber} - ${rfq.title || 'Requirement Specification'}</h1>
+  <p><strong>Category:</strong> ${rfq.category || 'General'}</p>
+  <p><strong>Delivery Location:</strong> ${rfq.deliveryLocation || 'Not provided'} ${rfq.deliveryPincode ? `(PIN: ${rfq.deliveryPincode})` : ''}</p>
+  <p><strong>Target Delivery / Deadline:</strong> ${rfq.targetDeliveryDate || 'Not specified'}</p>
+  <h2 style="font-size: 16px; margin-top: 20px; color: #0f172a;">Line Items / Technical BOQ</h2>
+  <table>
+    <thead>
+      <tr><th>#</th><th>Description</th><th>Category</th><th>Qty</th><th>Target Price</th></tr>
+    </thead>
+    <tbody>${lineItemsHtml}</tbody>
+  </table>
+</body>
+</html>`;
 }
 
 /**
@@ -531,14 +751,39 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   } catch {
     router = null;
   }
-  const { currentRole, showToast, refreshFromDB, refreshRFQs, syncRFQRecord, buyerVendors, currentUserSession } = useApp();
+  const {
+    currentRole,
+    showToast,
+    refreshFromDB,
+    refreshRFQs,
+    syncRFQRecord,
+    buyerVendors,
+    currentUserSession,
+    activeBuyerAccount,
+    vendorUnlockedRfqIds = [],
+    unlockRFQForVendor,
+    refreshVendorCredits,
+    vendorOpportunities = [],
+    rfqs = [],
+  } = useApp();
   const isVendor = Boolean(isVendorView || currentUserSession?.role === 'vendor' || currentRole === 'vendor');
   // The category manager is an internal oversight role: it sees full vendor
   // contact details (no double-blind) and a tabbed Procucev / Buyer's-own split
   // in the assigned-suppliers panel. The buyer keeps the confidential view.
   const isCategoryManager = currentRole === 'category_manager' && !isVendor;
   const [localRfq, setLocalRfq] = useState<RFQItem | null>(rfq);
+  const [locallyDownloaded, setLocallyDownloaded] = useState(false);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const creditsLoadedRef = useRef(false);
+
+  useEffect(() => {
+    if (isVendor && !creditsLoadedRef.current && typeof refreshVendorCredits === 'function') {
+      creditsLoadedRef.current = true;
+      void refreshVendorCredits();
+    }
+  }, [isVendor, refreshVendorCredits]);
   const [isClosing, setIsClosing] = useState(false);
+  const [closeModalOpen, setCloseModalOpen] = useState(false);
   const [extendModalOpen, setExtendModalOpen] = useState(false);
   // The day count typed in the extension dialog, and its parsed value (null while blank, fractional or out of range).
   const [extensionDaysInput, setExtensionDaysInput] = useState<string>(String(DEFAULT_EXTENSION_DAYS));
@@ -584,6 +829,126 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     activeRfq?.sourcingMode === 'mode_2' ||
     (activeRfq?.sourcingMode as any) === 'v2' ||
     (activeRfq?.sourcingMode as any) === 'version_2';
+  const quotesSealed = !isVendor && isBuyerQuotesSealed(activeRfq, currentRole);
+  const unsealIso = resolveQuotesUnsealIso(activeRfq);
+
+  const isPublic = useMemo(() => {
+    return isPublicRfqForVendor(activeRfq, {
+      vendorOpportunities,
+      rfqs,
+      currentUserSession,
+      buyerVendors,
+    });
+  }, [activeRfq, vendorOpportunities, rfqs, currentUserSession, buyerVendors]);
+
+  const isDownloaded = useMemo(() => {
+    return isRfqDownloadedByVendor(activeRfq, {
+      vendorUnlockedRfqIds,
+      localUnlockedIds: locallyDownloaded ? [activeRfq?.rfqNumber || '', activeRfq?.id || ''] : [],
+      vendorEmail: currentUserSession?.email,
+      vendorId: currentUserSession?.orgId || (currentUserSession as any)?.vendorId || (currentUserSession as any)?.id,
+    });
+  }, [activeRfq, vendorUnlockedRfqIds, locallyDownloaded, currentUserSession]);
+
+  const isPublicOpportunity = isPublic || isV0 || isV3 || Boolean((activeRfq as any)?.isPublic);
+  const requiresDownload = isPublicOpportunity && !isDownloaded;
+  const isClosedOrExpired = activeRfq ? (activeRfq.status === 'Closed' || activeRfq.status === 'Expired') : false;
+  const isSubmitDisabled = isClosedOrExpired || requiresDownload;
+
+  const handleDownloadRfq = async () => {
+    if (!activeRfq || isDownloading) return;
+    setIsDownloading(true);
+    try {
+      let downloadData: any = null;
+      if (typeof unlockRFQForVendor === 'function') {
+        const unlockRes = await unlockRFQForVendor(activeRfq.rfqNumber);
+        if (!unlockRes.success) {
+          if (unlockRes.exhausted) {
+            showToast(
+              'Free Credits Exhausted',
+              unlockRes.error || UI_STRINGS.vendorSubscriptionModal.subscriptionRequiredToastDesc,
+              'warning'
+            );
+          } else {
+            showToast('Download Failed', unlockRes.error || 'Could not download the RFQ.', 'warning');
+          }
+          setIsDownloading(false);
+          return;
+        }
+        downloadData = (unlockRes as any).data;
+      }
+
+      if (!downloadData?.htmlBody) {
+        try {
+          const token = authClient.getToken();
+          const res = await fetch(`/api/rfqs/${encodeURIComponent(activeRfq.rfqNumber)}/download`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            },
+          });
+          const json = await res.json().catch(() => null);
+          if (res.ok && json?.success && json.data) {
+            downloadData = json.data;
+          }
+        } catch {
+          // Fallback to local HTML generation
+        }
+      }
+
+      const htmlBody = downloadData?.htmlBody || generateRfqSpecHtml(activeRfq);
+      const specBlob = new Blob([htmlBody], { type: 'text/html' });
+      const specUrl = URL.createObjectURL(specBlob);
+      const specLink = document.createElement('a');
+      specLink.href = specUrl;
+      specLink.download = `${activeRfq.rfqNumber}-specification.html`;
+      document.body.appendChild(specLink);
+      specLink.click();
+      specLink.remove();
+      URL.revokeObjectURL(specUrl);
+
+      const attachments = activeRfq.attachments || [];
+      const token = authClient.getToken();
+      for (const file of attachments) {
+        try {
+          const fileRes = await fetch(rfqAttachmentUrl(file.id), {
+            headers: token ? { Authorization: `Bearer ${token}` } : {},
+          });
+          if (!fileRes.ok) continue;
+          const fileBlob = await fileRes.blob();
+          const fileUrl = URL.createObjectURL(fileBlob);
+          const fileLink = document.createElement('a');
+          fileLink.href = fileUrl;
+          fileLink.download = file.fileName || `${activeRfq.rfqNumber}-attachment`;
+          document.body.appendChild(fileLink);
+          fileLink.click();
+          fileLink.remove();
+          URL.revokeObjectURL(fileUrl);
+        } catch {
+          // Ignore
+        }
+      }
+
+      setLocallyDownloaded(true);
+      if (typeof refreshVendorCredits === 'function') {
+        void refreshVendorCredits();
+      }
+      showToast(
+        'RFQ Downloaded',
+        `Downloaded RFQ specification for ${activeRfq.rfqNumber}. Quote submission is now unlocked.`,
+        'success'
+      );
+    } catch (err: unknown) {
+      showToast(
+        'Download Failed',
+        err instanceof Error && err.message ? err.message : 'Could not download the RFQ specification.',
+        'warning'
+      );
+    } finally {
+      setIsDownloading(false);
+    }
+  };
 
   const syncUpdatedRfq = async (updatedRfq?: RFQItem | null) => {
     if (updatedRfq) {
@@ -597,19 +962,29 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     await refreshFromDB();
   };
 
+  const openCloseModal = () => {
+    setCloseModalOpen(true);
+  };
+
   const handleCloseRFQ = async () => {
     if (!activeRfq || isClosing || isVendor) return;
     setIsClosing(true);
     try {
       const result = await updateRFQ(activeRfq.id, { status: 'Closed' });
       if (result.success) {
-        showToast('RFQ Closed', `RFQ ${activeRfq.rfqNumber} has been officially closed.`, 'success');
+        showToast(
+          DETAILS.closeSuccessTitle,
+          formatString(DETAILS.closeSuccessMessage, { rfqNumber: activeRfq.rfqNumber }),
+          'success'
+        );
+        setCloseModalOpen(false);
         await syncUpdatedRfq(result.rfq);
       } else {
-        throw new Error(result.error || 'Failed to close RFQ.');
+        throw new Error(result.error || DETAILS.closeFailedMessage);
       }
-    } catch (err: any) {
-      showToast('Action Failed', err?.message || 'Failed to close RFQ.', 'warning');
+    } catch (err: unknown) {
+      const message = err instanceof Error && err.message ? err.message : DETAILS.closeFailedMessage;
+      showToast(DETAILS.closeFailedTitle, message, 'warning');
     } finally {
       setIsClosing(false);
     }
@@ -947,7 +1322,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     });
 
     // 3. Quoted Vendors
-    const quotes = Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
+    const quotes = !quotesSealed && Array.isArray(activeRfq.quotes) ? activeRfq.quotes : [];
     quotes.forEach((q: any) => {
       const isProc = checkIsProcucevVendor(q.vendorId, q.vendorName, q.vendorEmail, q);
       // Procucev/internal vendors are shown by name only.
@@ -980,7 +1355,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         if (b.messages.length > 0 && a.messages.length === 0) return 1;
         return 0;
       });
-  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor]);
+  }, [activeRfq, isVendor, isV0, currentUserSession, checkIsProcucevVendor, quotesSealed]);
 
   // Live vendor presence state (Online / Offline based on heartbeat / session activity)
   const [onlineVendors, setOnlineVendors] = useState<Set<string>>(new Set());
@@ -988,6 +1363,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
   useEffect(() => {
     let mounted = true;
     const fetchPresence = async () => {
+      if (isVendor) return;
       const identifiers = vendorChannels.flatMap((c) =>
         [c.vendorEmail, c.vendorId].filter(Boolean) as string[]
       );
@@ -1004,7 +1380,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       mounted = false;
       clearInterval(timer);
     };
-  }, [vendorChannels]);
+  }, [vendorChannels, isVendor]);
 
   // Set default selected vendor
   useEffect(() => {
@@ -1417,7 +1793,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
   const mode = SOURCING_MODES.find((m) => m.id === activeRfq.sourcingMode);
   const attachments = activeRfq.attachments || [];
-  const quotes = activeRfq.quotes || [];
+  const quotes = quotesSealed || (isV0 && currentRole === 'buyer' && !isVendor) ? [] : (activeRfq.quotes || []);
   const resolvedTargetDeliveryDate =
     activeRfq.targetDeliveryDate ||
     (activeRfq as any).target_delivery_date ||
@@ -1426,9 +1802,61 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     lineItems.find((i) => i.targetDate)?.targetDate ||
     '';
   const countdown = deliveryCountdown(daysUntil(resolvedTargetDeliveryDate));
-  const autoClassified = lineItems.filter((i) => i.confidence >= HIGH_CONFIDENCE).length;
-  const classifiedPercent = lineItems.length === 0 ? 0 : Math.round((autoClassified / lineItems.length) * 100);
   const totalQuantity = filteredItems.reduce((sum, item) => sum + item.quantity, 0);
+
+  const isDateValue = (val: unknown): boolean => {
+    if (!val || typeof val !== 'string') return false;
+    const trimmed = val.trim();
+    if (/^\d{4}-\d{2}-\d{2}/.test(trimmed)) return true;
+    if (/^\d{1,2}\s+(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*\s+\d{4}/i.test(trimmed)) return true;
+    if (/^\d{1,2}[\/-]\d{1,2}[\/-]\d{2,4}/.test(trimmed)) return true;
+    return false;
+  };
+
+  const candidateNames = [
+    (activeRfq as any).raisedByName,
+    (activeRfq as any).buyerName,
+    (activeRfq as any).buyerContact,
+    (activeRfq as any).contactPerson,
+    (activeRfq as any).userName,
+    (activeRfq as any).requestedBy,
+    activeBuyerAccount?.contactPerson,
+    currentUserSession?.name,
+    activeBuyerAccount?.organizationName,
+    (activeRfq as any).buyerAccountName,
+  ];
+
+  const validName = candidateNames.find(
+    (name) => typeof name === 'string' && name.trim().length > 0 && !isDateValue(name)
+  )?.trim();
+
+  const fallbackFromEmail = (
+    activeRfq.raisedByEmail ||
+    (activeRfq as any).buyerEmail ||
+    (activeRfq as any).corporateEmail ||
+    (activeRfq as any).userEmail ||
+    (activeRfq as any).sourceEmail ||
+    activeBuyerAccount?.corporateEmail ||
+    currentUserSession?.email ||
+    ''
+  )
+    .split('@')[0]
+    ?.replace(/[._-]/g, ' ')
+    ?.replace(/\b\w/g, (c: string) => c.toUpperCase());
+
+  const requestedByName = validName || fallbackFromEmail || 'Buyer';
+
+  const candidateEmails = [
+    (activeRfq as any).buyerEmail,
+    activeRfq.raisedByEmail,
+    (activeRfq as any).corporateEmail,
+    (activeRfq as any).userEmail,
+    (activeRfq as any).sourceEmail,
+    activeBuyerAccount?.corporateEmail,
+    currentUserSession?.email,
+  ];
+  const requestedByEmail =
+    candidateEmails.find((email) => typeof email === 'string' && email.includes('@'))?.trim() || '';
 
   const getStatusBadgeClass = (status: string) => {
     switch (status) {
@@ -1458,14 +1886,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         >
           <ArrowLeft size={14} /> {DETAILS.backAction}
         </button>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-slate-500 dark:text-gray-400">
-          <span className="mono">{formatString(DETAILS.raisedOnStrip, { timestamp: formatIndianDateTime(activeRfq.createdAt) })}</span>
-          {activeRfq.updatedAt && activeRfq.updatedAt !== activeRfq.createdAt && (
-            <span className="mono">
-              {formatString(DETAILS.updatedOnStrip, { timestamp: formatIndianDateTime(activeRfq.updatedAt) })}
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Header bar */}
@@ -1491,6 +1911,62 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <span className="text-xs text-slate-600 dark:text-gray-300 font-medium">{activeRfq.title}</span>
           </div>
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {isVendor && (
+              <>
+                <button
+                  type="button"
+                  onClick={handleDownloadRfq}
+                  disabled={isDownloading}
+                  className={`btn btn-sm font-bold inline-flex items-center gap-1.5 rounded-xl shadow-xs px-3.5 py-1.5 cursor-pointer text-xs border transition-all ${
+                    requiresDownload
+                      ? 'bg-blue-600 hover:bg-blue-700 text-white border-blue-600'
+                      : 'bg-white hover:bg-slate-100 text-slate-700 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-200 border-slate-300 dark:border-gray-600'
+                  }`}
+                  title={
+                    isDownloading
+                      ? 'Downloading RFQ specification...'
+                      : isDownloaded
+                      ? 'Download RFQ specification file again'
+                      : 'Download RFQ specification file to unlock bidding'
+                  }
+                  aria-label="Download RFQ"
+                >
+                  {isDownloading ? (
+                    <Loader2 size={13} className="animate-spin text-current" />
+                  ) : (
+                    <Download size={13} />
+                  )}
+                  <span>{isDownloading ? 'Downloading...' : 'Download RFQ'}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isSubmitDisabled) return;
+                    if (router) {
+                      router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                    } else {
+                      window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                    }
+                  }}
+                  disabled={isSubmitDisabled}
+                  className="btn btn-sm font-bold inline-flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl shadow-xs px-3.5 py-1.5 cursor-pointer disabled:cursor-not-allowed border-none text-xs"
+                  title={
+                    activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
+                      ? 'Bidding is closed for this RFQ'
+                      : requiresDownload
+                      ? 'Download RFQ first to enable bidding'
+                      : quotes.length > 0
+                      ? 'Update or resubmit quotation'
+                      : 'Submit quotation for this RFQ'
+                  }
+                  aria-label={quotes.length > 0 ? 'Resubmit Bid' : 'Submit Quote'}
+                >
+                  <Send size={13} />
+                  <span>{quotes.length > 0 ? 'Resubmit Bid' : 'Submit Quote'}</span>
+                </button>
+              </>
+            )}
             {activeRfq.status !== 'Closed' &&
               activeRfq.status !== 'Expired' &&
               activeRfq.status !== 'PO Generated' &&
@@ -1524,12 +2000,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               !isVendor && (
               <button
                 type="button"
-                onClick={handleCloseRFQ}
+                onClick={openCloseModal}
                 disabled={isClosing}
                 className="btn btn-xs font-bold inline-flex items-center gap-1.5 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-300 hover:bg-slate-100 dark:hover:bg-gray-800 disabled:opacity-50"
-                title="Close RFQ and conclude bidding"
+                title={formatString(DETAILS.closeRfqAria, { rfqNumber: activeRfq.rfqNumber })}
               >
-                <Lock size={12} /> {isClosing ? 'Closing...' : 'Close RFQ'}
+                <Lock size={12} /> {isClosing ? DETAILS.closeRfqClosingAction : DETAILS.closeRfqAction}
               </button>
             )}
             {onEdit && (
@@ -1553,6 +2029,26 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         </div>
       </header>
+
+      {/* Closed RFQ Banner (cannot be reopened) */}
+      {activeRfq.status === 'Closed' && !Boolean((activeRfq as any).poFinalised) && (
+        <div
+          role="status"
+          className="p-3.5 sm:p-4 rounded-xl bg-slate-100 dark:bg-gray-800/80 border border-slate-300 dark:border-gray-700 text-slate-800 dark:text-gray-200 text-xs flex items-start gap-3 shadow-xs"
+        >
+          <span className="w-8 h-8 rounded-lg bg-slate-200 dark:bg-gray-700 text-slate-700 dark:text-gray-200 flex items-center justify-center shrink-0">
+            <Lock size={16} />
+          </span>
+          <div>
+            <div className="font-extrabold text-sm text-slate-900 dark:text-white">
+              {DETAILS.closedPermanentBannerTitle}
+            </div>
+            <p className="text-slate-600 dark:text-gray-300 text-xs mt-0.5">
+              {isVendor ? DETAILS.closedPermanentBannerVendor : DETAILS.closedPermanentBannerBuyer}
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Finalised PO Banner */}
       {(activeRfq.status === 'PO Generated' || Boolean((activeRfq as any).poFinalised)) && (
@@ -1579,7 +2075,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
           <button
             type="button"
-            onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+            onClick={() => {
+              const matrixRoute = (currentRole === 'category_manager' || currentRole === 'admin')
+                ? `/category-manager/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`
+                : `/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+              router.push(matrixRoute);
+            }}
             className="btn btn-emerald btn-xs px-3.5 py-1.5 font-bold shrink-0 inline-flex items-center gap-1.5"
           >
             <Sparkles size={12} /> View Finalised Matrix &amp; PO ↗
@@ -1592,8 +2093,19 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         <Card
           title={DETAILS.submittedHeading}
           icon={<ClipboardList size={15} className="text-indigo-600 dark:text-indigo-400" />}
-          meta={<span className="text-[10px] mono text-slate-400 dark:text-gray-500">{activeRfq.id}</span>}
         >
+          <Row label={DETAILS.requestedByLabel || 'Requested By'}>
+            <span className="font-semibold text-slate-900 dark:text-white">
+              {requestedByName}
+            </span>
+          </Row>
+          {requestedByEmail && (
+            <Row label={DETAILS.userEmailLabel || 'User Email'}>
+              <span className="mono text-indigo-600 dark:text-indigo-400">
+                {requestedByEmail}
+              </span>
+            </Row>
+          )}
           <Row label={DETAILS.sourceLabel}>
             <span className="inline-flex items-center gap-1.5">
               {activeRfq.source === 'email_gateway' || activeRfq.source === 'email_upload' ? (
@@ -1769,10 +2281,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                   <span className="mono font-bold text-slate-900 dark:text-white tabular-nums">
                     {totalQuantity}
                   </span>
-                </span>
-                <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
-                  <ShieldCheck size={12} />
-                  {formatString(DETAILS.parsedSuccessfully, { percent: classifiedPercent })}
                 </span>
               </span>
             </>
@@ -2061,11 +2569,13 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           // A Procucev card always shows category, location, and score — resolve
           // each from the richest source available, so a backend-populated V3
           // vendor (which carries none of these inline) still renders them.
-          const quoteForVendor = (activeRfq?.quotes || []).find(
-            (q: any) =>
-              (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
-              (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
-          );
+          const quoteForVendor = quotesSealed
+            ? undefined
+            : (activeRfq?.quotes || []).find(
+                (q: any) =>
+                  (v.id && q.vendorId && String(q.vendorId) === String(v.id)) ||
+                  (v.name && q.vendorName && String(q.vendorName).trim().toLowerCase() === String(v.name).trim().toLowerCase())
+              );
           const { majorCategory, minorCategory } = resolveVendorCategories(v, found, isProc, activeRfq, idx, rfqEntities);
           const resolvedLocation =
             v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null) || found?.location || found?.city || found?.state || null;
@@ -2493,7 +3003,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                 <Download size={12} /> Download Quotes (Excel)
               </button>
               <button
-                onClick={() => router.push(`/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`)}
+                onClick={() => {
+                  const matrixRoute = (currentRole === 'category_manager' || currentRole === 'admin')
+                    ? `/category-manager/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`
+                    : `/buyer/quote-matrix?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                  router.push(matrixRoute);
+                }}
                 className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1.5"
               >
                 <Sparkles size={12} />{' '}
@@ -2519,7 +3034,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               When vendor submits quote, you will receive quote details in your email
             </span>
           </div>
-        ) : currentRole === 'buyer' && !isVendor && activeRfq?.quotesHidden ? (
+        ) : quotesSealed ? (
           <div className="px-4 pb-10 pt-4 flex flex-col items-center text-center max-w-xl mx-auto space-y-3">
             <span className="w-16 h-16 rounded-2xl bg-amber-50 dark:bg-amber-950/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
               <Lock size={26} />
@@ -2530,7 +3045,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             </p>
             <span className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-amber-800 dark:text-amber-300 bg-amber-100/70 dark:bg-amber-900/40 px-3 py-1 rounded-full border border-amber-200 dark:border-amber-800 shadow-sm">
               <Clock size={12} />
-              Unseals: {activeRfq.quotesHiddenUntil ? new Date(activeRfq.quotesHiddenUntil).toLocaleString() : 'After 48 hours'} (or when closed)
+              Unseals: {unsealIso ? new Date(unsealIso).toLocaleString() : 'After 48 hours'} (or when closed)
             </span>
           </div>
         ) : quotes.length === 0 ? (
@@ -2776,105 +3291,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
         )}
       </Panel>
       )}
-
-      {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
-      {isVendor && quotes.length > 0 && (() => {
-        const myQuote = quotes[0];
-        return (
-          <Panel
-            title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
-          >
-            <div className="p-4 sm:p-5 space-y-4">
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Unit Price</span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-white text-sm mt-0.5 block">
-                    {formatCurrency(myQuote.unitPrice)}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-emerald-50/50 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/40">
-                  <span className="text-[10px] text-emerald-600 dark:text-emerald-400 block uppercase font-bold">Total Quote Price</span>
-                  <span className="font-mono font-black text-emerald-700 dark:text-emerald-300 text-base mt-0.5 block">
-                    {formatCurrency(myQuote.totalPrice)}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Lead Time</span>
-                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
-                    {myQuote.leadTimeDays != null ? `${myQuote.leadTimeDays} Days` : 'Standard'}
-                  </span>
-                </div>
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold">Warranty</span>
-                  <span className="font-semibold text-slate-800 dark:text-gray-200 text-sm mt-0.5 block">
-                    {myQuote.warrantyYears != null ? `${myQuote.warrantyYears} Years` : 'Standard'}
-                  </span>
-                </div>
-              </div>
-
-              {(myQuote.paymentTerms || myQuote.remarks) && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
-                  {myQuote.paymentTerms && (
-                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Commercial & Payment Terms</span>
-                      <p className="text-slate-700 dark:text-gray-300 font-medium">{myQuote.paymentTerms}</p>
-                    </div>
-                  )}
-                  {myQuote.remarks && (
-                    <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                      <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1">Submission Remarks</span>
-                      <p className="text-slate-700 dark:text-gray-300">{myQuote.remarks}</p>
-                    </div>
-                  )}
-                </div>
-              )}
-
-              {Array.isArray(myQuote.lineItemQuotes) && myQuote.lineItemQuotes.length > 0 && (
-                <div className="space-y-2">
-                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 uppercase tracking-wider block">
-                    Line Item Price Breakdown
-                  </span>
-                  <div className="overflow-x-auto border border-slate-200 dark:border-gray-800 rounded-xl">
-                    <table className="w-full text-left text-xs">
-                      <thead className="bg-slate-50 dark:bg-gray-950 text-[10px] uppercase text-slate-500 font-bold">
-                        <tr>
-                          <th className="px-3 py-2">Item Name</th>
-                          <th className="px-3 py-2 text-right">Unit Rate</th>
-                          <th className="px-3 py-2 text-right">Line Total</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
-                        {myQuote.lineItemQuotes.map((li: any, lIdx: number) => (
-                          <tr key={li.lineItemId || lIdx}>
-                            <td className="px-3 py-2 font-medium text-slate-800 dark:text-gray-200">{li.itemName || `Item ${lIdx + 1}`}</td>
-                            <td className="px-3 py-2 text-right font-mono text-slate-900 dark:text-white">{formatCurrency(li.unitPrice)}</td>
-                            <td className="px-3 py-2 text-right font-mono font-bold text-slate-900 dark:text-white">{formatCurrency(li.totalPrice || li.unitPrice)}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                </div>
-              )}
-
-              {Array.isArray(myQuote.attachments) && myQuote.attachments.length > 0 && (
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700">
-                  <span className="text-[10px] text-slate-400 block uppercase font-bold mb-1.5">Submitted Bid Documents</span>
-                  <div className="flex flex-wrap gap-2">
-                    {myQuote.attachments.map((att: any, attIdx: number) => (
-                      <span key={att.id || attIdx} className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/50 text-indigo-700 dark:text-indigo-300 text-xs font-semibold border border-indigo-200 dark:border-indigo-800">
-                        <FileText size={12} />
-                        <span>{att.fileName || att.name || `Document-${attIdx + 1}`}</span>
-                      </span>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-          </Panel>
-        );
-      })()}
 
       {/* Vendor Inquiries & Clarifications Chat Desk */}
       {!isV0 && (
@@ -3402,13 +3818,96 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       </Panel>
       )}
 
+      {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
+      {isVendor && quotes.length === 0 && (
+        <div className="p-4 sm:p-5 rounded-xl bg-gradient-to-r from-emerald-50 via-teal-50 to-emerald-50 dark:from-emerald-950/30 dark:via-teal-950/20 dark:to-emerald-950/30 border border-emerald-200 dark:border-emerald-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-xs">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 rounded-xl bg-emerald-100 dark:bg-emerald-900/50 text-emerald-700 dark:text-emerald-300 flex items-center justify-center shrink-0">
+              <Send size={18} />
+            </div>
+            <div>
+              <h3 className="font-bold text-sm text-slate-900 dark:text-white">
+                Submit Your Quotation for this RFQ
+              </h3>
+              <p className="text-xs text-slate-600 dark:text-gray-300 mt-0.5">
+                Review the line items and technical specifications, then submit your competitive quotation for this requirement.
+              </p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {requiresDownload && (
+              <button
+                type="button"
+                onClick={handleDownloadRfq}
+                disabled={isDownloading}
+                className="btn btn-sm font-bold bg-blue-600 hover:bg-blue-700 text-white rounded-xl px-3.5 py-2 shadow-xs cursor-pointer border-none flex items-center gap-1.5"
+                title="Download RFQ specification file to unlock bidding"
+                aria-label="Download RFQ to Bid"
+              >
+                {isDownloading ? (
+                  <Loader2 size={14} className="animate-spin text-current" />
+                ) : (
+                  <Download size={14} />
+                )}
+                <span>{isDownloading ? 'Downloading...' : 'Download RFQ'}</span>
+              </button>
+            )}
+            <button
+              type="button"
+              disabled={isSubmitDisabled}
+              onClick={() => {
+                if (isSubmitDisabled) return;
+                if (router) {
+                  router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                } else {
+                  window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                }
+              }}
+              className="btn btn-sm font-bold bg-emerald-600 hover:bg-emerald-700 disabled:bg-slate-300 dark:disabled:bg-gray-800 disabled:text-slate-500 text-white rounded-xl px-4 py-2 shadow-xs shrink-0 cursor-pointer disabled:cursor-not-allowed border-none flex items-center gap-1.5"
+              title={
+                activeRfq.status === 'Closed' || activeRfq.status === 'Expired'
+                  ? 'Bidding is closed for this RFQ'
+                  : requiresDownload
+                  ? 'Download RFQ first to enable bidding'
+                  : 'Submit quotation for this RFQ'
+              }
+              aria-label="Submit Quote"
+            >
+              <Send size={14} />
+              <span>Submit Quote</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Vendor's Own Submitted Quotation View (when viewing as vendor and has submitted quote) */}
       {isVendor && quotes.length > 0 && (() => {
         const myQuote = quotes[0];
         return (
           <Panel
             title="Your Submitted Quotation"
-            toolbar={<span className="badge badge-emerald">Quote Submitted</span>}
+            toolbar={
+              <div className="flex items-center gap-2">
+                <span className="badge badge-emerald">Quote Submitted</span>
+                {activeRfq.status !== 'Closed' && activeRfq.status !== 'Expired' && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (router) {
+                        router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`);
+                      } else {
+                        window.location.href = `/vendor/quotation-form?rfq=${encodeURIComponent(activeRfq.rfqNumber)}`;
+                      }
+                    }}
+                    className="btn btn-xs bg-indigo-600 hover:bg-indigo-700 text-white font-bold inline-flex items-center gap-1 rounded-lg px-2.5 py-1 cursor-pointer border-none"
+                    title="Update or resubmit quotation"
+                  >
+                    <Send size={11} />
+                    <span>Resubmit Bid</span>
+                  </button>
+                )}
+              </div>
+            }
           >
             <div className="p-4 sm:p-5 space-y-4">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
@@ -3503,7 +4002,10 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       {/* Buyer Reply Modal */}
       {replyModalInquiry && (
-        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setReplyModalInquiry, null)}
+          className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+        >
           <div className="w-full max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-4 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -3596,12 +4098,90 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       )}
 
 
+      {/* Close RFQ Confirmation Modal */}
+      {closeModalOpen && activeRfq && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="close-rfq-modal-title"
+          onClick={createBackdropClickHandler(setCloseModalOpen, false, isClosing)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
+        >
+          <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-800">
+                  <Lock size={20} />
+                </div>
+                <div>
+                  <h3 id="close-rfq-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+                    {DETAILS.closeModalTitle}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
+                    {formatString(DETAILS.closeModalSubtitle, { rfqNumber: activeRfq.rfqNumber })}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="p-1 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-gray-800"
+                aria-label={UI_STRINGS.actions.cancel}
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200/80 dark:border-gray-700/60 space-y-2 text-xs">
+              <div className="flex justify-between items-center gap-3">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRfqNumberLabel}</span>
+                <span className="mono font-semibold text-slate-800 dark:text-gray-200">{activeRfq.rfqNumber}</span>
+              </div>
+              <div className="flex justify-between items-center gap-3 pt-2 border-t border-slate-200 dark:border-gray-700">
+                <span className="text-slate-500 dark:text-gray-400 font-medium">{DETAILS.closeModalRequirementLabel}</span>
+                <span className="font-semibold text-slate-800 dark:text-gray-200 truncate text-right">{activeRfq.title}</span>
+              </div>
+            </div>
+
+            <div className="flex items-start gap-2.5 p-3 rounded-xl bg-rose-50/90 dark:bg-rose-950/30 border border-rose-200/80 dark:border-rose-800/60 text-xs text-rose-800 dark:text-rose-300 leading-relaxed">
+              <AlertCircle size={16} className="shrink-0 mt-0.5 text-rose-600 dark:text-rose-400" />
+              <div className="space-y-0.5">
+                <p className="font-bold">{DETAILS.closeModalWarningTitle}</p>
+                <p>{DETAILS.closeModalWarningBody}</p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2">
+              <button
+                type="button"
+                onClick={() => setCloseModalOpen(false)}
+                disabled={isClosing}
+                className="btn btn-ghost btn-sm text-xs font-semibold"
+              >
+                {UI_STRINGS.actions.cancel}
+              </button>
+              <button
+                type="button"
+                onClick={handleCloseRFQ}
+                disabled={isClosing}
+                className="btn btn-sm text-xs font-bold bg-rose-600 hover:bg-rose-700 text-white shadow-xs inline-flex items-center gap-1.5 disabled:opacity-50"
+              >
+                <Lock size={12} />
+                <span>{isClosing ? DETAILS.closeModalConfirmingAction : DETAILS.closeModalConfirmAction}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Extend RFQ Modal */}
       {extendModalOpen && activeRfq && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="extend-rfq-modal-title"
+          onClick={createBackdropClickHandler(setExtendModalOpen, false, isExtending)}
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs animate-in fade-in duration-200"
         >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl shadow-2xl max-w-md w-full overflow-hidden p-6 space-y-5">

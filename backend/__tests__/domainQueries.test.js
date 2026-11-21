@@ -350,6 +350,32 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
         expect(dataParams).toEqual(['ba-42', 10, 0]);
       });
 
+      test('skips full-table COUNT(*) on D1 free-text search and uses limit + 1 pagination window', async () => {
+        const d1Bridge = require('../src/db/d1Bridge');
+        jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({});
+        try {
+          const query = jest
+            .fn()
+            .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-1' } }, { raw: { id: 'v-2' } }, { raw: { id: 'v-3' } }] })
+            .mockResolvedValueOnce({ rows: [{ raw: { id: 'v-4' } }] });
+          pool.pool = { query };
+
+          const morePage = await domainQueries.getVendorsPageFromDB({ limit: 2, offset: 0, search: 'steel' });
+          expect(query).toHaveBeenCalledTimes(1);
+          expect(query.mock.calls[0][0]).not.toContain('COUNT(*)');
+          expect(query.mock.calls[0][1].slice(-2)).toEqual([3, 0]);
+          expect(morePage.rows).toHaveLength(2);
+          expect(morePage.total).toBe(3);
+
+          const exactPage = await domainQueries.getVendorsPageFromDB({ limit: 2, offset: 2, search: 'steel' });
+          expect(query).toHaveBeenCalledTimes(2);
+          expect(exactPage.rows).toHaveLength(1);
+          expect(exactPage.total).toBe(3);
+        } finally {
+          jest.restoreAllMocks();
+        }
+      });
+
       test('keeps D1 buyer page predicates aligned with normalized owner indexes', async () => {
         jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
         const query = jest.spyOn(pool, 'query')
@@ -1455,6 +1481,26 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       await expect(domainQueries.getBuyerAccountByEmailFromDB('nobody@x.com')).resolves.toBeNull();
     });
 
+    test('getBuyerAccountsByEmailFromDB returns every row sharing the email, not just the active one', async () => {
+      const active = { id: 'buyer-active', corporateEmail: 'multi@lt.com' };
+      const inactive = { id: 'buyer-older', corporateEmail: 'multi@lt.com' };
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [{ raw: active }, { raw: JSON.stringify(inactive) }] }) };
+
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('multi@lt.com')).resolves.toEqual([active, inactive]);
+      expect(pool.pool.query).toHaveBeenCalledWith(
+        expect.stringContaining('WHERE lower(corporate_email) = lower($1)'),
+        ['multi@lt.com']
+      );
+    });
+
+    test('getBuyerAccountsByEmailFromDB returns an empty array when nothing matched, not configured, or no email given', async () => {
+      pool.pool = { query: jest.fn().mockResolvedValue({ rows: [] }) };
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('nobody@x.com')).resolves.toEqual([]);
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('')).resolves.toEqual([]);
+      pool.pool = null;
+      await expect(domainQueries.getBuyerAccountsByEmailFromDB('x@y.com')).resolves.toEqual([]);
+    });
+
     test('buyer account fresh lookups bypass cached records for email and id', async () => {
       pool.pool = {};
       const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [{ raw: { id: 'buyer-fresh' } }] });
@@ -2159,6 +2205,13 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       const cachedRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com');
       expect(cachedRes).toEqual([v]);
 
+      // Explicit fresh: true bypasses cache
+      pool.pool.query.mockResolvedValueOnce({ rows: [{ raw: v }] });
+      const freshRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com', { fresh: true });
+      expect(freshRes).toEqual([v]);
+      const explicitCachedRes = await domainQueries.getVendorsByBuyerFromDB(['b-1'], 100, 'buyer@company.com', { fresh: false });
+      expect(explicitCachedRes).toEqual([v]);
+
       // Stale cache fallback test
       const { queryCache } = require('../src/db/queryCache');
       const staleVendors = [{ id: 'stale-buyer-v' }];
@@ -2337,6 +2390,25 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(query).toHaveBeenCalledTimes(2);
       expect(query.mock.calls[0][1]).toEqual(['vendor', 'v-1', 25]);
       expect(query.mock.calls[1][1]).toEqual(['vendor', 'v-1']);
+
+      // Reconciles parsed raw.read with authoritative SQL is_read column and bypasses query cache
+      const drifted = { id: 'ntf-drift-1', recipientType: 'buyer', recipientId: 'b-1', read: false };
+      query
+        .mockResolvedValueOnce({ rows: [{ is_read: 1, raw: JSON.stringify(drifted) }] })
+        .mockResolvedValueOnce({ rows: [{ unread_count: 0 }] });
+      const reconciled = await domainQueries.getNotificationsForRecipientFromDB('buyer', 'b-1', 20);
+      expect(reconciled).toEqual({
+        data: [{ ...drifted, read: true }],
+        unreadCount: 0,
+      });
+
+      // markNotificationReadInDB accepts RETURNING rows even when rowCount is 0/undefined
+      query.mockResolvedValueOnce({ rowCount: 0, rows: [{ id: 'ntf-ret-1' }] });
+      await expect(domainQueries.markNotificationReadInDB('ntf-ret-1', 'buyer', 'b-1')).resolves.toBe(true);
+
+      // markAllNotificationsReadInDB coerces missing rowCount cleanly to 0
+      query.mockResolvedValueOnce({ rows: [] });
+      await expect(domainQueries.markAllNotificationsReadInDB('buyer', 'b-1')).resolves.toBe(0);
     });
 
     test('markChaserJobFailedInDB schedules retry work and caps the terminal failure attempt', async () => {
@@ -2870,8 +2942,9 @@ describe('D1 streamlined vendor search queries', () => {
     await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, search: 'stainless steel' });
 
     const d1Queries = query.mock.calls.map(([, , options]) => options?.d1Text).filter(Boolean);
-    expect(d1Queries).toHaveLength(2);
+    expect(d1Queries).toHaveLength(1);
     expect(d1Queries.every((sql) => !sql.includes('vendors_search_fts'))).toBe(true);
+    expect(d1Queries[0]).not.toContain('COUNT(*)');
     expect(d1Queries[0]).toContain("lower(json_extract(raw,'$.name')) LIKE lower($1)");
   });
 
@@ -3275,6 +3348,34 @@ describe('additional domainQueries branch coverage', () => {
       const buyerCreditQueries = require('../src/db/buyerCreditQueries');
       jest.spyOn(buyerCreditQueries, 'addBuyerCreditsInDB').mockResolvedValueOnce({ balance: 100 });
       expect(await domainQueries.addBuyerCreditsInDB({ buyerId: 'b-1' })).toEqual({ balance: 100 });
+    });
+
+    test('getVendorsPageFromDB activeOnly filters SQL and excludes inactive vendors', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const query = jest.fn()
+        .mockResolvedValueOnce({ rows: [{ total: 1 }] })
+        .mockResolvedValueOnce({
+          rows: [
+            { raw: { id: 'v-act', name: 'Active Vendor', status: 'ACTIVE' } },
+            { raw: { id: 'v-inact', name: 'Inactive Vendor', isActive: false, status: 'INACTIVE' } },
+          ],
+        });
+      pool.pool = { query };
+
+      const page = await domainQueries.getVendorsPageFromDB({ limit: 10, offset: 0, activeOnly: true });
+      expect(query.mock.calls[0][0]).toContain("upper(status) != 'INACTIVE'");
+      expect(page.rows.map((v) => v.id)).toEqual(['v-act']);
+
+      // getPublicVendorsByMajorCategoryFromDB drops inactive rows via appendUniqueVendors
+      const pubQuery = jest.fn().mockResolvedValueOnce({
+        rows: [
+          { raw: { id: 'v-pub-inact', isActive: false, status: 'INACTIVE', pincode: '560001' } },
+          { raw: { id: 'v-pub-act', status: 'ACTIVE', pincode: '560001' } },
+        ],
+      });
+      pool.pool = { query: pubQuery };
+      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(['Mechanical'], 5, { pincode: '560001' });
+      expect(majorRows.map((v) => v.id)).toEqual(['v-pub-act']);
     });
   });
 });

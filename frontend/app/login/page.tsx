@@ -12,6 +12,7 @@ import {
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
   GSTIN_PATTERN,
+  derivePanFromGstin,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -532,7 +533,7 @@ function LoginPageContent() {
     try {
       const email = regEmail.trim().toLowerCase();
       const cleanGstin = regGstin.trim().toUpperCase();
-      const derivedPan = '';
+      const derivedPan = derivePanFromGstin(cleanGstin);
       const cleanCity = regCity.trim();
       const cleanState = regState.trim();
       const cleanStreet = regStreet.trim();
@@ -548,13 +549,17 @@ function LoginPageContent() {
         role: selectedRegRole,
         orgName: regOrgName.trim() || regName.trim(),
         street: resolvedStreet,
+        streetAddress: resolvedStreet,
         address: resolvedStreet,
+        registeredAddress: resolvedStreet,
         city: cleanCity,
         state: cleanState,
         pincode: cleanPincode,
         country: 'India',
         gstin: cleanGstin,
+        gstNumber: cleanGstin,
         pan: derivedPan,
+        panNumber: derivedPan,
         emailOtp,
         mobileOtp,
         code: mobileOtp || emailOtp,
@@ -568,19 +573,27 @@ function LoginPageContent() {
       if (selectedRegRole === 'buyer') {
         await Promise.resolve(
           addBuyerAccount({
+            userId: response.user.id || undefined,
+            organizationId: response.user.orgId || undefined,
             organizationName: regOrgName.trim() || response.user.orgName || regName.trim(),
             brandName: regOrgName.trim() || regName.trim(),
             corporateEmail: email,
             contactPerson: regName.trim(),
             mobileNumber: regMobile.trim(),
             gstin: cleanGstin,
+            gstNumber: cleanGstin,
             pan: derivedPan,
+            panNumber: derivedPan,
             street: resolvedStreet,
+            streetAddress: resolvedStreet,
             address1: resolvedStreet,
+            address: resolvedStreet,
+            registeredAddress: resolvedStreet,
             city: cleanCity,
             state: cleanState,
             pincode: cleanPincode,
             zip_code: cleanPincode,
+            zipCode: cleanPincode,
             country: 'India',
             primaryPlantLocation: plantLocation,
             // Not asked at registration, so it is sent empty rather than a guessed sector.

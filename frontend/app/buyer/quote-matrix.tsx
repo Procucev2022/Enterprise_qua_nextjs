@@ -3,12 +3,14 @@
 import React, { useState, useEffect } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
-import { formatCurrency, formatIndianDate } from '@/lib/constants';
+import { formatCurrency, formatIndianDate, isBuyerQuotesSealed, resolveQuotesUnsealIso } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQItem, QuoteComparison, VendorFollowUpRecord } from '@/lib/types';
+import type { RFQItem, QuoteComparison } from '@/lib/types';
 import { PurchaseOrderModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
 import { downloadBidComparisonExcel, downloadFullQuotesExcel, downloadSingleVendorQuoteExcel } from '@/lib/bidComparisonExport';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
+import { fetchRFQById } from '@/lib/rfqClient';
 import {
   Sparkles,
   CheckCircle2,
@@ -54,6 +56,9 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     activeBuyerAccount,
     buyerVendors,
     refreshRFQs,
+    ensureRFQs,
+    syncRFQRecord,
+    isLoadingRFQs,
   } = useApp();
   let router: any = null;
   try {
@@ -66,25 +71,70 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
   const rfqParam = searchParams?.get('rfq');
 
   const rfqs = allRfqs;
+  const [standaloneRFQ, setStandaloneRFQ] = useState<RFQItem | null>(null);
+  const [isLoadingStandalone, setIsLoadingStandalone] = useState<boolean>(false);
 
   useEffect(() => {
-    if (rfqParam && rfqs.length > 0) {
+    if (rfqs.length === 0 && typeof ensureRFQs === 'function') {
+      void ensureRFQs();
+    }
+  }, [rfqs.length, ensureRFQs]);
+
+  useEffect(() => {
+    if (!rfqParam) return;
+    if (rfqs.length > 0) {
       const match = rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam);
-      if (match && match.id !== selectedRFQForMatrix?.id) {
-        setSelectedRFQForMatrix(match);
+      if (match) {
+        if (match.id !== selectedRFQForMatrix?.id) {
+          setSelectedRFQForMatrix(match);
+        }
+        return;
       }
     }
-  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix]);
+    if (!standaloneRFQ && !isLoadingStandalone) {
+      setIsLoadingStandalone(true);
+      fetchRFQById(rfqParam)
+        .then((res) => {
+          if (res.success && res.rfq) {
+            setStandaloneRFQ(res.rfq);
+            setSelectedRFQForMatrix(res.rfq);
+          }
+        })
+        .finally(() => {
+          setIsLoadingStandalone(false);
+        });
+    }
+  }, [rfqParam, rfqs, selectedRFQForMatrix?.id, setSelectedRFQForMatrix, standaloneRFQ, isLoadingStandalone]);
 
   const paramMatch = rfqParam ? rfqs.find((r) => r.rfqNumber === rfqParam || r.id === rfqParam) : null;
   const selectionInScope = !scopeToOwnBuyerAccount || (!!selectedRFQForMatrix && rfqs.some((r) => r.id === selectedRFQForMatrix.id));
 
-  const currentRFQ = paramMatch || (selectionInScope ? selectedRFQForMatrix : null) || (rfqs.length > 0 ? rfqs[0] : null);
+  const currentRFQ =
+    (standaloneRFQ && (standaloneRFQ.rfqNumber === rfqParam || standaloneRFQ.id === rfqParam) ? standaloneRFQ : null) ||
+    paramMatch ||
+    (selectionInScope ? selectedRFQForMatrix : null) ||
+    (rfqs.length > 0 ? rfqs[0] : null);
+
+  const availableRfqs =
+    standaloneRFQ && !rfqs.some((r) => r.id === standaloneRFQ.id)
+      ? [standaloneRFQ, ...rfqs]
+      : rfqs;
 
   const [poModalOpen, setPoModalOpen] = useState(false);
   const [selectedVendorForPO, setSelectedVendorForPO] = useState<QuoteComparison | null>(null);
 
   if (!currentRFQ) {
+    if (isLoadingStandalone || isLoadingRFQs) {
+      return (
+        <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
+          <div className="w-8 h-8 mx-auto border-2 border-indigo-600 border-t-transparent rounded-full animate-spin" />
+          <h3 className="text-base font-bold text-slate-900 dark:text-white">Loading Quote Matrix...</h3>
+          <p className="text-xs text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+            Retrieving procurement evaluation data for {rfqParam || 'selected RFQ'}.
+          </p>
+        </div>
+      );
+    }
     return (
       <div className="p-12 text-center glass-panel rounded-2xl space-y-3 border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
         <AlertCircle size={32} className="mx-auto text-amber-500" />
@@ -96,7 +146,13 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     );
   }
 
-  const quotes = currentRFQ.quotes || [];
+  const isV0 =
+    currentRFQ.sourcingMode === 'mode_0' ||
+    (currentRFQ.sourcingMode as any) === 'v0' ||
+    (currentRFQ.sourcingMode as any) === 'version_0';
+  const quotesSealed = isBuyerQuotesSealed(currentRFQ, currentRole);
+  const unsealIso = resolveQuotesUnsealIso(currentRFQ);
+  const quotes = quotesSealed || (currentRole === 'buyer' && isV0) ? [] : (currentRFQ.quotes || []);
 
   // Comparable total quotation amount including applicable taxes and charges
   const getComparableAmount = (q: QuoteComparison): number => {
@@ -135,10 +191,14 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
     setPoModalOpen(false);
     showToast('PPO Finalised', `Purchase Order ${poNumber} has been finalised and saved successfully.`, 'success');
     await refreshRFQs?.();
+    const isCM = currentRole === 'category_manager' || currentRole === 'admin';
+    const detailsRoute = isCM
+      ? `/category-manager/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`
+      : `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
     if (router?.push) {
-      router.push(`/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`);
+      router.push(detailsRoute);
     } else if (typeof window !== 'undefined') {
-      window.location.href = `/buyer/rfq-details?rfq=${encodeURIComponent(currentRFQ.rfqNumber)}`;
+      window.location.href = detailsRoute;
     }
   };
 
@@ -161,14 +221,14 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           <select
             value={currentRFQ.id}
             onChange={(e) => {
-              const found = rfqs.find((r) => r.id === e.target.value);
+              const found = availableRfqs.find((r) => r.id === e.target.value);
               if (found) setSelectedRFQForMatrix(found);
             }}
             className="text-xs font-semibold mono bg-white dark:bg-gray-900 border border-slate-300 dark:border-gray-700 rounded-lg px-2.5 py-1.5 shadow-sm"
           >
-            {rfqs.map((r) => (
+            {availableRfqs.map((r) => (
               <option key={r.id} value={r.id}>
-                {r.rfqNumber} — {r.title.slice(0, 35)}... ({r.quotesCount} Quotes)
+                {r.rfqNumber} — {String(r.title || 'Untitled RFQ').slice(0, 35)}... ({r.quotesCount || 0} Quotes)
               </option>
             ))}
           </select>
@@ -219,7 +279,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   </span>
                 )}
               </div>
-              <p className="text-slate-600 dark:text-gray-300 font-medium text-xs mt-0.5">{currentRFQ.title}</p>
+              <p className="text-slate-600 dark:text-gray-300 font-medium text-xs mt-0.5">{currentRFQ.title || 'Untitled RFQ'}</p>
             </div>
           </div>
 
@@ -249,64 +309,16 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
 
         {/* Multi-Channel Follow-Up Status Strip (WhatsApp, SMS, Email) */}
         {currentRFQ.followUpData && (() => {
-          const followUp = currentRFQ.followUpData;
-          const vCount = Math.max(
-            currentRFQ.assignedVendors?.length || 0,
-            currentRFQ.procucevVendorCount || 0,
-            followUp?.totalInvited || 0,
-            followUp?.whatsappStats?.total || 0,
-            followUp?.smsStats?.total || 0,
-            followUp?.emailStats?.total || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-          );
-          const isDispatched = currentRFQ.status !== 'Parsing' && vCount > 0;
-          const createdAtMs = currentRFQ.createdAt ? new Date(currentRFQ.createdAt).getTime() : Date.now();
-          const ageMs = !isNaN(createdAtMs) ? Math.max(0, Date.now() - createdAtMs) : 0;
-          const smsDue = isDispatched && ageMs >= 5 * 60 * 1000;
-          const waDue = isDispatched && ageMs >= 12 * 60 * 60 * 1000;
-          const emailDue = isDispatched && ageMs >= 24 * 60 * 60 * 1000;
-
-          const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-          const rawWaRead = Math.max(
-            followUp?.whatsappStats?.read || 0,
-            followUp?.whatsappStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-          );
-          const waRead = waDue ? (rawWaRead > 0 ? rawWaRead : waTotal) : 0;
-
-          const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-          const rawSmsDelivered = Math.max(
-            followUp?.smsStats?.delivered || 0,
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-          );
-          const smsDelivered = smsDue ? (rawSmsDelivered > 0 ? rawSmsDelivered : smsTotal) : 0;
-
-          const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-          const rawEmailDelivered = Math.max(
-            followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-            Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.email?.status === 'delivered' || v?.email24h?.status === 'delivered' || v?.emailSent).length : 0
-          );
-          const emailDelivered = emailDue ? (rawEmailDelivered > 0 ? rawEmailDelivered : emailTotal) : 0;
-
-          const quotesCount = Math.max(
-            Array.isArray(currentRFQ.quotes) ? currentRFQ.quotes.length : 0,
-            currentRFQ.quotesCount || 0
-          );
-          const vendorRespondedCount = Array.isArray(followUp?.vendors)
-            ? followUp.vendors.filter((v: VendorFollowUpRecord) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-            : 0;
-          const responded = Math.max(
-            followUp?.respondedCount || 0,
-            quotesCount,
-            vendorRespondedCount
-          );
-          const totalInvited = Math.max(
-            followUp?.totalInvited || 0,
-            vCount,
-            waTotal,
-            smsTotal,
-            emailTotal
-          );
+          const metrics = computeRFQFollowUpMetrics(currentRFQ);
+          const vCount = metrics.totalVendors;
+          const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+          const waRead = metrics.waDelivered ?? 0;
+          const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+          const smsDelivered = metrics.smsDelivered ?? 0;
+          const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+          const emailDelivered = metrics.emailDelivered ?? 0;
+          const responded = metrics.responded;
+          const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
 
           return (
             <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 flex flex-wrap items-center justify-between gap-2.5 text-xs">
@@ -341,7 +353,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       </div>
 
       {/* Evaluation Matrix Comparison Table */}
-      {currentRole === 'buyer' && (currentRFQ?.sourcingMode === 'mode_0' || (currentRFQ?.sourcingMode as any) === 'v0' || (currentRFQ?.sourcingMode as any) === 'version_0') ? (
+      {currentRole === 'buyer' && isV0 ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-indigo-200 dark:border-indigo-800/50 bg-indigo-50/40 dark:bg-indigo-950/20 shadow-sm">
           <div className="w-12 h-12 mx-auto rounded-xl bg-indigo-100 dark:bg-indigo-900/40 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shadow-inner">
             <Mail size={24} />
@@ -357,7 +369,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
             <span>Check your inbox for vendor quotations on {currentRFQ.rfqNumber}</span>
           </div>
         </div>
-      ) : currentRole === 'buyer' && currentRFQ?.quotesHidden ? (
+      ) : quotesSealed ? (
         <div className="p-8 text-center glass-panel rounded-xl space-y-3 border border-amber-300 dark:border-amber-700/50 bg-amber-50/50 dark:bg-amber-950/20 shadow-md">
           <div className="w-12 h-12 mx-auto rounded-xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-inner">
             <Lock size={24} />
@@ -370,7 +382,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           </div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-white dark:bg-gray-800 text-amber-800 dark:text-amber-300 border border-amber-200 dark:border-amber-700/60 shadow-sm">
             <Clock size={13} />
-            <span>Unseals on: {currentRFQ.quotesHiddenUntil ? new Date(currentRFQ.quotesHiddenUntil).toLocaleString() : UI_STRINGS.rfqDetails.unsetValue} (or upon RFQ closure)</span>
+            <span>Unseals on: {unsealIso ? new Date(unsealIso).toLocaleString() : UI_STRINGS.rfqDetails.unsetValue} (or upon RFQ closure)</span>
           </div>
           <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
             📱 An SMS comparison acknowledgment and final evaluation email will automatically be sent to your phone and inbox upon RFQ closure.
@@ -403,7 +415,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       }`}
                     >
                       <div className="flex items-center justify-between">
-                        <span className="font-extrabold text-sm text-slate-900 dark:text-white">{quote.vendorName}</span>
+                        <span className="font-extrabold text-sm text-slate-900 dark:text-white">{quote.vendorName || 'Vendor'}</span>
                         <div className="flex items-center gap-1.5">
                           <span
                             data-testid={`quote-source-${quote.vendorId}`}
@@ -568,10 +580,12 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                     >
                       {(() => {
                         const isPOFinalised = currentRFQ.status === 'PO Generated' || Boolean((currentRFQ as any).poFinalised);
+                        const vendorNameClean = (quote.vendorName || '').trim();
+                        const awardedVendorClean = (currentRFQ.awardedVendor || '').trim();
                         const isAwarded =
                           Boolean((quote as any).awarded) ||
                           quote.status === 'Awarded' ||
-                          (currentRFQ.awardedVendor && quote.vendorName.trim().toLowerCase() === currentRFQ.awardedVendor.trim().toLowerCase()) ||
+                          (awardedVendorClean !== '' && vendorNameClean.toLowerCase() === awardedVendorClean.toLowerCase()) ||
                           Boolean((currentRFQ as any).awardedVendorId && quote.vendorId === (currentRFQ as any).awardedVendorId);
 
                         if (isPOFinalised) {
@@ -609,7 +623,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             onClick={() => handleSelectVendor(quote)}
                             className="btn btn-secondary btn-md w-full"
                           >
-                            Select {quote.vendorName.split(' ')[0]}
+                            Select {(quote.vendorName || 'Vendor').split(' ')[0]}
                           </button>
                         );
                       })()}
@@ -623,7 +637,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
       )}
 
       {/* Line-Item-Wise Bid Comparison (DPS Template) */}
-      {quotes.length > 0 && !currentRFQ?.quotesHidden && (currentRFQ.extractedEntities || []).length > 0 && (
+      {quotes.length > 0 && !quotesSealed && (currentRFQ.extractedEntities || []).length > 0 && (
         <div className="glass-panel rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3.5 border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-900/50">
             <div>
@@ -670,7 +684,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       }`}
                     >
                       <div className="flex items-center justify-between gap-1">
-                        <span className="font-extrabold text-slate-900 dark:text-white truncate">{quote.vendorName}</span>
+                        <span className="font-extrabold text-slate-900 dark:text-white truncate">{quote.vendorName || 'Vendor'}</span>
                         {(() => {
                           const r = vendorRankMap.get(quote.vendorId);
                           const isL1 = r ? r.rank === 1 : quote.isBestPrice;
@@ -698,11 +712,12 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
               </thead>
               <tbody className="divide-y divide-slate-200 dark:divide-gray-800/80">
                 {(currentRFQ.extractedEntities || []).map((item, itemIdx) => {
+                  const itemTitle = item.itemName || 'Item';
                   const prices = quotes.map((quote) => {
                     const items = quote.lineItemQuotes || [];
                     const matched =
                       items.find((li) => li.lineItemId === item.id) ||
-                      items.find((li) => (li.itemName || '').trim().toLowerCase() === (item.itemName || '').trim().toLowerCase()) ||
+                      items.find((li) => (li.itemName || '').trim().toLowerCase() === itemTitle.trim().toLowerCase()) ||
                       items[itemIdx];
                     const effectivePrice =
                       matched && typeof matched.unitPrice === 'number' && matched.unitPrice > 0
@@ -722,8 +737,8 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   return (
                     <tr key={item.id || itemIdx} className="hover:bg-slate-50/60 dark:hover:bg-gray-800/30">
                       <td className="px-3.5 py-3">
-                        <div className="font-semibold text-slate-900 dark:text-white text-xs">{item.itemName}</div>
-                        {item.technicalSpecs && item.technicalSpecs !== item.itemName && (
+                        <div className="font-semibold text-slate-900 dark:text-white text-xs">{itemTitle}</div>
+                        {item.technicalSpecs && item.technicalSpecs !== itemTitle && (
                           <div className="text-[10px] text-slate-500 dark:text-gray-400 mt-0.5 line-clamp-1">{item.technicalSpecs}</div>
                         )}
                       </td>
@@ -834,10 +849,10 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           onFinalized={handlePOFinalized}
           lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
             id: ent.id,
-            description: ent.itemName,
+            description: ent.itemName || 'Item',
             technicalSpecs: ent.technicalSpecs,
             quantity: ent.quantity,
-            unit: ent.unit,
+            unit: ent.unit || 'Nos',
             unitPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.unitPrice ?? selectedVendorForPO.unitPrice,
             totalPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.totalPrice ?? (selectedVendorForPO.unitPrice * (ent.quantity || 1)),
           }))}

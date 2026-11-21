@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem } from '@/lib/types';
 import { VendorSurveyModal, RFQFollowUpDeepDiveModal } from '@/app/components/Modals';
@@ -18,6 +18,7 @@ import {
   FileText,
 } from 'lucide-react';
 import { SOURCING_MODES, formatIndianDateTime, rfqVersionLabel } from '@/lib/constants';
+import { computeRFQFollowUpMetrics } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { RFQEditModal } from '@/app/buyer/RFQEditModal';
 
@@ -131,6 +132,16 @@ export default function KanbanBoard({
     totalVendorsInvited > 0 ? Math.min(100, Math.round((quotesOnInvitedRfqs / totalVendorsInvited) * 100)) : null;
 
   const [summaryFilterModal, setSummaryFilterModal] = useState<'pipeline' | 'quotes' | 'awaiting' | null>(null);
+
+  // Close summary filter modal on Escape key
+  useEffect(() => {
+    if (!summaryFilterModal) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSummaryFilterModal(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [summaryFilterModal]);
 
   const summaryCards = [
     {
@@ -403,41 +414,14 @@ export default function KanbanBoard({
 
                 {(() => {
                   const followUp = rfq.followUpData;
-                  const totalVendors = Math.max(
-                    rfq.assignedVendors?.length || 0,
-                    followUp?.totalInvited || 0,
-                    followUp?.smsStats?.total || 0,
-                    followUp?.whatsappStats?.total || 0,
-                    followUp?.emailStats?.total || 0,
-                    Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                  );
-                  const waTotal = Math.max(followUp?.whatsappStats?.total || 0, totalVendors);
-                  const rawWaDelivered = Math.max(
-                    followUp?.whatsappStats?.delivered || 0,
-                    Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v) => v.whatsapp?.status === 'delivered' || v.whatsapp?.status === 'read').length : 0
-                  );
-                  // Recorded deliveries only. No follow-up record means the count is unknown, not zero or the total.
-                  const waDelivered = followUp ? rawWaDelivered : null;
-                  
-                  const smsTotal = Math.max(followUp?.smsStats?.total || 0, totalVendors);
-                  const vendorSmsCount = Array.isArray(followUp?.vendors)
-                    ? followUp.vendors.filter((v) => v.sms?.status === 'sent' || v.sms?.status === 'delivered').length
-                    : 0;
-                  const rawSmsDelivered = Math.max(
-                    followUp?.smsStats?.delivered || 0,
-                    vendorSmsCount
-                  );
-                  const smsDelivered = followUp ? rawSmsDelivered : null;
-
-                  const emailTotal = Math.max(followUp?.emailStats?.total || 0, totalVendors);
-                  const vendorEmailCount = Array.isArray(followUp?.vendors)
-                    ? followUp.vendors.filter((v) => v.email24h?.is24hReminderSent || v.email24h?.status === 'reminded_24h' || v.emailSent || v.email?.status === 'delivered').length
-                    : 0;
-                  const rawEmailDelivered = Math.max(
-                    followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                    vendorEmailCount
-                  );
-                  const emailDelivered = followUp ? rawEmailDelivered : null;
+                  const metrics = computeRFQFollowUpMetrics(rfq);
+                  const totalVendors = metrics.totalVendors;
+                  const waTotal = Math.max(metrics.waTotal ?? 0, totalVendors);
+                  const waDelivered = followUp ? (metrics.waDelivered ?? 0) : null;
+                  const smsTotal = Math.max(metrics.smsTotal ?? 0, totalVendors);
+                  const smsDelivered = followUp ? (metrics.smsDelivered ?? 0) : null;
+                  const emailTotal = Math.max(metrics.emailTotal ?? 0, totalVendors);
+                  const emailDelivered = followUp ? (metrics.emailDelivered ?? 0) : null;
 
                   return (
                     <div className="p-2 rounded-lg bg-slate-50 dark:bg-gray-950 border border-slate-100 dark:border-gray-800/80 space-y-1.5 text-[10px]">
@@ -560,8 +544,14 @@ export default function KanbanBoard({
           className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs"
           role="dialog"
           aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSummaryFilterModal(null);
+          }}
         >
-          <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-4xl max-h-[85vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200"
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between p-4 sm:p-5 border-b border-slate-200 dark:border-slate-800">
               <div className="flex items-center gap-3">

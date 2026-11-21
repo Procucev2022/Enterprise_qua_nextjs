@@ -254,4 +254,34 @@ describe('resolveActiveBuyerAccount', () => {
     const resolvedGst = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
     expect(resolvedGst.account.gstin).toBe('27AAAAA0000A1Z5');
   });
+
+  test('hydrates address from legacy primaryPlantLocation and derives genuine PAN from GSTIN', async () => {
+    dbPool.pool = { stub: true, query: jest.fn().mockResolvedValue({ rows: [{ total_rfqs: 0, total_spend: 0 }] }) };
+    jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+      found: true,
+      profile: profile({
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+      }),
+    });
+    jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+      gstin: '27AAACK3921P1Z9',
+      primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+      brandName: 'Veera Brands',
+    });
+
+    const resolved = await buyerAccountResolver.resolveActiveBuyerAccount(SESSION);
+    expect(resolved.ok).toBe(true);
+    expect(resolved.account.gstin).toBe('27AAACK3921P1Z9');
+    expect(resolved.account.panNumber).toBe('AAACK3921P');
+    expect(resolved.account.city).toBe('Bengaluru');
+    expect(resolved.account.state).toBe('Karnataka');
+    expect(resolved.account.pincode).toBe('560037');
+    expect(resolved.account.street).toBe('Bengaluru, Karnataka');
+    expect(resolved.account.brandName).toBe('Veera Brands');
+  });
 });

@@ -24,6 +24,7 @@ import {
   sanitize10DigitMobile,
   INDIAN_PINCODE_PATTERN,
   GSTIN_PATTERN,
+  derivePanFromGstin,
   validatePincode,
   PINCODE_PATTERN,
   isDummyPincode,
@@ -188,7 +189,7 @@ function BuyerFirstLoginContent() {
     if (!currentUserSession?.email) return;
     // The email code is issued against the account's own email and mobile pair, so
     // only the registered number can be used here. With none on record, stop.
-    const registeredMobile = resolveRegisteredMobile([currentUserSession.mobile, activeBuyerAccount?.mobileNumber]);
+    const registeredMobile = resolveRegisteredMobile([mobile, currentUserSession.mobile, activeBuyerAccount?.mobileNumber]);
     if (!registeredMobile) {
       setError(UI_STRINGS.auth.buyerOnboarding.placeholderPhoneWarning);
       return;
@@ -313,7 +314,7 @@ function BuyerFirstLoginContent() {
       return;
     }
 
-    const cleanPan = pan.trim() || undefined;
+    const cleanPan = pan.trim().toUpperCase() || derivePanFromGstin(cleanGstin) || undefined;
 
     setSaving(true);
     try {

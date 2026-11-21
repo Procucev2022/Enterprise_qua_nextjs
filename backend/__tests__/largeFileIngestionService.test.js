@@ -620,6 +620,9 @@ describe('largeFileIngestionService unit tests', () => {
       });
       jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockResolvedValueOnce([{ id: 1 }]);
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
@@ -636,7 +639,7 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-arr-1',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', importedRecords: 1, failedRecords: 1 })
+        expect.objectContaining({ status: 'PARTIAL_FAILURE', importedRecords: 1, failedRecords: 1 })
       );
     });
 
@@ -670,12 +673,14 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-arr-po',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', importedRecords: 1, failedRecords: 1 })
+        expect.objectContaining({ status: 'PARTIAL_FAILURE', importedRecords: 1, failedRecords: 1 })
       );
     });
 
-    it('handles empty rows array gracefully', async () => {
-      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({ id: 'sess-empty' });
+    it('marks empty or all-failed array jobs as FAILED instead of COMPLETED', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({ id: 'sess-empty', status: 'DRAFT', currentStep: 2 });
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
       const updateProgressSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
 
       await largeFileIngestionService.processArrayJob({
@@ -690,7 +695,32 @@ describe('largeFileIngestionService unit tests', () => {
       expect(updateProgressSpy).toHaveBeenCalledWith(
         'job-empty',
         'org-1',
-        expect.objectContaining({ status: 'COMPLETED', totalRecords: 0 })
+        expect.objectContaining({
+          status: 'FAILED',
+          totalRecords: 0,
+          errorMessage: expect.stringContaining('0 of 0'),
+        })
+      );
+
+      updateProgressSpy.mockClear();
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-all-fail',
+        sessionId: 'sess-empty',
+        organizationId: 'org-1',
+        rows: [{ companyName: '', email: 'bad' }],
+        fileName: 'bad.xlsx',
+        jobType: 'VENDOR_MASTER',
+      });
+
+      expect(updateProgressSpy).toHaveBeenCalledWith(
+        'job-all-fail',
+        'org-1',
+        expect.objectContaining({
+          status: 'FAILED',
+          importedRecords: 0,
+          failedRecords: 1,
+          errorMessage: expect.any(String),
+        })
       );
     });
 
@@ -990,6 +1020,21 @@ describe('largeFileIngestionService unit tests', () => {
         expect.objectContaining({ status: 'FAILED', errorMessage: 'Cancelled by user' })
       );
 
+      // Discards vendor master and resets session status when options.discardVendorMaster is true
+      const delMasterSpy = jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValueOnce(5);
+      const delMappingsSpy = jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValueOnce(3);
+      const updateSessSpy = jest.spyOn(queries, 'updateSession').mockResolvedValueOnce({});
+      const resDiscard = await largeFileIngestionService.cancelJob(
+        { organizationId: 'org-1' },
+        'sess-1',
+        null,
+        { discardVendorMaster: true }
+      );
+      expect(resDiscard).toBe(true);
+      expect(delMasterSpy).toHaveBeenCalledWith('sess-1', 'org-1');
+      expect(delMappingsSpy).toHaveBeenCalledWith('sess-1', 'org-1');
+      expect(updateSessSpy).toHaveBeenCalledWith('sess-1', 'org-1', { status: 'DRAFT' });
+
       // Returns false when organization is not resolvable
       jest.spyOn(queries, 'findSessionById').mockResolvedValueOnce(null);
       const resFalse = await largeFileIngestionService.cancelJob(null, 'bad-sess');
@@ -1018,6 +1063,9 @@ describe('largeFileIngestionService unit tests', () => {
       });
       jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
       jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
       jest.spyOn(queries, 'updateSession').mockResolvedValue({});
 
       // Process batch with errors in both main batch and remainder batch
@@ -1162,6 +1210,343 @@ describe('largeFileIngestionService unit tests', () => {
         fileName: 'none.csv',
       });
       expect(job.id).toBe('job-meta-only');
+    });
+  });
+
+  describe('Vendor Master duplicate detection and skipping', () => {
+    const domainQueries = require('../src/db/domainQueries');
+    const pool = require('../src/db/pool');
+
+    afterEach(() => {
+      jest.restoreAllMocks();
+    });
+
+    it('skips intra-batch duplicates by email, GSTIN, explicit vendorCode, and company+phone without incrementing failed', async () => {
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      const batch = [
+        { sourceRowNumber: 1, vendorCode: 'V-1', companyName: 'Alpha Pumps', email: 'alpha@pumps.in', phone: '+91 9811111111', gstNumber: '27AAACA1111A1Z1' },
+        { sourceRowNumber: 2, vendorCode: 'V-2', companyName: 'Alpha Dup Email', email: 'ALPHA@pumps.in', phone: '+91 9822222222', gstNumber: 'N/A' },
+        { sourceRowNumber: 3, vendorCode: 'V-3', companyName: 'Alpha Dup Gst', email: 'other@pumps.in', phone: '+91 9833333333', gstNumber: '27AAACA1111A1Z1' },
+        { sourceRowNumber: 4, vendorCode: 'V-1', companyName: 'Alpha Dup Code', email: 'code@pumps.in', phone: '+91 9844444444', gstNumber: '29BBBBB2222B1Z2' },
+        { sourceRowNumber: 5, companyName: 'Beta Valves', email: 'not-an-email', phone: '9855555555', gstNumber: 'none' },
+        { sourceRowNumber: 6, companyName: 'Beta Valves', email: '', phone: '+91 9855555555', gstNumber: '' },
+      ];
+
+      const result = await largeFileIngestionService.processVendorMasterBatch('sess-dup', 'org-1', batch);
+      expect(result.imported).toBe(2);
+      expect(result.skipped).toBe(4);
+      expect(result.failed).toBe(0);
+      expect(upsertSpy).toHaveBeenCalledWith(
+        'sess-dup',
+        'org-1',
+        expect.arrayContaining([
+          expect.objectContaining({ companyName: 'Alpha Pumps', vendorCode: 'V-1' }),
+          expect.objectContaining({ companyName: 'Beta Valves' }),
+        ])
+      );
+      expect(result.errors).toHaveLength(4);
+      expect(result.errors.every((e) => e.status === 'duplicate_skipped' && e.matchedAgainst === 'FILE')).toBe(true);
+    });
+
+    it('detects cross-batch duplicates and pre-seeds existing DB buyer vendors in streamProcessCsvFile', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValue([
+        { vendorCode: '1', companyName: 'Existing Buyer Vendor', email: 'existing@buyer.in', phone: '9966766905', gstin: '27EXSTG1234A1Z1' },
+        { vendorCode: 'EXT-9', name: 'Existing Custom Code Co', email: 'custom@buyer.in', phone: '9966766906' },
+      ]);
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-csv-dup',
+        organizationId: 'org-1',
+        createdByUserId: 'buyer-1',
+        createdByEmail: 'buyer@org.in',
+      });
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      const csv = [
+        'Vendor Code,Company Name,Email,Phone,GSTIN',
+        '1,Fresh Supplier Ltd,fresh@supplier.in,9800000001,27FRESH1234A1Z1',
+        '2,Dup From DB Email,existing@buyer.in,9800000002,27OTHER1234A1Z1',
+        '3,Dup Cross Batch Email,FRESH@supplier.in,9800000003,27OTHER2234A1Z1',
+        'EXT-9,Dup DB Code,newemail@co.in,9800000004,27OTHER3234A1Z1',
+        '5,Existing Custom Code Co,,9966766906,',
+      ].join('\n');
+      mockR2Client(csv);
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-csv-dup',
+        sessionId: 'sess-csv-dup',
+        organizationId: 'org-1',
+        r2Key: 'csv-dup-key',
+        fileName: 'Testing data.csv',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 2,
+      });
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 1,
+        processedRecords: 1,
+        importedRecords: 1,
+        skippedRecords: 4,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+      expect(finalCall[2].errorDetails).toHaveLength(4);
+      expect(finalCall[2].errorDetails[0].matchedAgainst).toBe('EXISTING_VENDOR');
+    });
+
+    it('deduplicates across batches in processArrayJob and tolerates existing-vendor lookup errors gracefully', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockRejectedValue(new Error('D1 read transient error'));
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-arr-dup',
+        organizationId: 'org-1',
+      });
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
+      jest.spyOn(queries, 'countVendorMasterRecords').mockResolvedValue(1);
+      jest.spyOn(queries, 'deleteVendorMasterRecords').mockResolvedValue(0);
+      jest.spyOn(queries, 'deleteCategoryMappingsForSession').mockResolvedValue(0);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'markVendorMasterUploaded').mockResolvedValue(true);
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+      jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-arr-dup',
+        sessionId: 'sess-arr-dup',
+        organizationId: 'org-1',
+        rows: [
+          { companyName: 'Unique One', email: 'one@dup.in', phone: '9800000011', gstNumber: '27UNIQG1234A1Z1' },
+          { companyName: 'Dup Two', email: 'ONE@dup.in', phone: '9800000012' },
+        ],
+        fileName: 'vendors.xlsx',
+        jobType: 'VENDOR_MASTER',
+        batchSize: 1,
+      });
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 1,
+        processedRecords: 1,
+        importedRecords: 1,
+        skippedRecords: 1,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+
+      // Verify additive vendor master upload preserves existing session records and advances colliding numeric vendorCode
+      jest.spyOn(domainQueries, 'getVendorsByBuyerFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(queries, 'findOrganizationVendorMasterRecords').mockResolvedValueOnce([]);
+      jest.spyOn(queries, 'findVendorMasterRecords').mockResolvedValueOnce([
+        { vendorCode: '1', companyName: 'Prior Master Co', email: 'prior@master.in', phone: '9800000099' },
+      ]);
+      const upsertSpy = jest.spyOn(queries, 'bulkUpsertVendorMasterRecords').mockImplementation(async (_s, _o, valid) => valid);
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-arr-additive',
+        sessionId: 'sess-arr-dup',
+        organizationId: 'org-1',
+        rows: [
+          { vendorCode: '1', companyName: 'Additive New Supplier', email: 'additive@new.in', phone: '9800000088' },
+        ],
+        fileName: 'vendors-batch2.xlsx',
+        jobType: 'VENDOR_MASTER',
+      });
+      expect(upsertSpy).toHaveBeenLastCalledWith(
+        'sess-arr-dup',
+        'org-1',
+        expect.arrayContaining([expect.objectContaining({ companyName: 'Additive New Supplier', vendorCode: '2' })])
+      );
+    });
+
+    it('clears prior PO dump line items and resets AI status when a replacement PO_DUMP upload finishes', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-po-replace',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.AI_COMPLETED,
+        currentStep: VENDOR_INGESTION_STEP.DISPATCH,
+      });
+      const delPoSpy = jest.spyOn(queries, 'deletePoLineItems').mockResolvedValue(17);
+      const resetMapSpy = jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(7);
+      jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValue([{ id: 'po-1' }]);
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 4, inHorizon: 4, outsideHorizon: 0 });
+      const updateSessionSpy = jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-po-replace',
+        sessionId: 'sess-po-replace',
+        organizationId: 'org-1',
+        rows: [{ vendorName: 'Apex', itemDescription: 'Valve' }],
+        fileName: 'po latest one.xlsx',
+        jobType: 'PO_DUMP',
+      });
+
+      expect(delPoSpy).toHaveBeenCalledWith('sess-po-replace', 'org-1');
+      expect(resetMapSpy).toHaveBeenCalledWith('sess-po-replace', 'org-1');
+      expect(updateSessionSpy).toHaveBeenCalledWith(
+        'sess-po-replace',
+        'org-1',
+        expect.objectContaining({
+          poFileName: 'po latest one.xlsx',
+          poRowCount: 4,
+          aiStatus: 'IDLE',
+          aiProcessedCount: 0,
+          aiFailedCount: 0,
+        })
+      );
+    });
+
+    it('rejects all-duplicate PO_DUMP re-uploads without clearing prior PO rows and reports duplicate errorDetails', async () => {
+      jest.spyOn(queries, 'findSession').mockResolvedValue({
+        id: 'sess-po-dup-all',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
+        currentStep: VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN,
+      });
+      jest.spyOn(queries, 'findExistingPoLineItemsByOrganization').mockResolvedValue([
+        {
+          vendorName: 'Apex Supplies',
+          itemDescription: 'Ball Bearings 6205',
+          specification: 'SKF',
+        },
+        {
+          poNumber: 'PO-777',
+          poDate: '2025-05-10',
+          vendorName: 'Vendor VND-9',
+          vendorCode: 'VND-9',
+          itemDescription: 'Gate Valve',
+          specification: '2 inch',
+          quantity: 5,
+          spend: 12500,
+        },
+      ]);
+      const delPoSpy = jest.spyOn(queries, 'deletePoLineItems').mockResolvedValue(0);
+      const insertPoSpy = jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValue([]);
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 2, inHorizon: 2, outsideHorizon: 0 });
+      const updateSessionSpy = jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.processArrayJob({
+        jobId: 'job-po-dup-all',
+        sessionId: 'sess-po-dup-all',
+        organizationId: 'org-1',
+        rows: [
+          { vendorName: '  apex  supplies ', itemDescription: 'ball bearings 6205', specification: 'skf' },
+          {
+            poNumber: 'po-777',
+            poDate: '10/05/2025',
+            vendorCode: 'VND-9',
+            itemDescription: 'Gate Valve',
+            specification: '2 inch',
+            quantity: 5,
+            spend: 12500,
+          },
+        ],
+        fileName: 'po-reupload.xlsx',
+        jobType: 'PO_DUMP',
+      });
+
+      expect(delPoSpy).not.toHaveBeenCalled();
+      expect(insertPoSpy).not.toHaveBeenCalled();
+      expect(updateSessionSpy).not.toHaveBeenCalled();
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 0,
+        processedRecords: 0,
+        importedRecords: 0,
+        skippedRecords: 2,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+      expect(finalCall[2].errorDetails).toHaveLength(2);
+      expect(finalCall[2].errorDetails[0]).toMatchObject({
+        status: 'duplicate_skipped',
+        matchedAgainst: 'EXISTING_PO',
+      });
+      expect(finalCall[2].errorDetails[1]).toMatchObject({
+        status: 'duplicate_skipped',
+        matchedAgainst: 'EXISTING_PO',
+        poNumber: 'PO-777',
+      });
+    });
+
+    it('deduplicates both existing and intra-file PO rows in streamed CSV PO_DUMP uploads and handles dedupe loader failure gracefully', async () => {
+      expect(largeFileIngestionService.buildPoLineDedupeKey(null)).toBe('');
+      expect(largeFileIngestionService.buildPoLineDedupeKey({})).toBe('');
+
+      const emptyState = await largeFileIngestionService.loadExistingPoDedupeState('');
+      expect(emptyState.existingKeys.size).toBe(0);
+      expect(largeFileIngestionService.checkAndRegisterPoDedupe(emptyState, {}, 2)).toBeNull();
+
+      jest.spyOn(queries, 'findExistingPoLineItemsByOrganization').mockRejectedValueOnce(new Error('D1 timeout'));
+      const fallbackState = await largeFileIngestionService.loadExistingPoDedupeState('org-1');
+      expect(fallbackState.existingKeys.size).toBe(0);
+
+      const csvContent = [
+        'Vendor/Supplier Name,Item Description,Specifications',
+        'Apex Tech,Steel Rod,Grade A',
+        'Beta Corp,Copper Wire,2mm',
+        'Beta Corp,Copper Wire,2mm',
+      ].join('\n');
+      mockR2Client(csvContent);
+
+      jest.spyOn(queries, 'findSession').mockResolvedValueOnce({
+        id: 'sess-po-csv-dup',
+        organizationId: 'org-1',
+        status: VENDOR_INGESTION_SESSION_STATUS.VENDOR_MASTER_STORED,
+        currentStep: VENDOR_INGESTION_STEP.PO_DUMP,
+      });
+      jest.spyOn(queries, 'findExistingPoLineItemsByOrganization').mockResolvedValueOnce([
+        { vendorName: 'Apex Tech', itemDescription: 'Steel Rod', specification: 'Grade A' },
+      ]);
+      const delPoSpy = jest.spyOn(queries, 'deletePoLineItems').mockResolvedValue(1);
+      jest.spyOn(queries, 'resetCategoryMappingsForReclassification').mockResolvedValue(0);
+      const insertPoSpy = jest.spyOn(queries, 'bulkInsertPoLineItems').mockResolvedValue([{ id: 'poli-new' }]);
+      jest.spyOn(queries, 'countPoLineItems').mockResolvedValue({ total: 1, inHorizon: 1, outsideHorizon: 0 });
+      jest.spyOn(queries, 'updateSession').mockResolvedValue({});
+      const updateJobSpy = jest.spyOn(queries, 'updateIngestionJobProgress').mockResolvedValue({});
+
+      await largeFileIngestionService.streamProcessCsvFile({
+        jobId: 'job-po-csv-dup',
+        sessionId: 'sess-po-csv-dup',
+        organizationId: 'org-1',
+        r2Key: 'uploads/vendor-ingestion/po-dup.csv',
+        fileName: 'po-dup.csv',
+        jobType: 'PO_DUMP',
+        batchSize: 2,
+      });
+
+      expect(delPoSpy).toHaveBeenCalledTimes(1);
+      expect(insertPoSpy).toHaveBeenCalledTimes(1);
+      expect(insertPoSpy.mock.calls[0][2]).toHaveLength(1);
+      expect(insertPoSpy.mock.calls[0][2][0]).toMatchObject({
+        vendorName: 'Beta Corp',
+        itemDescription: 'Copper Wire',
+      });
+
+      const finalCall = updateJobSpy.mock.calls.find(([, , patch]) => patch.status === 'COMPLETED');
+      expect(finalCall[2]).toMatchObject({
+        totalRecords: 1,
+        processedRecords: 1,
+        importedRecords: 1,
+        skippedRecords: 2,
+        failedRecords: 0,
+        status: 'COMPLETED',
+      });
+      expect(finalCall[2].errorDetails).toHaveLength(2);
+      expect(finalCall[2].errorDetails.map((e) => e.matchedAgainst)).toEqual(['EXISTING_PO', 'FILE']);
     });
   });
 });

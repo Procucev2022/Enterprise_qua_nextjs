@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEvaluationRecord, QuoteComparison, VendorFollowUpRecord, VendorModuleScore } from '@/lib/types';
-import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime } from '@/lib/constants';
-import { computeRFQFollowUpTimes } from '@/lib/followUpSchedule';
+import { SOURCING_MODES, VENDOR_QUOTATION_ROUTE, formatIndianDateTime, isBuyerQuotesSealed } from '@/lib/constants';
+import { computeRFQFollowUpTimes, computeRFQFollowUpMetrics, normalizeFollowUpVendors } from '@/lib/followUpSchedule';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   X,
@@ -43,6 +43,9 @@ import {
   Check,
   Info,
   Eye,
+  Radio,
+  ChevronLeft,
+  ArrowUpDown,
 } from 'lucide-react';
 
 interface POLineItem {
@@ -73,7 +76,7 @@ interface POModalProps {
 }
 
 // Helper to convert numbers into Indian Rupees currency words
-function numberToIndianWords(num: number): string {
+export function numberToIndianWords(num: number): string {
   if (typeof num !== 'number' || isNaN(num) || !isFinite(num) || num <= 0 || num > 99999999999) return '';
   const a = [
     '', 'One', 'Two', 'Three', 'Four', 'Five', 'Six', 'Seven', 'Eight', 'Nine', 'Ten',
@@ -198,6 +201,15 @@ export function PurchaseOrderModal({
   // The approver writes the sign-off note. No default note is supplied, so none is sent unless the approver types one.
   const [approverNotes, setApproverNotes] = useState('');
   const [approvedPo, setApprovedPo] = useState<{ poNumber: string; issueDate: string; shaSignature: string } | null>(null);
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   // Buyer Details Mapping (strictly real content, no substitute values)
   const buyerOrg = buyerAccount?.organizationName || (buyerAccount as any)?.name || rfq?.buyerAccountName || rfq?.buyerCompany || '';
@@ -530,8 +542,18 @@ export function PurchaseOrderModal({
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-3xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-3xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-4 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2.5 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30">
@@ -964,6 +986,72 @@ function formatNextFollowUp(iso: string | null): string {
   return iso ? formatIndianDateTime(iso) : UI_STRINGS.recordPlaceholders.notRecorded;
 }
 
+export const getCallBadge = (status: string) => {
+  switch (status) {
+    case 'completed':
+      return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📞 Connected</span>;
+    case 'connected':
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 In Call</span>;
+    case 'voicemail':
+      return <span className="badge badge-amber text-[11px] px-2 py-0.5">📞 Voicemail Left</span>;
+    case 'scheduled':
+      return <span className="badge badge-purple text-[11px] px-2 py-0.5">📞 Callback Queued</span>;
+    case 'not_dispatched':
+      return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
+    default:
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 {status}</span>;
+  }
+};
+
+export const getWhatsAppBadge = (status: string) => {
+  switch (status) {
+    case 'replied':
+      return <span className="badge badge-emerald text-[11px] px-2 py-0.5">💬 Replied / Bid In</span>;
+    case 'read':
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 Read (Link Clicked)</span>;
+    case 'delivered':
+      return <span className="badge badge-amber text-[11px] px-2 py-0.5">💬 Delivered</span>;
+    case 'pending':
+      return <span className="badge badge-purple text-[11px] px-2 py-0.5">💬 Queued</span>;
+    case 'not_dispatched':
+      return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
+    default:
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 {status}</span>;
+  }
+};
+
+export const getSMSBadge = (status: string) => {
+  switch (status) {
+    case 'clicked':
+      return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📱 Link Clicked</span>;
+    case 'delivered':
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">📱 Delivered (DLT)</span>;
+    case 'sent':
+      return <span className="badge badge-amber text-[11px] px-2 py-0.5">📱 Sent</span>;
+    case 'not_dispatched':
+      return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
+    default:
+      return <span className="badge badge-purple text-[11px] px-2 py-0.5">📱 {status}</span>;
+  }
+};
+
+export const getEmailBadge = (status: string) => {
+  switch (status) {
+    case 'replied':
+    case 'opened':
+      return <span className="badge badge-emerald text-[11px] px-2 py-0.5">✉️ Opened / Replied</span>;
+    case 'delivered':
+      return <span className="badge badge-blue text-[11px] px-2 py-0.5">✉️ Delivered</span>;
+    case 'escalated':
+    case 'sent':
+      return <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Escalated (24h)</span>;
+    case 'not_dispatched':
+      return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
+    default:
+      return <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ {status}</span>;
+  }
+};
+
 /* RFQ-WISE MULTI-CHANNEL FOLLOW-UP DEEP DIVE MODAL */
 interface RFQFollowUpDeepDiveModalProps {
   isOpen: boolean;
@@ -972,7 +1060,7 @@ interface RFQFollowUpDeepDiveModalProps {
 }
 
 export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDeepDiveModalProps) {
-  const { triggerChannelChaser, triggerBatchChannelChaser, showToast } = useApp();
+  const { rfqs, setSelectedRFQForDeepDive, triggerChannelChaser, triggerBatchChannelChaser, showToast } = useApp();
   const [activeChannelTab, setActiveChannelTab] = useState<'all' | 'call' | 'whatsapp' | 'sms'>('all');
   const [activeVendorModal, setActiveVendorModal] = useState<{
     vendorName: string;
@@ -981,36 +1069,15 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
 
   if (!isOpen || !rfq) return null;
 
-  const followUp = rfq.followUpData;
+  const liveRfq = (Array.isArray(rfqs) ? rfqs.find((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id) : undefined) || rfq;
+  const followUp = liveRfq.followUpData;
   // Each channel's next follow-up counts from the RFQ creation time, so it does not depend on follow-up data.
-  const nextFollowUps = computeRFQFollowUpTimes(rfq.createdAt);
-  const totalInvitedVendors = followUp?.totalInvited ?? (followUp?.vendors?.length || rfq.assignedVendors?.length || 0);
+  const nextFollowUps = computeRFQFollowUpTimes(liveRfq.createdAt);
+  const metrics = computeRFQFollowUpMetrics(liveRfq);
+  const totalInvitedVendors = metrics.totalInvited ?? 0;
 
-  // A channel with no outreach record is not dispatched. No attempt count, escalation or time is invented for it.
-  const notDispatched = { status: 'not_dispatched' as const, lastAttempt: '' };
-
-  // Normalize vendor telemetry records
-  const rawVendors: VendorFollowUpRecord[] = (followUp?.vendors && followUp.vendors.length > 0)
-    ? followUp.vendors
-    : (rfq.assignedVendors || []).map((av, idx) => ({
-        vendorId: av.id || `v-${idx + 1}`,
-        vendorName: av.name,
-        contactPerson: av.contactPerson || '',
-        phone: av.phone || '',
-        overallStatus: 'Pending' as const,
-        lastInteraction: '',
-        bidStatus: 'Pending' as const,
-        call: notDispatched,
-        whatsapp: notDispatched,
-        sms: notDispatched,
-      }));
-
-  const vendors: VendorFollowUpRecord[] = rawVendors.map((v) => ({
-    ...v,
-    call: v.call || notDispatched,
-    whatsapp: v.whatsapp || notDispatched,
-    sms: v.sms || notDispatched,
-  }));
+  // Normalize vendor telemetry records so assignedVendors entries without explicit vendorName/vendorId still display cleanly
+  const vendors: VendorFollowUpRecord[] = normalizeFollowUpVendors(liveRfq);
 
   // Vendor type shown per row:
   //  - "Buyer Vendors": a vendor the buyer explicitly added to this RFQ (present
@@ -1021,9 +1088,9 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   //    not on the buyer's assigned list is a Procucev network vendor.
   // V0/V1 RFQs circulate to the buyer's own roster only, so their vendors are
   // Buyer Vendors regardless.
-  const isHybridOrAutonomous = rfq.sourcingMode === 'mode_2' || rfq.sourcingMode === 'mode_3';
+  const isHybridOrAutonomous = liveRfq.sourcingMode === 'mode_2' || liveRfq.sourcingMode === 'mode_3';
   const assignedVendorKeys = new Set(
-    (rfq.assignedVendors || []).flatMap((av) =>
+    (liveRfq.assignedVendors || []).flatMap((av) =>
       [av.id, av.name].filter((k): k is string => !!k).map((k) => k.trim().toLowerCase())
     )
   );
@@ -1036,61 +1103,11 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
   };
 
   const filteredVendors = vendors.filter((v) => {
-    if (activeChannelTab === 'all') return true;
     if (activeChannelTab === 'call') return v.call.status !== 'failed';
     if (activeChannelTab === 'whatsapp') return v.whatsapp.status !== 'failed';
     if (activeChannelTab === 'sms') return v.sms.status !== 'failed';
     return true;
   });
-
-  const getCallBadge = (status: string) => {
-    switch (status) {
-      case 'completed':
-        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📞 Connected</span>;
-      case 'connected':
-        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 In Call</span>;
-      case 'voicemail':
-        return <span className="badge badge-amber text-[11px] px-2 py-0.5">📞 Voicemail Left</span>;
-      case 'scheduled':
-        return <span className="badge badge-purple text-[11px] px-2 py-0.5">📞 Callback Queued</span>;
-      case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
-      default:
-        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📞 {status}</span>;
-    }
-  };
-
-  const getWhatsAppBadge = (status: string) => {
-    switch (status) {
-      case 'replied':
-        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">💬 Replied / Bid In</span>;
-      case 'read':
-        return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 Read (Link Clicked)</span>;
-      case 'delivered':
-        return <span className="badge badge-amber text-[11px] px-2 py-0.5">💬 Delivered</span>;
-      case 'pending':
-        return <span className="badge badge-purple text-[11px] px-2 py-0.5">💬 Queued</span>;
-      case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
-      default:
-        return <span className="badge badge-blue text-[11px] px-2 py-0.5">💬 {status}</span>;
-    }
-  };
-
-  const getSMSBadge = (status: string) => {
-    switch (status) {
-      case 'clicked':
-        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">📱 Link Clicked</span>;
-      case 'delivered':
-        return <span className="badge badge-blue text-[11px] px-2 py-0.5">📱 Delivered (DLT)</span>;
-      case 'sent':
-        return <span className="badge badge-amber text-[11px] px-2 py-0.5">📱 Sent</span>;
-      case 'not_dispatched':
-        return <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>;
-      default:
-        return <span className="badge badge-purple text-[11px] px-2 py-0.5">📱 {status}</span>;
-    }
-  };
 
   return (
     <div className="modal-overlay" onClick={onClose}>
@@ -1107,7 +1124,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             <div>
               <div className="flex items-center gap-2.5 flex-wrap">
                 <span className="px-2.5 py-0.5 rounded-md font-extrabold text-xs mono bg-indigo-100 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-300 dark:border-indigo-800">
-                  {rfq.rfqNumber}
+                  {liveRfq.rfqNumber}
                 </span>
                 <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
                   Vendor Follow-Up Details
@@ -1115,16 +1132,40 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                 <span className="badge badge-purple text-xs font-bold px-2.5 py-0.5">Multi-Channel</span>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
-                {rfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {rfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
+                {liveRfq.title} • <span className="font-semibold text-slate-700 dark:text-gray-300">Target Delivery: {liveRfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</span> • <span className="text-indigo-600 dark:text-indigo-400 font-bold">{vendors.length} Vendors Empanelled</span>
               </p>
             </div>
           </div>
-          <button
-            onClick={onClose}
-            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
-          >
-            <X size={22} />
-          </button>
+          <div className="flex items-center gap-2.5">
+            {Array.isArray(rfqs) && rfqs.length > 1 && (
+              <div className="flex items-center gap-1.5 bg-slate-50 dark:bg-gray-800/80 px-2 py-1 rounded-lg border border-slate-200 dark:border-gray-700">
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400 dark:text-gray-400">Switch:</span>
+                <select
+                  aria-label="Switch Deep Dive RFQ"
+                  value={liveRfq.rfqNumber || liveRfq.id}
+                  onChange={(e) => {
+                    const next = rfqs.find((item) => (item.rfqNumber || item.id) === e.target.value);
+                    if (next && setSelectedRFQForDeepDive) {
+                      setSelectedRFQForDeepDive(next);
+                    }
+                  }}
+                  className="text-xs font-bold mono bg-white dark:bg-gray-900 text-slate-900 dark:text-white px-2 py-0.5 rounded border border-slate-300 dark:border-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-500 cursor-pointer"
+                >
+                  {rfqs.map((item) => (
+                    <option key={item.id} value={item.rfqNumber || item.id}>
+                      {item.rfqNumber} {item.title ? `— ${item.title.length > 25 ? item.title.slice(0, 25) + '…' : item.title}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+            <button
+              onClick={onClose}
+              className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+            >
+              <X size={22} />
+            </button>
+          </div>
         </div>
 
         {/* 4-Channel Live Metric Strip */}
@@ -1143,7 +1184,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-purple-950 dark:text-purple-100 mono">
-                {formatFollowUpCount(followUp?.callStats?.connected)} / {formatFollowUpCount(followUp?.callStats?.total)}
+                {formatFollowUpCount(metrics.callConnected)} / {formatFollowUpCount(metrics.callTotal)}
               </span>
               <span className="text-xs text-purple-700 dark:text-purple-300 font-semibold">Connected</span>
             </div>
@@ -1161,17 +1202,24 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
 
           {/* Channel 2: WhatsApp */}
           <div className="p-3.5 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-xs">
-            <div className="flex items-center justify-between text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider">
+            <div className="flex items-center justify-between gap-1 text-[11px] font-bold text-emerald-800 dark:text-emerald-300 uppercase tracking-wider flex-wrap">
               <span className="flex items-center gap-1.5">
                 <MessageSquare size={13} /> WHATSAPP BOT
               </span>
-              <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
-                {formatFollowUpCount(followUp?.whatsappStats?.read)} Read
+              <span className="flex items-center gap-1">
+                {(metrics.waDelivered ?? 0) > (metrics.waRead ?? 0) && (
+                  <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
+                    {formatFollowUpCount(metrics.waDelivered)} Delivered
+                  </span>
+                )}
+                <span className="mono text-[10px] bg-emerald-100 dark:bg-emerald-900/60 px-2 py-0.5 rounded font-black">
+                  {formatFollowUpCount(metrics.waRead)} Read
+                </span>
               </span>
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-emerald-950 dark:text-emerald-100 mono">
-                {formatFollowUpCount(followUp?.whatsappStats?.replied)} / {formatFollowUpCount(followUp?.whatsappStats?.total)}
+                {formatFollowUpCount(metrics.waReplied)} / {formatFollowUpCount(metrics.waTotal)}
               </span>
               <span className="text-xs text-emerald-700 dark:text-emerald-300 font-semibold">Bids Submitted</span>
             </div>
@@ -1196,7 +1244,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-sky-950 dark:text-cyan-100 mono">
-                {formatFollowUpCount(followUp?.smsStats?.delivered)} / {formatFollowUpCount(followUp?.smsStats?.total)}
+                {formatFollowUpCount(metrics.smsDelivered)} / {formatFollowUpCount(metrics.smsTotal)}
               </span>
               <span className="text-xs text-sky-700 dark:text-cyan-300 font-semibold">Delivered</span>
             </div>
@@ -1221,7 +1269,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
             </div>
             <div className="mt-2 flex items-baseline gap-1.5">
               <span className="text-2xl font-black text-amber-950 dark:text-amber-100 mono">
-                {formatFollowUpCount(followUp?.emailStats?.sent24h)} / {totalInvitedVendors}
+                {formatFollowUpCount(metrics.emailEscalationsSent)} / {totalInvitedVendors}
               </span>
               <span className="text-xs text-amber-700 dark:text-amber-300 font-semibold">Escalations Sent</span>
             </div>
@@ -1256,7 +1304,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📞</span> Calls ({formatFollowUpCount(followUp?.callStats?.total)})
+              <span>📞</span> Calls ({formatFollowUpCount(metrics.callTotal)})
             </button>
             <button
               onClick={() => setActiveChannelTab('whatsapp')}
@@ -1266,7 +1314,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <MessageSquare size={13} /> WhatsApp ({formatFollowUpCount(followUp?.whatsappStats?.total)})
+              <MessageSquare size={13} /> WhatsApp ({formatFollowUpCount(metrics.waTotal)})
             </button>
             <button
               onClick={() => setActiveChannelTab('sms')}
@@ -1276,7 +1324,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   : 'text-slate-600 dark:text-gray-400 hover:text-slate-900 dark:hover:text-white'
               }`}
             >
-              <span>📱</span> SMS ({formatFollowUpCount(followUp?.smsStats?.total)})
+              <span>📱</span> SMS ({formatFollowUpCount(metrics.smsTotal)})
             </button>
           </div>
         </div>
@@ -1433,34 +1481,44 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
                   </div>
 
                   {/* 24h Email Reminder Details */}
-                  <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
-                        <Mail size={12} className="text-amber-500" /> 24h Email Escalation
-                      </span>
-                      {vendor.email24h?.is24hReminderSent ? (
-                        <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
-                      ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
-                        <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
-                      ) : vendor.email24h ? (
-                        <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
-                      ) : (
-                        <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>
-                      )}
-                    </div>
-                    <div className="text-[10px] text-slate-500 dark:text-gray-400">
-                      {vendor.email24h?.lastAttempt
-                        ? `Sent: ${vendor.email24h.lastAttempt}`
-                        : vendor.email24h
-                          ? UI_STRINGS.modals.followUp.escalationQueued
-                          : UI_STRINGS.recordPlaceholders.notDispatched}
-                    </div>
-                    <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
-                      {vendor.email24h?.is24hReminderSent
-                        ? 'BOQ specs re-attached via email. Urgent bid submission requested.'
-                        : 'Dispatches if vendor fails to respond to initial follow-up.'}
-                    </p>
-                  </div>
+                  {(() => {
+                    const email24hDispatched = Boolean(
+                      vendor.email24h?.is24hReminderSent ||
+                      vendor.email24h?.status === 'sent' ||
+                      vendor.email24h?.status === 'delivered' ||
+                      vendor.email24h?.status === 'reminded_24h'
+                    );
+                    return (
+                      <div className="p-3 rounded-lg bg-white dark:bg-gray-900/90 border border-slate-200 dark:border-gray-800 space-y-1.5 shadow-2xs">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-800 dark:text-gray-200 flex items-center gap-1 text-[11px]">
+                            <Mail size={12} className="text-amber-500" /> 24h Email Escalation
+                          </span>
+                          {email24hDispatched ? (
+                            <span className="badge badge-amber text-[11px] px-2 py-0.5">✉️ Dispatched</span>
+                          ) : vendor.bidStatus === 'Submitted' || vendor.overallStatus === 'Responded' ? (
+                            <span className="badge badge-emerald text-[11px] px-2 py-0.5">✅ Bid Submitted</span>
+                          ) : vendor.email24h ? (
+                            <span className="badge badge-purple text-[11px] px-2 py-0.5">⏳ Pending 24h</span>
+                          ) : (
+                            <span className="badge badge-gray text-[11px] px-2 py-0.5">⏳ {UI_STRINGS.recordPlaceholders.notDispatched}</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] text-slate-500 dark:text-gray-400">
+                          {vendor.email24h?.lastAttempt
+                            ? `Sent: ${vendor.email24h.lastAttempt}`
+                            : vendor.email24h
+                              ? UI_STRINGS.modals.followUp.escalationQueued
+                              : UI_STRINGS.recordPlaceholders.notDispatched}
+                        </div>
+                        <p className="text-[11px] text-slate-600 dark:text-gray-400 leading-snug">
+                          {email24hDispatched
+                            ? 'BOQ specs re-attached via email. Urgent bid submission requested.'
+                            : 'Dispatches if vendor fails to respond to initial follow-up.'}
+                        </p>
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
             ))
@@ -1480,7 +1538,7 @@ export function RFQFollowUpDeepDiveModal({ isOpen, onClose, rfq }: RFQFollowUpDe
         <MultiChannelChaserModal
           isOpen={!!activeVendorModal}
           onClose={() => setActiveVendorModal(null)}
-          rfqNumber={rfq.rfqNumber}
+          rfqNumber={liveRfq.rfqNumber}
           vendorName={activeVendorModal.vendorName}
           hidePhone={true}
           initialChannel={activeVendorModal.channel}
@@ -1501,11 +1559,30 @@ interface SurveyModalProps {
  * nothing and records no audit entry. It states that the survey is not connected.
  */
 export function VendorSurveyModal({ isOpen, onClose }: SurveyModalProps) {
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-lg p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-purple-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-purple-50 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border border-purple-200 dark:border-purple-500/30">
@@ -1566,6 +1643,15 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
   const [processing, setProcessing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !processing) onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose, processing]);
+
   if (!isOpen) return null;
 
   const handlePay = async () => {
@@ -1581,8 +1667,18 @@ export function SubscriptionPaymentModal({ isOpen, onClose, planId, planName, pr
   };
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget && !processing) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-md p-6 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-indigo-500/40"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex items-center justify-between pb-3 border-b border-slate-200 dark:border-gray-800">
           <div className="flex items-center gap-2.5">
             <div className="p-2 rounded-lg bg-indigo-50 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-500/30">
@@ -1653,12 +1749,32 @@ interface EvaluationSummaryModalProps {
 
 export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: EvaluationSummaryModalProps) {
   const { selectedVendorEvaluation } = useApp();
+
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
+
   if (!isOpen) return null;
   const evalRecord = record || selectedVendorEvaluation;
 
   return (
-    <div className="modal-overlay">
-      <div className="modal-content max-w-5xl p-6 max-h-[92vh] overflow-y-auto relative animate-scale-up">
+    <div
+      role="dialog"
+      aria-modal="true"
+      className="modal-overlay"
+      onClick={(e) => {
+        if (e.target === e.currentTarget) onClose();
+      }}
+    >
+      <div
+        className="modal-content max-w-5xl p-6 max-h-[92vh] overflow-y-auto relative animate-scale-up"
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="flex justify-end mb-2">
           <button
             onClick={onClose}
@@ -1670,83 +1786,83 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
         {evalRecord ? (
           <div className="space-y-4">
             {/* Inline import pattern or standalone summary render */}
-            <div className="p-4 rounded-xl bg-slate-900 text-white flex items-center justify-between">
-              <div>
+            <div className="p-4 rounded-xl bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 min-w-0">
+              <div className="min-w-0">
                 <span className="text-[10px] uppercase font-bold text-indigo-300 tracking-wider">
                   Mode 3 Vendor Evaluation Summary Report
                 </span>
-                <h3 className="text-xl font-bold mt-0.5">{evalRecord.vendorName}</h3>
-                <p className="text-xs text-indigo-200/80 mt-0.5">{evalRecord.category} • Submitted: {evalRecord.submissionDate}</p>
+                <h3 className="text-xl font-bold mt-0.5 break-words">{evalRecord.vendorName}</h3>
+                <p className="text-xs text-indigo-200/80 mt-0.5 break-words">{evalRecord.category} • Submitted: {evalRecord.submissionDate}</p>
               </div>
-              <div className="text-right">
+              <div className="text-right shrink-0">
                 <div className="text-3xl font-black mono text-emerald-400">{typeof evalRecord.overallScore === 'number' ? `${evalRecord.overallScore}%` : UI_STRINGS.recordPlaceholders.notEvaluated}</div>
-                <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-block mt-1">
+                <span className="px-2.5 py-0.5 rounded text-[10px] font-bold uppercase bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 inline-flex items-center justify-center whitespace-nowrap mt-1">
                   {evalRecord.status}
                 </span>
               </div>
             </div>
 
-            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 text-xs text-emerald-900 dark:text-emerald-200">
+            <div className="p-3.5 rounded-xl bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-500/30 text-xs text-emerald-900 dark:text-emerald-200 min-w-0 break-words">
               ⚡ <strong>Automated System Execution Action:</strong> {evalRecord.systemAction}
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3 text-xs">
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 text-xs min-w-0">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Commercial Terms (25%)</div>
                   <div className="text-lg font-bold text-indigo-600 dark:text-indigo-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.commercial)}</div>
                 </div>
-                <div className="p-2 rounded bg-indigo-50/70 dark:bg-indigo-950/40 text-[10px] text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-800">
+                <div className="p-2 rounded bg-indigo-50/70 dark:bg-indigo-950/40 text-[10px] text-indigo-900 dark:text-indigo-200 border border-indigo-100 dark:border-indigo-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.commercial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Technical Specs (15%)</div>
                   <div className="text-lg font-bold text-sky-600 dark:text-cyan-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.technical)}</div>
                 </div>
-                <div className="p-2 rounded bg-sky-50/70 dark:bg-cyan-950/40 text-[10px] text-sky-900 dark:text-cyan-200 border border-sky-100 dark:border-cyan-800">
+                <div className="p-2 rounded bg-sky-50/70 dark:bg-cyan-950/40 text-[10px] text-sky-900 dark:text-cyan-200 border border-sky-100 dark:border-cyan-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.technical?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Quality & Warranty (20%)</div>
                   <div className="text-lg font-bold text-emerald-600 dark:text-emerald-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.quality)}</div>
                 </div>
-                <div className="p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/40 text-[10px] text-emerald-900 dark:text-emerald-200 border border-emerald-100 dark:border-emerald-800">
+                <div className="p-2 rounded bg-emerald-50/70 dark:bg-emerald-950/40 text-[10px] text-emerald-900 dark:text-emerald-200 border border-emerald-100 dark:border-emerald-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.quality?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Delivery OTIF (20%)</div>
                   <div className="text-lg font-bold text-purple-600 dark:text-purple-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.delivery)}</div>
                 </div>
-                <div className="p-2 rounded bg-purple-50/70 dark:bg-purple-950/40 text-[10px] text-purple-900 dark:text-purple-200 border border-purple-100 dark:border-purple-800">
+                <div className="p-2 rounded bg-purple-50/70 dark:bg-purple-950/40 text-[10px] text-purple-900 dark:text-purple-200 border border-purple-100 dark:border-purple-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.delivery?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Financial Rating (10%)</div>
                   <div className="text-lg font-bold text-amber-600 dark:text-amber-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.financial)}</div>
                 </div>
-                <div className="p-2 rounded bg-amber-50/70 dark:bg-amber-950/40 text-[10px] text-amber-900 dark:text-amber-200 border border-amber-100 dark:border-amber-800">
+                <div className="p-2 rounded bg-amber-50/70 dark:bg-amber-950/40 text-[10px] text-amber-900 dark:text-amber-200 border border-amber-100 dark:border-amber-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.financial?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
 
-              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between">
+              <div className="p-3 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-1.5 flex flex-col justify-between min-w-0">
                 <div>
                   <div className="text-[10px] text-slate-400 uppercase font-bold">Governance & ESG (10%)</div>
                   <div className="text-lg font-bold text-rose-600 dark:text-rose-400 mono mt-0.5">{formatModuleScore(evalRecord.moduleScores?.governance)}</div>
                 </div>
-                <div className="p-2 rounded bg-rose-50/70 dark:bg-rose-950/40 text-[10px] text-rose-900 dark:text-rose-200 border border-rose-100 dark:border-rose-800">
+                <div className="p-2 rounded bg-rose-50/70 dark:bg-rose-950/40 text-[10px] text-rose-900 dark:text-rose-200 border border-rose-100 dark:border-rose-800 break-words">
                   <strong>Remarks:</strong> {evalRecord.moduleScores?.governance?.remarks || UI_STRINGS.recordPlaceholders.notRecorded}
                 </div>
               </div>
@@ -1756,9 +1872,9 @@ export function VendorEvaluationSummaryModal({ isOpen, onClose, record }: Evalua
               <div className="font-bold text-slate-800 dark:text-gray-200">{UI_STRINGS.modals.evaluation.documentsHeading}</div>
               <div className="space-y-1.5">
                 {(evalRecord.documents || []).map((doc: any) => (
-                  <div key={doc.id} className="flex items-center justify-between p-2 rounded bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px]">
-                    <span className="font-semibold text-slate-700 dark:text-gray-200">{doc.name}</span>
-                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200">{doc.verified ? `✓ ${doc.status}` : doc.status}</span>
+                  <div key={doc.id} className="flex flex-wrap items-center justify-between gap-2 p-2 rounded bg-white dark:bg-gray-950 border border-slate-200 dark:border-gray-800 text-[11px] min-w-0">
+                    <span className="font-semibold text-slate-700 dark:text-gray-200 break-words">{doc.name}</span>
+                    <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 shrink-0 whitespace-nowrap">{doc.verified ? `✓ ${doc.status}` : doc.status}</span>
                   </div>
                 ))}
               </div>
@@ -2099,55 +2215,18 @@ export function ActivePipelineModal({
 
                   {(() => {
                     const followUp = rfq.followUpData;
-                    const vCount = Math.max(
-                      rfq.assignedVendors?.length || 0,
-                      rfq.procucevVendorCount || 0,
-                      followUp?.totalInvited || 0,
-                      followUp?.whatsappStats?.total || 0,
-                      followUp?.smsStats?.total || 0,
-                      followUp?.emailStats?.total || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.length : 0
-                    );
+                    const metrics = computeRFQFollowUpMetrics(rfq);
+                    const vCount = metrics.totalVendors;
                     if (!followUp && vCount === 0) return null;
 
-                    // Read and delivered counts come only from recorded receipts. Elapsed time never counts as a read or a delivery.
-                    const waTotal = Math.max(followUp?.whatsappStats?.total || 0, vCount);
-                    const waRead = Math.max(
-                      followUp?.whatsappStats?.read || 0,
-                      followUp?.whatsappStats?.delivered || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.whatsapp?.status === 'delivered' || v?.whatsapp?.status === 'read').length : 0
-                    );
-
-                    const smsTotal = Math.max(followUp?.smsStats?.total || 0, vCount);
-                    const smsDelivered = Math.max(
-                      followUp?.smsStats?.delivered || 0,
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.sms?.status === 'sent' || v?.sms?.status === 'delivered').length : 0
-                    );
-
-                    const emailTotal = Math.max(followUp?.emailStats?.total || 0, vCount);
-                    const emailDelivered = Math.max(
-                      followUp?.emailStats?.delivered ?? (followUp?.emailStats?.sent24h ?? 0),
-                      Array.isArray(followUp?.vendors) ? followUp.vendors.filter((v: any) => v?.email?.status === 'delivered' || v?.emailSent).length : 0
-                    );
-                    const totalInvited = Math.max(
-                      followUp?.totalInvited || 0,
-                      vCount,
-                      waTotal,
-                      smsTotal,
-                      emailTotal
-                    );
-                    const quotesCount = Math.max(
-                      Array.isArray(rfq.quotes) ? rfq.quotes.length : 0,
-                      rfq.quotesCount || 0
-                    );
-                    const vendorRespondedCount = Array.isArray(followUp?.vendors)
-                      ? followUp.vendors.filter((v: any) => v?.bidStatus === 'Submitted' || v?.overallStatus === 'Responded').length
-                      : 0;
-                    const responded = Math.max(
-                      followUp?.respondedCount || 0,
-                      quotesCount,
-                      vendorRespondedCount
-                    );
+                    const waTotal = Math.max(metrics.waTotal ?? 0, vCount);
+                    const waRead = metrics.waDelivered ?? 0;
+                    const smsTotal = Math.max(metrics.smsTotal ?? 0, vCount);
+                    const smsDelivered = metrics.smsDelivered ?? 0;
+                    const emailTotal = Math.max(metrics.emailTotal ?? 0, vCount);
+                    const emailDelivered = metrics.emailDelivered ?? 0;
+                    const totalInvited = Math.max(metrics.totalInvited ?? 0, vCount, waTotal, smsTotal, emailTotal);
+                    const responded = metrics.responded;
 
                     return (
                       <div className="flex items-center gap-2 pt-1 text-[11px] text-slate-600 dark:text-gray-300 flex-wrap">
@@ -2545,10 +2624,13 @@ export function SupplierQuotesModal({
 }: SupplierQuotesModalProps) {
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Flatten quotes across active RFQs
+  // Flatten quotes across active RFQs (respecting 48h/closure sealing & V0 privacy)
   const allQuotesWithRfq = useMemo(() => {
     const list: Array<{ quote: QuoteComparison; rfq: RFQItem }> = [];
     rfqs.forEach((rfq) => {
+      const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+      if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') return;
+      if (isBuyerQuotesSealed(rfq, 'buyer')) return;
       if (rfq.quotes && rfq.quotes.length > 0) {
         rfq.quotes.forEach((quote) => {
           list.push({ quote, rfq });
@@ -2778,6 +2860,960 @@ export function SupplierQuotesModal({
         <div className="flex items-center justify-between pt-4 mt-2 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 shrink-0">
           <span>Showing {sortedQuotes.length} quotes across active pipeline</span>
           <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">Close</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/* ════════════════════════════════════════════════════════════════════════════════
+   4. LIVE MULTI-CHANNEL OUTREACH OVERVIEW MODAL
+════════════════════════════════════════════════════════════════════════════════ */
+export interface LiveOutreachModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  rfqs: RFQItem[];
+  onOpenDeepDive: (rfq: RFQItem) => void;
+  onNavigateToMatrix?: (rfq: RFQItem) => void;
+}
+
+export function LiveOutreachModal({
+  isOpen,
+  onClose,
+  rfqs,
+  onOpenDeepDive,
+  onNavigateToMatrix,
+}: LiveOutreachModalProps) {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [channelFilter, setChannelFilter] = useState<'all' | 'call' | 'whatsapp' | 'sms' | 'email'>('all');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'engaged' | 'delivered' | 'pending'>('all');
+  const [selectedRfqFilter, setSelectedRfqFilter] = useState<string>('all');
+  const [viewMode, setViewMode] = useState<'grouped' | 'records'>('grouped');
+  const [sortField, setSortField] = useState<'activity' | 'vendors' | 'newest' | 'engagement'>('activity');
+  const [currentPage, setCurrentPage] = useState(1);
+
+  // Reset pagination on filter or view mode change
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [searchTerm, channelFilter, statusFilter, selectedRfqFilter, viewMode, sortField]);
+
+  // Aggregate metrics across ALL RFQs
+  const telemetrySummary = useMemo(() => {
+    let totalWa = 0;
+    let totalWaReplied = 0;
+    let totalWaRead = 0;
+    let totalWaDelivered = 0;
+    let totalSms = 0;
+    let totalSmsClicked = 0;
+    let totalSmsDelivered = 0;
+    let totalCalls = 0;
+    let totalCallsConnected = 0;
+    let totalCallsVoicemail = 0;
+    let totalEmail = 0;
+    let totalEmailDelivered = 0;
+    let totalVendors = 0;
+    let totalEngaged = 0;
+
+    (rfqs || []).forEach((rfq) => {
+      if (!rfq) return;
+      const fu = rfq.followUpData;
+      const metrics = computeRFQFollowUpMetrics(rfq);
+      const vendors = normalizeFollowUpVendors(rfq);
+
+      totalWa += fu?.whatsappStats?.total || 0;
+      totalWaReplied += fu?.whatsappStats?.replied || metrics.waReplied || 0;
+      totalWaRead += fu?.whatsappStats?.read || metrics.waRead || 0;
+      totalWaDelivered += fu?.whatsappStats?.delivered || metrics.waDelivered || 0;
+
+      totalSms += fu?.smsStats?.total || 0;
+      totalSmsClicked += fu?.smsStats?.clicked || 0;
+      totalSmsDelivered += fu?.smsStats?.delivered || metrics.smsDelivered || 0;
+
+      totalCalls += fu?.callStats?.total || 0;
+      totalCallsConnected += fu?.callStats?.connected || metrics.callConnected || 0;
+      totalCallsVoicemail += (fu?.callStats as any)?.voicemail || vendors.filter((v) => v.call?.status === 'voicemail').length;
+
+      totalEmail += fu?.emailStats?.total || 0;
+      totalEmailDelivered += fu?.emailStats?.delivered || metrics.emailDelivered || 0;
+
+      totalVendors += vendors.length;
+      totalEngaged += metrics.responded || 0;
+    });
+
+    const totalOutreachMessages = totalWa + totalSms + totalEmail;
+    const engagementRate = totalVendors > 0 ? Math.round((totalEngaged / totalVendors) * 100) : 0;
+
+    return {
+      totalOutreachMessages,
+      totalWa,
+      totalWaReplied,
+      totalWaRead,
+      totalWaDelivered,
+      totalSms,
+      totalSmsClicked,
+      totalSmsDelivered,
+      totalCalls,
+      totalCallsConnected,
+      totalCallsVoicemail,
+      totalEmail,
+      totalEmailDelivered,
+      totalVendors,
+      totalEngaged,
+      engagementRate,
+    };
+  }, [rfqs]);
+
+  // Flatten vendor outreach records across all RFQs for granular record-level telemetry view
+  const flattenedRecords = useMemo(() => {
+    const list: Array<{
+      id: string;
+      rfq: RFQItem;
+      vendor: VendorFollowUpRecord;
+      vendorType: 'buyer' | 'procucev';
+      callStatus: string;
+      whatsappStatus: string;
+      smsStatus: string;
+      emailStatus: string;
+      lastInteraction: string;
+      nextFollowUp: string;
+    }> = [];
+
+    (rfqs || []).forEach((rfq) => {
+      if (!rfq) return;
+      const isHybridOrAutonomous = rfq.sourcingMode === 'mode_2' || rfq.sourcingMode === 'mode_3';
+      const assignedVendorKeys = new Set(
+        (rfq.assignedVendors || []).flatMap((av: any) => {
+          if (!av) return [];
+          if (typeof av === 'string') return [av.trim().toLowerCase()];
+          return [av.id, av.name].filter((k: any): k is string => Boolean(k)).map((k: string) => k.trim().toLowerCase());
+        })
+      );
+      const vendors = normalizeFollowUpVendors(rfq);
+
+      vendors.forEach((v, idx) => {
+        if (!v) return;
+        const vId = (v.vendorId || '').trim().toLowerCase();
+        const vName = (v.vendorName || '').trim().toLowerCase();
+        const addedByBuyer = assignedVendorKeys.has(vId) || assignedVendorKeys.has(vName);
+        const vendorType: 'buyer' | 'procucev' = addedByBuyer ? 'buyer' : isHybridOrAutonomous ? 'procucev' : 'buyer';
+
+        list.push({
+          id: `${rfq.id}-${v.vendorId || v.vendorName || idx}`,
+          rfq,
+          vendor: v,
+          vendorType,
+          callStatus: v.call?.status || 'not_dispatched',
+          whatsappStatus: v.whatsapp?.status || 'not_dispatched',
+          smsStatus: v.sms?.status || 'not_dispatched',
+          emailStatus: (v as any).emailStatus || (v.emailSent ? 'delivered' : 'not_dispatched'),
+          lastInteraction: v.lastInteraction || rfq.createdAt || '',
+          nextFollowUp: (v as any).nextFollowUp || rfq.followUpData?.nextScheduledChaser || '',
+        });
+      });
+    });
+
+    return list;
+  }, [rfqs]);
+
+  // Filtered RFQs for Grouped View
+  const filteredRfqs = useMemo(() => {
+    return (rfqs || [])
+      .filter((rfq) => {
+        if (!rfq) return false;
+        if (selectedRfqFilter !== 'all' && (rfq.rfqNumber || rfq.id) !== selectedRfqFilter) {
+          return false;
+        }
+
+        const metrics = computeRFQFollowUpMetrics(rfq);
+        const vendors = normalizeFollowUpVendors(rfq);
+
+        if (channelFilter === 'whatsapp') {
+          const hasWa = (rfq.followUpData?.whatsappStats?.total || 0) > 0 || vendors.some((v) => v.whatsapp.status !== 'not_dispatched');
+          if (!hasWa) return false;
+        } else if (channelFilter === 'call') {
+          const hasCall = (rfq.followUpData?.callStats?.total || 0) > 0 || vendors.some((v) => v.call.status !== 'not_dispatched');
+          if (!hasCall) return false;
+        } else if (channelFilter === 'sms') {
+          const hasSms = (rfq.followUpData?.smsStats?.total || 0) > 0 || vendors.some((v) => v.sms.status !== 'not_dispatched');
+          if (!hasSms) return false;
+        } else if (channelFilter === 'email') {
+          const hasEmail = (rfq.followUpData?.emailStats?.total || 0) > 0 || vendors.some((v) => Boolean(v.emailSent));
+          if (!hasEmail) return false;
+        }
+
+        if (statusFilter === 'engaged') {
+          const isEngaged = (metrics.responded || 0) > 0 || (metrics.waReplied || 0) > 0 || (metrics.callConnected || 0) > 0;
+          if (!isEngaged) return false;
+        } else if (statusFilter === 'delivered') {
+          const isDelivered = (metrics.waDelivered || 0) > 0 || (metrics.smsDelivered || 0) > 0 || (metrics.emailDelivered || 0) > 0;
+          if (!isDelivered) return false;
+        } else if (statusFilter === 'pending') {
+          const hasPending = vendors.some(
+            (v) =>
+              v.whatsapp.status === 'pending' ||
+              v.call.status === 'scheduled' ||
+              v.whatsapp.status === 'not_dispatched' ||
+              v.call.status === 'not_dispatched'
+          );
+          if (!hasPending) return false;
+        }
+
+        if (searchTerm) {
+          const term = searchTerm.trim().toLowerCase();
+          const matchesRfq =
+            (rfq.rfqNumber || '').toLowerCase().includes(term) ||
+            (rfq.title || '').toLowerCase().includes(term) ||
+            (rfq.category || '').toLowerCase().includes(term) ||
+            (rfq.status || '').toLowerCase().includes(term);
+          const matchesVendor = vendors.some((v) =>
+            ((v.vendorName || '') + ' ' + (v.contactPerson || '') + ' ' + (v.phone || '') + ' ' + (typeof v.email === 'string' ? v.email : (v.email as any)?.address || ''))
+              .toLowerCase()
+              .includes(term)
+          );
+          if (!matchesRfq && !matchesVendor) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        const metricsA = computeRFQFollowUpMetrics(a);
+        const metricsB = computeRFQFollowUpMetrics(b);
+        const vendorsA = normalizeFollowUpVendors(a);
+        const vendorsB = normalizeFollowUpVendors(b);
+
+        if (sortField === 'activity') {
+          const outA = (a.followUpData?.whatsappStats?.total || 0) + (a.followUpData?.smsStats?.total || 0) + (a.followUpData?.callStats?.total || 0);
+          const outB = (b.followUpData?.whatsappStats?.total || 0) + (b.followUpData?.smsStats?.total || 0) + (b.followUpData?.callStats?.total || 0);
+          return outB - outA;
+        }
+        if (sortField === 'vendors') {
+          return vendorsB.length - vendorsA.length;
+        }
+        if (sortField === 'engagement') {
+          const rateA = vendorsA.length > 0 ? (metricsA.responded || 0) / vendorsA.length : 0;
+          const rateB = vendorsB.length > 0 ? (metricsB.responded || 0) / vendorsB.length : 0;
+          return rateB - rateA;
+        }
+        if (sortField === 'newest') {
+          return new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime();
+        }
+        const outA = (a.followUpData?.whatsappStats?.total || 0) + (a.followUpData?.smsStats?.total || 0) + (a.followUpData?.callStats?.total || 0);
+        const outB = (b.followUpData?.whatsappStats?.total || 0) + (b.followUpData?.smsStats?.total || 0) + (b.followUpData?.callStats?.total || 0);
+        return outB - outA;
+      });
+  }, [rfqs, selectedRfqFilter, channelFilter, statusFilter, searchTerm, sortField]);
+
+  // Filtered records for All Records View
+  const filteredRecords = useMemo(() => {
+    return flattenedRecords
+      .filter((rec) => {
+        if (selectedRfqFilter !== 'all' && (rec.rfq.rfqNumber || rec.rfq.id) !== selectedRfqFilter) {
+          return false;
+        }
+
+        if (channelFilter === 'whatsapp' && rec.whatsappStatus === 'not_dispatched') return false;
+        if (channelFilter === 'call' && rec.callStatus === 'not_dispatched') return false;
+        if (channelFilter === 'sms' && rec.smsStatus === 'not_dispatched') return false;
+        if (channelFilter === 'email' && rec.emailStatus === 'not_dispatched') return false;
+
+        const isEngaged =
+          rec.whatsappStatus === 'replied' ||
+          rec.callStatus === 'connected' ||
+          rec.callStatus === 'completed' ||
+          rec.smsStatus === 'clicked' ||
+          rec.vendor.bidStatus === 'Submitted';
+
+        const isDelivered =
+          rec.whatsappStatus === 'delivered' ||
+          rec.whatsappStatus === 'read' ||
+          rec.smsStatus === 'delivered' ||
+          rec.callStatus === 'voicemail' ||
+          rec.emailStatus === 'delivered';
+
+        if (statusFilter === 'engaged' && !isEngaged) return false;
+        if (statusFilter === 'delivered' && !isDelivered) return false;
+        if (statusFilter === 'pending' && (isEngaged || isDelivered)) return false;
+
+        if (searchTerm) {
+          const term = searchTerm.trim().toLowerCase();
+          const target = [
+            rec.rfq.rfqNumber,
+            rec.rfq.title,
+            rec.vendor.vendorName,
+            rec.vendor.contactPerson,
+            rec.vendor.phone,
+            typeof rec.vendor.email === 'string' ? rec.vendor.email : (rec.vendor.email as any)?.address,
+            rec.callStatus,
+            rec.whatsappStatus,
+            rec.smsStatus,
+          ]
+            .filter(Boolean)
+            .join(' ')
+            .toLowerCase();
+          if (!target.includes(term)) return false;
+        }
+
+        return true;
+      })
+      .sort((a, b) => {
+        if (sortField === 'newest') {
+          return new Date(b.lastInteraction || b.rfq.createdAt || 0).getTime() - new Date(a.lastInteraction || a.rfq.createdAt || 0).getTime();
+        }
+        if (sortField === 'vendors') {
+          return (a.vendor.vendorName || '').localeCompare(b.vendor.vendorName || '');
+        }
+        if (sortField === 'engagement') {
+          const scoreA = a.vendor.bidStatus === 'Submitted' ? 2 : a.whatsappStatus === 'replied' || a.callStatus === 'connected' ? 1 : 0;
+          const scoreB = b.vendor.bidStatus === 'Submitted' ? 2 : b.whatsappStatus === 'replied' || b.callStatus === 'connected' ? 1 : 0;
+          return scoreB - scoreA;
+        }
+        const outA = (a.rfq.followUpData?.whatsappStats?.total || 0) + (a.rfq.followUpData?.smsStats?.total || 0) + (a.rfq.followUpData?.callStats?.total || 0);
+        const outB = (b.rfq.followUpData?.whatsappStats?.total || 0) + (b.rfq.followUpData?.smsStats?.total || 0) + (b.rfq.followUpData?.callStats?.total || 0);
+        return outB - outA;
+      });
+  }, [flattenedRecords, selectedRfqFilter, channelFilter, statusFilter, searchTerm, sortField]);
+
+  if (!isOpen) return null;
+
+  // Pagination calculations
+  const pageSize = viewMode === 'grouped' ? 6 : 10;
+  const currentTotalItems = viewMode === 'grouped' ? filteredRfqs.length : filteredRecords.length;
+  const totalPages = Math.max(1, Math.ceil(currentTotalItems / pageSize));
+  const safeCurrentPage = Math.min(currentPage, totalPages);
+  const startIdx = (safeCurrentPage - 1) * pageSize;
+  const endIdx = startIdx + pageSize;
+
+  const paginatedRfqs = filteredRfqs.slice(startIdx, endIdx);
+  const paginatedRecords = filteredRecords.slice(startIdx, endIdx);
+
+  const getModeBadge = (modeId?: string) => {
+    const mode = SOURCING_MODES.find((m) => m.id === modeId);
+    if (!mode) return null;
+    return (
+      <span
+        className="px-2 py-0.5 rounded text-[10px] font-bold tracking-wide"
+        style={{
+          backgroundColor: `${mode.badgeColor}15`,
+          color: mode.badgeColor,
+          border: `1px solid ${mode.badgeColor}35`,
+        }}
+      >
+        {mode.code} ({mode.shortLabel})
+      </span>
+    );
+  };
+
+  const getRfqStatusBadge = (status: RFQItem['status']) => {
+    switch (status) {
+      case 'AI Recommended':
+        return <span className="badge badge-emerald text-[11px] px-2 py-0.5">AI Recommended</span>;
+      case 'In Evaluation':
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">In Evaluation</span>;
+      case 'Quotes Received':
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">Quotes Received</span>;
+      case 'PO Generated':
+        return <span className="badge badge-purple text-[11px] px-2 py-0.5">PO Generated</span>;
+      case 'Parsing':
+        return <span className="badge badge-amber text-[11px] px-2 py-0.5">OCR Parsing</span>;
+      case 'Closed':
+        return <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-slate-100 dark:bg-gray-800 text-slate-500 border border-slate-200 dark:border-gray-700">Closed</span>;
+      default:
+        return <span className="badge badge-blue text-[11px] px-2 py-0.5">{status}</span>;
+    }
+  };
+
+  return (
+    <div className="modal-overlay" onClick={onClose}>
+      <div
+        className="modal-content max-w-6xl p-6 sm:p-7 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-emerald-500/40 animate-fade-in max-h-[92vh] flex flex-col"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Modal Header */}
+        <div className="flex items-start justify-between pb-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
+          <div className="flex items-center gap-3">
+            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border border-emerald-200 dark:border-emerald-500/30 shadow-xs">
+              <Radio size={24} />
+            </div>
+            <div>
+              <div className="flex items-center gap-2.5 flex-wrap">
+                <h2 className="text-xl font-extrabold text-slate-900 dark:text-white">
+                  Live Multi-Channel Outreach
+                </h2>
+                <span className="px-2.5 py-0.5 rounded-full text-xs font-bold bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-300 dark:border-emerald-800">
+                  {(rfqs || []).filter(Boolean).length} Active RFQs
+                </span>
+                <span className="badge badge-purple text-xs font-bold px-2 py-0.5">Real-Time Telemetry</span>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-gray-400 mt-1">
+                Autonomous vendor follow-up tracking across Voice Bot, WhatsApp, Verified SMS, and Email escalations.
+              </p>
+            </div>
+          </div>
+          <button
+            onClick={onClose}
+            className="text-slate-400 hover:text-slate-900 dark:hover:text-white p-1.5 rounded-lg hover:bg-slate-100 dark:hover:bg-gray-800 transition-colors"
+          >
+            <X size={22} />
+          </button>
+        </div>
+
+        {/* Aggregate KPI Strip across ALL RFQs */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 my-4 shrink-0">
+          <div className="p-3 rounded-xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 shadow-2xs">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">Total Outreach</div>
+            <div className="text-2xl font-black text-slate-900 dark:text-white mono mt-1">
+              {telemetrySummary.totalOutreachMessages}
+            </div>
+            <div className="text-[10px] text-slate-500 dark:text-gray-400 font-semibold mt-0.5 truncate">
+              {telemetrySummary.totalVendors} Empanelled Vendors
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800/40 shadow-2xs">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-emerald-700 dark:text-emerald-300 flex items-center gap-1">
+              <MessageSquare size={12} /> WhatsApp Bot
+            </div>
+            <div className="text-2xl font-black text-emerald-900 dark:text-emerald-200 mono mt-1">
+              {telemetrySummary.totalWa}
+            </div>
+            <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-semibold mt-0.5 truncate">
+              {telemetrySummary.totalWaReplied} Replied • {telemetrySummary.totalWaRead} Read
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-sky-50/70 dark:bg-cyan-950/30 border border-sky-200 dark:border-cyan-800/40 shadow-2xs">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-sky-700 dark:text-cyan-300 flex items-center gap-1">
+              <Smartphone size={12} /> Verified SMS
+            </div>
+            <div className="text-2xl font-black text-sky-900 dark:text-cyan-200 mono mt-1">
+              {telemetrySummary.totalSms}
+            </div>
+            <div className="text-[10px] text-sky-600 dark:text-cyan-400 font-semibold mt-0.5 truncate">
+              {telemetrySummary.totalSmsClicked} Clicks • {telemetrySummary.totalSmsDelivered} Delivered
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-purple-50/70 dark:bg-purple-950/30 border border-purple-200 dark:border-purple-800/40 shadow-2xs">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-purple-700 dark:text-purple-300 flex items-center gap-1">
+              <Phone size={12} /> Voice Calls
+            </div>
+            <div className="text-2xl font-black text-purple-900 dark:text-purple-200 mono mt-1">
+              {telemetrySummary.totalCalls}
+            </div>
+            <div className="text-[10px] text-purple-600 dark:text-purple-400 font-semibold mt-0.5 truncate">
+              {telemetrySummary.totalCallsConnected} Connected • {telemetrySummary.totalCallsVoicemail} Voicemail
+            </div>
+          </div>
+
+          <div className="p-3 rounded-xl bg-indigo-50/70 dark:bg-indigo-950/30 border border-indigo-200 dark:border-indigo-800/40 shadow-2xs col-span-2 sm:col-span-1">
+            <div className="text-[10px] font-bold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">Engagement</div>
+            <div className="text-2xl font-black text-indigo-900 dark:text-indigo-200 mono mt-1">
+              {telemetrySummary.engagementRate}%
+            </div>
+            <div className="text-[10px] text-indigo-600 dark:text-indigo-400 font-semibold mt-0.5 truncate">
+              {telemetrySummary.totalEngaged} Vendors Responded
+            </div>
+          </div>
+        </div>
+
+        {/* Filter, Search & View Controls Bar */}
+        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-gray-800/70 border border-slate-200 dark:border-gray-800 space-y-3 shrink-0">
+          <div className="flex flex-col md:flex-row gap-2.5 items-stretch md:items-center justify-between">
+            {/* Search Input */}
+            <div className="relative flex-1">
+              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search across all RFQs by number, title, vendor, contact, phone..."
+                className="has-leading-icon w-full pr-8 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              />
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 p-0.5"
+                >
+                  <X size={12} />
+                </button>
+              )}
+            </div>
+
+            {/* RFQ Dropdown Selector */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-gray-400">RFQ:</span>
+              <select
+                aria-label="Filter by RFQ"
+                value={selectedRfqFilter}
+                onChange={(e) => setSelectedRfqFilter(e.target.value)}
+                className="text-xs font-bold py-1.5 px-2.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+              >
+                <option value="all">All RFQs ({(rfqs || []).filter(Boolean).length})</option>
+                {(rfqs || []).filter((r): r is RFQItem => Boolean(r)).map((r) => (
+                  <option key={r.id || r.rfqNumber} value={r.rfqNumber || r.id}>
+                    {r.rfqNumber} {r.title ? `— ${r.title.slice(0, 28)}` : ''}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Sort Dropdown */}
+            <div className="flex items-center gap-1.5 shrink-0">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-gray-400">Sort:</span>
+              <select
+                aria-label="Sort Outreach Items"
+                value={sortField}
+                onChange={(e) => setSortField(e.target.value as any)}
+                className="text-xs font-bold py-1.5 px-2.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 text-slate-900 dark:text-white focus:outline-none focus:ring-1 focus:ring-emerald-500 cursor-pointer"
+              >
+                <option value="activity">Most Outreach Activity</option>
+                <option value="vendors">Most Empanelled Vendors</option>
+                <option value="engagement">Highest Response Rate</option>
+                <option value="newest">Newest Requisitions</option>
+              </select>
+            </div>
+
+            {/* View Mode Switcher */}
+            <div className="flex items-center bg-slate-200/80 dark:bg-gray-700/80 p-0.5 rounded-lg shrink-0">
+              <button
+                onClick={() => setViewMode('grouped')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                  viewMode === 'grouped'
+                    ? 'bg-white dark:bg-gray-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-gray-300 hover:text-slate-900'
+                }`}
+              >
+                <Layers size={13} /> Grouped by RFQ
+              </button>
+              <button
+                onClick={() => setViewMode('records')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-md transition-all flex items-center gap-1.5 ${
+                  viewMode === 'records'
+                    ? 'bg-white dark:bg-gray-900 text-emerald-600 dark:text-emerald-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-gray-300 hover:text-slate-900'
+                }`}
+              >
+                <FileText size={13} /> All Records Table
+              </button>
+            </div>
+          </div>
+
+          {/* Secondary Filter Row: Channel Tabs & Status Filter */}
+          <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200/60 dark:border-gray-800">
+            {/* Channel Tabs */}
+            <div className="flex items-center gap-1 flex-wrap">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-gray-400 mr-1">Channel:</span>
+              <button
+                onClick={() => setChannelFilter('all')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all ${
+                  channelFilter === 'all'
+                    ? 'bg-slate-900 dark:bg-white text-white dark:text-slate-900 shadow-2xs'
+                    : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700 hover:border-slate-400'
+                }`}
+              >
+                All Channels
+              </button>
+              <button
+                onClick={() => setChannelFilter('whatsapp')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
+                  channelFilter === 'whatsapp'
+                    ? 'bg-emerald-600 text-white shadow-2xs'
+                    : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700 hover:border-emerald-400'
+                }`}
+              >
+                <MessageSquare size={12} /> WhatsApp
+              </button>
+              <button
+                onClick={() => setChannelFilter('call')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
+                  channelFilter === 'call'
+                    ? 'bg-purple-600 text-white shadow-2xs'
+                    : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700 hover:border-purple-400'
+                }`}
+              >
+                <Phone size={12} /> Voice Calls
+              </button>
+              <button
+                onClick={() => setChannelFilter('sms')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
+                  channelFilter === 'sms'
+                    ? 'bg-sky-600 text-white shadow-2xs'
+                    : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700 hover:border-sky-400'
+                }`}
+              >
+                <Smartphone size={12} /> SMS
+              </button>
+              <button
+                onClick={() => setChannelFilter('email')}
+                className={`px-2.5 py-1 text-xs font-bold rounded-lg transition-all flex items-center gap-1 ${
+                  channelFilter === 'email'
+                    ? 'bg-amber-600 text-white shadow-2xs'
+                    : 'bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 border border-slate-200 dark:border-gray-700 hover:border-amber-400'
+                }`}
+              >
+                <Mail size={12} /> Email
+              </button>
+            </div>
+
+            {/* Status Outcome Filter */}
+            <div className="flex items-center gap-1.5">
+              <span className="text-[11px] font-semibold text-slate-500 dark:text-gray-400">Status:</span>
+              <div className="flex items-center gap-1">
+                {(['all', 'engaged', 'delivered', 'pending'] as const).map((st) => (
+                  <button
+                    key={st}
+                    onClick={() => setStatusFilter(st)}
+                    className={`px-2 py-0.5 text-[11px] font-bold rounded capitalize transition-all ${
+                      statusFilter === st
+                        ? 'bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 border border-emerald-400'
+                        : 'bg-white dark:bg-gray-900 text-slate-500 dark:text-gray-400 border border-slate-200 dark:border-gray-700 hover:text-slate-700'
+                    }`}
+                  >
+                    {st === 'engaged' ? 'Responded / Connected' : st}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Content Area */}
+        <div className="flex-1 overflow-y-auto my-3 pr-1 space-y-3 min-h-[220px]">
+          {viewMode === 'grouped' ? (
+            /* GROUPED BY RFQ VIEW */
+            paginatedRfqs.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 dark:text-gray-500">
+                <Radio size={32} className="mx-auto mb-2 opacity-40 text-emerald-500" />
+                <p className="text-sm font-bold text-slate-700 dark:text-gray-300">No Requisitions Found</p>
+                <p className="text-xs text-slate-400 mt-1">No RFQs match your current search and channel filter criteria.</p>
+                {(searchTerm || channelFilter !== 'all' || statusFilter !== 'all' || selectedRfqFilter !== 'all') && (
+                  <button
+                    onClick={() => {
+                      setSearchTerm('');
+                      setChannelFilter('all');
+                      setStatusFilter('all');
+                      setSelectedRfqFilter('all');
+                    }}
+                    className="btn btn-secondary btn-xs font-bold mt-3 inline-flex items-center gap-1"
+                  >
+                    Clear Filters
+                  </button>
+                )}
+              </div>
+            ) : (
+              paginatedRfqs.map((rfq) => {
+                const metrics = computeRFQFollowUpMetrics(rfq);
+                const vendors = normalizeFollowUpVendors(rfq);
+                const responseRate = vendors.length > 0 ? Math.round(((metrics.responded || 0) / vendors.length) * 100) : 0;
+                const nextFollowUps = computeRFQFollowUpTimes(rfq.createdAt);
+                const hasQuotes = (rfq.quotesCount && rfq.quotesCount > 0) || (rfq.quotes && rfq.quotes.length > 0);
+
+                return (
+                  <div
+                    key={rfq.id}
+                    className="p-4 rounded-xl bg-slate-50/80 dark:bg-gray-800/50 border border-slate-200 dark:border-gray-800 hover:border-emerald-400 dark:hover:border-emerald-600 transition-all shadow-2xs flex flex-col gap-3"
+                  >
+                    {/* RFQ Meta Header */}
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-sm font-black mono text-emerald-700 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/60 px-2 py-0.5 rounded border border-emerald-300 dark:border-emerald-800">
+                            {rfq.rfqNumber}
+                          </span>
+                          <span className="text-sm font-bold text-slate-900 dark:text-white">
+                            {rfq.title}
+                          </span>
+                          {getModeBadge(rfq.sourcingMode)}
+                          {getRfqStatusBadge(rfq.status)}
+                        </div>
+                        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-gray-400 flex-wrap">
+                          <span>Category: <strong className="text-slate-700 dark:text-gray-300">{rfq.category || 'General'}</strong></span>
+                          <span>•</span>
+                          <span>Target Delivery: <strong className="text-slate-700 dark:text-gray-300">{rfq.targetDeliveryDate || UI_STRINGS.recordPlaceholders.notRecorded}</strong></span>
+                          <span>•</span>
+                          <span className="text-emerald-700 dark:text-emerald-400 font-bold">{vendors.length} Vendors Empanelled</span>
+                        </div>
+                      </div>
+
+                      {/* Action Buttons */}
+                      <div className="flex items-center gap-2 shrink-0 self-end sm:self-center">
+                        <Link
+                          href={`/buyer/rfq-details?rfq=${encodeURIComponent(rfq.rfqNumber)}`}
+                          onClick={onClose}
+                          className="btn btn-secondary btn-xs font-bold flex items-center gap-1"
+                          title="View RFQ Requisition Details"
+                        >
+                          <Eye size={12} /> View RFQ
+                        </Link>
+
+                        {hasQuotes && (
+                          <button
+                            onClick={() => {
+                              onClose();
+                              if (onNavigateToMatrix) {
+                                onNavigateToMatrix(rfq);
+                              } else {
+                                onOpenDeepDive(rfq);
+                              }
+                            }}
+                            className="btn btn-emerald btn-xs font-bold flex items-center gap-1 shadow-2xs"
+                            title="View Quotes Matrix"
+                          >
+                            <Sparkles size={12} /> Quotes
+                          </button>
+                        )}
+
+                        <button
+                          onClick={() => {
+                            onClose();
+                            onOpenDeepDive(rfq);
+                          }}
+                          className="btn btn-primary btn-xs font-bold flex items-center gap-1 shadow-2xs"
+                          title="Open Full Multi-Channel Follow-Up Telemetry"
+                        >
+                          <Phone size={12} /> Deep Dive
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* 4-Channel Strip for this RFQ */}
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 pt-1">
+                      <div className="p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                        <span className="text-[10px] text-purple-700 dark:text-purple-300 font-bold uppercase tracking-wide flex items-center gap-1">
+                          <span>📞</span> Voice Calls
+                        </span>
+                        <div className="text-sm font-black mono text-slate-900 dark:text-white mt-0.5">
+                          {metrics.callConnected || 0} / {metrics.callTotal || vendors.length} Connected
+                        </div>
+                        <div className="text-[9px] text-slate-400 truncate">Next: {formatNextFollowUp(nextFollowUps.call)}</div>
+                      </div>
+
+                      <div className="p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                        <span className="text-[10px] text-emerald-700 dark:text-emerald-300 font-bold uppercase tracking-wide flex items-center gap-1">
+                          <MessageSquare size={11} /> WhatsApp Bot
+                        </span>
+                        <div className="text-sm font-black mono text-slate-900 dark:text-white mt-0.5">
+                          {metrics.waReplied || 0} Replied • {metrics.waRead || 0} Read
+                        </div>
+                        <div className="text-[9px] text-slate-400 truncate">Next: {formatNextFollowUp(nextFollowUps.whatsapp)}</div>
+                      </div>
+
+                      <div className="p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                        <span className="text-[10px] text-sky-700 dark:text-cyan-300 font-bold uppercase tracking-wide flex items-center gap-1">
+                          <Smartphone size={11} /> Verified SMS
+                        </span>
+                        <div className="text-sm font-black mono text-slate-900 dark:text-white mt-0.5">
+                          {metrics.smsDelivered || 0} / {metrics.smsTotal || vendors.length} Delivered
+                        </div>
+                        <div className="text-[9px] text-slate-400 truncate">Next: {formatNextFollowUp(nextFollowUps.sms)}</div>
+                      </div>
+
+                      <div className="p-2 rounded-lg bg-white dark:bg-gray-900 border border-slate-100 dark:border-gray-800 shadow-2xs">
+                        <span className="text-[10px] text-amber-700 dark:text-amber-300 font-bold uppercase tracking-wide flex items-center gap-1">
+                          <Mail size={11} /> Inbound / Escalation
+                        </span>
+                        <div className="text-sm font-black mono text-slate-900 dark:text-white mt-0.5">
+                          {metrics.emailDelivered || 0} Delivered
+                        </div>
+                        <div className="text-[9px] text-slate-400 truncate">Next: {formatNextFollowUp(nextFollowUps.email)}</div>
+                      </div>
+                    </div>
+
+                    {/* Progress Bar & Vendors Roster Preview */}
+                    <div className="space-y-1.5 pt-1">
+                      <div className="flex items-center justify-between text-xs font-semibold text-slate-600 dark:text-gray-400">
+                        <span>Engagement Response Rate</span>
+                        <span className="font-bold text-slate-900 dark:text-white">
+                          {metrics.responded || 0} of {vendors.length} Vendors Engaged ({responseRate}%)
+                        </span>
+                      </div>
+                      <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-gray-700 overflow-hidden">
+                        <div
+                          className="h-full bg-gradient-to-r from-emerald-500 to-indigo-500 rounded-full transition-all duration-300"
+                          style={{ width: `${Math.min(100, responseRate)}%` }}
+                        />
+                      </div>
+
+                      {/* Mini Vendor Badges */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-1">
+                        <span className="text-[10px] text-slate-400 uppercase font-bold mr-1">Roster:</span>
+                        {vendors.slice(0, 5).map((v, idx) => (
+                          <span
+                            key={v.vendorId || idx}
+                            className="px-2 py-0.5 rounded text-[10px] font-semibold bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-300 flex items-center gap-1"
+                          >
+                            <Building2 size={10} className="text-slate-400" />
+                            {v.vendorName}
+                            {v.whatsapp.status === 'replied' ? (
+                              <span className="text-emerald-500 font-bold">💬 Bid In</span>
+                            ) : v.call.status === 'connected' ? (
+                              <span className="text-purple-500 font-bold">📞 Connected</span>
+                            ) : v.whatsapp.status === 'read' ? (
+                              <span className="text-blue-500">💬 Read</span>
+                            ) : (
+                              <span className="text-slate-400">⏳ Follow-up</span>
+                            )}
+                          </span>
+                        ))}
+                        {vendors.length > 5 && (
+                          <span className="text-[10px] text-slate-400 font-medium">
+                            +{vendors.length - 5} more
+                          </span>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })
+            )
+          ) : (
+            /* ALL RECORDS FLAT TELEMETRY TABLE VIEW */
+            paginatedRecords.length === 0 ? (
+              <div className="p-8 text-center text-slate-400 dark:text-gray-500">
+                <Radio size={32} className="mx-auto mb-2 opacity-40 text-emerald-500" />
+                <p className="text-sm font-bold text-slate-700 dark:text-gray-300">No Outreach Records Found</p>
+                <p className="text-xs text-slate-400 mt-1">No individual vendor records match your current filter settings.</p>
+                {(searchTerm || channelFilter !== 'all' || statusFilter !== 'all' || selectedRfqFilter !== 'all') && (
+                  <button
+                    onClick={() => {
+                      setSearchTerm('');
+                      setChannelFilter('all');
+                      setStatusFilter('all');
+                      setSelectedRfqFilter('all');
+                    }}
+                    className="btn btn-secondary btn-xs font-bold mt-3 inline-flex items-center gap-1"
+                  >
+                    Clear Filters
+                  </button>
+                )}
+              </div>
+            ) : (
+              <div className="border border-slate-200 dark:border-gray-800 rounded-xl overflow-hidden shadow-2xs">
+                <table className="w-full text-left text-xs border-collapse">
+                  <thead>
+                    <tr className="bg-slate-100 dark:bg-gray-800/80 text-slate-600 dark:text-gray-300 uppercase text-[10px] font-extrabold tracking-wider border-b border-slate-200 dark:border-gray-800">
+                      <th className="py-2.5 px-3">Requisition</th>
+                      <th className="py-2.5 px-3">Empanelled Vendor</th>
+                      <th className="py-2.5 px-3">Contact Details</th>
+                      <th className="py-2.5 px-3">WhatsApp Bot</th>
+                      <th className="py-2.5 px-3">Voice Calls</th>
+                      <th className="py-2.5 px-3">SMS</th>
+                      <th className="py-2.5 px-3 text-right">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
+                    {paginatedRecords.map((row) => (
+                      <tr
+                        key={row.id}
+                        className="hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors"
+                      >
+                        <td className="py-2.5 px-3 font-medium">
+                          <span className="mono font-bold text-emerald-700 dark:text-emerald-400 block">
+                            {row.rfq.rfqNumber}
+                          </span>
+                          <span className="text-[11px] text-slate-500 dark:text-gray-400 truncate max-w-[160px] block">
+                            {row.rfq.title}
+                          </span>
+                        </td>
+
+                        <td className="py-2.5 px-3">
+                          <div className="font-bold text-slate-900 dark:text-white flex items-center gap-1">
+                            <Building2 size={12} className="text-slate-400 shrink-0" />
+                            <span>{row.vendor.vendorName}</span>
+                          </div>
+                          <span
+                            className={`inline-block text-[9px] font-bold px-1.5 py-0.2 rounded mt-0.5 ${
+                              row.vendorType === 'buyer'
+                                ? 'bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800'
+                                : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800'
+                            }`}
+                          >
+                            {row.vendorType === 'buyer' ? 'Buyer Vendor' : 'Procucev Network'}
+                          </span>
+                        </td>
+
+                        <td className="py-2.5 px-3 text-[11px] text-slate-600 dark:text-gray-400">
+                          <div className="font-semibold text-slate-800 dark:text-gray-200">{row.vendor.contactPerson || row.vendor.vendorName}</div>
+                          <div className="mono text-[10px] text-slate-400">
+                            {row.vendor.phone || (typeof row.vendor.email === 'string' ? row.vendor.email : (row.vendor.email as any)?.address) || '—'}
+                          </div>
+                        </td>
+
+                        <td className="py-2.5 px-3">
+                          {getWhatsAppBadge(row.whatsappStatus)}
+                        </td>
+
+                        <td className="py-2.5 px-3">
+                          {getCallBadge(row.callStatus)}
+                        </td>
+
+                        <td className="py-2.5 px-3">
+                          {getSMSBadge(row.smsStatus)}
+                        </td>
+
+                        <td className="py-2.5 px-3 text-right">
+                          <button
+                            onClick={() => {
+                              onClose();
+                              onOpenDeepDive(row.rfq);
+                            }}
+                            className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1"
+                            title="Open Deep Dive for this Requisition"
+                          >
+                            Deep Dive
+                          </button>
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )
+          )}
+        </div>
+
+        {/* Informational Guidance Box */}
+        <div className="mt-2 p-3 rounded-xl bg-emerald-50/70 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900/50 text-xs text-emerald-900 dark:text-emerald-200 flex items-center gap-2.5 shrink-0">
+          <Info size={18} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
+          <span>
+            <strong>Multi-Channel Automated Chaser Engine:</strong> Dispatches WhatsApp reminders at T+1h, automated voice follow-ups at T+4h, and DLT SMS at T+12h across all active requisitions to guarantee timely vendor response.
+          </span>
+        </div>
+
+        {/* Footer & Pagination Controls */}
+        <div className="flex flex-col sm:flex-row items-center justify-between pt-3 mt-2 border-t border-slate-200 dark:border-gray-800 text-xs text-slate-500 dark:text-gray-400 gap-2 shrink-0">
+          <div>
+            Showing {currentTotalItems > 0 ? startIdx + 1 : 0}–{Math.min(endIdx, currentTotalItems)} of {currentTotalItems}{' '}
+            {viewMode === 'grouped' ? 'requisitions' : 'vendor outreach records'}
+          </div>
+
+          {/* Pagination buttons */}
+          <div className="flex items-center gap-2">
+            {totalPages > 1 && (
+              <div className="flex items-center gap-1">
+                <button
+                  disabled={safeCurrentPage <= 1}
+                  onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                  className="btn btn-secondary btn-xs font-bold px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronLeft size={13} />
+                </button>
+                <span className="text-xs font-bold text-slate-700 dark:text-gray-300 px-1.5 mono">
+                  {safeCurrentPage} / {totalPages}
+                </span>
+                <button
+                  disabled={safeCurrentPage >= totalPages}
+                  onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                  className="btn btn-secondary btn-xs font-bold px-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                >
+                  <ChevronRight size={13} />
+                </button>
+              </div>
+            )}
+            <button onClick={onClose} className="btn btn-secondary btn-sm font-bold px-4">
+              Close
+            </button>
+          </div>
         </div>
       </div>
     </div>
