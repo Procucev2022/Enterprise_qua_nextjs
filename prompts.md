@@ -7935,3 +7935,12 @@ REUSE Existing code and functionality don't merge the code in test-v3 use same b
 ```
 
 ---
+### Prompt 379
+
+**Timestamp**: 2026-11-21T21:37:36+05:30
+
+```text
+why it is not showing available credits
+```
+
+---
