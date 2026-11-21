@@ -2076,7 +2076,7 @@ export const UI_STRINGS = {
     maxMajorReached:
       'You can select at most {max} procurement divisions. Clear one before adding another.',
     maxMinorReached:
-      'You have selected {count} of {max} procurement categories. Clear one before adding another.',
+      'You have selected more than the allowed limit of 10 categories. Please select only 10 most relevant categories to proceed.',
   },
 
   // ============================================================================
