@@ -481,7 +481,7 @@ describe('Role screen routes', () => {
 
       clickCallback('all-rfqs:onNavigateToMatrix');
       expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
-      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
 
       clickCallback('all-rfqs:onViewDetails');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/rfq-details?rfq=RFQ-1');

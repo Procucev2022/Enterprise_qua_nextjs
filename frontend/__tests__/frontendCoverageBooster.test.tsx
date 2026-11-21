@@ -584,15 +584,18 @@ describe('Frontend Master Coverage Booster Suite', () => {
   });
 
   test('BuyerQuoteMatrixPage and CategoryManagerQuoteMatrixPage back routing', () => {
-    render(<BuyerQuoteMatrixPage />);
+    const { unmount: unmountBuyer } = render(<BuyerQuoteMatrixPage />);
     expect(screen.getByText(/Target Delivery/i)).toBeInTheDocument();
     const backBtn = screen.getByRole('button', { name: /Back to Command Center/i });
     fireEvent.click(backBtn);
+    unmountBuyer();
 
-    render(<CategoryManagerQuoteMatrixPage />);
+    const { unmount: unmountCm } = render(<CategoryManagerQuoteMatrixPage />);
     expect(screen.getAllByText(/Target Delivery/i).length).toBeGreaterThan(0);
-    const cmBackBtns = screen.getAllByRole('button', { name: /Back to Command Center/i });
-    if (cmBackBtns.length > 0) fireEvent.click(cmBackBtns[0]);
+    const cmBackBtn = screen.getByRole('button', { name: /Back to Command Center/i });
+    fireEvent.click(cmBackBtn);
+    expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+    unmountCm();
   });
 
   test('VendorQuotationFormPage loads matching RFQ, fallback and missing opportunity', () => {
