@@ -69,6 +69,7 @@ import {
   removeVendorsFromUploadHistoryInStorage,
   setVendorsActiveStateInStorage,
   isVendorActive,
+  resolveVendorDisplayName,
   VENDOR_ACTIVE_STATUSES,
 } from './constants';
 
@@ -2478,7 +2479,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     ].filter(Boolean);
     setVendorsActiveStateInStorage(identifiersToSync, isActive);
 
-    const displayName = saved.name || matchedVendor?.name || targetVendor?.name || savedId;
+    const displayName = resolveVendorDisplayName(
+      { ...matchedVendor, ...saved, id: savedId },
+      UI_STRINGS.vendorStatusControl.genericVendorLabel,
+      matchedVendor?.name,
+      targetVendor?.name
+    );
     void addAuditLog(
       isActive
         ? `Reactivated vendor ${displayName} (${savedId}) for future sourcing workflows.`

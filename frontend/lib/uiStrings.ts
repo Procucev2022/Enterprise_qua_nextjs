@@ -3930,6 +3930,11 @@ export const UI_STRINGS = {
     bulkEnableButton: 'Mark Active ({count})',
     singleDisableTitle: 'Mark Vendor Inactive',
     singleEnableTitle: 'Reactivate Vendor',
+    // Used wherever a vendor's name would otherwise fall back to its vendorCode
+    // or raw record ID — a last-resort value upstream uses so a record is
+    // never persisted with a blank name, but confusing to show as if it were
+    // the vendor's name in a confirmation prompt, audit log, or toast.
+    genericVendorLabel: 'this supplier',
     singleDisableBanner: 'Deactivation (History Preserved):',
     singleDisableDescription: 'Are you sure you want to mark {vendorName} as inactive?',
     singleDisableImpactNote: 'Historical RFQs, invitations, quotes, purchase orders, and evaluations remain intact. This vendor will NOT appear in future Create RFQ flows, RFQ invitations, or sourcing lists until reactivated.',
@@ -3970,8 +3975,8 @@ export const UI_STRINGS = {
   vendorSummaryStats: {
     totalVendorLabel: 'Total Vendor',
     ocrEvaluatedLabel: 'OCR & 360° Evaluated',
-    preferredStatusLabel: 'Preferred Status',
-    selectedSuppliersLabel: 'Selected Suppliers',
+    activeVendorLabel: 'Active',
+    inactiveVendorLabel: 'Inactive',
   },
 
 };

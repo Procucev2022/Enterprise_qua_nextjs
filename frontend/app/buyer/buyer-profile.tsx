@@ -9,7 +9,7 @@ import {
   flattenCategorySelection,
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
-import { ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
+import { ORGANIZATION_TYPE_OPTIONS, BUYER_PROFILE_LIMITS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
   FORM_SCHEMAS,
@@ -388,7 +388,11 @@ export default function BuyerProfilePage() {
   const minorsOf = (majorName: string) =>
     activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
-  // Toggle Major Category (unlimited major & minor selections)
+  // Toggle Major Category, capped at BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES
+  // divisions and BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES minor categories in
+  // total — selecting a major auto-selects every minor under it, so that bulk
+  // add is blocked outright (not partially filled) whenever it would push the
+  // total minor count over the cap, re-enforced server-side on save.
   const toggleMajorCategory = (majorName: string) => {
     if (selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
@@ -400,11 +404,33 @@ export default function BuyerProfilePage() {
       return;
     }
 
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (typeof MAX_MAJOR_CATEGORIES === 'number' && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
+    const allMinor = minorsOf(majorName);
+    if (
+      typeof MAX_MINOR_CATEGORIES === 'number' &&
+      totalSelectedMinorCount + allMinor.length > MAX_MINOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
+
     setSelectedMajor((prev) => [...prev, majorName]);
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: minorsOf(majorName) }));
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
   };
 
-  // Toggle Minor Category (unlimited selections)
+  // Toggle Minor Category, capped at BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES in total.
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
     const isChecked = currentList.includes(minorName);
@@ -423,15 +449,48 @@ export default function BuyerProfilePage() {
       return;
     }
 
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (
+      typeof MAX_MAJOR_CATEGORIES === 'number' &&
+      !selectedMajor.includes(majorName) &&
+      selectedMajor.length >= MAX_MAJOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
+    if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount >= MAX_MINOR_CATEGORIES) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
+
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
     setSelectedMinor((prev) => ({ ...prev, [majorName]: [...(prev[majorName] || []), minorName] }));
   };
 
-  // Select all minor for a major
+  // Select all minor for a major, capped the same way as toggleMajorCategory.
   const selectAllMinorInMajor = (majorName: string) => {
     const allMinor = minorsOf(majorName);
+    const alreadySelected = selectedMinor[majorName] || [];
+    const additional = allMinor.filter((m) => !alreadySelected.includes(m)).length;
+    const { MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount + additional > MAX_MINOR_CATEGORIES) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }

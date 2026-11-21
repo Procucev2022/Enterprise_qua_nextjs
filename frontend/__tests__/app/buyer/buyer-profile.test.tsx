@@ -764,7 +764,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
   });
 
-  it('allows selecting more than 5 major categories without artificial cap', async () => {
+  it('blocks a 6th major category once the 5-division cap is reached', async () => {
     const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
       majorCategory: `Category ${i + 1}`,
       minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
@@ -779,22 +779,22 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
 
-    // Selecting 6th and 7th major categories succeeds cleanly without limit warnings
+    // At the 5-division cap: selecting a 6th is blocked with a toast and the
+    // selection is left exactly as it was.
     fireEvent.click(screen.getByText('Category 6'));
-    fireEvent.click(screen.getByText('Category 7'));
 
-    expect(selectionSummary()).toBe('7 Divisions • 9 Categories Selected');
-    expect(mockShowToast).not.toHaveBeenCalledWith(
+    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
+    expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.any(String),
+      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: 5 }),
       'warning'
     );
   });
 
-  it('allows selecting unlimited minor categories beyond 10', async () => {
-    const minors = Array.from({ length: 45 }, (_, i) => `Subcat ${i + 1}`);
+  it('blocks a 11th minor category once the 10-category cap is reached', async () => {
+    const minors = Array.from({ length: 15 }, (_, i) => `Subcat ${i + 1}`);
     const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
-    const initialCategories = minors.slice(0, 40).map((m) => ({
+    const initialCategories = minors.slice(0, 9).map((m) => ({
       major: 'Huge Category',
       minor: m,
     }));
@@ -802,14 +802,20 @@ describe('app/buyer/buyer-profile.tsx', () => {
     mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
     await renderLoaded();
 
-    const subcat41 = screen.getByText('Subcat 41').closest('label')!.querySelector('input')!;
-    fireEvent.click(subcat41);
+    // The 10th minor is still under the cap and succeeds.
+    const subcat10 = screen.getByText('Subcat 10').closest('label')!.querySelector('input')!;
+    fireEvent.click(subcat10);
+    expect(subcat10).toBeChecked();
+    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
 
-    expect(subcat41).toBeChecked();
-    expect(selectionSummary()).toBe('1 Division • 41 Categories Selected');
-    expect(mockShowToast).not.toHaveBeenCalledWith(
+    // The 11th is blocked outright, with no partial addition and no toggle.
+    const subcat11 = screen.getByText('Subcat 11').closest('label')!.querySelector('input')!;
+    fireEvent.click(subcat11);
+    expect(subcat11).not.toBeChecked();
+    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
+    expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.any(String),
+      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
       'warning'
     );
   });
@@ -957,7 +963,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     jest.useRealTimers();
   });
 
-  it('supports unlimited Select All and toggleMinorCategory across more than 10 categories', async () => {
+  it('blocks any further bulk addition — toggling a whole major, a lone minor, or Select All — once the 10-minor cap is already reached', async () => {
     const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
     const largeTaxonomy = Array.from({ length: 6 }, (_, i) => ({
       majorCategory: `Major Cat ${i + 1}`,
@@ -982,30 +988,32 @@ describe('app/buyer/buyer-profile.tsx', () => {
     }, largeTaxonomy);
 
     await renderLoaded();
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
 
-    // Selecting Major Cat 3 when 10 minors are already selected succeeds
+    // Selecting Major Cat 3 would auto-add all 5 of its minors, pushing the
+    // total to 15 — blocked outright rather than partially filled.
     fireEvent.click(screen.getByText('Major Cat 3'));
-    expect(selectionSummary()).toBe('3 Divisions • 15 Categories Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.limitReachedTitle,
+      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
+      'warning'
+    );
 
-    // Expand Major Cat 4 and toggle a minor + Select All
+    // A single additional minor under a new major is blocked the same way.
     expandMajor('Major Cat 4');
     fireEvent.click(screen.getByText('Minor 4-A'));
-    expect(selectionSummary()).toBe('4 Divisions • 16 Categories Selected');
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
 
+    // Select All on another major's minors is blocked the same way too.
     const panel5 = majorPanel('Major Cat 5');
     expandMajor('Major Cat 5');
     const selectAllBtn5 = Array.from(panel5.querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'Select All'
     );
-    if (selectAllBtn5) {
-      fireEvent.click(selectAllBtn5);
-      expect(selectionSummary()).toBe('5 Divisions • 21 Categories Selected');
-    }
-    expect(mockShowToast).not.toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      expect.any(String),
-      'warning'
-    );
+    expect(selectAllBtn5).toBeTruthy();
+    fireEvent.click(selectAllBtn5!);
+    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
   });
 
   it('covers postal pincode successful resolution with post office auto-populating city and state', async () => {

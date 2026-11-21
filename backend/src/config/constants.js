@@ -2772,8 +2772,8 @@ const BUYER_PROFILE_CONFIG = {
   // most 5 divisions, at most 10 minor categories in total. They exist because
   // the RFQ distribution engine fans out per selected category, so an unbounded
   // selection would broadcast every RFQ to the entire vendor base.
-  MAX_MAJOR_CATEGORIES: null,
-  MAX_MINOR_CATEGORIES: null,
+  MAX_MAJOR_CATEGORIES: 5,
+  MAX_MINOR_CATEGORIES: 10,
 
   // The rupee sign is rewritten before storage, exactly as updateBuyer does.
   // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹

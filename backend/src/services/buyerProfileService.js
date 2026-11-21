@@ -30,11 +30,13 @@ const {
 } = require('../config/validationSchemas');
 const {
   AUTH_MESSAGES,
+  BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
   D1_OVERLOAD_CONFIG,
   DEFAULT_CATEGORY_TAXONOMY,
   VALIDATION_SCHEMAS,
   validatePayload,
+  formatMessage,
 } = require('../config/constants');
 
 const LOG_CATEGORY = 'BUYER_PROFILE_SERVICE';
@@ -418,7 +420,30 @@ function normalizeCategories(rawCategories) {
     normalized.push({ major, minor });
   });
 
-  // Unlimited major and minor procurement categories supported per organization.
+  // Cardinality caps on the de-duplicated set: at most MAX_MAJOR_CATEGORIES
+  // distinct divisions, at most MAX_MINOR_CATEGORIES minor categories in
+  // total across all of them. A client cannot be trusted to hold the line on
+  // its own, so this is re-checked here even though the profile screen also
+  // stops the buyer at the click that would exceed the cap.
+  const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_CONFIG;
+  if (typeof MAX_MINOR_CATEGORIES === 'number' && normalized.length > MAX_MINOR_CATEGORIES) {
+    throw new BuyerProfileError(
+      formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MINOR_CATEGORIES, { max: MAX_MINOR_CATEGORIES }),
+      400,
+      { categories: formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MINOR_CATEGORIES, { max: MAX_MINOR_CATEGORIES }) }
+    );
+  }
+  if (typeof MAX_MAJOR_CATEGORIES === 'number') {
+    const distinctMajors = new Set(normalized.map((entry) => entry.major.toLowerCase()));
+    if (distinctMajors.size > MAX_MAJOR_CATEGORIES) {
+      throw new BuyerProfileError(
+        formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MAJOR_CATEGORIES, { max: MAX_MAJOR_CATEGORIES }),
+        400,
+        { categories: formatMessage(BUYER_PROFILE_MESSAGES.TOO_MANY_MAJOR_CATEGORIES, { max: MAX_MAJOR_CATEGORIES }) }
+      );
+    }
+  }
+
   return normalized;
 }
 
