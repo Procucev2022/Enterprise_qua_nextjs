@@ -2957,7 +2957,19 @@ class StoreService {
 
     const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
 
-    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
+    // Mode 0 RFQs are public enquiries that every seller can already view (canVendorViewRfq), so
+    // any seller may unlock one for 1 credit whatever their category, as on test-v3. A seller who
+    // already unlocked an RFQ keeps access to re-download it. The credit checks below still apply.
+    const previouslyUnlocked = (Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [])
+      .some((id) => String(id) === String(rfq.id) || (rfq.rfqNumber && String(id) === String(rfq.rfqNumber)));
+
+    if (
+      !hasUnlimitedDownloads &&
+      !isV0 &&
+      !previouslyUnlocked &&
+      !this.vendorCoversRFQ(vendor, rfq) &&
+      !(isNetworkMode && categoryMatches)
+    ) {
       return {
         success: false,
         error: RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED,

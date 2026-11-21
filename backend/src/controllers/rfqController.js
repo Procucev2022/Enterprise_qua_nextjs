@@ -2188,6 +2188,9 @@ function respondToVendorUnlockFailure(res, unlockResult) {
         ? RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED
         : RFQ_DOWNLOAD_ERRORS.UNKNOWN_FAILURE));
   const payload = { success: false, error };
+  // Machine-readable reason so callers such as the WhatsApp bot can tell "no credits" from
+  // "not allowed" (both are 403). Additive only: the status and error text are unchanged.
+  payload.code = creditsExhausted ? 'CREDITS_EXHAUSTED' : (unlockResult && unlockResult.unauthorized ? 'NOT_ELIGIBLE' : 'UNKNOWN');
   if (creditsExhausted) {
     payload.freeCreditsRemaining = unlockResult.freeCreditsRemaining ?? 0;
     payload.exhausted = true;
