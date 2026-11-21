@@ -1592,4 +1592,43 @@ describe('Summary Cards Click and Modal Popup', () => {
 
     localStorage.removeItem('qua_payment_dues_column_prefs');
   });
+
+  it('handles backdrop click and escape key to close communication modals and column settings', async () => {
+    render(<PaymentDuesDashboard />);
+    await waitFor(() => expect(screen.getByText('Apex Industries')).toBeInTheDocument());
+
+    // 1. Email Modal Escape & backdrop click
+    const emailBtns = screen.getAllByTitle('Send Email');
+    fireEvent.click(emailBtns[0]);
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(screen.getByText('Send Low-Credit Email Notification'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(emailBtns[0]);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Column settings Escape & backdrop click
+    const gearBtn = screen.getByTitle('Column Settings');
+    fireEvent.click(gearBtn);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(screen.getByText('Customize Columns'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

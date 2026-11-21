@@ -959,4 +959,50 @@ describe('TicketsDashboard', () => {
     expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
   });
 
+  it('handles backdrop click and escape key for create and escalate modals', async () => {
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+    });
+
+    // 1. Create Ticket modal Escape and backdrop click
+    fireEvent.click(screen.getByRole('button', { name: /New Ticket/i }));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByText('Create Support Ticket'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByRole('button', { name: /New Ticket/i }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Escalate modal Escape and backdrop click
+    const escalateButtons = screen.getAllByTitle('Escalate Ticket');
+    fireEvent.click(escalateButtons[0]);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByText('Escalate Ticket'));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(escalateButtons[0]);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

@@ -108,6 +108,7 @@ describe('account creation on D1 binds every placeholder to its own value', () =
       ROLE_UUID,
       0,
       IDENTITY_MASTER_DATA.VERIFICATION_VERIFIED,
+      IDENTITY_MASTER_DATA.SOURCE_TYPE_WEB,
       'Acme Components',
       ORG_TYPE_UUID,
       'buyer@example.com',
