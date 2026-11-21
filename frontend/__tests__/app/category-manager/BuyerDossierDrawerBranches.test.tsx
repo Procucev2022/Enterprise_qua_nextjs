@@ -375,6 +375,30 @@ describe('BuyerDossierDrawer branch coverage', () => {
       expect(screen.getByText('5 Credits')).toBeInTheDocument();
     });
 
+    it('shows available credits from buyer remainingFreeRFQs and loads credit history when opened from the profile tab', async () => {
+      (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        summary: creditSummaryFixture,
+        transactions: [],
+      });
+      render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="profile" />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
+      expect(screen.getByText('5 Credits')).toBeInTheDocument();
+      expect(buyerProfileClient.fetchBuyerCreditHistory).toHaveBeenCalledWith(mockBuyer.id);
+    });
+
+    it('falls back to 0 credits if buyer has no remainingFreeRFQs and creditSummary is not yet loaded', async () => {
+      const buyerWithoutCredits = { ...mockBuyer, remainingFreeRFQs: undefined as any };
+      (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
+      render(<BuyerDossierDrawer buyer={buyerWithoutCredits} onClose={onCloseMock} initialTab="profile" />);
+
+      fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
+      fireEvent.click(screen.getByRole('menuitem', { name: 'Buyer Credit Addition' }));
+      expect(screen.getByText('0 Credits')).toBeInTheDocument();
+    });
+
     it('shows the built-in load message when the credit history reports a failure without an error', async () => {
       (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValueOnce({ success: false });
       render(<BuyerDossierDrawer buyer={mockBuyer} onClose={onCloseMock} initialTab="credits" />);
