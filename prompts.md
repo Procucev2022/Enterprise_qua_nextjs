@@ -7889,3 +7889,49 @@ contiinue
 ```
 
 ---
+### Prompt 378
+
+**Timestamp**: 2026-11-21T20:51:06+05:30
+
+```text
+Fix the horizontal overflow/scrolling bug on the Registrations tab filter toolbar and add 100-per-page pagination to the All RFQs table.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Strictly reuse existing code**: Do NOT rewrite, duplicate, or replace existing state management, API calls, filter/search/sort methods, export utilities, or shared UI components. Hook into the exact existing handlers and utilities already in the codebase.
+- **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, KPI cards, table columns, row actions, modals, popups, sorting, filtering, and export behaviors 100% intact. Make minimal, surgical edits scoped strictly to the two items below.
+
+### 1. Fix Registrations Tab Toolbar Horizontal Overflow
+In **Action Center > Registrations**, the toolbar is currently overflowing horizontally and showing a horizontal scrollbar because the `All Users` and `Source` `<select>` dropdowns are stretching to full width (`w-full` / `flex-1`). Fix only the CSS/layout classes so all 8 controls fit cleanly on a single row with **no horizontal scrollbar**:
+
+- **Remove horizontal scrolling on the toolbar wrapper**: Remove `overflow-x-auto` / `overflow-x-scroll` from the toolbar container and use `flex items-center gap-2 w-full`.
+- **Apply explicit compact widths** (remove `w-full` or `flex-1` from the `<select>` elements), reusing all existing `value`, `onChange`, and `onClick` bindings without changing any logic:
+  1. **Search input**: `flex-1 min-w-[180px]` — fix the magnifying glass icon overlapping `Search...` by adding proper left padding (e.g., `pl-9`).
+  2. **All Users dropdown**: `w-[130px] shrink-0` (NOT `w-full`).
+  3. **Source dropdown**: `w-[120px] shrink-0` (NOT `w-full`).
+  4. **Start Date**: `w-[135px] shrink-0`.
+  5. **End Date**: `w-[135px] shrink-0`.
+  6. **Export button**: `shrink-0 whitespace-nowrap` (keep existing emerald green styling and existing export handler).
+  7. **Refresh icon button**: `w-9 h-9 shrink-0` (keep existing refresh handler).
+  8. **Gear icon button**: `w-9 h-9 shrink-0` (keep existing column-settings handler).
+- **Do not touch** the Action Center sub-tabs, KPI cards, table layout, or any existing filter/export functionality.
+
+### 2. Add Pagination to the All RFQs Table (100 RFQs per Page)
+Add a compact, single-row pagination bar directly below the **All RFQs** table container (above the bottom page footer), strictly reusing existing RFQ data fetching, filtering, and sorting logic:
+
+- **Reuse existing pagination component/pattern** if one already exists in the codebase; otherwise, match the exact light SaaS card border, rounded corners, and typography of the table.
+- **Page Size**: Display **100 RFQs per page** (`PAGE_SIZE = 100`).
+  - If the existing API endpoint already supports `page` and `limit`, pass `limit=100` and `page` without breaking existing query params; otherwise, slice the existing filtered RFQ array client-side (`slice((page - 1) * 100, page * 100)`).
+- **Pagination Bar Layout** (single row inside the bottom of the white rounded table card, separated by a thin top border):
+  - **Left side**: Range text (e.g., `Showing 1–100 of 342 RFQs`).
+  - **Right side**: `< Previous` button, clickable page numbers (`1`, `2`, `3`, `4`, with the active page highlighted in the sidebar teal color), and `Next >` button.
+- **State & Safety Checks**:
+  - Disable `Previous` on Page 1 and `Next` on the last page.
+  - Reset to **Page 1** whenever search, status, or date filters change.
+  - Smoothly scroll the table container back to the top when changing pages.
+  - **Do not break** any existing table columns, horizontal table scrolling, row actions (`Invite Vendors`, `Details`, `Quote Matrix`), or export functionality.
+
+
+REUSE Existing code and functionality don't merge the code in test-v3 use same branch again raise the pr and pass all the covergaes only i can merge the pr
+```
+
+---

@@ -872,6 +872,110 @@ describe('AllRFQsConsole', () => {
       jest.useRealTimers();
     });
   });
+
+  describe('Pagination', () => {
+    it('renders pagination bar, handles page navigation, and resets page on filter change', async () => {
+      // Mock window scrollTo and Element scrollTo
+      const originalScrollTo = Element.prototype.scrollTo;
+      Element.prototype.scrollTo = jest.fn();
+
+      const manyRfqs = Array.from({ length: 250 }, (_, i) =>
+        makeRfq({
+          id: `page-${i + 1}`,
+          title: `RFQ Item ${i + 1}`,
+          category: 'Cables',
+          status: 'Quotes Pending',
+          budget: 10000,
+          buyerAccountName: 'Alpha Buyer Co',
+        })
+      );
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: manyRfqs });
+
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('RFQ Item 1')).toBeInTheDocument());
+
+      // Should show 250 total, page 1 (1–100)
+      expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument();
+
+      // Page 1 should be active
+      const page1Btn = screen.getByRole('button', { name: 'Page 1' });
+      expect(page1Btn).toHaveAttribute('aria-current', 'page');
+      expect(page1Btn.className).toContain('bg-[#009688]');
+
+      // Previous button should be disabled
+      const prevBtn = screen.getByRole('button', { name: 'Previous page' });
+      expect(prevBtn).toBeDisabled();
+
+      // Next button should be enabled
+      const nextBtn = screen.getByRole('button', { name: 'Next page' });
+      expect(nextBtn).not.toBeDisabled();
+
+      // Click Next -> moves to page 2 (101–200)
+      fireEvent.click(nextBtn);
+      expect(screen.getByText('Showing 101–200 of 250 RFQs')).toBeInTheDocument();
+      expect(screen.getByText('RFQ Item 101')).toBeInTheDocument();
+      expect(screen.queryByText('RFQ Item 1')).not.toBeInTheDocument();
+      expect(prevBtn).not.toBeDisabled();
+
+      // Click Page 3 -> moves to page 3 (201–250)
+      const page3Btn = screen.getByRole('button', { name: 'Page 3' });
+      fireEvent.click(page3Btn);
+      expect(screen.getByText('Showing 201–250 of 250 RFQs')).toBeInTheDocument();
+      expect(screen.getByText('RFQ Item 201')).toBeInTheDocument();
+      expect(nextBtn).toBeDisabled();
+
+      // Click Previous -> back to page 2
+      fireEvent.click(prevBtn);
+      expect(screen.getByText('Showing 101–200 of 250 RFQs')).toBeInTheDocument();
+
+      // Filter change resets to page 1
+      const searchInput = screen.getByPlaceholderText(S.searchPlaceholder);
+      fireEvent.change(searchInput, { target: { value: 'Item 250' } });
+      await waitFor(() => expect(screen.getByText('Showing 1–1 of 1 RFQs')).toBeInTheDocument());
+      expect(screen.getByText('RFQ Item 250')).toBeInTheDocument();
+
+      // Clear search restores pagination and resets to page 1
+      const clearSearchBtn = screen.getByRole('button', { name: S.clearSearch });
+      fireEvent.click(clearSearchBtn);
+      await waitFor(() => expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument());
+
+      Element.prototype.scrollTo = originalScrollTo;
+    });
+
+    it('renders ellipsis pagination for large number of pages (>7 pages)', async () => {
+      const originalScrollTo = Element.prototype.scrollTo;
+      Element.prototype.scrollTo = jest.fn();
+
+      const manyPagesRfqs = Array.from({ length: 950 }, (_, i) =>
+        makeRfq({
+          id: `big-${i + 1}`,
+          title: `Big RFQ ${i + 1}`,
+          category: 'Cables',
+          status: 'Quotes Pending',
+        })
+      );
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: manyPagesRfqs });
+
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Big RFQ 1')).toBeInTheDocument());
+
+      expect(screen.getByText('Showing 1–100 of 950 RFQs')).toBeInTheDocument();
+      expect(screen.getAllByText('...').length).toBeGreaterThanOrEqual(1);
+
+      // Navigate to middle page to test middle ellipsis window
+      const page5Btn = screen.getByRole('button', { name: 'Page 5' });
+      fireEvent.click(page5Btn);
+      expect(screen.getByText('Showing 401–500 of 950 RFQs')).toBeInTheDocument();
+      expect(screen.getAllByText('...').length).toBeGreaterThanOrEqual(2);
+
+      // Navigate to near last page
+      const page10Btn = screen.getByRole('button', { name: 'Page 10' });
+      fireEvent.click(page10Btn);
+      expect(screen.getByText('Showing 901–950 of 950 RFQs')).toBeInTheDocument();
+
+      Element.prototype.scrollTo = originalScrollTo;
+    });
+  });
 });
 
 describe('CategoryManagerAllRFQsPage', () => {

@@ -490,9 +490,9 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
       {/* Registrations Filter Toolbar: Single Horizontal Row */}
       <div className="rounded-xl border border-slate-200 bg-white p-2.5 shadow-2xs dark:border-slate-800 dark:bg-gray-900/80">
-        <div className="flex items-center gap-2 flex-nowrap w-full overflow-x-auto whitespace-nowrap">
-          {/* 1. Search input (flex-1) */}
-          <div className="relative flex-1 min-w-[200px]">
+        <div className="flex items-center gap-2 w-full">
+          {/* 1. Search input (flex-1 min-w-[180px]) */}
+          <div className="relative flex-1 min-w-[180px]">
             <Search size={15} aria-hidden="true" className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
             <input
               id="registrations-search"
@@ -504,7 +504,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               }}
               placeholder={strings.searchPlaceholder}
               aria-label={strings.searchPlaceholder}
-              className={`h-9 w-full rounded-lg border border-slate-200 bg-white pl-10 pr-8 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 ${search ? 'pr-8' : ''}`}
+              className={`h-9 w-full rounded-lg border border-slate-200 bg-white pl-9 pr-8 text-xs font-medium text-slate-800 placeholder:text-slate-400 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 ${search ? 'pr-8' : ''}`}
             />
             {search && (
               <button
@@ -531,7 +531,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               setCurrentPage(1);
             }}
             aria-label={strings.clientTypeLabel}
-            className="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
+            className="h-9 w-[130px] shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
           >
             {REGISTRATION_CLIENT_TYPES.map((ct) => (
               <option key={ct.id} value={ct.id}>
@@ -549,7 +549,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               setCurrentPage(1);
             }}
             aria-label={strings.sourceTypeLabel}
-            className="h-9 shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
+            className="h-9 w-[120px] shrink-0 rounded-lg border border-slate-200 bg-white px-3 text-xs font-semibold text-slate-800 focus:border-indigo-500 focus:outline-none dark:border-slate-800 dark:bg-gray-950 dark:text-gray-200 cursor-pointer"
           >
             <option value="all">{strings.sourceDropdownLabel}</option>
             <option value="Web App">{strings.webApp}</option>
@@ -568,7 +568,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 openStartDatePicker();
               }
             }}
-            className="relative flex items-center justify-between h-9 w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+            className="relative flex items-center justify-between h-9 w-[135px] shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
           >
             <span className={startDate ? 'font-semibold text-slate-800 dark:text-gray-200 truncate' : 'text-slate-500 dark:text-gray-400 truncate'}>
               {startDate || strings.startDatePlaceholder}
@@ -599,7 +599,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 openEndDatePicker();
               }
             }}
-            className="relative flex items-center justify-between h-9 w-36 shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
+            className="relative flex items-center justify-between h-9 w-[135px] shrink-0 rounded-lg border border-slate-200 bg-white px-2.5 py-1 text-xs text-slate-700 hover:border-slate-300 dark:border-slate-800 dark:bg-gray-950 dark:text-gray-250 cursor-pointer select-none"
           >
             <span className={endDate ? 'font-semibold text-slate-800 dark:text-gray-200 truncate' : 'text-slate-500 dark:text-gray-400 truncate'}>
               {endDate || strings.endDatePlaceholder}
@@ -626,7 +626,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
             disabled={loading || sortedClients.length === 0}
             aria-label={strings.exportBtn}
             data-testid="registrations-export-csv"
-            className="inline-flex items-center gap-1.5 h-9 shrink-0 rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 px-3.5 text-xs font-bold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+            className="inline-flex items-center gap-1.5 h-9 shrink-0 whitespace-nowrap rounded-lg bg-emerald-600 hover:bg-emerald-700 active:bg-emerald-800 px-3.5 text-xs font-bold text-white shadow-xs transition-colors disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
           >
             <Download size={14} className="shrink-0" />
             <span>{strings.exportBtn}</span>
