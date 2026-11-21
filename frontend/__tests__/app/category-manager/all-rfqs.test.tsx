@@ -885,7 +885,7 @@ describe('CategoryManagerAllRFQsPage', () => {
     fireEvent.click(screen.getByLabelText(`Open the comparative quote matrix for ${ROWS[1].rfqNumber}`));
 
     expect(setSelectedRFQForMatrix).toHaveBeenCalledWith(ROWS[1]);
-    expect(push).toHaveBeenCalledWith('/category-manager/quote-matrix');
+    expect(push).toHaveBeenCalledWith(`/category-manager/quote-matrix?rfq=${ROWS[1].rfqNumber}`);
   });
 
   it('wires the details action to the CM rfq-details route addressed by RFQ number', async () => {

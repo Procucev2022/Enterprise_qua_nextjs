@@ -7751,3 +7751,32 @@ pass all the coverages
 ```
 
 ---
+
+### Prompt 360
+
+**Timestamp**: 2026-11-21T10:18:32+05:30
+
+```text
+Fix the following two issues on the "All RFQs" page (`/category-manager/all-rfqs`) while keeping all existing colors/theme untouched and reusing 100% of existing code, state, and backend handlers:
+
+### 1. Fix "Quote Matrix >" Action Not Working
+- Inspect the `Quote Matrix >` button/link in the `ACTIONS` column of each RFQ row.
+- Restore its exact working navigation/modal/route handler from the original implementation (check the route path, RFQ ID parameter, `onClick` handler, or `useNavigate` / `Link` target) so clicking `Quote Matrix >` reliably opens the Quote Matrix page/view for that specific RFQ without errors or dead clicks.
+- Verify that `Invite Vendors` and `Details` also remain wired to their exact existing handlers.
+
+### 2. Fix Toolbar Widths, Icon Overlap & Control Order (Single Horizontal Row)
+Update the single-line top toolbar (`flex items-center gap-2 whitespace-nowrap`) so the widths and order are arranged cleanly from left to right:
+1. **Search bar (Wide — takes the remaining space):** Make the search input `flex-1 min-w-[240px]` so it is much wider than before. Fix the magnifying glass icon overlapping the placeholder text (`RFQ number, title, category...`) by adding proper left padding (`pl-9` or `pl-10`) on the input.
+2. **All Statuses dropdown (Small/Compact):** Move `All Statuses` directly after the Search bar and shrink its width to a compact fixed/auto size (e.g., `w-36` or `w-40 shrink-0`) instead of stretching across the toolbar.
+3. **Start Date:** Compact date button/control (`w-36 shrink-0`) with `"Start Date"` inside and full-area click to open the calendar.
+4. **End Date:** Compact date button/control (`w-36 shrink-0`) with `"End Date"` inside and full-area click to open the calendar.
+5. **Export button:** Existing green `Export` button (`shrink-0`).
+6. **Gear icon button:** Icon-only Column Settings button (`shrink-0`, no visible text).
+7. **Refresh/Retry icon button:** Icon-only Refresh button (`shrink-0`, no visible text).
+
+Do not change any existing colors, API calls, or filter/export/settings/refresh logic—only fix the Quote Matrix click/routing bug and the toolbar layout/order.
+
+Reuse all the existing code and don''t merge directly in the test-v3 raise the pr and pass all the coverages
+```
+
+---
