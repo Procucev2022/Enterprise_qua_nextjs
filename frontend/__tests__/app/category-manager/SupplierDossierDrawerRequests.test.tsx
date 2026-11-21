@@ -181,11 +181,13 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('menuitem', { name: 'Discount' }));
 
     expect(screen.getByText('Request Discount Approval')).toBeInTheDocument();
-    expect(screen.getByText('Step 1 of 3: Select sourcing mode for discount request.')).toBeInTheDocument();
+    expect(screen.getByText(/Step 1 of 2: Select sourcing mode for discount request/i)).toBeInTheDocument();
 
-    // Verify ONLY Connect Model and Select Model are displayed
+    // Verify ONLY Connect Model and Select Model are displayed with their annual prices
     expect(screen.getByRole('button', { name: /Connect Model/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /Select Model/i })).toBeInTheDocument();
+    expect(screen.getByText(/₹7,499 \/ yr/i)).toBeInTheDocument();
+    expect(screen.getByText(/₹14,999 \/ yr/i)).toBeInTheDocument();
     expect(screen.queryByText('Mode 1')).not.toBeInTheDocument();
     expect(screen.queryByText('Mode 2')).not.toBeInTheDocument();
     expect(screen.queryByText('Mode 3')).not.toBeInTheDocument();
@@ -193,15 +195,8 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     // Step 1: Click Connect Model
     fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
 
-    // Step 2: Billing Duration
-    expect(screen.getByText(/Step 2 of 3: Select billing duration for Connect Model/i)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /12 Months/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /6 Months/i })).toBeInTheDocument();
-
-    // Click 12 Months
-    fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
-
-    // Step 3: Enter Discount & Review Breakdown
+    // Step 2: Enter Discount & Review Breakdown directly (without duration selection)
+    expect(screen.getByText(/Step 2 of 2: Submit discount authorization for Connect Model/i)).toBeInTheDocument();
     expect(screen.getByText(/Price Breakdown/i)).toBeInTheDocument();
     expect(screen.getAllByText('Original Plan Price')[0]).toBeInTheDocument();
     expect(screen.getAllByText('₹7,499')[0]).toBeInTheDocument();
@@ -404,27 +399,18 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     // Step 1: Select Select Model
     fireEvent.click(screen.getByRole('button', { name: /Select Model/i }));
 
-    // In Step 2: Click Back button to return to Step 1
-    const backBtnStep2 = screen.getByRole('button', { name: 'Back' });
-    fireEvent.click(backBtnStep2);
-    expect(screen.getByText('Step 1 of 3: Select sourcing mode for discount request.')).toBeInTheDocument();
+    // In Step 2 for Select Model: Verify ₹14,999 pricing
+    expect(screen.getByText(/Step 2 of 2: Submit discount authorization for Select Model/i)).toBeInTheDocument();
+    expect(screen.getAllByText('₹14,999')[0]).toBeInTheDocument();
+
+    // Click Back button to return to Step 1
+    const backBtn = screen.getByRole('button', { name: 'Back' });
+    fireEvent.click(backBtn);
+    expect(screen.getByText(/Step 1 of 2: Select sourcing mode for discount request/i)).toBeInTheDocument();
 
     // Select Connect Model again
     fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
-
-    // In Step 2: Select 6 Months duration
-    fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
-
-    // In Step 3: Verify 6 Months pricing (₹3,999)
-    expect(screen.getAllByText('₹3,999')[0]).toBeInTheDocument();
-
-    // Test Back button from Step 3 to Step 2
-    const backBtnStep3 = screen.getByRole('button', { name: 'Back' });
-    fireEvent.click(backBtnStep3);
-    expect(screen.getByText(/Step 2 of 3: Select billing duration/i)).toBeInTheDocument();
-
-    // Re-advance to Step 3 with 12 Months
-    fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
+    expect(screen.getAllByText('₹7,499')[0]).toBeInTheDocument();
 
     // Enter invalid discount percentage > 100
     const discountInput = screen.getByPlaceholderText('0');
@@ -742,7 +728,8 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Discount' }));
     fireEvent.click(screen.getByText('Connect Model'));
-    expect(screen.getByText('Select Billing Duration')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('12 Months')).toBeInTheDocument();
 
     // Step 2: Back button returns to Step 1
     fireEvent.click(screen.getByRole('button', { name: /Back/i }));
@@ -750,15 +737,14 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
 
     // Transition Step 1 -> Step 2 -> Cancel
     fireEvent.click(screen.getByText('Select Model'));
-    expect(screen.getByText('Select Billing Duration')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText('Select Billing Duration')).not.toBeInTheDocument();
+    expect(screen.queryByText('Request Discount Approval')).not.toBeInTheDocument();
 
-    // Transition Step 1 -> Step 2 -> Step 3 -> Close (X)
+    // Transition Step 1 -> Step 2 -> Close (X)
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Discount' }));
     fireEvent.click(screen.getByText('Connect Model'));
-    fireEvent.click(screen.getAllByText('6 Months')[0]);
     expect(screen.getByText('Request Discount Approval')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     expect(screen.queryByText('Request Discount Approval')).not.toBeInTheDocument();
@@ -830,7 +816,6 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Discount' }));
     fireEvent.click(screen.getByText('Connect Model'));
-    fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
     fireEvent.change(screen.getByPlaceholderText('0'), { target: { value: '20' } });
     fireEvent.change(document.getElementById('quote-credit-approver') as HTMLInputElement, { target: { value: 'Srinu Sir' } });
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
@@ -893,7 +878,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(screen.getAllByText(/Failed to submit quote credit approval request/i)[0]).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 4b. Offline payment API failure without res.error
@@ -908,7 +893,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
     await waitFor(() => {
       expect(screen.getAllByText('Failed to submit offline payment approval request.')[0]).toBeInTheDocument();
-    });
+    }, { timeout: 5000 });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 5. Trial period date validation where end date is before start date
@@ -921,7 +906,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     unmount3();
   });
 
-  it('Scenario 19: Validates 2 Modes (Connect & Select Model), 6 & 12 Months durations, Initiators, and Approvers', async () => {
+  it('Scenario 19: Validates 2 Modes (Connect & Select Model), 12 Months duration, Initiators, and Approvers', async () => {
     const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
 
     // Open Discount workflow
@@ -933,24 +918,22 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     expect(screen.getByText('Connect Model')).toBeInTheDocument();
     expect(screen.getByText('Select Model')).toBeInTheDocument();
 
-    // Select "Select Model"
+    // Select "Select Model" - advances directly to Step 2
     fireEvent.click(screen.getByText('Select Model'));
 
-    // Step 2: Verify 6 Months and 12 Months are clearly available
-    expect(screen.getAllByText('6 Months').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('12 Months').length).toBeGreaterThanOrEqual(1);
+    // Step 2: Verify Selected Mode, Duration and pricing displayed
+    expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('12 Months')).toBeInTheDocument();
+    expect(screen.getAllByText('₹14,999')[0]).toBeInTheDocument();
 
     // Test Back button from Step 2 to Step 1
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
     expect(screen.getByText('Connect Model')).toBeInTheDocument();
 
-    // Re-select Select Model and then 6 Months
-    fireEvent.click(screen.getByText('Select Model'));
-    fireEvent.click(screen.getByRole('button', { name: /6 Months/i }));
-
-    // Step 3: Verify Selected Mode and Duration displayed
-    expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('6 Months')).toBeInTheDocument();
+    // Re-select Connect Model
+    fireEvent.click(screen.getByText('Connect Model'));
+    expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
+    expect(screen.getAllByText('₹7,499')[0]).toBeInTheDocument();
 
     // Verify Initiated By dropdown options: first four strictly Govardhan, Chandan, Krishna Chaitanya, Sudheer
     const initiatorSelect = document.getElementById('discount-initiator') as HTMLSelectElement;
@@ -983,23 +966,22 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     unmount();
   });
 
-  it('Scenario 20: Validates 12 Months selection, back button, and credit deletion validations', async () => {
+  it('Scenario 20: Validates 2-step discount workflow, back button, and credit deletion validations', async () => {
     const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
 
-    // Test 12 Months duration flow
+    // Test Discount flow for Connect Model
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: /^Discount$/i }));
-    fireEvent.click(screen.getByText('Connect Model'));
-    fireEvent.click(screen.getByRole('button', { name: /12 Months/i }));
+    fireEvent.click(screen.getByRole('button', { name: /Connect Model/i }));
     expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
     expect(screen.getByDisplayValue('12 Months')).toBeInTheDocument();
 
-    // Test Back button from Step 3 to Step 2
+    // Test Back button from Step 2 to Step 1
     fireEvent.click(screen.getByRole('button', { name: 'Back' }));
-    expect(screen.getAllByText('6 Months').length).toBeGreaterThanOrEqual(1);
-    expect(screen.getAllByText('12 Months').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByRole('button', { name: /Connect Model/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Select Model/i })).toBeInTheDocument();
 
-    // Cancel Step 2
+    // Cancel from Step 1
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // Test Seller Credit Deletion

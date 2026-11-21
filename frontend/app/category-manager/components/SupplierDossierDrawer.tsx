@@ -74,7 +74,6 @@ import {
   INTERNAL_TASK_USERS,
   SELLER_DISCOUNT_MODES,
   SELLER_TRIAL_PERIOD_MODES,
-  DISCOUNT_BILLING_DURATIONS,
   OFFLINE_PAYMENT_TYPES,
   calculateDiscountBreakdown,
   calculateTrialDaysFromDates,
@@ -280,7 +279,7 @@ export default function SupplierDossierDrawer({
   const [isSubmittingQuoteCredits, setIsSubmittingQuoteCredits] = useState<boolean>(false);
 
   // Discount Workflow state
-  const [discountStep, setDiscountStep] = useState<1 | 2 | 3>(1);
+  const [discountStep, setDiscountStep] = useState<1 | 2>(1);
   const [selectedDiscountMode, setSelectedDiscountMode] = useState<string>('Connect Model');
   const [selectedBillingDuration, setSelectedBillingDuration] = useState<string>('12 Months');
   const [discountPercentage, setDiscountPercentage] = useState<number>(0);
@@ -303,13 +302,11 @@ export default function SupplierDossierDrawer({
     return 'connect';
   }, [selectedDiscountMode]);
 
-  const discountDurationId = useMemo(() => {
-    return selectedBillingDuration === '6 Months' ? '6_months' : '12_months';
-  }, [selectedBillingDuration]);
+  const discountDurationId = '12_months';
 
   const originalDiscountPlanPrice = useMemo(() => {
     return getStandardDiscountPlanPrice(pricingConfig, discountPlanId, discountDurationId);
-  }, [pricingConfig, discountPlanId, discountDurationId]);
+  }, [pricingConfig, discountPlanId]);
 
   const discountBreakdown = useMemo(() => {
     return calculateDiscountBreakdown(originalDiscountPlanPrice, discountPercentage, pricingConfig?.gstRate ?? 0.18);
@@ -3420,7 +3417,7 @@ export default function SupplierDossierDrawer({
         >
           <div
             className={`w-full ${
-              (selectedRequestType === 'Discount' || selectedRequestType === 'Discounts') && discountStep === 3
+              (selectedRequestType === 'Discount' || selectedRequestType === 'Discounts') && discountStep === 2
                 ? 'max-w-2xl'
                 : selectedRequestType === 'Offline Payments'
                 ? 'max-w-2xl'
@@ -3437,7 +3434,7 @@ export default function SupplierDossierDrawer({
                         <h3 className="text-sm font-bold text-slate-900 dark:text-white">
                           {discountStrings.step1Title}
                         </h3>
-                        <p className="text-xs text-slate-500 mt-0.5">{discountStrings.step1Subtitle}</p>
+                        <p className="text-xs text-slate-500 mt-0.5">{discountStrings.step1SubtitleSeller || 'Step 1 of 2: Select sourcing mode for discount request.'}</p>
                       </div>
                       <button
                         type="button"
@@ -3465,16 +3462,21 @@ export default function SupplierDossierDrawer({
                               setSelectedDiscountMode(mode.label);
                               setDiscountStep(2);
                             }}
-                            className={`p-3 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
+                            className={`p-3.5 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
                               selectedDiscountMode === mode.label
                                 ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
                                 : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
                             }`}
                           >
                             <div className="space-y-0.5">
-                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
-                                {mode.label}
-                              </span>
+                              <div className="flex items-center justify-between gap-4">
+                                <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
+                                  {mode.label}
+                                </span>
+                                <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400">
+                                  ₹{mode.price.toLocaleString('en-IN')} / yr
+                                </span>
+                              </div>
                               <span className="text-xs text-slate-500 dark:text-slate-400 block">
                                 {mode.description}
                               </span>
@@ -3500,7 +3502,7 @@ export default function SupplierDossierDrawer({
                   </div>
                 )}
 
-                {/* Step 2: Select Billing Duration */}
+                {/* Step 2: Enter Discount Percentage & Review Price Breakdown */}
                 {discountStep === 2 && (
                   <div className="space-y-3">
                     <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
@@ -3509,86 +3511,8 @@ export default function SupplierDossierDrawer({
                           {discountStrings.step2Title}
                         </h3>
                         <p className="text-xs text-slate-500 mt-0.5">
-                          {formatString(discountStrings.step2Subtitle, { mode: selectedDiscountMode })}
+                          {formatString(discountStrings.step2SubtitleSeller || 'Step 2 of 2: Submit discount authorization for {mode}.', { mode: selectedDiscountMode })}
                         </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAddQuoteCreditsModalOpen(false);
-                          setIsAddCreditModalOpen(false);
-                        }}
-                        className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
-                        aria-label="Close"
-                      >
-                        <X size={18} />
-                      </button>
-                    </div>
-
-                    <div className="space-y-2 text-xs">
-                      <label className="block font-semibold text-slate-700 dark:text-slate-300">
-                        {discountStrings.step2SectionLabel}
-                      </label>
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-                        {DISCOUNT_BILLING_DURATIONS.map((dur) => (
-                          <button
-                            key={dur.id}
-                            type="button"
-                            onClick={() => {
-                              setSelectedBillingDuration(dur.label);
-                              setDiscountStep(3);
-                            }}
-                            className={`p-3 rounded-xl border text-left transition flex items-center justify-between group cursor-pointer ${
-                              selectedBillingDuration === dur.label
-                                ? 'border-emerald-500 bg-emerald-50/50 dark:bg-emerald-950/30 text-emerald-950 dark:text-emerald-100 ring-1 ring-emerald-500'
-                                : 'border-slate-200 dark:border-slate-800 hover:border-slate-300 dark:hover:border-slate-700 bg-white dark:bg-slate-900'
-                            }`}
-                          >
-                            <div className="space-y-0.5">
-                              <span className="font-bold text-sm text-slate-900 dark:text-white block group-hover:text-emerald-600 dark:group-hover:text-emerald-400">
-                                {dur.label}
-                              </span>
-                              <span className="text-xs text-slate-500 dark:text-slate-400 block">
-                                {dur.months} Months
-                              </span>
-                            </div>
-                            <ChevronRight className="w-4 h-4 text-slate-400 group-hover:text-emerald-500 transition" />
-                          </button>
-                        ))}
-                      </div>
-                    </div>
-
-                    <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
-                      <button
-                        type="button"
-                        onClick={() => setDiscountStep(1)}
-                        className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
-                      >
-                        <ArrowLeft size={14} />
-                        {discountStrings.backBtn}
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setIsAddQuoteCreditsModalOpen(false);
-                          setIsAddCreditModalOpen(false);
-                        }}
-                        className="px-3.5 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
-                      >
-                        {discountStrings.cancelBtn}
-                      </button>
-                    </div>
-                  </div>
-                )}
-
-                {/* Step 3: Enter Discount Percentage & Review Price Breakdown */}
-                {discountStep === 3 && (
-                  <div className="space-y-3">
-                    <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-2.5">
-                      <div>
-                        <h3 className="text-sm font-bold text-slate-900 dark:text-white">
-                          {discountStrings.step3Title}
-                        </h3>
                       </div>
                       <button
                         type="button"
@@ -3807,7 +3731,7 @@ export default function SupplierDossierDrawer({
                       <div className="flex items-center justify-between pt-2 border-t border-slate-100 dark:border-slate-800">
                         <button
                           type="button"
-                          onClick={() => setDiscountStep(2)}
+                          onClick={() => setDiscountStep(1)}
                           className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-lg transition cursor-pointer"
                         >
                           <ArrowLeft size={14} />
