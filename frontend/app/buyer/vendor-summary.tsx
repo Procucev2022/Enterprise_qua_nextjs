@@ -1184,7 +1184,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
   const resolveBulkTargetVendors = (targetIsActive: boolean): VendorEntry[] => {
     const selectedVendors = mergedVendors.filter(
-      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount)
+      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount, currentUserSession)
     );
     const targetedVendors = selectedVendors.filter((v) =>
       targetIsActive ? isVendorInactive(v) : isVendorActive(v)
@@ -1680,7 +1680,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
-    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount);
+    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount, currentUserSession);
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
@@ -2071,8 +2071,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 onClick={() => handleOpenStatusModal(vendor, vendorInactive)}
                 className={
                   vendorInactive
-                    ? 'btn btn-ghost btn-xs text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1'
-                    : 'btn btn-ghost btn-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1'
+                    ? 'btn btn-secondary btn-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1 shadow-xs'
+                    : 'btn btn-secondary btn-xs font-semibold text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1 shadow-xs'
                 }
                 title={
                   vendorInactive
@@ -3174,7 +3174,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
                     <Layers size={13} className="text-indigo-600" /> Procurement Taxonomy &amp; Products
                   </span>
-                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                     <button
                       type="button"
                       data-testid="view-profile-edit-category-button"
@@ -3325,7 +3325,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -3337,7 +3337,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <Pencil size={13} /> Edit Profile
                   </button>
                 )}
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     data-testid="view-profile-status-toggle-button"

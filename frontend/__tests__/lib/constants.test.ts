@@ -860,6 +860,15 @@ describe('Indian address location extraction helpers', () => {
       { source: 'buyer_uploaded', buyerAccountId: 'b-1', buyerEmail: 'me@co.test', addedByBuyerCompany: 'My Co' },
       { id: 'b-1', corporateEmail: 'me@co.test', organizationName: 'My Co' }
     )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'buyer_uploaded', buyerEmail: 'buyer@corp.com' },
+      null,
+      { email: 'buyer@corp.com' }
+    )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'vendor_master_ingestion', organizationId: 'org-abc' },
+      { id: 'ba-123', organizationId: 'org-abc' }
+    )).toBe(true);
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
