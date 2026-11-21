@@ -3073,5 +3073,10 @@ module.exports = {
   authenticateVendorDirectory,
   getSubscriptionPricing,
   sanitizePublicVendor,
+  checkVendorOwnership,
+  checkVendorOwnershipWithContext,
+  resolveFallbackVendorRecord,
+  empanelFallbackVendorForEvaluation,
+  resolveOrPromoteVendorForStatusChange,
   ...vendorDossierExtensions,
 };
