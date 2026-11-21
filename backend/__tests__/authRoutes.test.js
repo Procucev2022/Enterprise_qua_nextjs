@@ -1382,6 +1382,7 @@ describe('Changing your own password', () => {
     originalPool = dbPool.pool;
     dbPool.pool = { query: jest.fn() };
     jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(signedInBuyer());
+    jest.spyOn(identityQueries, 'findUserByUuid').mockResolvedValue(signedInBuyer());
     jest.spyOn(identityQueries, 'updateUserPasswordByUuid').mockResolvedValue(true);
   });
 
@@ -1422,9 +1423,9 @@ describe('Changing your own password', () => {
 
     test('does not issue a redundant vendor profile write after a successful password change', async () => {
       const email = 'first-login-vendor@procucev.com';
-      identityQueries.findUserByEmail.mockResolvedValue(
-        signedInBuyer({ role: 'vendor', email, id: UUID })
-      );
+      const vendorUser = signedInBuyer({ role: 'vendor', email, id: UUID });
+      identityQueries.findUserByEmail.mockResolvedValue(vendorUser);
+      identityQueries.findUserByUuid.mockResolvedValue(vendorUser);
       const updateVendorSpy = jest.spyOn(storeService, 'updateVendorDurably').mockResolvedValue({ id: 'vendor-1', tempPassword: null });
 
       await call({ email });
@@ -1434,9 +1435,9 @@ describe('Changing your own password', () => {
 
     test('successfully changes vendor password using verification code when vendor has no mobile in database', async () => {
       const email = 'vendor-no-mobile@procucev.com';
-      identityQueries.findUserByEmail.mockResolvedValue(
-        signedInBuyer({ role: 'vendor', email, id: UUID, mobile: '' })
-      );
+      const vendorUser = signedInBuyer({ role: 'vendor', email, id: UUID, mobile: '' });
+      identityQueries.findUserByEmail.mockResolvedValue(vendorUser);
+      identityQueries.findUserByUuid.mockResolvedValue(vendorUser);
       await authSessionQueries.saveOtp(`otp:${email}`, '123456', Date.now() + 60000, email);
 
       const result = await call({ email, currentPassword: '', code: '123456' });
@@ -1481,20 +1482,43 @@ describe('Changing your own password', () => {
     });
 
     test('refuses when the account row can no longer be read', async () => {
+      identityQueries.findUserByUuid.mockResolvedValue(null);
       identityQueries.findUserByEmail.mockResolvedValue(null);
       await expect(call()).rejects.toThrow(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
     });
 
-    // Guards against a token whose subject no longer matches the row resolved
-    // from its email claim, which duplicate usernames make possible.
-    test('refuses when the resolved row is not the token subject', async () => {
+    // Resolved by the session's own UUID primary key, not by re-deriving the
+    // row from its email claim: `user.username` has no unique index, so a
+    // duplicate-email row can tie-break ahead of the actual signed-in account
+    // in an email-only lookup. The genuinely valid session must still
+    // succeed even though the email lookup alone would resolve to a
+    // different account entirely.
+    test('succeeds using the UUID-resolved row even when a duplicate-email lookup would resolve to a different account', async () => {
+      identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer({ id: 'someone-else' }));
+      identityQueries.findUserByUuid.mockResolvedValue(signedInBuyer());
+
+      const result = await call();
+      expect(result.success).toBe(true);
+      expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
+        UUID,
+        NEXT,
+        'buyer@procucev.com'
+      );
+    });
+
+    // The UUID lookup is the one actually consulted; a stale/incorrect email
+    // lookup result must not block the change nor be mistaken for it.
+    test('refuses when the UUID itself no longer resolves to any account, even if an email lookup would', async () => {
+      identityQueries.findUserByUuid.mockResolvedValue(null);
       identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer({ id: 'someone-else' }));
       await expect(call()).rejects.toThrow(AUTH_MESSAGES.CHANGE_PASSWORD_ACCOUNT_MISSING);
       expect(identityQueries.updateUserPasswordByUuid).not.toHaveBeenCalled();
     });
 
     test('applies the same active-account gate as sign-in', async () => {
-      identityQueries.findUserByEmail.mockResolvedValue(signedInBuyer({ isActive: false }));
+      const inactiveUser = signedInBuyer({ isActive: false });
+      identityQueries.findUserByEmail.mockResolvedValue(inactiveUser);
+      identityQueries.findUserByUuid.mockResolvedValue(inactiveUser);
       await expect(call()).rejects.toThrow(AUTH_MESSAGES.ACCOUNT_INACTIVE);
     });
 
@@ -1627,7 +1651,7 @@ describe('Changing your own password', () => {
         });
 
       expect(res.status).toBe(200);
-      expect(identityQueries.findUserByEmail).toHaveBeenCalledWith('buyer@procucev.com');
+      expect(identityQueries.findUserByUuid).toHaveBeenCalledWith(UUID);
       expect(identityQueries.updateUserPasswordByUuid).toHaveBeenCalledWith(
         UUID,
         NEXT,
