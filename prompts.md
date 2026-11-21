@@ -7944,3 +7944,30 @@ why it is not showing available credits
 ```
 
 ---
+### Prompt 380
+
+**Timestamp**: 2026-11-21T22:08:37+05:30
+
+```text
+Remove the 6th and 12th in discount request in seller directory and update the  prices for both connect , and select mode
+```
+
+---
+### Prompt 381
+
+**Timestamp**: 2026-11-21T22:09:09+05:30
+
+```text
+Remove the 6th and 12th  months in discount request in seller directory and update the  prices for both connect , and select mode
+```
+
+---
+### Prompt 382
+
+**Timestamp**: 2026-11-21T22:24:16+05:30
+
+```text
+All done ?
+```
+
+---

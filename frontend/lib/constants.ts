@@ -2833,8 +2833,8 @@ export const TRIAL_PERIOD_SOURCING_MODES = [
 export type TrialPeriodSourcingModeLabel = (typeof TRIAL_PERIOD_SOURCING_MODES)[number]['label'];
 
 export const SELLER_DISCOUNT_MODES = [
-  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)' },
-  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)' },
+  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)', price: 7499 },
+  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)', price: 14999 },
 ] as const;
 
 export type SellerDiscountModeId = (typeof SELLER_DISCOUNT_MODES)[number]['id'];
