@@ -325,54 +325,53 @@ export default function BuyerProfilePage() {
     void loadProfile();
   }, [loadProfile]);
 
-  // Backfill any empty form fields if activeBuyerAccount loads or carries onboarding data
+  // Backfill any empty form fields once activeBuyerAccount loads or carries onboarding
+  // data — once per account, not on every keystroke. The field values (companyName,
+  // gstNumber, panNumber, ...) used to sit in this effect's dependency array, which
+  // meant clearing any one of them (e.g. to retype a corrected PAN/GSTIN) changed the
+  // dependency, re-ran the effect, saw the field now empty, and immediately refilled it
+  // from activeBuyerAccount — the field could never actually be left blank or edited from
+  // scratch. Backfill now runs only when the account identity changes, is guarded so it
+  // applies at most once per account, and reads/writes form state through updater
+  // functions (prev => prev || fallback) instead of the reactive variables, so it never
+  // overwrites a value the buyer has already typed (including an intentional blank).
+  //
+  // Scope: `loadProfile` (above) already resolves companyName, city, state, pincode,
+  // country, street and every contact field against `activeBuyerAccountRef.current` the
+  // moment the profile load settles, and it never re-runs (empty dependency array), so
+  // those fields need no second fallback pass here. Only brandName (loadProfile falls
+  // back to activeBuyerAccount.brandName but not organizationName) and gstNumber/
+  // panNumber (so the account is still consulted if it resolves only after loadProfile's
+  // one-time read of the ref) are handled here.
+  const backfilledAccountKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeBuyerAccount) return;
+    // Wait for the mount-time profile load to settle first. Backfilling on
+    // the very first render (before `loadProfile`'s fetch resolves) would be
+    // clobbered moments later when that fetch resolves and unconditionally
+    // sets each field from the loaded profile — the backfilled value would
+    // flash in and then disappear.
+    if (!isLoaded) return;
     const expectedEmail = String(currentUserSession?.email || '').trim().toLowerCase();
     const accountEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
     if (expectedEmail && accountEmail && expectedEmail !== accountEmail) return;
-    if (!companyName && activeBuyerAccount.organizationName) setCompanyName(activeBuyerAccount.organizationName);
-    if (!brandName && (activeBuyerAccount.brandName || activeBuyerAccount.organizationName)) {
-      setBrandName(activeBuyerAccount.brandName || activeBuyerAccount.organizationName);
-    }
-    const parsedPlant = parsePrimaryPlantLocation(activeBuyerAccount.primaryPlantLocation);
-    const resolvedCity = activeBuyerAccount.city || parsedPlant.city || '';
-    const resolvedState = activeBuyerAccount.state || parsedPlant.state || '';
-    const resolvedPincode =
-      activeBuyerAccount.pincode || activeBuyerAccount.zip_code || activeBuyerAccount.zipCode || parsedPlant.pincode || '';
-    if (!city && resolvedCity) setCity(resolvedCity);
-    if (!state && resolvedState) setState(resolvedState);
-    if (!pincode && resolvedPincode) {
-      setPincode(resolvedPincode);
-    }
-    if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
+
+    const accountKey = String(activeBuyerAccount.id || accountEmail || '');
+    if (accountKey && backfilledAccountKeyRef.current === accountKey) return;
+    backfilledAccountKeyRef.current = accountKey;
+
+    setBrandName((prev) => prev || activeBuyerAccount.brandName || activeBuyerAccount.organizationName || prev);
+
     const savedGst = (activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '').toUpperCase();
-    if (!gstNumber && savedGst) setGstNumber(savedGst);
-    if (!panNumber) {
-      const savedPan = (
-        activeBuyerAccount.panNumber ||
-        activeBuyerAccount.pan ||
-        derivePanFromGstin(savedGst || gstNumber) ||
-        ''
-      ).toUpperCase();
-      if (savedPan) setPanNumber(savedPan);
-    }
-    if (!street) {
-      const fallbackStreet =
-        activeBuyerAccount.street ||
-        activeBuyerAccount.streetAddress ||
-        activeBuyerAccount.address1 ||
-        activeBuyerAccount.address ||
-        activeBuyerAccount.registeredAddress ||
-        (resolvedCity && resolvedState
-          ? `${resolvedCity}, ${resolvedState}`
-          : resolvedCity || '');
-      if (fallbackStreet) setStreet(fallbackStreet);
-    }
-    if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);
-    if (!contactPhone && activeBuyerAccount.mobileNumber) setContactPhone(activeBuyerAccount.mobileNumber);
-    if (!contactEmail && activeBuyerAccount.corporateEmail) setContactEmail(activeBuyerAccount.corporateEmail);
-  }, [activeBuyerAccount, currentUserSession?.email, companyName, brandName, city, state, pincode, country, gstNumber, panNumber, street, contactName, contactPhone, contactEmail]);
+    setGstNumber((prev) => prev || savedGst || prev);
+    const savedPan = (
+      activeBuyerAccount.panNumber ||
+      activeBuyerAccount.pan ||
+      derivePanFromGstin(savedGst) ||
+      ''
+    ).toUpperCase();
+    setPanNumber((prev) => prev || savedPan || prev);
+  }, [activeBuyerAccount, currentUserSession?.email, isLoaded]);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
@@ -1039,6 +1038,19 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
+          </div>
+
+          <div className="flex justify-end border-t border-slate-100 dark:border-gray-800 pt-2.5">
+            <button
+              type="submit"
+              onClick={handleSaveProfile}
+              disabled={isLoading || isSaving}
+              aria-busy={isSaving}
+              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
+            >
+              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
+              {UI_STRINGS.buyerProfile.saveCategoryButton}
+            </button>
           </div>
         </div>
       </form>

@@ -2319,6 +2319,41 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return { targetVendorId, matchedVendor, syntheticHints };
   };
 
+  /**
+   * A buyer-vendor action can 404 ("Vendor with ID ... not found.") for a
+   * vendor the buyer's own list is still showing: the record the list was
+   * built from (a durable-save or an ingestion response that can race or
+   * double-submit — see storeService.processHistoricalPurchaseData on the
+   * backend) stops existing server-side, but nothing ever told the
+   * already-rendered list that. Left alone, that row stays in `buyerVendors`
+   * and in the upload-history cache forever, failing the same 404 on every
+   * click with no way for the buyer to dismiss it short of a hard refresh.
+   *
+   * Every mutation below calls this when the response is a 404 for the
+   * vendor it targeted, so the ghost row is dropped from local state and
+   * from the upload-history cache instead of staying there to fail again.
+   */
+  const pruneGhostVendorOn404 = (res: Response, identifiers: ReadonlyArray<string | undefined | null>): void => {
+    if (res.status !== 404) return;
+    const idSet = new Set(
+      identifiers
+        .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+        .map((id) => id.trim().toLowerCase())
+    );
+    if (idSet.size === 0) return;
+    setBuyerVendors((prev) => {
+      const next = prev.filter((v) => {
+        const matches =
+          (v.id && idSet.has(v.id.trim().toLowerCase())) ||
+          (v.email && idSet.has(v.email.trim().toLowerCase()));
+        return !matches;
+      });
+      if (next.length !== prev.length) setSessionCache('vendors', next);
+      return next;
+    });
+    removeVendorsFromUploadHistoryInStorage(Array.from(idSet));
+  };
+
   // The local list changes only after the server confirms the write, and it takes the record the server returns.
   const updateBuyerVendor = async (vendorId: string, updates: Partial<VendorEntry>): Promise<boolean> => {
     const { targetVendorId, matchedVendor, syntheticHints } = resolveVendorMutationTarget(vendorId, updates);
@@ -2340,6 +2375,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const json = await res.json().catch(() => null);
     if (!res.ok || !json?.success) {
       logApiResponseFailure('Vendor update request failed', res, 'VENDOR_PROFILE', { vendorId: targetVendorId, responseError: json?.error });
+      pruneGhostVendorOn404(res, [vendorId, targetVendorId, matchedVendor?.email]);
       showToast(STORE_MESSAGES.vendorUpdateFailedTitle, json?.error || STORE_MESSAGES.vendorUpdateFailed, 'warning');
       return false;
     }
@@ -2406,6 +2442,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         isActive,
         responseError: json?.error,
       });
+      pruneGhostVendorOn404(res, [vendorId, targetVendorId, matchedVendor?.email]);
       showToast(
         UI_STRINGS.vendorStatusControl.updateFailedTitle,
         json?.error || UI_STRINGS.vendorStatusControl.singleUpdateFailedMessage,

@@ -247,7 +247,9 @@ describe('Gemini document extraction service', () => {
       expect(rows[1]).toEqual({
         itemName: 'Hex Bolt M8x250',
         quantity: 50,
-        unit: 'PCS',
+        // The model-provided unit is now normalized like every other unit
+        // source, so "PCS" canonicalizes to "Pcs" instead of staying raw.
+        unit: 'Pcs',
         technicalSpecs: 'Grade 8.8',
         category: '',
         targetDate: '',
@@ -261,6 +263,32 @@ describe('Gemini document extraction service', () => {
       expect(rows[2].quantity).toBe(25);
       expect(rows[2].unitPrice).toBe(5000);
       expect(rows[2].totalPrice).toBe(125000);
+    });
+
+    test('discards a storage/clock-speed spec token echoed into "unit" instead of trusting it as a real unit of measure', () => {
+      // Reproduces the reported bug: "Business Laptops" with specification
+      // "Intel Core i5, 16GB" and quantity 20 came back with unit "GB" (read
+      // from the 16GB RAM spec) instead of being left for the buyer to set.
+      const rows = gemini.toRawLineItems({
+        items: [
+          // Compact array form: model put "GB" straight into the unit slot.
+          ['Business Laptops', 20, 'GB', 'Intel Core i5, 16GB', 55000, 1100000],
+          // Object form, same mistake via a synonym key.
+          { itemDescription: 'Business Laptops', quantity: 20, uom: 'GB', specification: 'Intel Core i5, 16GB' },
+          // Model left unit blank; only the spec mentions "16GB" and "2.5GHz" — neither must be inferred as the unit.
+          { itemDescription: 'Business Laptops', quantity: 20, specification: 'Intel Core i5, 16GB, 2.5GHz' },
+        ],
+      });
+
+      expect(rows).toHaveLength(3);
+      for (const row of rows) {
+        expect(row.unit).toBe('');
+      }
+      // A real stated unit for the same kind of item is still honored normally.
+      const withRealUnit = gemini.toRawLineItems({
+        items: [['Business Laptops', 20, 'Nos', 'Intel Core i5, 16GB']],
+      });
+      expect(withRealUnit[0].unit).toBe('Nos');
     });
   });
 

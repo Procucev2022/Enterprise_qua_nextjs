@@ -2700,6 +2700,28 @@ async function getBuyerAccountByEmailFromDB(email, { fresh = false } = {}) {
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
+/**
+ * Every buyer_accounts row sharing a corporate_email, not just the one
+ * getBuyerAccountByEmailFromDB would pick. A buyer can end up with more than
+ * one row under the same email (a re-registration, an org re-provisioning,
+ * or any other path that inserts rather than reuses), and `is_active` is a
+ * single global pointer — switching it to a newer row does not retro-tag the
+ * vendors a buyer already imported while an older row was active. Ownership
+ * checks that resolve to "the current active row only" would then 403 a
+ * buyer on their own historical vendors the moment the active row changes.
+ * Callers that need to recognize a vendor as theirs across that switch use
+ * every id/email in this list, not just the single active one.
+ */
+async function getBuyerAccountsByEmailFromDB(email, { fresh = false } = {}) {
+  if (!pool.hasStorage() || !email) return [];
+  const result = await pool.query(
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC',
+    [email],
+    { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
+  );
+  return result.rows.map((row) => parseRaw(row.raw)).filter(Boolean);
+}
+
 async function getBuyerAccountByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
   const result = await pool.query(
@@ -4081,6 +4103,7 @@ module.exports = {
   deleteCatalogueProductInDB,
   getBuyerAccountsFromDB,
   getBuyerAccountByEmailFromDB,
+  getBuyerAccountsByEmailFromDB,
   getBuyerAccountByIdFromDB,
   getBuyerAccountSnapshotByIdFromDB,
   getBuyerAccountSnapshotByEmailFromDB,

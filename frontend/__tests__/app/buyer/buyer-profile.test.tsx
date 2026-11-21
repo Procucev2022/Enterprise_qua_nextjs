@@ -868,6 +868,57 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
 
+  it('lets the buyer clear a backfilled PAN/GSTIN and leaves it blank, instead of snapping back on every keystroke', async () => {
+    const mockAccount = {
+      organizationName: 'Clearable Org',
+      gstin: '27AAACL1234F1Z5',
+      panNumber: 'AAACL1234F',
+      corporateEmail: 'clearable@buyer.com',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(PROFILE);
+    await renderLoaded();
+
+    const panField = screen.getByText(/^PAN Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    const gstField = screen.getByText(/^GSTIN \/ GST Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    expect(panField).toHaveValue(PROFILE.panNumber);
+    expect(gstField).toHaveValue(PROFILE.gstNumber);
+
+    // Clearing either field used to re-run the activeBuyerAccount backfill effect
+    // (panNumber/gstNumber were in its dependency array), which saw the field was
+    // now empty and immediately refilled it from activeBuyerAccount — the field
+    // could never actually be cleared. It must stay blank across re-renders now.
+    fireEvent.change(panField, { target: { value: '' } });
+    fireEvent.change(gstField, { target: { value: '' } });
+    expect(panField).toHaveValue('');
+    expect(gstField).toHaveValue('');
+
+    // Give any stray effect a chance to run and confirm it still doesn't refill.
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(panField).toHaveValue('');
+    expect(gstField).toHaveValue('');
+  });
+
+  it('flags a stored pincode that fails the format pattern outright, unreachable by typing since the input strips non-digits', async () => {
+    // The PIN input's onChange strips non-digit characters, so this branch (3+
+    // chars that fail PINCODE_PATTERN, and are not a dummy or 6 plain digits)
+    // can only be reached by a value that arrives pre-populated from the
+    // loaded profile, not by simulating a keystroke.
+    mockLoad({ ...PROFILE, pincode: '12-3@5' });
+    await renderLoaded();
+    await waitFor(() => {
+      expect(screen.getByText('Invalid PIN code format')).toBeInTheDocument();
+    });
+  });
+
   it('covers pincode invalid patterns, catch block and save blocked by pincode error', async () => {
     // Mount with dummy pincode 111111: passes regex schema but fails dummy check (setting pincodeError)
     mockLoad({

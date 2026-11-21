@@ -1268,7 +1268,6 @@ export default function IngestionWizard({
           finalMatching = candidatePool;
         } else {
           const matchingVendors: typeof candidatePool = [];
-          const mismatchedVendors: typeof candidatePool = [];
 
           for (const v of candidatePool) {
             const matchEval = checkVendorRfqCategoryMatch(v, {
@@ -1280,17 +1279,7 @@ export default function IngestionWizard({
             });
             if (dispatchSignals.length === 0 || matchEval.isMatch) {
               matchingVendors.push(v);
-            } else {
-              mismatchedVendors.push(v);
             }
-          }
-
-          if (mismatchedVendors.length > 0) {
-            showToast(
-              'Shortlist Adjusted',
-              `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
-              'info'
-            );
           }
 
           finalMatching = dispatchSignals.length > 0

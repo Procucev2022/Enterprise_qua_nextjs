@@ -3062,6 +3062,85 @@ describe('lib/store.tsx - channel chasers and bids', () => {
       expect(ctx().buyerVendors.some((v: any) => v.id === v2.id)).toBe(false);
     });
 
+    it('prunes a vendor the server 404s as not found from buyerVendors and the upload-history cache, instead of leaving a ghost row that fails on every retry', async () => {
+      const ctx = await mountStore();
+      localStorage.setItem(
+        'procucev_vendor_upload_history',
+        JSON.stringify([
+          {
+            id: 'batch-ghost',
+            records: [{ id: 'v-hist-ghost-1', name: 'Ghost Supplier', email: 'ghost@vendor.test', category: 'IT' }],
+          },
+        ])
+      );
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: 'v-hist-ghost-1' } }),
+          });
+        }
+        if (url === '/api/vendors/v-hist-ghost-1' && init?.method === 'PUT') {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            json: async () => ({ success: false, error: 'Vendor with ID v-hist-ghost-1 not found.' }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      await act(async () => {
+        await ctx().addBuyerVendor({ name: 'Ghost Supplier', majorCategory: 'IT', email: 'ghost@vendor.test' } as any);
+      });
+      expect(ctx().buyerVendors.some((v: any) => v.id === 'v-hist-ghost-1')).toBe(true);
+
+      await act(async () => {
+        const ok = await ctx().updateBuyerVendor('v-hist-ghost-1', { majorCategory: 'IT Infrastructure' });
+        expect(ok).toBe(false);
+      });
+
+      // The ghost row is gone from in-memory state, so it can't fail the same way again on the next click.
+      expect(ctx().buyerVendors.some((v: any) => v.id === 'v-hist-ghost-1')).toBe(false);
+      const historyAfterPrune = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
+      expect(historyAfterPrune.some((b: any) => b.records.some((r: any) => r.id === 'v-hist-ghost-1'))).toBe(false);
+    });
+
+    it('prunes a vendor the status endpoint 404s as not found from buyerVendors', async () => {
+      const ctx = await mountStore();
+      mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
+        if (url === '/api/vendors' && init?.method === 'POST') {
+          const sent = JSON.parse(init.body || '{}');
+          return Promise.resolve({
+            ok: true,
+            status: 201,
+            json: async () => ({ success: true, data: { ...sent, id: 'v-hist-ghost-2' } }),
+          });
+        }
+        if (url === '/api/vendors/v-hist-ghost-2/status' && init?.method === 'PATCH') {
+          return Promise.resolve({
+            ok: false,
+            status: 404,
+            json: async () => ({ success: false, error: 'Vendor with ID v-hist-ghost-2 not found.' }),
+          });
+        }
+        return Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+      });
+
+      await act(async () => {
+        await ctx().addBuyerVendor({ name: 'Ghost Supplier Two', majorCategory: 'IT', email: 'ghost2@vendor.test' } as any);
+      });
+      expect(ctx().buyerVendors.some((v: any) => v.id === 'v-hist-ghost-2')).toBe(true);
+
+      await act(async () => {
+        const ok = await ctx().setBuyerVendorActiveStatus('v-hist-ghost-2', false);
+        expect(ok).toBe(false);
+      });
+      expect(ctx().buyerVendors.some((v: any) => v.id === 'v-hist-ghost-2')).toBe(false);
+    });
+
     it('cleans up buyerVendors, vendorEvaluations, and upload history using targetVendor/targetVendors hints across single and bulk delete', async () => {
       const ctx = await mountStore();
       mockFetch.mockImplementation((url: string, init?: { method?: string; body?: string }) => {
