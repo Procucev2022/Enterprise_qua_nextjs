@@ -367,24 +367,27 @@ export default function IngestionWizard({
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0 && form.sourcingMode !== 'mode_0';
 
-  // Auto-prefill delivery location and pincode from active buyer profile
+  // Delivery location and pincode: document first, buyer profile as fallback.
+  // Each field is filled from the buyer profile independently and only when
+  // that field is still empty, so a document that states only one of the two
+  // (e.g. a location but no pincode) keeps its own value for that field while
+  // still picking up the other from the profile — the previous guard required
+  // BOTH fields to be empty before filling either, so a lone document-stated
+  // field (set before activeBuyerAccount finished loading) silently blocked
+  // the profile from ever filling the other, still-empty one.
   useEffect(() => {
-    if (activeBuyerAccount) {
-      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
-        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
-        : (activeBuyerAccount.primaryPlantLocation || '');
-      const defaultPin = activeBuyerAccount.pincode || '';
-      setForm((prev) => {
-        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
-          return {
-            ...prev,
-            deliveryLocation: prev.deliveryLocation || defaultLoc,
-            deliveryPincode: prev.deliveryPincode || defaultPin,
-          };
-        }
-        return prev;
-      });
-    }
+    if (!activeBuyerAccount) return;
+    const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
+      ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+      : (activeBuyerAccount.primaryPlantLocation || '');
+    const defaultPin = activeBuyerAccount.pincode || '';
+    if (!defaultLoc && !defaultPin) return;
+    setForm((prev) => {
+      const nextLocation = prev.deliveryLocation || defaultLoc;
+      const nextPincode = prev.deliveryPincode || defaultPin;
+      if (nextLocation === prev.deliveryLocation && nextPincode === prev.deliveryPincode) return prev;
+      return { ...prev, deliveryLocation: nextLocation, deliveryPincode: nextPincode };
+    });
   }, [activeBuyerAccount]);
 
   const [mode1VendorSearch, setMode1VendorSearch] = useState('');
@@ -994,9 +997,19 @@ export default function IngestionWizard({
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
           majorCategory: prev.majorCategory || extractedMajor,
           minorCategory: prev.minorCategory || extractedMinor,
-          deliveryLocation: prev.deliveryLocation || derivedLocation,
-          deliveryPincode: prev.deliveryPincode || derivedPincode,
-          targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
+          // Delivery terms prefer what this document actually states over
+          // whatever is already sitting in the form. A prior upload's
+          // extraction (or the activeBuyerAccount default pre-fill above)
+          // leaves these fields non-empty, so `prev.X || derivedX` always
+          // kept the OLD value and the newly extracted one was silently
+          // discarded on re-extraction — fixed only by clicking Clear Form
+          // first. Line items already behave this way (always replaced when
+          // the document has any); delivery location/pincode/date now match,
+          // falling back to whatever was already entered only when this
+          // document states nothing for that field.
+          deliveryLocation: derivedLocation || prev.deliveryLocation,
+          deliveryPincode: derivedPincode || prev.deliveryPincode,
+          targetDeliveryDate: derivedDate || prev.targetDeliveryDate,
           lineItems: extracted.length > 0 ? extracted : prev.lineItems,
         }));
 

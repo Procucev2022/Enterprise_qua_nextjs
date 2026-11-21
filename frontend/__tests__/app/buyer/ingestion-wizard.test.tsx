@@ -780,6 +780,59 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
   });
 
+  it('refreshes delivery location, pincode, and target date from a re-extracted document without requiring Clear Form first', async () => {
+    renderWizard();
+
+    // First document: extraction fills delivery location/pincode/date.
+    uploadFile(new File(['binary'], 'RFQ_Mumbai.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Mumbai Order',
+        category: '',
+        targetDeliveryDate: '2026-09-15',
+        deliveryLocation: 'Navi Mumbai Plant',
+        deliveryPincode: '400701',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-1' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Navi Mumbai Plant');
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('400701');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-09-15');
+
+    // Second document uploaded and extracted WITHOUT clicking Clear Form —
+    // its own, different delivery terms must win, not the first document's.
+    uploadFile(new File(['binary'], 'RFQ_Pune.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Pune Order',
+        category: '',
+        targetDeliveryDate: '2026-11-20',
+        deliveryLocation: 'Pune Depot',
+        deliveryPincode: '411001',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-2', itemName: 'Gate Valve' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+
+    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune Depot');
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-11-20');
+  });
+
   it('falls back to a default message when extraction fails without an error string', async () => {
     renderWizard();
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
@@ -3187,6 +3240,77 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         expect(pinInput3.value).toBe('560001');
       });
       unmount3();
+
+      global.fetch = origFetch;
+    });
+
+    it('keeps a document-stated field and only fills the other, still-empty one from the buyer profile once it loads later', async () => {
+      // Document extraction states only the pincode; the profile (which
+      // resolves asynchronously, after the document is already extracted)
+      // must fill the still-empty location without touching the pincode the
+      // document already set. The previous guard required BOTH fields to be
+      // empty before filling either, so the location field would be stuck
+      // blank forever in this exact sequence.
+      const origFetch = global.fetch;
+      let resolveActiveAccount: ((value: any) => void) | null = null;
+      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        if (urlStr.includes('/api/buyer-accounts/active')) {
+          return new Promise((resolve) => {
+            resolveActiveAccount = resolve;
+          }) as any;
+        }
+        return (origFetch as any)(url, init);
+      }) as any;
+
+      renderWizard();
+
+      uploadFile(new File(['binary'], 'RFQ_Doc.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce({
+        success: true,
+        data: {
+          title: 'Doc Order',
+          category: '',
+          targetDeliveryDate: '',
+          deliveryPincode: '600028',
+          estimatedBudget: null,
+          extractedEntities: [entity({ id: 'ent-doc' })],
+          source: 'web_portal',
+        },
+        classification: undefined,
+        extraction: undefined,
+      });
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalled());
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('');
+
+      // Now the buyer profile resolves, after the document already set the pincode.
+      await act(async () => {
+        resolveActiveAccount?.({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: {
+              id: 'ba-later',
+              corporateEmail: 'buyer@test.com',
+              organizationName: 'Tata Motors',
+              contactPerson: 'CPO',
+              city: 'Chennai',
+              state: 'Tamil Nadu',
+              pincode: '600001',
+              remainingFreeRFQs: 5,
+            },
+          }),
+        });
+      });
+
+      await waitFor(() => {
+        expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Chennai, Tamil Nadu');
+      });
+      // The document-stated pincode must not be overwritten by the profile's.
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('600028');
 
       global.fetch = origFetch;
     });
