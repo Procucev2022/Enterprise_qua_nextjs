@@ -8042,3 +8042,63 @@ continue
 ```text
 continue
 ```
+
+
+---
+
+### User Prompt 387 (Timestamp: 22 Nov 2026, 09:27 AM IST)
+```text
+Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, Approvals, Credits, and Communications).
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Completely solve the root cause at the DB/service/API level**: Do NOT apply superficial UI patches or workarounds. Every balance, ledger row, and communication record must come from a single source of truth so these issues NEVER recur in the future.
+- **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API services, or UI components. Fix and unify the existing credit, approval, and communication services.
+- **Do not break any existing UI or functionality**: Keep all working tabs (e.g., Payments, Quotes, RFQs, Directory counts) and existing workflows 100% intact.
+
+---
+
+### 1. Root Cause Fix — Approved Buyer Credits Not Persisting or Appearing in Buyer Dossier
+- **Observed Bug**: Request `REQ-AAEEAABA2D35` (`Buyer Credit Addition: 5 RFQ Credits` for `Veera solutions pvt ltd`) is marked `Approved` in Approvals, yet `BuyerDossierDrawer` (`Credit` tab + `Request Buyer Credit Approval` modal) still displays `Total Credits Allocated: 0`, `Remaining Free Credits: 0`, `Available Credits: 0 Credits`, and `No credit transactions recorded`.
+- **Root Cause & Fix**:
+  - Trace the full approval execution path when a **Buyer Credit Addition** (or Deletion) request is approved.
+  - Ensure approving a buyer credit request atomically:
+    1. Updates the buyer's canonical credit balance in the DB (the exact field/table read by `BuyerDossierDrawer`, `Profile`, `Credit` tab, and the approval modal).
+    2. Inserts a corresponding credit transaction record into the buyer's credit ledger/history table under the exact canonical buyer ID.
+    3. Invalidates/refreshes frontend state so the new balance and ledger row appear immediately across the Dossier and Directory.
+  - Verify why `Credit` tab was showing `"Credit history is not recorded for this account"` even after approval, and fix any ID mismatch (`buyerId` vs `userId` vs `companyId`).
+
+---
+
+### 2. Root Cause Fix — Seller Credit Split-Brain (`99` Subscription Credits vs `1` Ledger Credit) & Deduction Display Bug
+- **Observed Bug**: For `Veera Solutions Pvt LTD` (on `Select` subscription tier with `100` allocated / `99` active quote balance):
+  - The top KPI cards and `Request Seller Credit Deletion` modal show `99 Credits Available`.
+  - Submitting a deduction of `10` credits fails with: `"Cannot delete 10 credits: Veera Solutions Pvt LTD only has 1 credits available."`
+  - The Credit ledger table shows `Balance: 1` (computed from the old 5-credit free tier: `5 - 1 - 3 = 1`) instead of reflecting the 100-credit subscription (`99` remaining).
+  - The `CREDIT_DEDUCTION` row (`vtx-ded-mwrao5kj-1c7fca`) displays `+3` in the **Added** column instead of `-3` in the **Consumed** column.
+- **Root Cause & Fix**:
+  - Unify the Seller credit balance into a **single source of truth** across subscription allocation, free credits, credit additions/deletions, deletion validation, and ledger running balance.
+  - When a seller takes a subscription (e.g., `Select` = 100 credits), record the subscription credit allocation in the seller's credit transaction ledger (or initialize the baseline ledger with the subscription credit grant so the running balance starts from `100`).
+  - Fix the deletion validation endpoint so it checks against the seller's actual, live total available credit balance (`99` credits, NOT just `freeQuotationCredits: 1`).
+  - In the Credit ledger table, fix the column mapping: `CREDIT_DEDUCTION` transactions MUST display in the **Consumed** column as a deduction (`-3` or `3` consumed) and display `—` in the **Added** column.
+  - Update the ledger running balance calculation so additions add, deductions subtract, and the final balance matches the exact live active quote balance (`99 - 3 = 96` or current live balance).
+
+---
+
+### 3. Root Cause Fix — Communications Not Appearing in Buyer Directory & Seller Directory
+- **Observed Bug**: In both `BuyerDossierDrawer` and `SupplierDossierDrawer`, the **Communications** tab displays `Communications (0)` and `"No communication records found."` even when communications have been recorded or sent.
+- **Root Cause & Fix**:
+  - Investigate the communications data model and API endpoints (`GET /api/buyer-accounts/:id/communications` and `GET /api/vendors/:id/communications` or equivalent).
+  - Verify how communications are logged (via `Record Communication` button, email/SMS/WhatsApp dispatchers, or call logs) and what foreign keys are used (`entity_id`, `buyer_id`, `vendor_id`, `recipient_email`, `phone`).
+  - Resolve identifier mismatches: ensure fetching communications searches by all canonical representations of the entity (e.g., `id`, `userId`, `email`, `companyName` or phone) so records are never missed due to ID format differences.
+  - Ensure the tab badge count `Communications (N)` accurately counts all communication entries matching that buyer or seller.
+
+---
+
+### 4. End-to-End Verification & Regression Tests
+- Write automated unit tests for:
+  1. Buyer Credit Approval execution updating DB balance and inserting ledger transaction under canonical buyer ID.
+  2. Seller credit deletion validation checking true available balance (`99`) and deduction displaying in Consumed column.
+  3. Communications lookup returning all records across buyer and seller entities.
+- Ensure all modified frontend and backend files meet or exceed the mandatory **>= 90% per-file code coverage** across Statements, Branches, Functions, and Lines.
+- Run fast verification (`npm run qc:fast` or `npm run check:fast`) and ensure 0 test failures.
+```

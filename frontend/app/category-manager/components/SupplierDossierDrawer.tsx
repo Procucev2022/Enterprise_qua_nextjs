@@ -1913,10 +1913,10 @@ export default function SupplierDossierDrawer({
                             {t.creditSource}
                           </td>
                           <td className="px-3.5 py-2.5 font-semibold text-emerald-600 dark:text-emerald-400">
-                            {t.creditsAdded > 0 ? `+${t.creditsAdded}` : '—'}
+                            {t.creditsAdded > 0 && !(t.creditsConsumed > 0) && !String(t.transactionType).toUpperCase().includes('DEDUCT') ? `+${t.creditsAdded}` : '—'}
                           </td>
                           <td className="px-3.5 py-2.5 font-semibold text-rose-600 dark:text-rose-400">
-                            {t.creditsConsumed > 0 ? `-${t.creditsConsumed}` : '—'}
+                            {(t.creditsConsumed > 0 || String(t.transactionType).toUpperCase().includes('DEDUCT')) ? `-${t.creditsConsumed || t.creditsAdded || 0}` : '—'}
                           </td>
                           <td className="px-3.5 py-2.5 font-bold text-slate-800 dark:text-slate-200">
                             {t.updatedBalance}

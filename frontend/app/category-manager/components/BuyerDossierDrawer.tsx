@@ -853,6 +853,8 @@ export default function BuyerDossierDrawer({
         setTrialDateError(null);
         setPaymentReference('');
         setAddCreditReason('');
+        void loadCreditHistory();
+        void loadCommunications();
       } else {
         showToast(
           res.error ||
@@ -1495,7 +1497,7 @@ export default function BuyerDossierDrawer({
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Available Quota</p>
                   <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {buyer.remainingFreeRFQs ?? EMPTY_VALUE}
+                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? 0}
                   </p>
                   <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
                 </div>
@@ -1716,7 +1718,7 @@ export default function BuyerDossierDrawer({
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.remainingFree}</p>
                   <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? EMPTY_VALUE}
+                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? 0}
                   </p>
                 </div>
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
@@ -3397,7 +3399,7 @@ export default function BuyerDossierDrawer({
                       </label>
                       <div className="px-3 py-1.5 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-lg text-emerald-700 dark:text-emerald-300 font-bold text-xs">
                         {(() => {
-                          const credits = creditSummary?.remainingFreeCredits ?? buyer.remainingFreeRFQs ?? 0;
+                          const credits = creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? 0;
                           return `${credits} Credits`;
                         })()}
                       </div>

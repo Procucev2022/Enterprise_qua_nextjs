@@ -133,6 +133,18 @@ async function getCreditHistory(req, res, next) {
       transactions = await domainQueries.getVendorCreditTransactionsFromDB(vendor.id, 100);
     }
 
+    const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
+    const planQuota = VENDOR_PLAN_RFQ_QUOTA[vendor.subscriptionPlan];
+    const isSubscribed = Boolean(
+      creditInfo.isSubscribed ||
+      planQuota !== undefined ||
+      vendor.subscriptionPlan === 'connect' ||
+      vendor.subscriptionPlan === 'select'
+    );
+    const liveAvailableCredits = creditInfo.freeCreditsRemaining ?? (
+      planQuota !== undefined ? Math.max(0, planQuota - (Number(vendor.rfqDownloadsUsed) || 0)) : (vendor.freeQuotationCredits ?? 0)
+    );
+
     let totalAllocated = 0;
     let totalConsumed = 0;
     let purchasedCredits = 0;
@@ -148,57 +160,77 @@ async function getCreditHistory(req, res, next) {
         totalAllocated += amt;
       } else if (/ADJUSTMENT|REFUND/.test(type)) {
         adjustedCredits += amt;
-      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK')) {
+      } else if (Number(t.amount || 0) < 0 || type.includes('UNLOCK') || type.includes('DEDUCT') || type.includes('CONSUM') || type.includes('DELETE')) {
         totalConsumed += amt;
       }
     }
 
     if (totalAllocated === 0) {
-      totalAllocated = alloc;
+      totalAllocated = isSubscribed && planQuota ? planQuota : alloc;
     }
 
-    if (totalConsumed === 0 && Number(creditInfo.freeCreditsUsed || 0) > 0) {
-      totalConsumed = Number(creditInfo.freeCreditsUsed);
+    if (totalConsumed === 0) {
+      if (Number(creditInfo.freeCreditsUsed || 0) > 0) {
+        totalConsumed = Number(creditInfo.freeCreditsUsed);
+      } else if (Number(vendor.rfqDownloadsUsed || 0) > 0) {
+        totalConsumed = Number(vendor.rfqDownloadsUsed);
+      }
     }
 
-    const curBal = creditInfo.freeCreditsRemaining ?? Math.max(0, totalAllocated - totalConsumed);
+    const curBal = liveAvailableCredits;
     const summary = {
-      totalCreditsAllocated: totalAllocated,
+      totalCreditsAllocated: isSubscribed && planQuota ? Math.max(totalAllocated, planQuota) : totalAllocated,
       totalCreditsConsumed: totalConsumed,
       remainingFreeCredits: curBal,
       purchasedCredits,
       adjustedCredits,
       currentCreditBalance: curBal,
-      isSubscribed: Boolean(creditInfo.isSubscribed),
+      isSubscribed: Boolean(isSubscribed),
       subscriptionPlan: creditInfo.subscriptionPlan || vendor.subscriptionPlan || 'Free Tier',
     };
 
-    const formattedTransactions = (transactions || []).map((t) => {
+    const formattedTransactions = (transactions || []).map((t, idx) => {
       const amt = Number(t.amount || 0);
-      const isDeduction = amt < 0 || String(t.transaction_type).includes('UNLOCK');
+      const typeStr = String(t.transaction_type || '').toUpperCase();
+      const isDeduction = amt < 0 ||
+        typeStr.includes('UNLOCK') ||
+        typeStr.includes('DEDUCT') ||
+        typeStr.includes('CONSUM') ||
+        typeStr.includes('DELETE');
       const txType = t.transaction_type || (isDeduction ? 'Credits Consumed' : 'Credits Added');
+      const absAmt = Math.abs(amt);
+
       let creditSource = 'Qua Quotation Engine';
-      if (String(txType).includes('INITIAL')) {
+      if (typeStr.includes('INITIAL')) {
         creditSource = 'Free Tier Allocation';
-      } else if (String(txType).includes('UPGRADE')) {
+      } else if (typeStr.includes('SUBSCRIPTION') || typeStr.includes('UPGRADE')) {
         creditSource = 'Subscription Upgrade';
       }
 
-      const balAfter = Number(t.balance_after ?? 0);
+      let displayedBalance = t.balance_after ?? t.balanceAfter ?? null;
+      if (isSubscribed && planQuota && displayedBalance !== null) {
+        if (Number(displayedBalance) <= (alloc || 5) && planQuota > (alloc || 5)) {
+          displayedBalance = planQuota - ((alloc || 5) - Number(displayedBalance));
+        }
+      }
+      if (idx === 0 && liveAvailableCredits !== undefined && displayedBalance !== null && !isSubscribed) {
+        displayedBalance = liveAvailableCredits;
+      }
+
       return {
         id: t.id,
         transactionId: t.id,
         transactionDate: t.created_at || null,
         transactionType: txType,
         creditSource,
-        creditsAdded: isDeduction ? 0 : Math.abs(amt),
-        creditsConsumed: isDeduction ? Math.abs(amt) : 0,
-        previousBalance: balAfter + (isDeduction ? Math.abs(amt) : -Math.abs(amt)),
-        updatedBalance: balAfter,
+        creditsAdded: isDeduction ? 0 : absAmt,
+        creditsConsumed: isDeduction ? absAmt : 0,
+        previousBalance: t.balance_after ? Number(t.balance_after) + (isDeduction ? absAmt : -absAmt) : null,
+        updatedBalance: displayedBalance,
         relatedRfqId: t.rfq_id || null,
-        paymentReference: t.idempotency_key || null,
         status: 'COMPLETED',
-        description: t.description || (isDeduction ? `Quotation submission unlock for RFQ ${t.rfq_id || 'Direct'}` : 'Quotation credit allocation'),
+        notes: t.notes || null,
+        description: t.description || (isDeduction ? `Quotation Unlock / Deduction (${absAmt} Credits)` : `Credit top-up (${absAmt} Credits)`),
       };
     });
 
@@ -220,9 +252,19 @@ async function getVendorCommunications(req, res, next) {
     if (!assertCategoryManagerOrVendor(req, res, vendor)) return;
 
     const paymentDuesQueries = require('../db/paymentDuesQueries');
+    const candidateIds = [
+      vendor.id,
+      vendor.userId,
+      vendor.vendorId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+    const emails = [vendor.email, vendor.contactEmail].filter(Boolean);
+    const phones = [vendor.phone, vendor.mobile, vendor.mobileNumber].filter(Boolean);
+
     let comms = [];
     try {
-      comms = (await paymentDuesQueries.getCommunicationHistory(vendor.id)) || [];
+      comms = (await paymentDuesQueries.getCommunicationHistory(candidateIds, { emails, phones })) || [];
     } catch (dbErr) {
       logger.warn('Failed to load vendor communication history from database', { vendorId: vendor.id, error: dbErr.message }, 'VENDOR_CONTROLLER');
       comms = [];
@@ -568,9 +610,15 @@ async function addQuoteCredits(req, res, next) {
     const actor = actorDisplayName(req.user) || 'signed-in user';
     const reason = validation.sanitizedData.reason || `Manual quote credit addition by ${actor}`;
 
-    const currentBalance = vendor.freeQuotationCredits !== undefined
-      ? Number(vendor.freeQuotationCredits)
-      : (vendor.credits !== undefined ? Number(vendor.credits) : VENDOR_FREE_CREDITS_LIMIT);
+    const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
+    const creditInfo = storeService.getVendorRfqCredits(vendor.id, vendor);
+    const planKey = String(vendor.subscriptionPlan || '').toLowerCase();
+    const isSubscribed = Boolean(VENDOR_PLAN_RFQ_QUOTA[planKey] !== undefined || creditInfo.isSubscribed);
+    const currentBalance = isSubscribed
+      ? (creditInfo.freeCreditsRemaining ?? (vendor.freeQuotationCredits !== undefined ? Number(vendor.freeQuotationCredits) : (vendor.credits !== undefined ? Number(vendor.credits) : VENDOR_FREE_CREDITS_LIMIT)))
+      : (vendor.freeQuotationCredits !== undefined
+        ? Number(vendor.freeQuotationCredits)
+        : (vendor.credits !== undefined ? Number(vendor.credits) : (creditInfo.freeCreditsRemaining ?? VENDOR_FREE_CREDITS_LIMIT)));
 
     const updatedBalance = currentBalance + amount;
 
@@ -741,7 +789,13 @@ async function requestCreditApproval(req, res, next) {
     const makerId = req.user?.uuid || req.user?.id || null;
 
     const vendorLabel = vendor.name || vendor.id;
-    const balance = vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? vendor.credits ?? 0;
+    const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
+    const creditInfo = storeService.getVendorRfqCredits(vendor.id, vendor);
+    const planKey = String(vendor.subscriptionPlan || '').toLowerCase();
+    const isSubscribed = Boolean(VENDOR_PLAN_RFQ_QUOTA[planKey] !== undefined || creditInfo.isSubscribed);
+    const balance = isSubscribed
+      ? (creditInfo.freeCreditsRemaining ?? (vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? vendor.credits ?? 0))
+      : (vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? vendor.credits ?? creditInfo.freeCreditsRemaining ?? 0);
     const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
 
     if (requestType === 'Seller Credit Deletion') {

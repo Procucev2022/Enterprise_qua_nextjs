@@ -1358,7 +1358,11 @@ class StoreService {
   updateBuyerAccount(idOrEmail, updates, { persist = true } = {}) {
     const key = String(idOrEmail || '').trim().toLowerCase();
     const idx = this.buyerAccounts.findIndex(
-      (a) => a.id === idOrEmail || (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
+      (a) => a.id === idOrEmail ||
+             a.userId === idOrEmail ||
+             a.buyerId === idOrEmail ||
+             a.organizationId === idOrEmail ||
+             (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
     );
     if (idx === -1) return null;
 
@@ -1380,7 +1384,11 @@ class StoreService {
   async updateBuyerAccountDurably(idOrEmail, updates) {
     const key = String(idOrEmail || '').trim().toLowerCase();
     let idx = this.buyerAccounts.findIndex(
-      (account) => account.id === idOrEmail || (account.corporateEmail && account.corporateEmail.toLowerCase() === key)
+      (account) => account.id === idOrEmail ||
+                   account.userId === idOrEmail ||
+                   account.buyerId === idOrEmail ||
+                   account.organizationId === idOrEmail ||
+                   (account.corporateEmail && account.corporateEmail.toLowerCase() === key)
     );
     const storageConfigured = pool.hasStorage();
     let updated;
@@ -3695,14 +3703,19 @@ class StoreService {
 
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
+    const candidateIds = Array.isArray(buyerAccountId)
+      ? buyerAccountId.filter(Boolean)
+      : [buyerAccountId].filter(Boolean);
     if (pool.hasStorage()) {
-      const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(buyerAccountId);
-      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of fromDB) byId.set(link.id, link);
-      this.paymentLinks = Array.from(byId.values());
+      for (const id of candidateIds) {
+        const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(id);
+        const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
+        for (const link of fromDB) byId.set(link.id, link);
+        this.paymentLinks = Array.from(byId.values());
+      }
     }
     return this.paymentLinks
-      .filter((l) => l.payerType === 'buyer' && l.buyerAccountId === buyerAccountId)
+      .filter((l) => l.payerType === 'buyer' && candidateIds.includes(l.buyerAccountId))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 

@@ -691,13 +691,97 @@ async function getCommunicationHistory(accountId, options = {}) {
   const offset = Math.max(Number(options?.offset) || 0, 0);
   requireStorage('communication history read');
 
-  const sql = isAll
-    ? 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2'
-    : 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
-  const params = isAll ? [limit, offset] : [accountId, limit, offset];
+  if (isAll) {
+    const sql = 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2';
+    const params = [limit, offset];
+    let result;
+    try {
+      result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    } catch (error) {
+      throwPersistenceUnavailable('communication history read', error);
+    }
+    if (!result || !Array.isArray(result.rows)) {
+      throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
+    }
+    return result.rows.map(mapCommunicationRow);
+  }
+
+  const isMultiLookup = Array.isArray(accountId) || Boolean(options?.emails?.length) || Boolean(options?.phones?.length);
+  if (!isMultiLookup) {
+    const targetAccountId = String(accountId || '').trim();
+    if (!targetAccountId) return [];
+    const sql = 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
+    const params = [targetAccountId, limit, offset];
+    let result;
+    try {
+      result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    } catch (error) {
+      throwPersistenceUnavailable('communication history read', error);
+    }
+    if (!result || !Array.isArray(result.rows)) {
+      throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
+    }
+    return result.rows.map(mapCommunicationRow);
+  }
+
+  const rawIds = Array.isArray(accountId) ? accountId : String(accountId || '').split(',');
+  const accountIds = rawIds.map((s) => String(s || '').trim()).filter(Boolean);
+  const emails = (options?.emails || [])
+    .concat(accountIds.filter((id) => id.includes('@')))
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter(Boolean);
+  const phones = (options?.phones || [])
+    .map((p) => String(p || '').trim())
+    .filter(Boolean);
+
+  if (accountIds.length === 0 && emails.length === 0 && phones.length === 0) {
+    return [];
+  }
+
+  const sql = `
+    SELECT * FROM payment_dues_communications 
+    WHERE (
+      account_id = ANY($1::text[])
+      OR lower(recipient) = ANY($2::text[])
+      OR recipient = ANY($3::text[])
+      OR metadata->>'accountId' = ANY($1::text[])
+      OR metadata->>'buyerId' = ANY($1::text[])
+      OR metadata->>'vendorId' = ANY($1::text[])
+      OR metadata->>'entityId' = ANY($1::text[])
+      OR lower(metadata->>'recipientEmail') = ANY($2::text[])
+      OR metadata->>'recipientPhone' = ANY($3::text[])
+    )
+    ORDER BY sent_at DESC LIMIT $4 OFFSET $5
+  `;
+  const params = [accountIds, emails, phones, limit, offset];
+
+  const d1AccountPlaceholders = accountIds.length > 0 ? accountIds.map((_, i) => `$${i + 1}`).join(', ') : "''";
+  const d1EmailOffset = accountIds.length;
+  const d1EmailPlaceholders = emails.length > 0 ? emails.map((_, i) => `$${d1EmailOffset + i + 1}`).join(', ') : "''";
+  const d1PhoneOffset = d1EmailOffset + emails.length;
+  const d1PhonePlaceholders = phones.length > 0 ? phones.map((_, i) => `$${d1PhoneOffset + i + 1}`).join(', ') : "''";
+  const d1LimitOffset = d1PhoneOffset + phones.length;
+
+  const d1Sql = `
+    SELECT * FROM payment_dues_communications 
+    WHERE (
+      account_id IN (${d1AccountPlaceholders})
+      OR lower(recipient) IN (${d1EmailPlaceholders})
+      OR recipient IN (${d1PhonePlaceholders})
+      OR json_extract(metadata, '$.accountId') IN (${d1AccountPlaceholders})
+      OR json_extract(metadata, '$.buyerId') IN (${d1AccountPlaceholders})
+      OR json_extract(metadata, '$.vendorId') IN (${d1AccountPlaceholders})
+      OR json_extract(metadata, '$.entityId') IN (${d1AccountPlaceholders})
+      OR lower(json_extract(metadata, '$.recipientEmail')) IN (${d1EmailPlaceholders})
+      OR json_extract(metadata, '$.recipientPhone') IN (${d1PhonePlaceholders})
+    )
+    ORDER BY sent_at DESC LIMIT $${d1LimitOffset + 1} OFFSET $${d1LimitOffset + 2}
+  `;
+  const d1Params = [...accountIds, ...emails, ...phones, limit, offset];
+
   let result;
   try {
-    result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    result = await pool.query(sql, params, { d1: true, d1Text: d1Sql, d1Params });
   } catch (error) {
     throwPersistenceUnavailable('communication history read', error);
   }

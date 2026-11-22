@@ -62,7 +62,9 @@ function knownCreditBalance(buyer) {
   const balance = numberOrNull(buyer.creditBalance) ??
                   numberOrNull(buyer.remainingFreeRFQs) ??
                   numberOrNull(buyer.remainingFreeCredits) ??
-                  numberOrNull(buyer.available_credits);
+                  numberOrNull(buyer.available_credits) ??
+                  numberOrNull(buyer.credit_balance) ??
+                  numberOrNull(buyer.freeRFQsRemaining);
   return balance;
 }
 
@@ -800,9 +802,18 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
     let transactions = [];
     try {
-      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(candidateIds, 100)) || [];
     } catch (dbErr) {
       logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
     }
@@ -1327,9 +1338,20 @@ async function getBuyerCommunications(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+    const emails = [buyer.corporateEmail, buyer.email, buyer.contactEmail].filter(Boolean);
+    const phones = [buyer.phone, buyer.mobileNumber, buyer.contactPhone].filter(Boolean);
+
     let comms = [];
     try {
-      comms = (await paymentDuesQueries.getCommunicationHistory(id)) || [];
+      comms = (await paymentDuesQueries.getCommunicationHistory(candidateIds, { emails, phones })) || [];
     } catch (dbErr) {
       logger.warn('Failed to load communication history from database, returning empty list', { id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
       comms = [];
@@ -1581,10 +1603,19 @@ async function getBuyerPaymentHistory(req, res, next) {
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    let links = await storeService.getPaymentLinksForBuyer(buyer.id);
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
+    let links = await storeService.getPaymentLinksForBuyer(candidateIds);
     const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
     if (reconciled > 0) {
-      links = await storeService.getPaymentLinksForBuyer(buyer.id);
+      links = await storeService.getPaymentLinksForBuyer(candidateIds);
     }
 
     const payments = [];

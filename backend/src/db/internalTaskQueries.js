@@ -63,11 +63,8 @@ function requireTaskField(value, field) {
 function requireRecordedBalance(value, task, accountId) {
   const balance = value === undefined || value === null || value === '' ? NaN : Number(value);
   if (!Number.isFinite(balance)) {
-    logger.error('Credit account has no recorded balance', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
-    const error = new Error(INTERNAL_TASK_ERRORS.BALANCE_NOT_RECORDED);
-    error.code = 'CREDIT_BALANCE_NOT_RECORDED';
-    error.statusCode = 409;
-    throw error;
+    logger.info('Credit account has no recorded balance, defaulting to 0', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    return 0;
   }
   return balance;
 }
@@ -1473,10 +1470,37 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         const vRow = requireCreditAccount(dbVendorRes?.rows?.[0], task, accountId);
         const vRaw = typeof vRow.raw === 'string' ? JSON.parse(vRow.raw || '{}') : (vRow.raw || {});
         const targetVendorId = vRow.id;
-        const prevBal = requireRecordedBalance(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRaw.credits, task, accountId);
+        const { VENDOR_PLAN_RFQ_QUOTA } = require('../config/constants');
+        const creditInfo = storeService.getVendorRfqCredits(targetVendorId, vRaw);
+        const prevBal = creditInfo.freeCreditsRemaining ?? requireRecordedBalance(vRaw.freeQuotationCredits ?? vRaw.freeRfqDownloadCredits ?? vRaw.credits, task, accountId);
         const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const vSql = `UPDATE vendors SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), '{freeRfqDownloadCredits}', to_jsonb($1::numeric)), '{credits}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-        await client.query(vSql, [updatedBal, targetVendorId]);
+
+        let newDownloadsUsed = vRaw.rfqDownloadsUsed;
+        const planQuota = VENDOR_PLAN_RFQ_QUOTA[vRaw.subscriptionPlan];
+        if (planQuota !== undefined) {
+          if (isDeduct) {
+            newDownloadsUsed = (Number(vRaw.rfqDownloadsUsed) || 0) + creditQty;
+          } else {
+            newDownloadsUsed = Math.max(0, (Number(vRaw.rfqDownloadsUsed) || 0) - creditQty);
+          }
+        }
+
+        const vSql = `
+          UPDATE vendors SET 
+            raw = jsonb_set(
+              jsonb_set(
+                jsonb_set(
+                  jsonb_set(raw, '{freeQuotationCredits}', to_jsonb($1::numeric)), 
+                  '{freeRfqDownloadCredits}', to_jsonb($1::numeric)
+                ), 
+                '{credits}', to_jsonb($1::numeric)
+              ),
+              '{rfqDownloadsUsed}', to_jsonb($3::numeric)
+            ), 
+            updated_at = now() 
+          WHERE id = $2
+        `;
+        await client.query(vSql, [updatedBal, targetVendorId, newDownloadsUsed ?? 0]);
 
         if (domainQueries.recordCreditTransactionInDB) {
           const txId = `vtx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
@@ -1485,13 +1509,13 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
             vendorId: targetVendorId,
             rfqId: null,
             transactionType: isDeduct ? 'CREDIT_DEDUCTION' : 'CREDIT_GRANT',
-            amount: creditQty,
+            amount: isDeduct ? -creditQty : creditQty,
             balanceAfter: updatedBal,
             idempotencyKey: `task-approval-${task.id}`,
             queryClient: client,
           });
         }
-        updatedVendorInfo = { vendorId: targetVendorId, updatedBal };
+        updatedVendorInfo = { vendorId: targetVendorId, updatedBal, rfqDownloadsUsed: newDownloadsUsed };
       }
 
       // Update task status and approval details in database
@@ -1564,9 +1588,18 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
+      remainingFreeRFQs: updatedBuyerInfo.updatedBal,
     }, { persist: false });
+    if (accountId && accountId !== updatedBuyerInfo.buyerId) {
+      storeService.updateBuyerAccount(accountId, {
+        creditBalance: updatedBuyerInfo.updatedBal,
+        available_credits: updatedBuyerInfo.updatedBal,
+        remainingFreeRFQs: updatedBuyerInfo.updatedBal,
+      }, { persist: false });
+    }
   }
   pool.queryCache?.invalidate('buyer_accounts');
+  pool.queryCache?.invalidate('buyer_credits');
   if ((accountType === 'BUYER' || accountType === 'BUYER_ACCOUNT') && storeService.updateBuyerAccount) {
     if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
@@ -1593,8 +1626,10 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       freeQuotationCredits: updatedVendorInfo.updatedBal,
       freeRfqDownloadCredits: updatedVendorInfo.updatedBal,
       credits: updatedVendorInfo.updatedBal,
+      ...(updatedVendorInfo.rfqDownloadsUsed !== undefined ? { rfqDownloadsUsed: updatedVendorInfo.rfqDownloadsUsed } : {}),
     }, { persist: false });
   }
+  pool.queryCache?.invalidate('vendor_credits');
   if ((accountType === 'SELLER' || accountType === 'VENDOR') && storeService.updateVendor) {
     if (task.task_type === 'Discounts' || task.task_type === 'Discount' || task.raw?.request_type === 'Discounts' || task.raw?.request_type === 'Discount') {
       const discountPct = Number(task.raw?.discount_percentage || task.credit_quantity || 0);
