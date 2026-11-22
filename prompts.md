@@ -8268,3 +8268,112 @@ Pass all the coverages and ready to merge
 ```text
 continue
 ```
+
+## Prompt 391 — 2026-11-22T15:23:47+05:30
+```text
+Summary of Changes
+1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+Robust Multi-Identifier Resolution: ImplementedesolveBuyerAccount\ in \ackend/src/controllers/buyerAccountController.js\ to resolve buyer accounts by \id, \userId, \uyerId, \organizationId, or \corporateEmail\ across memory, database, and buyer profile identity tables.
+Dossier Tabs Alignment: Replaced repetitive local ID lookups in \getCreditHistory, \getBuyerPaymentHistory, \getBuyerCommunications,ecordBuyerCommunication, \getBuyerUploadedVendors, andequestCreditApproval\ with canonicalesolveBuyerAccount. Fixes \Buyer account user-veerababuv2002-001 not found\ on Payments tab.
+Available Credits Display: In \BuyerDossierDrawer.tsx, Available Credits now displays numeric balances (including \
+[feat(category-manager): fix buyer dossier lookup sync, clean up initi…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[381b216](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[github-actions](https://github.com/apps/github-actions) Botcommented[10 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)•
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+352 / 352 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+7376
+7376
+0
+0
+frontend
+4870
+4870
+0
+0
+Workspace
+12246
+12246
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.17%
+92.65%
+98.63%
+98.93%
+166 / 166
+frontend
+97.64%
+92.66%
+97.34%
+98.53%
+186 / 186
+Workspace
+97.93%
+92.65%
+97.83%
+98.74%
+352 / 352
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+[veerababuprocucev](https://github.com/veerababuprocucev) added 3 commits [3 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
+[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[fix(ci): restore canonical single-id queries and balance validations …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
+[e6e467f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+1 failing, 3 successful checks
+failing checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503880/job/137165340896?pr=496)
+Failing after 33s
+successful checks
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137165340539?pr=496)
+Successful in 5m
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137165340811?pr=496)
+Successful in 8m
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137167367649?pr=496)
+Successful in 27s
+
+pass gemini pr check as well
+```

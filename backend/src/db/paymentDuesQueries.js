@@ -724,15 +724,18 @@ async function getCommunicationHistory(accountId, options = {}) {
     return result.rows.map(mapCommunicationRow);
   }
 
+  const SAFE_ID_PATTERN = /^[a-zA-Z0-9_\-@.+]+$/;
   const rawIds = Array.isArray(accountId) ? accountId : String(accountId || '').split(',');
-  const accountIds = rawIds.map((s) => String(s || '').trim()).filter(Boolean);
+  const accountIds = rawIds
+    .map((s) => String(s || '').trim())
+    .filter((s) => s.length > 0 && s.length <= 128 && SAFE_ID_PATTERN.test(s));
   const emails = (options?.emails || [])
     .concat(accountIds.filter((id) => id.includes('@')))
     .map((e) => String(e || '').trim().toLowerCase())
-    .filter(Boolean);
+    .filter((e) => e.length > 0 && e.length <= 256 && SAFE_ID_PATTERN.test(e));
   const phones = (options?.phones || [])
     .map((p) => String(p || '').trim())
-    .filter(Boolean);
+    .filter((p) => p.length > 0 && p.length <= 32 && /^[+0-9\s\-()]+$/.test(p));
 
   if (accountIds.length === 0 && emails.length === 0 && phones.length === 0) {
     return [];
@@ -755,29 +758,42 @@ async function getCommunicationHistory(accountId, options = {}) {
   `;
   const params = [accountIds, emails, phones, limit, offset];
 
-  const d1AccountPlaceholders = accountIds.length > 0 ? accountIds.map((_, i) => `$${i + 1}`).join(', ') : "''";
-  const d1EmailOffset = accountIds.length;
-  const d1EmailPlaceholders = emails.length > 0 ? emails.map((_, i) => `$${d1EmailOffset + i + 1}`).join(', ') : "''";
-  const d1PhoneOffset = d1EmailOffset + emails.length;
-  const d1PhonePlaceholders = phones.length > 0 ? phones.map((_, i) => `$${d1PhoneOffset + i + 1}`).join(', ') : "''";
-  const d1LimitOffset = d1PhoneOffset + phones.length;
+  const d1Conditions = [];
+  const d1Params = [];
+
+  if (accountIds.length > 0) {
+    const placeholders = accountIds.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...accountIds);
+    d1Conditions.push(`account_id IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.accountId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.buyerId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.vendorId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.entityId') IN (${placeholders})`);
+  }
+
+  if (emails.length > 0) {
+    const placeholders = emails.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...emails);
+    d1Conditions.push(`lower(recipient) IN (${placeholders})`);
+    d1Conditions.push(`lower(json_extract(metadata, '$.recipientEmail')) IN (${placeholders})`);
+  }
+
+  if (phones.length > 0) {
+    const placeholders = phones.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...phones);
+    d1Conditions.push(`recipient IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.recipientPhone') IN (${placeholders})`);
+  }
+
+  const d1LimitParam = `$${d1Params.length + 1}`;
+  const d1OffsetParam = `$${d1Params.length + 2}`;
+  d1Params.push(limit, offset);
 
   const d1Sql = `
     SELECT * FROM payment_dues_communications 
-    WHERE (
-      account_id IN (${d1AccountPlaceholders})
-      OR lower(recipient) IN (${d1EmailPlaceholders})
-      OR recipient IN (${d1PhonePlaceholders})
-      OR json_extract(metadata, '$.accountId') IN (${d1AccountPlaceholders})
-      OR json_extract(metadata, '$.buyerId') IN (${d1AccountPlaceholders})
-      OR json_extract(metadata, '$.vendorId') IN (${d1AccountPlaceholders})
-      OR json_extract(metadata, '$.entityId') IN (${d1AccountPlaceholders})
-      OR lower(json_extract(metadata, '$.recipientEmail')) IN (${d1EmailPlaceholders})
-      OR json_extract(metadata, '$.recipientPhone') IN (${d1PhonePlaceholders})
-    )
-    ORDER BY sent_at DESC LIMIT $${d1LimitOffset + 1} OFFSET $${d1LimitOffset + 2}
+    WHERE (${d1Conditions.join(' OR ')})
+    ORDER BY sent_at DESC LIMIT ${d1LimitParam} OFFSET ${d1OffsetParam}
   `;
-  const d1Params = [...accountIds, ...emails, ...phones, limit, offset];
 
   let result;
   try {
