@@ -8213,3 +8213,58 @@ Merging can be performed automatically.
 
 pass all the coverages
 ```
+
+
+## Prompt 389 — 2026-11-22T14:00:55+05:30
+```text
+Quality checks
+Check
+Actual step status
+Backend unit tests
+FAILED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+[veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
+[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+3 failing, 1 successful checks
+failing checks
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137142817646?pr=496)
+Failing after 5m
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137142818016?pr=496)
+Failing after 4m
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137144188027?pr=496)
+Failing after 35s
+successful checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175884/job/137142817428?pr=496)
+Successful in 59s
+
+Pass all the coverages and ready to merge
+```
+
+## Prompt 390 — 2026-11-22T14:45:00+05:30
+```text
+continue
+```

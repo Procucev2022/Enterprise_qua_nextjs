@@ -95,6 +95,25 @@ async function resolveBuyerAccount(identifier, req = null) {
   if (!buyer && pool.hasStorage()) {
     try {
       buyer = await domainQueries.getBuyerAccountByIdFromDB(identifier);
+      if (!buyer && identifier.includes('@')) {
+        buyer = await domainQueries.getBuyerAccountByEmailFromDB(identifier);
+      }
+      if (!buyer) {
+        const queryRes = await pool.query(
+          `SELECT raw FROM buyer_accounts 
+           WHERE raw->>'userId' = $1 
+              OR raw->>'user_id' = $1 
+              OR raw->>'buyerId' = $1 
+              OR raw->>'organizationId' = $1 
+              OR lower(corporate_email) = lower($1)
+           ORDER BY is_active DESC, updated_at DESC LIMIT 1`,
+          [identifier],
+          { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+        );
+        if (queryRes?.rows?.[0]?.raw) {
+          buyer = domainQueries.parseRaw(queryRes.rows[0].raw);
+        }
+      }
     } catch {
       buyer = null;
     }

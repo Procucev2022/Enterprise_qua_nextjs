@@ -2724,59 +2724,17 @@ async function getBuyerAccountsByEmailFromDB(email, { fresh = false } = {}) {
 
 async function getBuyerAccountByIdFromDB(id, { fresh = false } = {}) {
   if (!pool.hasStorage() || !id) return null;
-  const targetId = String(id).trim();
-  const sql = `
-    SELECT raw FROM buyer_accounts 
-    WHERE id = $1 
-       OR lower(corporate_email) = lower($1)
-       OR raw->>'userId' = $1
-       OR raw->>'user_id' = $1
-       OR raw->>'organizationId' = $1
-       OR raw->>'buyerId' = $1
-    ORDER BY is_active DESC, updated_at DESC LIMIT 1
-  `;
-  const d1Sql = `
-    SELECT raw FROM buyer_accounts 
-    WHERE id = $1 
-       OR lower(corporate_email) = lower($1)
-       OR json_extract(raw, '$.userId') = $1
-       OR json_extract(raw, '$.user_id') = $1
-       OR json_extract(raw, '$.organizationId') = $1
-       OR json_extract(raw, '$.buyerId') = $1
-    ORDER BY is_active DESC, updated_at DESC LIMIT 1
-  `;
   const result = await pool.query(
-    sql,
-    [targetId],
-    { d1: true, d1Text: d1Sql, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
+    'SELECT raw FROM buyer_accounts WHERE id = $1 LIMIT 1',
+    [id],
+    { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
 }
 
 async function getBuyerAccountSnapshotByIdFromDB(id) {
   if (!pool.hasStorage() || !id) return null;
-  const targetId = String(id).trim();
-  const sql = `
-    SELECT id, raw FROM buyer_accounts 
-    WHERE id = $1 
-       OR lower(corporate_email) = lower($1)
-       OR raw->>'userId' = $1
-       OR raw->>'user_id' = $1
-       OR raw->>'organizationId' = $1
-       OR raw->>'buyerId' = $1
-    ORDER BY is_active DESC, updated_at DESC LIMIT 1
-  `;
-  const d1Sql = `
-    SELECT id, raw FROM buyer_accounts 
-    WHERE id = $1 
-       OR lower(corporate_email) = lower($1)
-       OR json_extract(raw, '$.userId') = $1
-       OR json_extract(raw, '$.user_id') = $1
-       OR json_extract(raw, '$.organizationId') = $1
-       OR json_extract(raw, '$.buyerId') = $1
-    ORDER BY is_active DESC, updated_at DESC LIMIT 1
-  `;
-  const result = await pool.query(sql, [targetId], { d1: true, d1Text: d1Sql });
+  const result = await pool.query('SELECT id, raw FROM buyer_accounts WHERE id = $1 LIMIT 1', [id], { d1: true });
   const row = result.rows[0];
   if (!row) return null;
   const raw = typeof row.raw === 'string' ? row.raw : JSON.stringify(row.raw);
@@ -3884,7 +3842,25 @@ async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
   if (!pool.hasStorage() || !buyerId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
   const maxLimit = hasLimit ? Math.min(Number(limit), 1000) : 1000;
-  const idList = (Array.isArray(buyerId) ? buyerId : [buyerId]).map((x) => String(x || '').trim()).filter(Boolean);
+
+  if (!Array.isArray(buyerId)) {
+    const targetId = String(buyerId).trim();
+    if (!targetId) return [];
+    const sql = hasLimit
+      ? 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    const params = hasLimit ? [targetId, maxLimit] : [targetId];
+    const result = await pool.query(sql, params, {
+      d1: true,
+      d1Text: sql,
+      useCache: true,
+      tag: 'buyer_credits',
+      ttlMs: 60000,
+    });
+    return result && result.rows ? result.rows : [];
+  }
+
+  const idList = buyerId.map((x) => String(x || '').trim()).filter(Boolean);
   if (idList.length === 0) return [];
 
   const sql = `

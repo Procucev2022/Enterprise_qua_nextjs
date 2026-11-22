@@ -63,8 +63,11 @@ function requireTaskField(value, field) {
 function requireRecordedBalance(value, task, accountId) {
   const balance = value === undefined || value === null || value === '' ? NaN : Number(value);
   if (!Number.isFinite(balance)) {
-    logger.info('Credit account has no recorded balance, defaulting to 0', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
-    return 0;
+    const error = new Error(INTERNAL_TASK_ERRORS.BALANCE_NOT_RECORDED);
+    error.code = 'CREDIT_BALANCE_NOT_RECORDED';
+    error.statusCode = 409;
+    logger.error('Credit account for task has no recorded balance', { taskId: task.id, accountId }, 'INTERNAL_TASK_CREDIT_APPROVAL');
+    throw error;
   }
   return balance;
 }
@@ -1588,13 +1591,11 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
-      remainingFreeRFQs: updatedBuyerInfo.updatedBal,
     }, { persist: false });
     if (accountId && accountId !== updatedBuyerInfo.buyerId) {
       storeService.updateBuyerAccount(accountId, {
         creditBalance: updatedBuyerInfo.updatedBal,
         available_credits: updatedBuyerInfo.updatedBal,
-        remainingFreeRFQs: updatedBuyerInfo.updatedBal,
       }, { persist: false });
     }
   }
