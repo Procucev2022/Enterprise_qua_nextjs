@@ -141,3 +141,215 @@ describe('getLowCreditAccounts ordering', () => {
     expect(result.summary).toMatchObject({ totalLowCreditAccounts: 2, totalBuyers: 2, zeroCredits: 1 });
   });
 });
+
+describe('getCommunicationHistory multi-lookup & error branches', () => {
+  test('handles cross-account error and missing rows exceptions', async () => {
+    pool.query.mockRejectedValueOnce(new Error('Cross-account DB query timeout'));
+    await expect(paymentDuesQueries.getCommunicationHistory('', { isCrossAccount: true })).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+
+    pool.query.mockResolvedValueOnce({});
+    await expect(paymentDuesQueries.getCommunicationHistory('', { isCrossAccount: true })).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+  });
+
+  test('returns empty array when multi-lookup receives no valid identifiers', async () => {
+    const res = await paymentDuesQueries.getCommunicationHistory([], { emails: [], phones: [] });
+    expect(res).toEqual([]);
+
+    const resEmptyStr = await paymentDuesQueries.getCommunicationHistory(' , ', { emails: [''], phones: [''] });
+    expect(resEmptyStr).toEqual([]);
+  });
+
+  test('executes multi-identifier lookup across accounts, emails, and phones', async () => {
+    const mockComm = {
+      id: 'comm-ml-1',
+      account_id: 'buyer-001',
+      account_type: 'buyer',
+      channel: 'EMAIL',
+      recipient: 'user@test.com',
+      subject: 'Follow-up',
+      message: 'Checking status',
+      sent_at: '2026-03-01T10:00:00.000Z',
+      communicated_by: 'Category Manager',
+      delivery_status: 'Delivered',
+      notification_status: 'Sent',
+      acknowledgement_status: 'Pending',
+      notes: 'Initial check',
+      metadata: JSON.stringify({ rfqId: 'rfq-1' }),
+    };
+
+    pool.query.mockResolvedValueOnce({ rows: [mockComm] });
+
+    const result = await paymentDuesQueries.getCommunicationHistory(
+      ['buyer-001', 'user@test.com'],
+      {
+        emails: ['alt@test.com'],
+        phones: ['+919988776655'],
+        limit: 10,
+        offset: 0,
+      }
+    );
+
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      id: 'comm-ml-1',
+      accountId: 'buyer-001',
+      recipient: 'user@test.com',
+      metadata: { rfqId: 'rfq-1' },
+    });
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE ('),
+      expect.arrayContaining([
+        expect.arrayContaining(['buyer-001', 'user@test.com']),
+        expect.arrayContaining(['alt@test.com', 'user@test.com']),
+        expect.arrayContaining(['+919988776655']),
+      ]),
+      expect.objectContaining({ d1: true, d1Text: expect.stringContaining('payment_dues_communications') })
+    );
+  });
+
+  test('handles comma-separated account identifiers in multi-lookup', async () => {
+    pool.query.mockResolvedValueOnce({ rows: [] });
+
+    const result = await paymentDuesQueries.getCommunicationHistory('buyer-alpha, buyer-beta', {
+      emails: ['contact@buyer.com'],
+    });
+
+    expect(result).toEqual([]);
+    expect(pool.query).toHaveBeenCalledWith(
+      expect.stringContaining('WHERE ('),
+      expect.arrayContaining([
+        expect.arrayContaining(['buyer-alpha', 'buyer-beta']),
+      ]),
+      expect.anything()
+    );
+  });
+
+  test('handles errors and missing rows in multi-lookup query', async () => {
+    pool.query.mockRejectedValueOnce(new Error('Multi-lookup query failed'));
+    await expect(paymentDuesQueries.getCommunicationHistory(['b-1'], { emails: ['b@test.com'] })).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+
+    pool.query.mockResolvedValueOnce({});
+    await expect(paymentDuesQueries.getCommunicationHistory(['b-1'], { emails: ['b@test.com'] })).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+  });
+});
+
+describe('queryCommunications branches', () => {
+  test('executes queryCommunications with filters and handles edge cases', async () => {
+    pool.query.mockImplementation(async (sql) => {
+      if (/COUNT\(\*\)/.test(sql)) {
+        return { rows: [{ total: '1' }] };
+      }
+      return {
+        rows: [{
+          id: 'comm-qc-1',
+          account_id: 'acc-qc-1',
+          account_type: 'seller',
+          channel: 'SMS',
+          message: 'Alert',
+          sent_at: '2026-03-01T00:00:00.000Z',
+        }],
+      };
+    });
+
+    // With accountId, entityType, and channel
+    const resFiltered = await paymentDuesQueries.queryCommunications({
+      accountId: 'acc-qc-1',
+      entityType: 'seller',
+      channel: 'SMS',
+      limit: 10,
+      offset: 0,
+    });
+
+    expect(resFiltered.total).toBe(1);
+    expect(resFiltered.items).toHaveLength(1);
+    expect(resFiltered.items[0].id).toBe('comm-qc-1');
+
+    // With cross-account and channel ALL
+    const resCross = await paymentDuesQueries.queryCommunications({
+      isCrossAccount: true,
+      channel: 'ALL',
+    });
+    expect(resCross.total).toBe(1);
+
+    // Default call without arguments
+    const resDefaults = await paymentDuesQueries.queryCommunications();
+    expect(resDefaults.total).toBe(1);
+
+    // Without storage
+    pool.hasStorage.mockReturnValueOnce(false);
+    await expect(paymentDuesQueries.queryCommunications()).rejects.toMatchObject({
+      code: 'PERSISTENCE_UNAVAILABLE',
+    });
+  });
+});
+
+describe('fetchCommunicationsMap & seller communication status branches', () => {
+  test('fetchCommunicationsMap queries without account filter when accountIds is undefined', async () => {
+    pool.query.mockResolvedValueOnce({
+      rows: [{
+        account_id: 'acc-unfiltered',
+        channel: 'EMAIL',
+        notification_status: 'Sent',
+        delivery_status: 'Delivered',
+        acknowledgement_status: 'Acknowledged',
+        sent_at: '2026-03-01T00:00:00.000Z',
+      }],
+    });
+
+    const commMap = await paymentDuesQueries.fetchCommunicationsMap();
+    expect(commMap.get('acc-unfiltered')).toBeDefined();
+    expect(commMap.get('acc-unfiltered')[0].channel).toBe('EMAIL');
+  });
+
+  test('getLowCreditAccounts populates latestComm fields for low credit sellers', async () => {
+    pool.query.mockImplementation(async (sql) => {
+      if (/FROM vendors/.test(sql)) {
+        return {
+          rows: [{
+            id: 'vendor-low-1',
+            name: 'Low Credit Vendor',
+            is_active: 0,
+            status: null,
+            raw: JSON.stringify({
+              credits: 0,
+              subscriptionPlan: 'free',
+            }),
+            created_at: '2026-01-01T00:00:00.000Z',
+            updated_at: '2026-01-02T00:00:00.000Z',
+          }],
+        };
+      }
+      if (/payment_dues_communications/.test(sql)) {
+        return {
+          rows: [{
+            account_id: 'vendor-low-1',
+            channel: 'WHATSAPP',
+            notification_status: 'Delivered',
+            delivery_status: 'Delivered',
+            acknowledgement_status: 'Pending',
+            sent_at: '2026-03-01T12:00:00.000Z',
+          }],
+        };
+      }
+      return { rows: [] };
+    });
+
+    const result = await paymentDuesQueries.getLowCreditAccounts({ accountType: 'seller' });
+    expect(result.total).toBe(1);
+    const account = result.accounts[0];
+    expect(account.accountId).toBe('vendor-low-1');
+    expect(account.notificationChannel).toBe('WHATSAPP');
+    expect(account.acknowledgementStatus).toBe('Pending');
+    expect(account.deliveryStatus).toBe('Delivered');
+    expect(account.notificationStatus).toBe('Delivered');
+    expect(account.accountStatus).toBe('–');
+  });
+});

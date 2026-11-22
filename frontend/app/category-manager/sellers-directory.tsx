@@ -58,6 +58,7 @@ import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { fetchSellerDirectoryKPIStats } from '@/lib/accountDocumentsClient';
 import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
@@ -393,11 +394,48 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     }
   }, [initialSellerId, allSellers]);
 
+  // Live Database KPI counts (Removes 500-cap)
+  const [dbKPIStats, setDbKPIStats] = useState<{
+    totalSuppliers: number;
+    networkSuppliers: number;
+    buyerUploaded: number;
+    verifiedActive: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchSellerDirectoryKPIStats().then((res) => {
+      if (
+        active &&
+        res &&
+        res.success &&
+        typeof res.totalSuppliers === 'number' &&
+        !isNaN(res.totalSuppliers)
+      ) {
+        setDbKPIStats({
+          totalSuppliers: res.totalSuppliers,
+          networkSuppliers: typeof res.networkSuppliers === 'number' ? res.networkSuppliers : 0,
+          buyerUploaded: typeof res.buyerUploaded === 'number' ? res.buyerUploaded : 0,
+          verifiedActive: typeof res.verifiedActive === 'number' ? res.verifiedActive : 0,
+        });
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // KPI Metrics Calculation
-  const totalSellersCount = allSellers.length;
-  const networkSellersCount = allSellers.filter((s) => s.source === 'procucev_network').length;
-  const buyerUploadedCount = allSellers.filter((s) => s.source === 'buyer_uploaded').length;
-  const verifiedCount = allSellers.filter((s) => s.status.includes('ACTIVE') || s.status.includes('VERIFIED')).length;
+  const totalSellersCount = dbKPIStats ? dbKPIStats.totalSuppliers : allSellers.length;
+  const networkSellersCount = dbKPIStats
+    ? dbKPIStats.networkSuppliers
+    : allSellers.filter((s) => s.source === 'procucev_network').length;
+  const buyerUploadedCount = dbKPIStats
+    ? dbKPIStats.buyerUploaded
+    : allSellers.filter((s) => s.source === 'buyer_uploaded').length;
+  const verifiedCount = dbKPIStats
+    ? dbKPIStats.verifiedActive
+    : allSellers.filter((s) => s.status.includes('ACTIVE') || s.status.includes('VERIFIED')).length;
 
   // Averages cover only sellers that have a recorded value. Null when none does.
   const avgScore = useMemo<number | null>(() => {

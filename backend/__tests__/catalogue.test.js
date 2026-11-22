@@ -25,6 +25,7 @@ describe('Vendor Item SKU Catalogue API', () => {
   // Catalogue items are now scoped to the caller's own vendor record
   // (resolveOwnVendorId in catalogueController), so one must exist first.
   beforeAll(async () => {
+    jest.spyOn(storeService, 'provisionVendorOnboarding').mockResolvedValue(null);
     await request(app).post('/api/vendors').set(authHeader('vendor')).send({
       name: 'Apex Industrial Dynamics Pvt Ltd',
       majorCategory: 'Valves & Actuators',

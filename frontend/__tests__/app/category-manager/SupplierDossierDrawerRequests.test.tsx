@@ -728,8 +728,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
     fireEvent.click(screen.getByRole('menuitem', { name: 'Discount' }));
     fireEvent.click(screen.getByText('Connect Model'));
-    expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('12 Months')).toBeInTheDocument();
+    expect(screen.getByText('Price Breakdown')).toBeInTheDocument();
 
     // Step 2: Back button returns to Step 1
     fireEvent.click(screen.getByRole('button', { name: /Back/i }));
@@ -737,9 +736,9 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
 
     // Transition Step 1 -> Step 2 -> Cancel
     fireEvent.click(screen.getByText('Select Model'));
-    expect(screen.getByDisplayValue('Select Model')).toBeInTheDocument();
+    expect(screen.getByText('Price Breakdown')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    expect(screen.queryByText('Request Discount Approval')).not.toBeInTheDocument();
+    expect(screen.queryByText('Price Breakdown')).not.toBeInTheDocument();
 
     // Transition Step 1 -> Step 2 -> Close (X)
     fireEvent.click(screen.getByTestId('request-type-dropdown-btn'));
@@ -878,7 +877,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Submit for Approval' }));
     await waitFor(() => {
       expect(screen.getAllByText(/Failed to submit quote credit approval request/i)[0]).toBeInTheDocument();
-    }, { timeout: 5000 });
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 4b. Offline payment API failure without res.error
@@ -893,7 +892,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     fireEvent.submit(screen.getByRole('button', { name: 'Submit for Approval' }).closest('form')!);
     await waitFor(() => {
       expect(screen.getAllByText('Failed to submit offline payment approval request.')[0]).toBeInTheDocument();
-    }, { timeout: 5000 });
+    });
     fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
 
     // 5. Trial period date validation where end date is before start date
@@ -906,7 +905,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     unmount3();
   });
 
-  it('Scenario 19: Validates 2 Modes (Connect & Select Model), 12 Months duration, Initiators, and Approvers', async () => {
+  it('Scenario 19: Validates 2 Modes (Connect & Select Model), 6 & 12 Months durations, Initiators, and Approvers', async () => {
     const { unmount } = render(<SupplierDossierDrawer seller={mockSeller} initialTab="credit" onClose={jest.fn()} />);
 
     // Open Discount workflow
@@ -935,14 +934,14 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     expect(screen.getByDisplayValue('Connect Model')).toBeInTheDocument();
     expect(screen.getAllByText('₹7,499')[0]).toBeInTheDocument();
 
-    // Verify Initiated By dropdown options: first four strictly Govardhan, Chandan, Krishna Chaitanya, Sudheer
+    // Verify Initiated By dropdown options: strictly Govardhan, Chandan, Krishna Chaitanya, Other
     const initiatorSelect = document.getElementById('discount-initiator') as HTMLSelectElement;
     expect(initiatorSelect).toBeInTheDocument();
     const initiatorOptionValues = Array.from(initiatorSelect.options).map((opt) => opt.value);
     expect(initiatorOptionValues[1]).toBe('Govardhan');
     expect(initiatorOptionValues[2]).toBe('Chandan');
     expect(initiatorOptionValues[3]).toBe('Krishna Chaitanya');
-    expect(initiatorOptionValues[4]).toBe('Sudheer');
+    expect(initiatorOptionValues[4]).toBe('Other');
 
     // Verify Assigned Approver dropdown: strictly 3 options (Srinu Sir, Rao Sir, Sudheer Sir)
     const approverSelect = document.getElementById('quote-credit-approver') as HTMLSelectElement;
@@ -995,7 +994,7 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     expect(delInitiatorOptions[1]).toBe('Govardhan');
     expect(delInitiatorOptions[2]).toBe('Chandan');
     expect(delInitiatorOptions[3]).toBe('Krishna Chaitanya');
-    expect(delInitiatorOptions[4]).toBe('Sudheer');
+    expect(delInitiatorOptions[4]).toBe('Other');
 
     // Approver dropdown strictly 3 options
     const delApproverSelect = document.getElementById('quote-credit-approver') as HTMLSelectElement;

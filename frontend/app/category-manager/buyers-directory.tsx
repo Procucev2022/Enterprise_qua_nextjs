@@ -33,6 +33,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { fetchBuyerDirectoryKPIStats } from '@/lib/buyerProfileClient';
 import BuyerDossierDrawer from './components/BuyerDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
@@ -327,15 +328,46 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     [buyerAccounts, isSubscriptionBuyer]
   );
 
+  // Live Database KPI counts (Removes 500-cap)
+  const [dbKPIStats, setDbKPIStats] = useState<{
+    totalBuyers: number;
+    verifiedBuyers: number;
+    subscriptionBuyers: number;
+    modeCounts?: Record<string, number>;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchBuyerDirectoryKPIStats().then((res) => {
+      if (
+        active &&
+        res &&
+        res.success &&
+        typeof res.totalBuyers === 'number' &&
+        !isNaN(res.totalBuyers)
+      ) {
+        setDbKPIStats({
+          totalBuyers: res.totalBuyers,
+          verifiedBuyers: typeof res.verifiedBuyers === 'number' ? res.verifiedBuyers : 0,
+          subscriptionBuyers: typeof res.subscriptionBuyers === 'number' ? res.subscriptionBuyers : 0,
+          modeCounts: res.modeCounts,
+        });
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // KPI Metrics Calculation (5 Summary Cards)
-  const totalBuyers = buyerAccounts.length;
+  const totalBuyers = dbKPIStats ? dbKPIStats.totalBuyers : buyerAccounts.length;
   const verifiedBuyers = useMemo(
-    () => buyerAccounts.filter(isVerifiedBuyer).length,
-    [buyerAccounts]
+    () => (dbKPIStats ? dbKPIStats.verifiedBuyers : buyerAccounts.filter(isVerifiedBuyer).length),
+    [dbKPIStats, buyerAccounts]
   );
   const subscriptionBuyers = useMemo(
-    () => buyerAccounts.filter(isSubscriptionBuyer).length,
-    [buyerAccounts, isSubscriptionBuyer]
+    () => (dbKPIStats ? dbKPIStats.subscriptionBuyers : buyerAccounts.filter(isSubscriptionBuyer).length),
+    [dbKPIStats, buyerAccounts, isSubscriptionBuyer]
   );
   const totalRFQs = rfqs.length;
   const paidRFQs = useMemo(
@@ -368,6 +400,9 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
 
   // Mode distribution
   const modeCounts = useMemo(() => {
+    if (dbKPIStats?.modeCounts) {
+      return dbKPIStats.modeCounts;
+    }
     const counts: Record<string, number> = {
       [RFQ_MODES.MODE_0]: 0,
       [RFQ_MODES.MODE_1]: 0,
@@ -380,7 +415,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       else counts[RFQ_MODES.MODE_0]++;
     });
     return counts;
-  }, [buyerAccounts]);
+  }, [dbKPIStats, buyerAccounts]);
 
   // Filtered Buyers
   const filteredBuyers = useMemo(() => {

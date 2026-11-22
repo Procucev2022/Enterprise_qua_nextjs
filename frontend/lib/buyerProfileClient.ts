@@ -563,6 +563,41 @@ export async function fetchBuyerUploadedVendors(buyerId: string): Promise<{
   }
 }
 
+export async function fetchBuyerDirectoryKPIStats(): Promise<{
+  success: boolean;
+  totalBuyers: number;
+  verifiedBuyers: number;
+  subscriptionBuyers: number;
+  modeCounts?: Record<string, number>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/buyer-accounts/kpi-stats', {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    if (!body || typeof body.totalBuyers !== 'number') {
+      return {
+        success: false,
+        totalBuyers: 0,
+        verifiedBuyers: 0,
+        subscriptionBuyers: 0,
+        error: 'Invalid KPI stats response',
+      };
+    }
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer directory KPI stats request failed', err);
+    return {
+      success: false,
+      totalBuyers: 0,
+      verifiedBuyers: 0,
+      subscriptionBuyers: 0,
+      error: getRequestErrorMessage(err, 'Failed to fetch buyer directory KPI stats'),
+    };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
   fetchBuyerProfileCompletion,
@@ -579,6 +614,7 @@ const buyerProfileClient = {
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
   fetchBuyerUploadedVendors,
+  fetchBuyerDirectoryKPIStats,
 };
 
 export default buyerProfileClient;

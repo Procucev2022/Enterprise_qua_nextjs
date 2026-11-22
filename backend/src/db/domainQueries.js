@@ -3737,15 +3737,20 @@ async function recordCreditTransactionInDB({ id, vendorId, rfqId, transactionTyp
 async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const sql = hasLimit
-    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
-  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
+  const maxLimit = hasLimit ? Math.min(Number(limit), 1000) : 1000;
+  const idList = (Array.isArray(vendorId) ? vendorId : [vendorId]).map((x) => String(x || '').trim()).filter(Boolean);
+  if (idList.length === 0) return [];
+
+  const sql = `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ANY($1::text[]) ORDER BY created_at DESC LIMIT $2`;
+  const d1Placeholders = idList.map((_, i) => `$${i + 1}`).join(', ');
+  const d1Sql = `SELECT * FROM vendor_credit_transactions WHERE vendor_id IN (${d1Placeholders}) ORDER BY created_at DESC LIMIT $${idList.length + 1}`;
+  const params = [idList, maxLimit];
+  const d1Params = [...idList, maxLimit];
+
   const result = await pool.query(sql, params, {
     d1: true,
-    d1Text: hasLimit
-      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    d1Text: d1Sql,
+    d1Params,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -3836,15 +3841,63 @@ async function unlockVendorRfqDurablyInDB(options) {
 async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
   if (!pool.hasStorage() || !buyerId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const sql = hasLimit
-    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`;
-  const params = hasLimit ? [buyerId, Math.min(Number(limit), 1000)] : [buyerId];
+  const maxLimit = hasLimit ? Math.min(Number(limit), 1000) : 1000;
+
+  if (!Array.isArray(buyerId)) {
+    const targetId = String(buyerId).trim();
+    if (!targetId) return [];
+    const sql = hasLimit
+      ? 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    const params = hasLimit ? [targetId, maxLimit] : [targetId];
+    const result = await pool.query(sql, params, {
+      d1: true,
+      d1Text: sql,
+      useCache: true,
+      tag: 'buyer_credits',
+      ttlMs: 60000,
+    });
+    return result && result.rows ? result.rows : [];
+  }
+
+  const idList = buyerId.map((x) => String(x || '').trim()).filter(Boolean);
+  if (idList.length === 0) return [];
+
+  const sql = `
+    SELECT * FROM buyer_credit_transactions 
+    WHERE buyer_id = ANY($1::text[])
+       OR buyer_id IN (
+            SELECT id FROM buyer_accounts 
+            WHERE id = ANY($1::text[]) 
+               OR raw->>'userId' = ANY($1::text[]) 
+               OR raw->>'user_id' = ANY($1::text[]) 
+               OR raw->>'organizationId' = ANY($1::text[]) 
+               OR lower(corporate_email) = ANY($2::text[])
+          )
+    ORDER BY created_at DESC LIMIT $3
+  `;
+  const lowerEmails = idList.map((x) => x.toLowerCase());
+  const d1Placeholders = idList.map((_, i) => `$${i + 1}`).join(', ');
+  const d1Sql = `
+    SELECT * FROM buyer_credit_transactions 
+    WHERE buyer_id IN (${d1Placeholders})
+       OR buyer_id IN (
+            SELECT id FROM buyer_accounts 
+            WHERE id IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.userId') IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.user_id') IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.organizationId') IN (${d1Placeholders}) 
+               OR lower(corporate_email) IN (${d1Placeholders})
+          )
+    ORDER BY created_at DESC LIMIT $${idList.length + 1}
+  `;
+  const params = [idList, lowerEmails, maxLimit];
+  const d1Params = [...idList, maxLimit];
+
   const result = await pool.query(sql, params, {
     d1: true,
-    d1Text: hasLimit
-      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    d1Text: d1Sql,
+    d1Params,
     useCache: true,
     tag: 'buyer_credits',
     ttlMs: 60000,

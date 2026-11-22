@@ -20,6 +20,8 @@ router.get('/public/filters', authenticate, requireRole('category_manager'), req
 router.get('/public/:id', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorById);
 
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
+router.get('/kpi-stats', authenticate, requireRole('admin', 'category_manager'), vendorController.getSellerDirectoryKPIStats);
+router.get('/analytics', authenticate, requireRole('admin', 'category_manager'), vendorController.getSellerDirectoryKPIStats);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);

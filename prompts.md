@@ -7971,3 +7971,409 @@ All done ?
 ```
 
 ---
+
+### Prompt 383
+
+**Timestamp**: 2026-11-21T22:22:15+05:30
+
+```text
+Investigate the root causes and fix the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, and Request Approval flows).
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Do not apply surface-level UI patches that hide backend/data mismatches. Trace the exact API endpoints, DB queries, and ID fields so these issues cannot recur.
+- **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API clients, or modal components. Reuse existing approval, credit, and directory services/hooks.
+- **Do not break any existing UI or functionality**: Keep all unrelated tabs, columns, filters, and workflows intact, and add regression tests covering each fix.
+
+---
+
+### 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+- **Investigate ID/Lookup Mismatch**: In `BuyerDossierDrawer` (e.g., for `Veera solutions pvt ltd`), the **Payments** tab returns `Buyer account user-veerababuv2002-001 not found` and the **Request Buyer Credit Approval** modal shows `Available Credits: —` with the error `"The credit balance for ... is not on record, so the approver cannot see the balance this request is made against."` Meanwhile, the **Seller** credit approval modal correctly displays `Available Credits` (e.g., `99 Credits`).
+- **Fix the lookup consistently across all Buyer Dossier tabs (Profile, Credit, Payments, and Credit Approval Modal)**:
+  - Ensure the frontend passes the exact canonical buyer identifier expected by the backend (and/or the backend resolves by both `buyerId` and `userId` consistently) so `Credit`, `Payments`, and `Request Buyer Credit Approval` all read the live DB record without `not found` or `not on record` errors.
+  - Ensure `Available Credits` in the Buyer Credit Approval modal always displays the real numeric DB balance (including `0 Credits` when the balance is `0`, never `—` or a blocking error when the account exists in DB).
+- **Direct DB Sync After Approval**:
+  - Verify the full end-to-end credit approval flow (for both Buyers and Sellers): when a request (e.g., `+5 Credits`) is approved, it must persist to the DB credit balance + credit history ledger and immediately reflect across the Dossier header/Profile `Available Quota`, the `Credit` tab cards/history, the directory table `Credits` column, and the approval modal without stale cache or manual workarounds.
+
+---
+
+### 2. Clean Up `Initiated By` Dropdown Across ALL Request Approval Modals (Buyer & Seller)
+In **both Buyers Directory and Sellers Directory** (and every Request Approval modal across Category Manager):
+- **Remove all dummy data, approver names, generic labels, and raw UUIDs** from the `Initiated By` dropdown (currently polluted with `Sudheer`, `Srinu Sir`, `Category Manager`, `Session Initiator`, and raw UUIDs like `701eb175-baa1-4fc6-b463-2abd659d25cc`).
+- **Show ONLY these 3 valid initiator names**:
+  1. `Govardhan`
+  2. `Chandan`
+  3. `Krishna Chaitanya`
+- **Add an "Other" option**: Include an `Other` (or `+ Add Other Person`) option at the bottom of the `Initiated By` dropdown. When selected, reveal a clean inline text input so the user can type a custom person's name and submit it with the approval request.
+- Centralize this initiator list + "Other" input logic in a single shared constant/component reused by both Buyer and Seller approval modals so it cannot drift out of sync in the future.
+
+---
+
+### 3. Exact DB Counts for Buyers Directory & Sellers Directory (Remove 500 Cap)
+- Currently, KPI cards in **Buyers Directory** and **Sellers Directory** (e.g., `TOTAL BUYERS`, `TOTAL SUPPLIERS`, `BUYER UPLOADED`) are capped at `500` because they are derived from a limited query/array (`limit: 500`) instead of the actual database count.
+- **Fix backend & frontend analytics**:
+  - Query exact live DB counts (`COUNT(*)`) for all directory KPI/analytics cards (`Total Buyers`, `Total Suppliers`, `Network Suppliers`, `Buyer Uploaded`, etc.) directly from the database rather than counting the paginated/capped rows returned to the table.
+  - Ensure all analytics numbers stay directly linked to live DB state.
+
+---
+
+### 4. Verification & Regression Prevention
+- Add/update unit and integration tests covering:
+  1. Buyer dossier credit/payments lookup resolving correctly and post-approval credit addition (`+5 Credits`) reflecting in DB and UI.
+  2. `Initiated By` rendering only `Govardhan`, `Chandan`, `Krishna Chaitanya`, and `Other` (with custom name input) in both Buyer and Seller approval modals.
+  3. Directory KPI totals returning exact DB counts even when total records exceed `500`.
+```
+
+```
+### User Prompt 384 (Timestamp: 22 Nov 2026, 12:04 AM IST)
+continue
+```
+
+
+---
+
+### User Prompt 385 (Timestamp: 22 Nov 2026, 12:12 AM IST)
+```text
+continue
+```
+
+---
+
+### User Prompt 386 (Timestamp: 22 Nov 2026, 02:37 AM IST)
+```text
+continue
+```
+
+
+---
+
+### User Prompt 387 (Timestamp: 22 Nov 2026, 09:27 AM IST)
+```text
+Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, Approvals, Credits, and Communications).
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Completely solve the root cause at the DB/service/API level**: Do NOT apply superficial UI patches or workarounds. Every balance, ledger row, and communication record must come from a single source of truth so these issues NEVER recur in the future.
+- **Strictly reuse existing code, methods, and functionality**: Do not duplicate business logic, API services, or UI components. Fix and unify the existing credit, approval, and communication services.
+- **Do not break any existing UI or functionality**: Keep all working tabs (e.g., Payments, Quotes, RFQs, Directory counts) and existing workflows 100% intact.
+
+---
+
+### 1. Root Cause Fix — Approved Buyer Credits Not Persisting or Appearing in Buyer Dossier
+- **Observed Bug**: Request `REQ-AAEEAABA2D35` (`Buyer Credit Addition: 5 RFQ Credits` for `Veera solutions pvt ltd`) is marked `Approved` in Approvals, yet `BuyerDossierDrawer` (`Credit` tab + `Request Buyer Credit Approval` modal) still displays `Total Credits Allocated: 0`, `Remaining Free Credits: 0`, `Available Credits: 0 Credits`, and `No credit transactions recorded`.
+- **Root Cause & Fix**:
+  - Trace the full approval execution path when a **Buyer Credit Addition** (or Deletion) request is approved.
+  - Ensure approving a buyer credit request atomically:
+    1. Updates the buyer's canonical credit balance in the DB (the exact field/table read by `BuyerDossierDrawer`, `Profile`, `Credit` tab, and the approval modal).
+    2. Inserts a corresponding credit transaction record into the buyer's credit ledger/history table under the exact canonical buyer ID.
+    3. Invalidates/refreshes frontend state so the new balance and ledger row appear immediately across the Dossier and Directory.
+  - Verify why `Credit` tab was showing `"Credit history is not recorded for this account"` even after approval, and fix any ID mismatch (`buyerId` vs `userId` vs `companyId`).
+
+---
+
+### 2. Root Cause Fix — Seller Credit Split-Brain (`99` Subscription Credits vs `1` Ledger Credit) & Deduction Display Bug
+- **Observed Bug**: For `Veera Solutions Pvt LTD` (on `Select` subscription tier with `100` allocated / `99` active quote balance):
+  - The top KPI cards and `Request Seller Credit Deletion` modal show `99 Credits Available`.
+  - Submitting a deduction of `10` credits fails with: `"Cannot delete 10 credits: Veera Solutions Pvt LTD only has 1 credits available."`
+  - The Credit ledger table shows `Balance: 1` (computed from the old 5-credit free tier: `5 - 1 - 3 = 1`) instead of reflecting the 100-credit subscription (`99` remaining).
+  - The `CREDIT_DEDUCTION` row (`vtx-ded-mwrao5kj-1c7fca`) displays `+3` in the **Added** column instead of `-3` in the **Consumed** column.
+- **Root Cause & Fix**:
+  - Unify the Seller credit balance into a **single source of truth** across subscription allocation, free credits, credit additions/deletions, deletion validation, and ledger running balance.
+  - When a seller takes a subscription (e.g., `Select` = 100 credits), record the subscription credit allocation in the seller's credit transaction ledger (or initialize the baseline ledger with the subscription credit grant so the running balance starts from `100`).
+  - Fix the deletion validation endpoint so it checks against the seller's actual, live total available credit balance (`99` credits, NOT just `freeQuotationCredits: 1`).
+  - In the Credit ledger table, fix the column mapping: `CREDIT_DEDUCTION` transactions MUST display in the **Consumed** column as a deduction (`-3` or `3` consumed) and display `—` in the **Added** column.
+  - Update the ledger running balance calculation so additions add, deductions subtract, and the final balance matches the exact live active quote balance (`99 - 3 = 96` or current live balance).
+
+---
+
+### 3. Root Cause Fix — Communications Not Appearing in Buyer Directory & Seller Directory
+- **Observed Bug**: In both `BuyerDossierDrawer` and `SupplierDossierDrawer`, the **Communications** tab displays `Communications (0)` and `"No communication records found."` even when communications have been recorded or sent.
+- **Root Cause & Fix**:
+  - Investigate the communications data model and API endpoints (`GET /api/buyer-accounts/:id/communications` and `GET /api/vendors/:id/communications` or equivalent).
+  - Verify how communications are logged (via `Record Communication` button, email/SMS/WhatsApp dispatchers, or call logs) and what foreign keys are used (`entity_id`, `buyer_id`, `vendor_id`, `recipient_email`, `phone`).
+  - Resolve identifier mismatches: ensure fetching communications searches by all canonical representations of the entity (e.g., `id`, `userId`, `email`, `companyName` or phone) so records are never missed due to ID format differences.
+  - Ensure the tab badge count `Communications (N)` accurately counts all communication entries matching that buyer or seller.
+
+---
+
+### 4. End-to-End Verification & Regression Tests
+- Write automated unit tests for:
+  1. Buyer Credit Approval execution updating DB balance and inserting ledger transaction under canonical buyer ID.
+  2. Seller credit deletion validation checking true available balance (`99`) and deduction displaying in Consumed column.
+  3. Communications lookup returning all records across buyer and seller entities.
+- Ensure all modified frontend and backend files meet or exceed the mandatory **>= 90% per-file code coverage** across Statements, Branches, Functions, and Lines.
+- Run fast verification (`npm run qc:fast` or `npm run check:fast`) and ensure 0 test failures.
+```
+
+
+## Prompt 388 — 2026-11-22T13:26:12+05:30
+```text
+Summary of Changes
+1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+Robust Multi-Identifier Resolution: ImplementedesolveBuyerAccount\ in \ackend/src/controllers/buyerAccountController.js\ to resolve buyer accounts by \id, \userId, \uyerId, \organizationId, or \corporateEmail\ across memory, database, and buyer profile identity tables.
+Dossier Tabs Alignment: Replaced repetitive local ID lookups in \getCreditHistory, \getBuyerPaymentHistory, \getBuyerCommunications,ecordBuyerCommunication, \getBuyerUploadedVendors, andequestCreditApproval\ with canonicalesolveBuyerAccount. Fixes \Buyer account user-veerababuv2002-001 not found\ on Payments tab.
+Available Credits Display: In \BuyerDossierDrawer.tsx, Available Credits now displays numeric balances (including \
+[feat(category-manager): fix buyer dossier lookup sync, clean up initi…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[381b216](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[github-actions](https://github.com/apps/github-actions) Botcommented[8 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)•
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: FAILED
+351 / 352 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+7368
+7364
+4
+0
+frontend
+4870
+4869
+1
+0
+Workspace
+12238
+12233
+5
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.13%
+92.56%
+98.53%
+98.89%
+165 / 166
+frontend
+97.63%
+92.66%
+97.33%
+98.53%
+186 / 186
+Workspace
+97.90%
+92.61%
+97.78%
+98.72%
+351 / 352
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+FAILED
+Backend per-file coverage
+FAILED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+Coverage failures
+backend: src/db/paymentDuesQueries.js: statements 88.85% < 90%.
+backend: src/db/paymentDuesQueries.js: branches 83.01% < 90%.
+backend: src/db/paymentDuesQueries.js: functions 87.04% < 90%.
+[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+3 failing, 1 successful checks
+failing checks
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/44994968534/job/137123925169?pr=496)
+Failing after 5m
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/44994968534/job/137123925328?pr=496)
+Failing after 6m
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/44994968534/job/137125448498?pr=496)
+Failing after 31s
+successful checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/44994968502/job/137123925197?pr=496)
+Successful in 38s
+No conflicts with base branch
+Merging can be performed automatically.
+
+pass all the coverages
+```
+
+
+## Prompt 389 — 2026-11-22T14:00:55+05:30
+```text
+Quality checks
+Check
+Actual step status
+Backend unit tests
+FAILED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+FAILED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+[veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
+[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+3 failing, 1 successful checks
+failing checks
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137142817646?pr=496)
+Failing after 5m
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137142818016?pr=496)
+Failing after 4m
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175964/job/137144188027?pr=496)
+Failing after 35s
+successful checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45001175884/job/137142817428?pr=496)
+Successful in 59s
+
+Pass all the coverages and ready to merge
+```
+
+## Prompt 390 — 2026-11-22T14:45:00+05:30
+```text
+continue
+```
+
+## Prompt 391 — 2026-11-22T15:23:47+05:30
+```text
+Summary of Changes
+1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
+Robust Multi-Identifier Resolution: ImplementedesolveBuyerAccount\ in \ackend/src/controllers/buyerAccountController.js\ to resolve buyer accounts by \id, \userId, \uyerId, \organizationId, or \corporateEmail\ across memory, database, and buyer profile identity tables.
+Dossier Tabs Alignment: Replaced repetitive local ID lookups in \getCreditHistory, \getBuyerPaymentHistory, \getBuyerCommunications,ecordBuyerCommunication, \getBuyerUploadedVendors, andequestCreditApproval\ with canonicalesolveBuyerAccount. Fixes \Buyer account user-veerababuv2002-001 not found\ on Payments tab.
+Available Credits Display: In \BuyerDossierDrawer.tsx, Available Credits now displays numeric balances (including \
+[feat(category-manager): fix buyer dossier lookup sync, clean up initi…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[381b216](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/381b2168a4fc346f22695bce6709053d11c23d20)
+[github-actions](https://github.com/apps/github-actions) Botcommented[10 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#issuecomment-7070675547)•
+Procucev Enterprise CI Quality & Coverage Summary
+Strict 90% per-file coverage gate: PASSED
+352 / 352 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+Unit test results
+Project
+Total
+Passed
+Failed
+Skipped / Todo
+backend
+7376
+7376
+0
+0
+frontend
+4870
+4870
+0
+0
+Workspace
+12246
+12246
+0
+0
+Coverage
+Project
+Statements
+Branches
+Functions
+Lines
+Files passed
+backend
+98.17%
+92.65%
+98.63%
+98.93%
+166 / 166
+frontend
+97.64%
+92.66%
+97.34%
+98.53%
+186 / 186
+Workspace
+97.93%
+92.65%
+97.83%
+98.74%
+352 / 352
+Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+Quality checks
+Check
+Actual step status
+Backend unit tests
+PASSED
+Backend per-file coverage
+PASSED
+Frontend unit tests
+PASSED
+Frontend per-file coverage
+PASSED
+Production build
+PASSED
+TypeScript typecheck
+PASSED
+Lint
+PASSED
+Database migrations
+PASSED
+PostgreSQL / D1 schema parity
+PASSED
+Schema parity checker tests
+PASSED
+[veerababuprocucev](https://github.com/veerababuprocucev) added 3 commits [3 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496#commits-pushed-6af3e90)
+[fix(category-manager): resolve buyer credit persistence, seller split…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[6af3e90](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/6af3e9023d1c05cfa88d64524e9a5e4aee40bcc6)
+[test(backend): add coverage for paymentDuesQueries multi-lookup and c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[4d0cf01](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/4d0cf01c57a82c03e34578517ea285f79814feb8)
+[fix(ci): restore canonical single-id queries and balance validations …](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
+[e6e467f](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/496/commits/e6e467f27f87efb022b32c4fb50d3e441db3584e)
+This branch has not been deployed
+No deployments
+Merge info
+Some checks were not successful
+1 failing, 3 successful checks
+failing checks
+[Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503880/job/137165340896?pr=496)
+Failing after 33s
+successful checks
+[Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137165340539?pr=496)
+Successful in 5m
+[Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137165340811?pr=496)
+Successful in 8m
+[Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45008503855/job/137167367649?pr=496)
+Successful in 27s
+
+pass gemini pr check as well
+```

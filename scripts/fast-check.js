@@ -336,6 +336,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
   }
 
   // 5. Backend Unit Tests + Strict 90% Per-File Coverage Gate on Changed Files
+  const maxWorkersArg = `--maxWorkers=${process.env.JEST_MAX_WORKERS || '2'}`;
   if (hasBackendChanges) {
     if (shouldCheckAll || scope.touchedBackendConfig) {
       runFastStep('Backend Full Test Suite & 90% Per-File Coverage Gate', 'npm run test:coverage --prefix backend');
@@ -348,7 +349,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
         if (backendSrcRelFiles.length > 0) {
           const jestArgs = [
             '--bail',
-            '--maxWorkers=50%',
+            maxWorkersArg,
             '--passWithNoTests',
             '--coverage',
             `--coverageDirectory=${FAST_COVERAGE_DIR}`,
@@ -373,7 +374,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
         } else {
           runJestWithArgs('Backend Related Unit Tests', backendDir, [
             '--bail',
-            '--maxWorkers=50%',
+            maxWorkersArg,
             '--passWithNoTests',
             '--findRelatedTests',
             ...backendRelFiles,
@@ -403,7 +404,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
         if (frontendSrcRelFiles.length > 0) {
           const jestArgs = [
             '--bail',
-            '--maxWorkers=50%',
+            maxWorkersArg,
             '--passWithNoTests',
             '--coverage',
             `--coverageDirectory=${FAST_COVERAGE_DIR}`,
@@ -428,7 +429,7 @@ function runFastCheckCli(argv = process.argv.slice(2)) {
         } else {
           runJestWithArgs('Frontend Related Unit Tests', frontendDir, [
             '--bail',
-            '--maxWorkers=50%',
+            maxWorkersArg,
             '--passWithNoTests',
             '--findRelatedTests',
             ...frontendRelFiles,

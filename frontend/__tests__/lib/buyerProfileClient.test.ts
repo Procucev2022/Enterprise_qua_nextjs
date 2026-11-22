@@ -716,12 +716,53 @@ describe('buyerProfileClient', () => {
     });
   });
 
+  describe('fetchBuyerDirectoryKPIStats', () => {
+    test('fetches live DB KPI counts successfully', async () => {
+      const mockKPI = { success: true, totalBuyers: 512, verifiedBuyers: 410, subscriptionBuyers: 220, modeCounts: { Mode_1: 300 } };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockKPI,
+      });
+
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res).toEqual(mockKPI);
+      expect(global.fetch).toHaveBeenCalledWith('/api/buyer-accounts/kpi-stats', expect.any(Object));
+    });
+
+    test('returns error envelope when response payload is invalid', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invalid: true }),
+      });
+
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalBuyers).toBe(0);
+      expect(res.error).toBe('Invalid KPI stats response');
+    });
+
+    test('returns fallback error object when fetch throws', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
+      const errorLog = jest.spyOn(logger, 'error');
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalBuyers).toBe(0);
+      expect(res.error).toBe('Network error');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer directory KPI stats request failed',
+        expect.any(Object),
+        'BUYER_PROFILE'
+      );
+    });
+  });
+
   test('the default export exposes the whole client surface', () => {
     expect(Object.keys(buyerProfileClient).sort()).toEqual([
       'addBuyerCredit',
       'expandCategorySelection',
       'fetchBuyerCommunications',
       'fetchBuyerCreditHistory',
+      'fetchBuyerDirectoryKPIStats',
       'fetchBuyerPaymentHistory',
       'fetchBuyerProfile',
       'fetchBuyerProfileCompletion',

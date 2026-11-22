@@ -385,3 +385,46 @@ export async function addSellerQuoteCredits(
     return { success: false, error: errorMsg };
   }
 }
+
+/**
+ * Fetch exact database KPI stats for Sellers Directory (removing 500 pagination cap).
+ */
+export async function fetchSellerDirectoryKPIStats(): Promise<{
+  success: boolean;
+  totalSuppliers: number;
+  networkSuppliers: number;
+  buyerUploaded: number;
+  verifiedActive: number;
+  error?: string;
+}> {
+  try {
+    const url = '/api/vendors/kpi-stats';
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: authHeaders(),
+    });
+    const json = await res.json();
+    if (!json || typeof json.totalSuppliers !== 'number') {
+      return {
+        success: false,
+        totalSuppliers: 0,
+        networkSuppliers: 0,
+        buyerUploaded: 0,
+        verifiedActive: 0,
+        error: 'Invalid KPI stats response',
+      };
+    }
+    return json;
+  } catch (err) {
+    const errorMsg = (err as Error).message || 'Failed to fetch seller KPI stats.';
+    logger.error('fetchSellerDirectoryKPIStats network error', { error: errorMsg }, ACCOUNT_DOCS_LOG_CATEGORY);
+    return {
+      success: false,
+      totalSuppliers: 0,
+      networkSuppliers: 0,
+      buyerUploaded: 0,
+      verifiedActive: 0,
+      error: errorMsg,
+    };
+  }
+}

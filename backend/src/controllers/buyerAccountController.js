@@ -55,10 +55,106 @@ function mostFrequent(values) {
 
 /**
  * The buyer's real credit balance, or null when the record does not hold one.
- * Callers must not substitute a number for null.
+ * Callers must not substitute a number for null unless an account exists on record.
  */
 function knownCreditBalance(buyer) {
-  return numberOrNull(buyer.creditBalance);
+  if (!buyer) return null;
+  const balance = numberOrNull(buyer.creditBalance) ??
+                  numberOrNull(buyer.remainingFreeRFQs) ??
+                  numberOrNull(buyer.remainingFreeCredits) ??
+                  numberOrNull(buyer.available_credits) ??
+                  numberOrNull(buyer.credit_balance) ??
+                  numberOrNull(buyer.freeRFQsRemaining);
+  return balance;
+}
+
+/**
+ * Robustly resolve a buyer account from memory, database, or buyer profile.
+ * Supports resolution by account id, user id, buyer id, organization id, or corporate email.
+ */
+async function resolveBuyerAccount(identifier, req = null) {
+  if (!identifier) return null;
+  const domainQueries = require('../db/domainQueries');
+  const target = String(identifier).trim().toLowerCase();
+
+  // 1. Check in-memory store
+  let buyer = storeService.getBuyerAccounts().find(
+    (b) => b.id === identifier ||
+           b.userId === identifier ||
+           b.buyerId === identifier ||
+           b.organizationId === identifier ||
+           (b.corporateEmail && b.corporateEmail.toLowerCase() === target)
+  );
+
+  // 2. If buyer role session and still not found, try session email
+  if (!buyer && req && req.user && req.user.role === 'buyer' && req.user.email) {
+    buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+  }
+
+  // 3. Check database (supports matching on id, corporate_email, or raw JSON fields)
+  if (!buyer && pool.hasStorage()) {
+    try {
+      buyer = await domainQueries.getBuyerAccountByIdFromDB(identifier);
+      if (!buyer && identifier.includes('@')) {
+        buyer = await domainQueries.getBuyerAccountByEmailFromDB(identifier);
+      }
+      if (!buyer) {
+        const queryRes = await pool.query(
+          `SELECT raw FROM buyer_accounts 
+           WHERE raw->>'userId' = $1 
+              OR raw->>'user_id' = $1 
+              OR raw->>'buyerId' = $1 
+              OR raw->>'organizationId' = $1 
+              OR lower(corporate_email) = lower($1)
+           ORDER BY is_active DESC, updated_at DESC LIMIT 1`,
+          [identifier],
+          { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+        );
+        if (queryRes?.rows?.[0]?.raw) {
+          buyer = domainQueries.parseRaw(queryRes.rows[0].raw);
+        }
+      }
+    } catch {
+      buyer = null;
+    }
+  }
+
+  // 4. Check buyer profile identity tables if still not found
+  if (!buyer && pool.hasStorage()) {
+    try {
+      const buyerProfileQueries = require('../db/buyerProfileQueries');
+      const lookup = await buyerProfileQueries.findProfileByIdentifier({
+        userId: identifier,
+        email: identifier.includes('@') ? identifier : undefined,
+        organizationId: identifier,
+      });
+      if (lookup?.found && lookup.profile) {
+        const p = lookup.profile;
+        const mirrorUser = {
+          role: 'buyer',
+          email: p.contactEmail || p.email,
+          sub: p.userId || identifier,
+          id: p.userId || identifier,
+          orgId: p.organizationId,
+        };
+        buyer = await storeService.ensureBuyerAccountForUser(mirrorUser);
+      }
+    } catch (err) {
+      logger.warn('Buyer profile fallback lookup failed in resolveBuyerAccount', { error: err.message, identifier }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+  }
+
+  // Sync into memory cache if found
+  if (buyer) {
+    const idx = storeService.buyerAccounts.findIndex((a) => a.id === buyer.id);
+    if (idx >= 0) {
+      storeService.buyerAccounts[idx] = buyer;
+    } else {
+      storeService.buyerAccounts.unshift(buyer);
+    }
+  }
+
+  return buyer || null;
 }
 
 /**
@@ -125,9 +221,10 @@ function assertBuyerAccountRole(req, res) {
 
 async function assertBuyerAccountAccess(req, res, id) {
   if (!assertBuyerAccountRole(req, res)) return false;
+  const domainQueries = require('../db/domainQueries');
   const buyer = pool.hasStorage()
-    ? await domainQueries.getBuyerAccountByIdFromDB(id)
-    : storeService.getBuyerAccounts().find((account) => account.id === id) || null;
+    ? (await domainQueries.getBuyerAccountByIdFromDB(id) || await resolveBuyerAccount(id, req))
+    : await resolveBuyerAccount(id, req);
   if (!buyer) {
     res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     return false;
@@ -714,14 +811,7 @@ async function getCreditHistory(req, res, next) {
     const { id } = req.params;
     const domainQueries = require('../db/domainQueries');
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && req.user.role === 'buyer') {
-      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-    }
-    if (!buyer && pool.hasStorage()) {
-      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
-      if (snapshot?.account) buyer = snapshot.account;
-    }
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -731,9 +821,18 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
     let transactions = [];
     try {
-      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(candidateIds, 100)) || [];
     } catch (dbErr) {
       logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
     }
@@ -827,12 +926,7 @@ async function addCredit(req, res, next) {
     // The guard above guarantees an authenticated caller, so the actor is the session.
     const actorEmail = req.user.email;
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && pool.hasStorage()) {
-      const domainQueries = require('../db/domainQueries');
-      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
-      if (snapshot?.account) buyer = snapshot.account;
-    }
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -840,7 +934,7 @@ async function addCredit(req, res, next) {
     const txId = `ctx-add-${crypto.randomBytes(6).toString('hex')}`;
     const tx = {
       id: txId,
-      buyerId: id,
+      buyerId: buyer.id,
       rfqId: null,
       transactionType: 'Admin Credit Addition',
       creditSource: source || null,
@@ -891,7 +985,7 @@ async function requestCreditApproval(req, res, next) {
   try {
     if (!assertCategoryManagerOrAdmin(req, res)) return;
     const { id } = req.params;
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
@@ -1224,19 +1318,14 @@ async function updateSupportedCategories(req, res, next) {
       return res.status(400).json({ success: false, error: 'categories must be an array of strings.' });
     }
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && pool.hasStorage()) {
-      const domainQueries = require('../db/domainQueries');
-      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
-      if (snapshot?.account) buyer = snapshot.account;
-    }
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const cleanCategories = Array.from(new Set(categories.map((c) => String(c).trim()).filter(Boolean)));
-    const updated = await storeService.updateBuyerAccountDurably(id, {
+    const updated = await storeService.updateBuyerAccountDurably(buyer.id, {
       supportedMajorCategories: cleanCategories,
     });
 
@@ -1262,20 +1351,26 @@ async function getBuyerCommunications(req, res, next) {
     const { id } = req.params;
     const paymentDuesQueries = require('../db/paymentDuesQueries');
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && pool.hasStorage()) {
-      const domainQueries = require('../db/domainQueries');
-      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
-      if (snapshot?.account) buyer = snapshot.account;
-    }
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+    const emails = [buyer.corporateEmail, buyer.email, buyer.contactEmail].filter(Boolean);
+    const phones = [buyer.phone, buyer.mobileNumber, buyer.contactPhone].filter(Boolean);
+
     let comms = [];
     try {
-      comms = (await paymentDuesQueries.getCommunicationHistory(id)) || [];
+      comms = (await paymentDuesQueries.getCommunicationHistory(candidateIds, { emails, phones })) || [];
     } catch (dbErr) {
       logger.warn('Failed to load communication history from database, returning empty list', { id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
       comms = [];
@@ -1309,12 +1404,7 @@ async function recordBuyerCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && pool.hasStorage()) {
-      const domainQueries = require('../db/domainQueries');
-      const snapshot = await domainQueries.getBuyerAccountSnapshotByIdFromDB(id);
-      if (snapshot?.account) buyer = snapshot.account;
-    }
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1526,19 +1616,25 @@ async function getBuyerPaymentHistory(req, res, next) {
   try {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
     const { id } = req.params;
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && req.user.role === 'buyer') {
-      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-    }
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    let links = await storeService.getPaymentLinksForBuyer(buyer.id);
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
+    let links = await storeService.getPaymentLinksForBuyer(candidateIds);
     const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
     if (reconciled > 0) {
-      links = await storeService.getPaymentLinksForBuyer(buyer.id);
+      links = await storeService.getPaymentLinksForBuyer(candidateIds);
     }
 
     const payments = [];
@@ -1619,13 +1715,7 @@ async function getBuyerUploadedVendors(req, res, next) {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
     const { id } = req.params;
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && pool.hasStorage()) {
-      buyer = await domainQueries.getBuyerAccountByIdFromDB(id);
-    }
-    if (!buyer && req.user.role === 'buyer') {
-      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-    }
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.BUYER_NOT_FOUND, { id }) });
     }
@@ -1697,6 +1787,18 @@ async function getBuyerUploadedVendors(req, res, next) {
   }
 }
 
+async function getBuyerDirectoryKPIStats(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const directoryKPIQueries = require('../db/directoryKPIQueries');
+    const stats = await directoryKPIQueries.getBuyerDirectoryKPIStatsFromDB();
+    res.json({ success: true, ...stats });
+  } catch (err) {
+    logger.error('Error fetching buyer directory KPI stats', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -1718,6 +1820,7 @@ module.exports = {
   recordBuyerCommunication,
   getBuyerPaymentHistory,
   getBuyerUploadedVendors,
+  getBuyerDirectoryKPIStats,
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrBuyer,
 };

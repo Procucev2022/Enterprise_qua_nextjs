@@ -691,13 +691,113 @@ async function getCommunicationHistory(accountId, options = {}) {
   const offset = Math.max(Number(options?.offset) || 0, 0);
   requireStorage('communication history read');
 
-  const sql = isAll
-    ? 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2'
-    : 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
-  const params = isAll ? [limit, offset] : [accountId, limit, offset];
+  if (isAll) {
+    const sql = 'SELECT * FROM payment_dues_communications ORDER BY sent_at DESC LIMIT $1 OFFSET $2';
+    const params = [limit, offset];
+    let result;
+    try {
+      result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    } catch (error) {
+      throwPersistenceUnavailable('communication history read', error);
+    }
+    if (!result || !Array.isArray(result.rows)) {
+      throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
+    }
+    return result.rows.map(mapCommunicationRow);
+  }
+
+  const isMultiLookup = Array.isArray(accountId) || Boolean(options?.emails?.length) || Boolean(options?.phones?.length);
+  if (!isMultiLookup) {
+    const targetAccountId = String(accountId || '').trim();
+    if (!targetAccountId) return [];
+    const sql = 'SELECT * FROM payment_dues_communications WHERE account_id = $1 ORDER BY sent_at DESC LIMIT $2 OFFSET $3';
+    const params = [targetAccountId, limit, offset];
+    let result;
+    try {
+      result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    } catch (error) {
+      throwPersistenceUnavailable('communication history read', error);
+    }
+    if (!result || !Array.isArray(result.rows)) {
+      throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
+    }
+    return result.rows.map(mapCommunicationRow);
+  }
+
+  const SAFE_ID_PATTERN = /^[a-zA-Z0-9_\-@.+]+$/;
+  const rawIds = Array.isArray(accountId) ? accountId : String(accountId || '').split(',');
+  const accountIds = rawIds
+    .map((s) => String(s || '').trim())
+    .filter((s) => s.length > 0 && s.length <= 128 && SAFE_ID_PATTERN.test(s));
+  const emails = (options?.emails || [])
+    .concat(accountIds.filter((id) => id.includes('@')))
+    .map((e) => String(e || '').trim().toLowerCase())
+    .filter((e) => e.length > 0 && e.length <= 256 && SAFE_ID_PATTERN.test(e));
+  const phones = (options?.phones || [])
+    .map((p) => String(p || '').trim())
+    .filter((p) => p.length > 0 && p.length <= 32 && /^[+0-9\s\-()]+$/.test(p));
+
+  if (accountIds.length === 0 && emails.length === 0 && phones.length === 0) {
+    return [];
+  }
+
+  const sql = `
+    SELECT * FROM payment_dues_communications 
+    WHERE (
+      account_id = ANY($1::text[])
+      OR lower(recipient) = ANY($2::text[])
+      OR recipient = ANY($3::text[])
+      OR metadata->>'accountId' = ANY($1::text[])
+      OR metadata->>'buyerId' = ANY($1::text[])
+      OR metadata->>'vendorId' = ANY($1::text[])
+      OR metadata->>'entityId' = ANY($1::text[])
+      OR lower(metadata->>'recipientEmail') = ANY($2::text[])
+      OR metadata->>'recipientPhone' = ANY($3::text[])
+    )
+    ORDER BY sent_at DESC LIMIT $4 OFFSET $5
+  `;
+  const params = [accountIds, emails, phones, limit, offset];
+
+  const d1Conditions = [];
+  const d1Params = [];
+
+  if (accountIds.length > 0) {
+    const placeholders = accountIds.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...accountIds);
+    d1Conditions.push(`account_id IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.accountId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.buyerId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.vendorId') IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.entityId') IN (${placeholders})`);
+  }
+
+  if (emails.length > 0) {
+    const placeholders = emails.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...emails);
+    d1Conditions.push(`lower(recipient) IN (${placeholders})`);
+    d1Conditions.push(`lower(json_extract(metadata, '$.recipientEmail')) IN (${placeholders})`);
+  }
+
+  if (phones.length > 0) {
+    const placeholders = phones.map(() => `$${d1Params.length + 1}`).join(', ');
+    d1Params.push(...phones);
+    d1Conditions.push(`recipient IN (${placeholders})`);
+    d1Conditions.push(`json_extract(metadata, '$.recipientPhone') IN (${placeholders})`);
+  }
+
+  const d1LimitParam = `$${d1Params.length + 1}`;
+  const d1OffsetParam = `$${d1Params.length + 2}`;
+  d1Params.push(limit, offset);
+
+  const d1Sql = `
+    SELECT * FROM payment_dues_communications 
+    WHERE (${d1Conditions.join(' OR ')})
+    ORDER BY sent_at DESC LIMIT ${d1LimitParam} OFFSET ${d1OffsetParam}
+  `;
+
   let result;
   try {
-    result = await pool.query(sql, params, { d1: true, d1Text: sql });
+    result = await pool.query(sql, params, { d1: true, d1Text: d1Sql, d1Params });
   } catch (error) {
     throwPersistenceUnavailable('communication history read', error);
   }
