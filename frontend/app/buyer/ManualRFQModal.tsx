@@ -1400,11 +1400,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               // Empty string for null so a blank row shows blank
                               // rather than a zero the buyer never typed.
                               value={item.quantity ?? ''}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const qtyVal = e.target.value === '' ? null : Number(e.target.value);
                                 patchItem(item.id, {
-                                  quantity: e.target.value === '' ? null : Number(e.target.value),
-                                })
-                              }
+                                  quantity: qtyVal,
+                                  ...(qtyVal !== null && qtyVal > 0 && !item.unit ? { unit: 'Nos' } : {}),
+                                });
+                              }}
                               placeholder={MODAL.qtyPlaceholder}
                               className="mono w-28"
                             />

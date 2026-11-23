@@ -4131,6 +4131,13 @@ class StoreService {
     if (!vendor && pool.hasStorage()) {
       vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
     }
+    if (!vendor && ratingData && (ratingData.vendorEmail || ratingData.email)) {
+      const emailHint = String(ratingData.vendorEmail || ratingData.email).trim().toLowerCase();
+      vendor = this.getVendorById(emailHint, scopedBuyerId);
+      if (!vendor && pool.hasStorage()) {
+        vendor = await this.getVendorByIdWithDBFallback(emailHint, scopedBuyerId, { fresh: true });
+      }
+    }
     if (!vendor) return null;
     let revisionSource = vendor;
     let prepared;
