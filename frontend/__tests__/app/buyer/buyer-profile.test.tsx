@@ -49,8 +49,8 @@ const PROFILE: BuyerProfile = {
   companyName: 'Navin Chaudhary Enterprises',
   brandName: 'NC Heavy Engineering',
   organizationType: 'Public Limited',
-  panNumber: 'AAACL1234F',
-  gstNumber: '27AAACL1234F1Z5',
+  panNumber: 'AAACK3921P',
+  gstNumber: '27AAACK3921P1Z9',
   cinNumber: 'L28920MH1946PLC004768',
   website: 'https://www.example.com',
   annualTurnover: 'INR 1,80,000 Cr+',
@@ -189,8 +189,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Navin Chaudhary Enterprises')).toBeInTheDocument();
     expect(screen.getByDisplayValue('NC Heavy Engineering')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Public Limited Company')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('AAACL1234F')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('27AAACL1234F1Z5')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
     expect(screen.getByDisplayValue('L28920MH1946PLC004768')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://www.example.com')).toBeInTheDocument();
     expect(screen.getByDisplayValue('INR 1,80,000 Cr+')).toBeInTheDocument();
@@ -347,8 +347,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     fireEvent.change(screen.getByDisplayValue('Public Limited Company'), {
       target: { value: 'Private Limited' },
     });
-    fireEvent.change(screen.getByDisplayValue('AAACL1234F'), { target: { value: 'bbbcl1234f' } });
-    fireEvent.change(screen.getByDisplayValue('27AAACL1234F1Z5'), {
+    fireEvent.change(screen.getByDisplayValue('AAACK3921P'), { target: { value: 'bbbcl1234f' } });
+    fireEvent.change(screen.getByDisplayValue('27AAACK3921P1Z9'), {
       target: { value: '27bbbcl1234f1z5' },
     });
     fireEvent.change(screen.getByDisplayValue('L28920MH1946PLC004768'), {
@@ -391,8 +391,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
     expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('AAACL1234F'), { target: { value: 'NOPE' } });
-    fireEvent.change(screen.getByDisplayValue('27AAACL1234F1Z5'), { target: { value: 'NOPE' } });
+    fireEvent.change(screen.getByDisplayValue('AAACK3921P'), { target: { value: 'NOPE' } });
+    fireEvent.change(screen.getByDisplayValue('27AAACK3921P1Z9'), { target: { value: 'NOPE' } });
 
     expect(screen.getByText('Invalid Format')).toBeInTheDocument();
     expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
@@ -458,7 +458,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       expect.objectContaining({
         companyName: 'Navin Chaudhary Enterprises',
         organizationType: 'Public Limited',
-        panNumber: 'AAACL1234F',
+        panNumber: 'AAACK3921P',
         pincode: '400001',
         contactName: 'Navin Chaudhary',
       })
@@ -557,8 +557,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   it.each([
-    ['AAACL1234F', 'NOTAPAN', UI_STRINGS.buyerProfile.panInvalid],
-    ['27AAACL1234F1Z5', '27AAACL1234F1Z', UI_STRINGS.buyerProfile.gstInvalid],
+    ['AAACK3921P', 'NOTAPAN', UI_STRINGS.buyerProfile.panInvalid],
+    ['27AAACK3921P1Z9', '27AAACL1234F1Z', UI_STRINGS.buyerProfile.gstInvalid],
     ['L28920MH1946PLC004768', 'L28920MH1946PLC0047', UI_STRINGS.buyerProfile.cinInvalid],
     ['https://www.example.com', 'example.com', UI_STRINGS.buyerProfile.websiteInvalid],
     ['400001', '040001', UI_STRINGS.buyerProfile.pincodeInvalid],
@@ -874,11 +874,37 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
 
+  it('does not display dummy PAN details if the buyer account or profile has dummy or placeholder PAN', async () => {
+    const dummyPanProfile: BuyerProfile = {
+      ...PROFILE,
+      panNumber: 'AAACL1234F',
+    };
+    const mockAccount = {
+      organizationName: 'Dummy PAN Org',
+      panNumber: 'ABCDE1234F',
+      corporateEmail: 'dummy@buyer.com',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(dummyPanProfile);
+    await renderLoaded();
+
+    const panField = screen.getByText(/^PAN Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    expect(panField).toHaveValue('');
+    expect(screen.queryByDisplayValue('AAACL1234F')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('ABCDE1234F')).not.toBeInTheDocument();
+  });
+
   it('lets the buyer clear a backfilled PAN/GSTIN and leaves it blank, instead of snapping back on every keystroke', async () => {
     const mockAccount = {
       organizationName: 'Clearable Org',
-      gstin: '27AAACL1234F1Z5',
-      panNumber: 'AAACL1234F',
+      gstin: '27AAACK3921P1Z9',
+      panNumber: 'AAACK3921P',
       corporateEmail: 'clearable@buyer.com',
     };
 
