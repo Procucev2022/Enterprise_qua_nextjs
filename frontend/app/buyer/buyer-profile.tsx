@@ -44,8 +44,6 @@ import {
   MapPin,
   User,
   Search,
-  CheckSquare,
-  Square,
   ChevronDown,
   ChevronRight,
   Save,
@@ -1023,11 +1021,11 @@ export default function BuyerProfilePage() {
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-2.5 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
-                      <button type="button" className="text-indigo-600 dark:text-indigo-400">
-                        {isMajorSelected ? <CheckSquare size={16} /> : <Square size={16} className="text-slate-400" />}
-                      </button>
+                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3">
+                    <div 
+                      className="flex items-center gap-2.5 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => toggleMajorCategory(cat.majorCategory)}
+                    >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                           {cat.majorCategory}
@@ -1044,10 +1042,12 @@ export default function BuyerProfilePage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))
-                        }
-                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }));
+                        }}
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 transition-colors"
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cat.majorCategory}`}
                       >
                         {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </button>
