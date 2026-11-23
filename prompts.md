@@ -8622,3 +8622,23 @@ create the pr and pass all the covergaes don't merge in test-v3 pass all the gem
 ```text
 create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
 ```
+
+
+---
+
+### Prompt 396
+
+**Timestamp**: 2026-11-23T19:32:49+05:30
+
+```text
+Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** (`View Profile` modal).
+
+**Strict Constraint:** Do NOT delete or modify any backend code, API endpoints, database logic, or existing frontend handlers. Wrap the button in a boolean feature flag (e.g., `const ENABLE_VENDOR_EVALUATION = false;`) so it can be easily re-enabled later.
+
+### Vendor Directory — View Profile Modal
+- **Location:** Buyer Login → `Vendor Directory` → `View Profile` modal footer.
+- **Requirement:**
+  - Hide the **Request Vendor Evaluation** button from the modal footer (next to `Edit Profile` and `Mark Inactive`).
+  - Keep **Edit Profile**, **Mark Inactive**, and **Close** buttons visible and functioning normally.
+  - Do not remove any underlying API calls or handler functions—only conditionally hide the button from the frontend UI.
+```
