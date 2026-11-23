@@ -411,6 +411,9 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
       rawUnit = unitMatch[1].trim();
     }
   }
+  if (!rawUnit && (parsedQty !== null || rawQty !== null && rawQty !== undefined || clean(entity.itemName))) {
+    rawUnit = 'Nos';
+  }
 
   return {
     id: entity.id || `manual-item-${Date.now()}-${rowCounter}`,

@@ -1868,11 +1868,13 @@ export default function IngestionWizard({
                             min={1}
                             aria-label={MODAL.colQty}
                             value={item.quantity ?? ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const qtyVal = e.target.value === '' ? null : Number(e.target.value);
                               patchItem(item.id, {
-                                quantity: e.target.value === '' ? null : Number(e.target.value),
-                              })
-                            }
+                                quantity: qtyVal,
+                                ...(qtyVal !== null && qtyVal > 0 && !item.unit ? { unit: 'Nos' } : {}),
+                              });
+                            }}
                             placeholder={MODAL.qtyPlaceholder}
                             className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 mono font-semibold focus:ring-2 focus:ring-indigo-500"
                           />

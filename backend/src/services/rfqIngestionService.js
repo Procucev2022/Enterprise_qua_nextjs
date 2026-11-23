@@ -786,7 +786,7 @@ function normalizeLineItems(rawItems, options = {}) {
     if (!rawUnit) {
       rawUnit = extractUnitFromText(rawQty) || extractUnitFromText(raw.quantity) || extractUnitFromText(raw.qty) || extractUnitFromText(raw.itemName) || extractUnitFromText(raw.itemDescription) || '';
     }
-    const normalizedUnit = normalizeUnit(rawUnit) || (rawUnit || null);
+    const normalizedUnit = normalizeUnit(rawUnit) || (rawUnit || (normalizedQty !== null && normalizedQty > 0 ? 'Nos' : null));
 
     const normalized = {
       id: raw.id || `ent-ingested-${Date.now()}-${index}`,
