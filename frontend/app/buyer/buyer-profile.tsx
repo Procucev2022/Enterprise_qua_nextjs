@@ -21,6 +21,16 @@ import {
   derivePanFromGstin,
   parsePrimaryPlantLocation,
 } from '@/lib/validationSchemas';
+
+const BUYER_DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+export function isDummyBuyerPan(pan: unknown): boolean {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return BUYER_DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_PATTERN.test(clean);
+}
 import { logger } from '@/lib/logger';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
@@ -275,7 +285,7 @@ export default function BuyerProfilePage() {
       activeAcc?.registeredAddress ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
     const resolvedGst = (profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '').toUpperCase();
-    const resolvedPan =
+    const rawPan =
       (
         profile.panNumber ||
         activeAcc?.panNumber ||
@@ -283,6 +293,7 @@ export default function BuyerProfilePage() {
         derivePanFromGstin(resolvedGst) ||
         ''
       ).toUpperCase();
+    const resolvedPan = isDummyBuyerPan(rawPan) ? '' : rawPan;
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -364,12 +375,13 @@ export default function BuyerProfilePage() {
 
     const savedGst = (activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '').toUpperCase();
     setGstNumber((prev) => prev || savedGst || prev);
-    const savedPan = (
+    const rawSavedPan = (
       activeBuyerAccount.panNumber ||
       activeBuyerAccount.pan ||
       derivePanFromGstin(savedGst) ||
       ''
     ).toUpperCase();
+    const savedPan = isDummyBuyerPan(rawSavedPan) ? '' : rawSavedPan;
     setPanNumber((prev) => prev || savedPan || prev);
   }, [activeBuyerAccount, currentUserSession?.email, isLoaded]);
 
@@ -730,11 +742,13 @@ export default function BuyerProfilePage() {
                 <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
-                {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
-                ) : (
-                  <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
-                )}
+                {panNumber.trim() ? (
+                  isPanValid(panNumber) && !isDummyBuyerPan(panNumber) ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
+                  )
+                ) : null}
               </div>
               <input
                 type="text"
@@ -766,7 +780,7 @@ export default function BuyerProfilePage() {
                   setGstNumber(nextGst);
                   if (!panNumber.trim()) {
                     const derivedPan = derivePanFromGstin(nextGst);
-                    if (derivedPan) setPanNumber(derivedPan);
+                    if (derivedPan && !isDummyBuyerPan(derivedPan)) setPanNumber(derivedPan);
                   }
                 }}
                 maxLength={15}
