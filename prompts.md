@@ -8642,3 +8642,14 @@ Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** 
   - Keep **Edit Profile**, **Mark Inactive**, and **Close** buttons visible and functioning normally.
   - Do not remove any underlying API calls or handler functions—only conditionally hide the button from the frontend UI.
 ```
+
+
+---
+
+### Prompt 397
+
+**Timestamp**: 2026-11-23T19:35:11+05:30
+
+```text
+create the pr using this branch and pass all the coverages and gemini pr and ready to merge with test-v3 i can merge after that
+```
