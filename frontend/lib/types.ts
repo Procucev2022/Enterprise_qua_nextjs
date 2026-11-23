@@ -693,6 +693,7 @@ export interface RFQItem {
   /** Whether RFQ is pending manual vendor assignment by a Category Manager */
   needsCategoryManagerAssignment?: boolean;
   inquiries?: RFQInquiry[];
+  broadcasts?: RFQBroadcast[];
   quotesHidden?: boolean;
   quotesHiddenUntil?: string;
   quotesHiddenReason?: string;
@@ -746,6 +747,19 @@ export interface RFQInquiry {
   repliedAt?: string;
   repliedBy?: string;
   messages?: RFQChatMessage[];
+}
+
+export interface RFQBroadcast {
+  id: string;
+  rfqId: string;
+  rfqNumber: string;
+  title?: string;
+  message: string;
+  attachments?: RFQAttachment[];
+  authorName?: string;
+  authorRole?: 'buyer' | 'category_manager' | 'admin' | string;
+  authorEmail?: string | null;
+  createdAt: string;
 }
 
 /** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */

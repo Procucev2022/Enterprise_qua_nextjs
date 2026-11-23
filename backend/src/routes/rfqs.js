@@ -56,6 +56,13 @@ router.delete('/:id', authenticate, requireRole('buyer', 'category_manager', 'ad
 router.post('/:id/quotes', authenticate, rfqController.addQuote);
 router.post('/:id/inquiries', authenticate, rfqController.addInquiry);
 router.post('/:id/inquiries/:inquiryId/reply', authenticate, rfqController.replyInquiry);
+router.get('/:id/broadcasts', authenticate, rfqController.getBroadcasts);
+router.post(
+  '/:id/broadcasts',
+  authenticate,
+  requireRole('buyer', 'category_manager', 'admin'),
+  rfqController.addBroadcast
+);
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // Download / unlock an RFQ with free credit deduction check
