@@ -1120,7 +1120,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     }
   };
 
-  const handleDownloadBroadcastAttachment = async (att: RFQAttachment) => {
+  const handleDownloadAttachment = async (att: RFQAttachment) => {
     try {
       const token = authClient.getToken();
       const res = await fetch(rfqAttachmentUrl(att.id), {
@@ -1143,6 +1143,8 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       showToast('Download Error', 'An error occurred while downloading the attachment.', 'warning');
     }
   };
+
+  const handleDownloadBroadcastAttachment = handleDownloadAttachment;
 
   const handleInitiatePrivateReply = (bcast: RFQBroadcast) => {
     const refHeader = bcast.title ? `[Re Broadcast: "${bcast.title}"] ` : `[Re Broadcast: "${bcast.message.slice(0, 30)}..."] `;
@@ -2587,22 +2589,32 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       </span>
                     </span>
                   </span>
-                  {/* Fetched with the session's Authorization header and opened as a
-                      blob URL — a plain <a href> can't carry that header, and this
-                      endpoint requires it. The browser still previews a PDF or image
-                      inline from the blob exactly as it would from a direct URL. */}
-                  <button
-                    type="button"
-                    onClick={() => handleViewAttachment(file)}
-                    disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
-                    aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
-                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto disabled:opacity-60"
-                  >
-                    <ExternalLink size={11} />{' '}
-                    {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
-                      ? DETAILS.attachmentViewingAction
-                      : DETAILS.attachmentViewAction}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadAttachment(file)}
+                      aria-label={`Download ${file.fileName}`}
+                      className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1"
+                    >
+                      <Download size={11} /> Download
+                    </button>
+                    {/* Fetched with the session's Authorization header and opened as a
+                        blob URL — a plain <a href> can't carry that header, and this
+                        endpoint requires it. The browser still previews a PDF or image
+                        inline from the blob exactly as it would from a direct URL. */}
+                    <button
+                      type="button"
+                      onClick={() => handleViewAttachment(file)}
+                      disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
+                      aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
+                      className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 disabled:opacity-60"
+                    >
+                      <ExternalLink size={11} />{' '}
+                      {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
+                        ? DETAILS.attachmentViewingAction
+                        : DETAILS.attachmentViewAction}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>

@@ -3802,6 +3802,74 @@ function makeInquiry(overrides: any = {}): any {
       global.fetch = origFetch;
     });
 
+    it('exercises handleDownloadAttachment download button for supporting documents across Buyer, Category Manager, and Vendor views', async () => {
+      const origFetch = global.fetch;
+      const origCreate = window.URL.createObjectURL;
+      const origRevoke = window.URL.revokeObjectURL;
+
+      window.URL.createObjectURL = jest.fn(() => 'blob:mock-doc-download');
+      window.URL.revokeObjectURL = jest.fn();
+
+      const sampleRfq = buildRFQ({
+        attachments: [
+          { id: 'att-sup-1', fileName: 'Engineering_Specs.pdf', size: 2048, mimeType: 'application/pdf' } as any,
+        ],
+      });
+
+      // 1. Buyer view download success
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        blob: jest.fn().mockResolvedValue(new Blob(['pdf-bytes'], { type: 'application/pdf' })),
+      } as any);
+
+      renderDetails(sampleRfq);
+
+      const downloadBtn = screen.getByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(downloadBtn).toBeInTheDocument();
+      fireEvent.click(downloadBtn);
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+        expect(window.URL.createObjectURL).toHaveBeenCalled();
+      });
+
+      // 2. Category Manager view
+      renderDetails(sampleRfq);
+      const cmDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(cmDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(cmDownloadBtns[cmDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 3. Vendor view renders and allows download
+      renderDetails(sampleRfq, { isVendorView: true });
+      const vendorDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(vendorDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(vendorDownloadBtns[vendorDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 4. Download failure (ok: false)
+      global.fetch = jest.fn().mockResolvedValue({ ok: false } as any);
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Failed', 'Could not download the requested document.', 'warning');
+      });
+
+      // 5. Download exception
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network drop'));
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Error', 'An error occurred while downloading the attachment.', 'warning');
+      });
+
+      global.fetch = origFetch;
+      window.URL.createObjectURL = origCreate;
+      window.URL.revokeObjectURL = origRevoke;
+    });
+
     it('exercises line items table sorting by quantity, targetDate with nulls, and category', () => {
       renderDetails(
         buildRFQ({

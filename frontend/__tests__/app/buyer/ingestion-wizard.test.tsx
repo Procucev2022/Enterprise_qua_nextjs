@@ -3862,4 +3862,130 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
     });
   });
+
+  describe('IngestionWizard: Supporting Documents Field', () => {
+    beforeEach(() => {
+      mockAttach.mockReset();
+      mockCreateRFQ.mockReset();
+    });
+
+    it('renders the Supporting Documents upload field in Section 1 and handles upload, display, removal, and clearing', async () => {
+      mockAttach.mockResolvedValueOnce({
+        success: true,
+        data: {
+          id: 'doc-att-1',
+          fileName: 'Technical_Drawing_A1.pdf',
+          fileSize: 2048,
+          size: 2048,
+          mimeType: 'application/pdf',
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      renderWizard();
+
+      expect(screen.getByLabelText(/Supporting Documents/i)).toBeInTheDocument();
+      const uploadBtn = screen.getByRole('button', { name: /Upload Supporting Documents/i });
+      expect(uploadBtn).toBeInTheDocument();
+
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      expect(fileInput).toHaveAttribute('accept', '.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg');
+
+      const testFile = new File(['dummy-content'], 'Technical_Drawing_A1.pdf', { type: 'application/pdf' });
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [testFile] } });
+      });
+
+      expect(mockAttach).toHaveBeenCalledWith(testFile);
+      expect(await screen.findByText('Technical_Drawing_A1.pdf')).toBeInTheDocument();
+      expect(screen.getByText('2.0 KB')).toBeInTheDocument();
+
+      // Test remove button
+      const removeBtn = screen.getByRole('button', { name: /Remove Technical_Drawing_A1\.pdf/i });
+      fireEvent.click(removeBtn);
+      expect(screen.queryByText('Technical_Drawing_A1.pdf')).not.toBeInTheDocument();
+    });
+
+    it('rejects files exceeding the 15 MB file size limit', async () => {
+      renderWizard();
+
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      const largeFile = new File(['content'], 'Large_Document.pdf', { type: 'application/pdf' });
+      Object.defineProperty(largeFile, 'size', { value: 16 * 1024 * 1024 });
+
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [largeFile] } });
+      });
+
+      expect(mockAttach).not.toHaveBeenCalled();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds the 15 MB file size limit/i);
+    });
+
+    it('deduplicates and includes supporting documents in the createRFQ submission payload', async () => {
+      mockAttach.mockResolvedValueOnce({
+        success: true,
+        data: {
+          id: 'doc-att-sub',
+          fileName: 'Spec_Sheet.docx',
+          size: 4096,
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      mockCreateRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-new-1',
+          rfqNumber: 'RFQ-NEW-1',
+          title: 'Specs RFQ',
+          attachments: [{ id: 'doc-att-sub', fileName: 'Spec_Sheet.docx', size: 4096 }],
+        },
+      });
+
+      renderWizard();
+
+      // Attach file
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      const file = new File(['specs'], 'Spec_Sheet.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+      });
+
+      expect(await screen.findByText('Spec_Sheet.docx')).toBeInTheDocument();
+
+      // Fill required fields
+      fireEvent.change(screen.getByPlaceholderText(MODAL.titlePlaceholder), { target: { value: 'Specs RFQ' } });
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Bangalore, India' } });
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), { target: { value: '560001' } });
+      const targetDate = screen.getByLabelText(/Target Delivery Date/i);
+      fireEvent.change(targetDate, { target: { value: '2029-12-31' } });
+
+      // Line item
+      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), { target: { value: 'Mechanical Pump' } });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Nos' } });
+      completeRFQFields();
+
+      // Choose Mode 0
+      chooseSourcingMode('mode_0');
+
+      // Submit
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      await act(async () => {
+        fireEvent.click(dispatchBtn);
+      });
+
+      await waitFor(() => {
+        expect(mockCreateRFQ).toHaveBeenCalled();
+      });
+      const payload = mockCreateRFQ.mock.calls[0][0];
+      expect(payload.attachments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'doc-att-sub', fileName: 'Spec_Sheet.docx' }),
+        ])
+      );
+    });
+  });
 });
