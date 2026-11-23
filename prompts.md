@@ -8456,3 +8456,51 @@ ALL done?
 ```text
 continue
 ```
+
+
+---
+
+### Prompt 391
+
+**Timestamp**: 2026-11-23T14:05:00+05:30
+
+```text
+Refactor the **Action Center > Internal tasks** tab to fix the clipped toolbar dropdowns, enforce a strict single-line spreadsheet row layout, and ensure a working Edit option for every internal task.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Internal Tasks table, filter state, Create/Edit task modal, and update API endpoints. Do NOT duplicate components or rewrite working business logic.
+- **Do not break any existing UI or functionality**: Keep all KPI cards, Action Center tabs, checkboxes, sorting, filtering, `Send SMS / Email`, `Export CSV`, and delete actions 100% intact.
+
+---
+
+### 1. Fix Clipped `All Categories` & `All Users` Dropdowns in Toolbar
+- In the **Internal tasks** toolbar, the text inside the `All Categories` and `All Users` `<select>` dropdowns is currently clipped at the bottom.
+- Fix the `<select>` height, line-height, and vertical padding (e.g., `h-9 py-0 leading-normal` with clean flex alignment) so `All Categories` and `All Users` render centered and fully visible with zero clipping.
+- Also add proper left padding (e.g., `pl-9`) to the `Search by title, ID, entity...` input so the magnifying glass icon does not overlap the `S`.
+
+---
+
+### 2. Compact Every Internal Task Row to a Strict Single Line
+Update the **Internal tasks** table rows so every row is a compact, single-line Excel-style row (`whitespace-nowrap` with `truncate` where needed) — remove all stacked two-line sub-text:
+- **Task Subject & ID**: Remove the second line showing the task number/ID and sub-note (e.g., `TASK-2C79F40E72AD390B • Testing`). Display only the single-line task subject (with a hover tooltip showing the full subject, Task ID, and description).
+- **Category & Type**: Remove the stacked second line (`Credit Management` / category manager sub-label). Display only one single-line value in the cell; on cursor hover, show the category details in a hover tooltip (and keep the user/assignee cleanly in `Assigned To`).
+- **Due Date & Time**: Remove the stacked `—` above `Closed` / `No Due Date`. Display only the single-line date/time, `Closed`, or `No Due Date` on one line.
+- Keep `Done`, `Status`, `Related Entity`, `Priority`, `Assigned To`, and `Actions` vertically centered on that single line.
+
+---
+
+### 3. Working Edit Option for Internal Tasks
+- Ensure every row in the **Internal tasks** table has a working **Edit** button (pencil icon) in the `Actions` column.
+- Clicking **Edit** should open the existing Internal Task modal (reusing the Create Internal Task modal in edit mode) pre-populated with the task's current fields (subject, category/type, related entity, priority, assigned user, due date, description/notes).
+- Submitting the form should call the existing task update API/handler, persist the changes to the DB, close the modal (supporting click-outside and `Escape` to close), and immediately refresh the row in the table.
+```
+
+---
+
+### Prompt 392
+
+**Timestamp**: 2026-11-23T14:25:23+05:30
+
+```text
+raise the pr and with this branch and don't merge directly pass all the covergaes and gemini pr checck?
+```

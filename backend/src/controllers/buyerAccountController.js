@@ -111,7 +111,8 @@ async function resolveBuyerAccount(identifier, req = null) {
           { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
         );
         if (queryRes?.rows?.[0]?.raw) {
-          buyer = domainQueries.parseRaw(queryRes.rows[0].raw);
+          const raw = queryRes.rows[0].raw;
+          buyer = typeof raw === 'string' ? JSON.parse(raw) : raw;
         }
       }
     } catch {
@@ -832,10 +833,84 @@ async function getCreditHistory(req, res, next) {
 
     let transactions = [];
     try {
-      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(candidateIds, 100)) || [];
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(candidateIds, 200)) || [];
     } catch (dbErr) {
       logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
     }
+
+    // Reconcile buyer's RFQs:
+    // If RFQs exist that do not have a recorded credit transaction, synthesize and persist them
+    try {
+      const rfqs = (await domainQueries.getRFQsFromDB(buyer.id, 1000)) || [];
+      const existingRfqIds = new Set(
+        transactions.map((t) => t.rfq_id || t.rfqId).filter(Boolean)
+      );
+
+      const missingRfqs = rfqs.filter((r) => r && r.id && !existingRfqIds.has(r.id));
+      if (missingRfqs.length > 0) {
+        for (const rfq of missingRfqs) {
+          const rfqDate = rfq.createdAt || rfq.created_at || new Date().toISOString();
+          const syntheticTx = {
+            id: `ctx-rfq-${rfq.id}`,
+            buyer_id: buyer.id,
+            rfq_id: rfq.id,
+            transaction_type: 'Credits Consumed',
+            credit_source: rfq.sourcingMode ? String(rfq.sourcingMode).toUpperCase() : 'MODE_1',
+            credits_added: 0,
+            credits_consumed: 1,
+            previous_balance: remainingFree || 0,
+            updated_balance: remainingFree || 0,
+            status: 'COMPLETED',
+            description: `Credit consumed for RFQ ${rfq.rfqNumber || rfq.id}: ${rfq.title || rfq.category || 'Requisition'}`,
+            idempotency_key: `rfq-credit-reconcile-${buyer.id}-${rfq.id}`,
+            created_at: rfqDate,
+          };
+          transactions.push(syntheticTx);
+
+          if (pool.hasStorage()) {
+            pool.query(
+              `INSERT INTO buyer_credit_transactions (
+                 id, buyer_id, rfq_id, transaction_type, credit_source, credits_added, credits_consumed,
+                 previous_balance, updated_balance, status, description, idempotency_key, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                syntheticTx.id,
+                syntheticTx.buyer_id,
+                syntheticTx.rfq_id,
+                syntheticTx.transaction_type,
+                syntheticTx.credit_source,
+                0,
+                1,
+                syntheticTx.previous_balance,
+                syntheticTx.updated_balance,
+                syntheticTx.status,
+                syntheticTx.description,
+                syntheticTx.idempotency_key,
+                syntheticTx.created_at,
+              ],
+              {
+                d1: true,
+                d1Text: `INSERT OR IGNORE INTO buyer_credit_transactions (
+                  id, buyer_id, rfq_id, transaction_type, credit_source, credits_added, credits_consumed,
+                  previous_balance, updated_balance, status, description, idempotency_key, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              }
+            ).catch((err) => {
+              logger.warn('[buyerAccountController] Failed to backfill credit transaction for RFQ:', { rfqId: rfq.id, error: err?.message }, 'BUYER_ACCOUNT_CONTROLLER');
+            });
+          }
+        }
+      }
+    } catch (rfqErr) {
+      logger.warn('[buyerAccountController] Failed to reconcile RFQs for credit history:', { error: rfqErr?.message || rfqErr }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+
+    transactions.sort((a, b) => {
+      const dateA = new Date(a.created_at || a.createdAt || 0).getTime();
+      const dateB = new Date(b.created_at || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
 
     let totalAllocated = 0;
     let totalConsumed = 0;
@@ -844,8 +919,10 @@ async function getCreditHistory(req, res, next) {
 
     for (const t of transactions) {
       const added = Number(t.credits_added || t.creditsAdded || 0);
-      const consumed = Number(t.credits_consumed || t.creditsConsumed || 0);
+      const rawConsumed = Number(t.credits_consumed || t.creditsConsumed || 0);
       const type = t.transaction_type || t.transactionType || '';
+      const isRfqConsumption = type.includes('Consumed') || type.includes('RFQ_CREATE');
+      const consumed = rawConsumed > 0 ? rawConsumed : (isRfqConsumption ? 1 : 0);
 
       if (type.includes('Allocated') || type.includes('Addition')) {
         totalAllocated += added;
@@ -857,13 +934,24 @@ async function getCreditHistory(req, res, next) {
       if (type.includes('Adjustment') || type.includes('Refund')) {
         adjustedCredits += added;
       }
-      if (consumed > 0 || type.includes('Consumed') || type.includes('RFQ_CREATE')) {
+      if (consumed > 0 || isRfqConsumption) {
         totalConsumed += consumed;
       }
     }
 
-    if (transactions.length > 0 && totalAllocated === 0 && remainingFree !== null) {
+    if (transactions.length > 0 && remainingFree !== null && totalAllocated < remainingFree + totalConsumed) {
       totalAllocated = remainingFree + totalConsumed;
+    }
+
+    if (pool.hasStorage()) {
+      pool.query(
+        `UPDATE buyer_credit_transactions SET credits_consumed = 1 WHERE (transaction_type = 'RFQ_CREATE' OR transaction_type = 'Credits Consumed') AND credits_consumed = 0 AND buyer_id = $1`,
+        [buyer.id],
+        {
+          d1: true,
+          d1Text: `UPDATE buyer_credit_transactions SET credits_consumed = 1 WHERE (transaction_type = 'RFQ_CREATE' OR transaction_type = 'Credits Consumed') AND credits_consumed = 0 AND buyer_id = $1`,
+        }
+      ).catch(() => {});
     }
 
     const summary = {
@@ -876,21 +964,27 @@ async function getCreditHistory(req, res, next) {
       currentSubscriptionPlan: subscriptionPlan,
     };
 
-    const formattedTransactions = transactions.map((t) => ({
-      id: t.id,
-      transactionId: t.id,
-      transactionDate: t.created_at || t.createdAt,
-      transactionType: t.transaction_type || t.transactionType,
-      creditSource: t.credit_source || t.creditSource || null,
-      creditsAdded: numberOrNull(t.credits_added ?? t.creditsAdded),
-      creditsConsumed: numberOrNull(t.credits_consumed ?? t.creditsConsumed),
-      previousBalance: numberOrNull(t.previous_balance ?? t.previousBalance),
-      updatedBalance: numberOrNull(t.updated_balance ?? t.updatedBalance),
-      relatedRfqId: t.rfq_id || t.rfqId || null,
-      paymentReference: t.payment_reference || t.paymentReference || null,
-      status: t.status || null,
-      description: t.description || null,
-    }));
+    const formattedTransactions = transactions.map((t) => {
+      const type = t.transaction_type || t.transactionType || '';
+      const rawConsumed = numberOrNull(t.credits_consumed ?? t.creditsConsumed);
+      const isRfqConsumption = type.includes('Consumed') || type.includes('RFQ_CREATE');
+      const creditsConsumed = rawConsumed !== null && rawConsumed > 0 ? rawConsumed : (isRfqConsumption ? 1 : (rawConsumed ?? 0));
+      return {
+        id: t.id,
+        transactionId: t.id,
+        transactionDate: t.created_at || t.createdAt,
+        transactionType: t.transaction_type || t.transactionType,
+        creditSource: t.credit_source || t.creditSource || null,
+        creditsAdded: numberOrNull(t.credits_added ?? t.creditsAdded),
+        creditsConsumed,
+        previousBalance: numberOrNull(t.previous_balance ?? t.previousBalance),
+        updatedBalance: numberOrNull(t.updated_balance ?? t.updatedBalance),
+        relatedRfqId: t.rfq_id || t.rfqId || null,
+        paymentReference: t.payment_reference || t.paymentReference || null,
+        status: t.status || null,
+        description: t.description || null,
+      };
+    });
 
     return res.json({
       success: true,

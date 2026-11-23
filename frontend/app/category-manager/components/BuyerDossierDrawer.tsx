@@ -687,13 +687,6 @@ export default function BuyerDossierDrawer({
         setCreditSummary(res.summary || null);
         setCreditTransactions(res.transactions || []);
         setCreditHistoryAvailable(res.historyAvailable ?? (res.transactions || []).length > 0);
-        if (res.summary && typeof res.summary.remainingFreeCredits === 'number') {
-          appContext?.updateBuyerAccount(buyer.id, {
-            remainingFreeRFQs: res.summary.remainingFreeCredits,
-            creditBalance: res.summary.remainingFreeCredits,
-            available_credits: res.summary.remainingFreeCredits,
-          });
-        }
       } else {
         setCreditSummary(null);
         setCreditTransactions([]);
@@ -707,7 +700,7 @@ export default function BuyerDossierDrawer({
     } finally {
       setLoadingCredit(false);
     }
-  }, [canonicalBuyerId, buyer.id, strings.credit.loadFailure, appContext]);
+  }, [canonicalBuyerId, strings.credit.loadFailure]);
 
   useEffect(() => {
     if (dossierTab === 'credits' || isAddCreditModalOpen) {
@@ -1041,7 +1034,10 @@ export default function BuyerDossierDrawer({
           t.transactionId.toLowerCase().includes(creditSearch.toLowerCase()) ||
           (t.relatedRfqId && t.relatedRfqId.toLowerCase().includes(creditSearch.toLowerCase())) ||
           t.description.toLowerCase().includes(creditSearch.toLowerCase());
-        const matchType = creditTypeFilter === 'all' || t.transactionType === creditTypeFilter;
+        const matchType =
+          creditTypeFilter === 'all' ||
+          t.transactionType === creditTypeFilter ||
+          (creditTypeFilter === 'Credits Consumed' && t.transactionType === 'RFQ_CREATE');
         return matchSearch && matchType;
       })
       .sort((a, b) => {
@@ -1141,16 +1137,17 @@ export default function BuyerDossierDrawer({
     return list.filter((item) => {
       // Match active sub-tab
       let matchChannel = false;
+      const ch = (item.channel || '').toUpperCase();
       if (commSubTab === 'all') {
         matchChannel = true;
       } else if (commSubTab === 'email') {
-        matchChannel = item.channel === 'EMAIL' || item.channel === 'SYSTEM_NOTIFICATION';
+        matchChannel = ch === 'EMAIL' || ch === 'SYSTEM_NOTIFICATION';
       } else if (commSubTab === 'sms') {
-        matchChannel = item.channel === 'SMS';
+        matchChannel = ch === 'SMS';
       } else if (commSubTab === 'whatsapp') {
-        matchChannel = item.channel === 'WHATSAPP';
+        matchChannel = ch === 'WHATSAPP';
       } else if (commSubTab === 'call') {
-        matchChannel = item.channel === 'CALL';
+        matchChannel = ch === 'CALL';
       }
 
       if (!matchChannel) return false;
