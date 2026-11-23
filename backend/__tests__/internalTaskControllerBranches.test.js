@@ -551,4 +551,106 @@ describe('internalTaskController branches', () => {
       expect(res.status).toHaveBeenCalledWith(200);
     });
   });
+
+  describe('getRegistrations and handleRegistrationAction', () => {
+    const registrationQueries = require('../src/db/registrationQueries');
+    const storeService = require('../src/services/storeService');
+
+    test('getRegistrations handles validation error, date presets, and errors', async () => {
+      const res = mockRes();
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: false, errors: { limit: 'Invalid' } });
+      await internalTaskController.getRegistrations({ query: { limit: -1 } }, res);
+      expect(res.status).toHaveBeenCalledWith(400);
+
+      jest.spyOn(registrationQueries, 'getRegisteredClients').mockResolvedValue({ total: 1, clients: [], limit: 10, offset: 0 });
+      validationSchemas.validatePayload.mockReturnValueOnce({
+        isValid: true,
+        sanitizedData: { dateRangePreset: 'last10', limit: 10, offset: 0 },
+      });
+      await internalTaskController.getRegistrations({ query: {} }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      validationSchemas.validatePayload.mockReturnValueOnce({
+        isValid: true,
+        sanitizedData: { dateRangePreset: 'last30', limit: 10, offset: 0 },
+      });
+      await internalTaskController.getRegistrations({ query: {} }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      jest.spyOn(registrationQueries, 'getRegisteredClients').mockRejectedValue({ code: 'PERSISTENCE_UNAVAILABLE' });
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: {} });
+      await internalTaskController.getRegistrations({ query: {} }, res);
+      expect(res.status).toHaveBeenCalledWith(503);
+
+      jest.spyOn(registrationQueries, 'getRegisteredClients').mockRejectedValue(new Error('Boom'));
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: {} });
+      await internalTaskController.getRegistrations({ query: {} }, res);
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    test('handleRegistrationAction handles validation, not found, email sending and errors', async () => {
+      const res = mockRes();
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: false, errors: { action: 'Invalid' } });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {} }, res);
+      expect(res.status).toHaveBeenCalledWith(400);
+
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue(null);
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(404);
+
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: true });
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+        id: 'reg-1',
+        clientType: 'buyer',
+        userEmail: 'buyer@procucev.test',
+        userName: 'Buyer Name',
+        phoneNumber: '9876543210',
+        tempPassword: 'TempPassword123!',
+      });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockResolvedValue({ sent: false });
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      jest.spyOn(mailerService, 'sendBuyerCredentialsEmail').mockRejectedValue(new Error('SMTP down'));
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({
+        id: 'reg-1',
+        clientType: 'buyer',
+        userEmail: 'buyer@procucev.test',
+        userName: 'Buyer Name',
+      });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'reject' } });
+      jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockResolvedValue({ id: 'reg-1' });
+      await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+      expect(res.status).toHaveBeenCalledWith(200);
+
+      const errorCodes = [
+        [{ code: 'PERSISTENCE_UNAVAILABLE' }, 503],
+        [{ code: 'REGISTRATION_ALREADY_PROCESSED' }, 409],
+        [{ code: 'INVALID_REGISTRATION_ACTION' }, 400],
+        [new Error('Server error'), 500],
+      ];
+      for (const [err, expectedStatus] of errorCodes) {
+        validationSchemas.validatePayload.mockReturnValueOnce({ isValid: true, sanitizedData: { action: 'accept' } });
+        jest.spyOn(registrationQueries, 'updateClientRegistrationStatus').mockRejectedValue(err);
+        await internalTaskController.handleRegistrationAction({ params: { id: 'reg-1' }, body: {}, user: SESSION_USER }, res);
+        expect(res.status).toHaveBeenCalledWith(expectedStatus);
+      }
+    });
+  });
 });

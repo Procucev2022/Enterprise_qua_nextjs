@@ -8653,3 +8653,51 @@ Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** 
 ```text
 create the pr using this branch and pass all the coverages and gemini pr and ready to merge with test-v3 i can merge after that
 ```
+
+
+---
+
+### Prompt 398
+
+**Timestamp**: 2026-11-23T20:57:02+05:30
+
+```text
+Identify the root cause and fix the sync bug where linked tasks in **Action Center > Internal tasks** remain in `Open` state after their corresponding request in **Action Center > Approvals** is `Approved` or `Rejected`.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Trace the exact approval decision endpoint/service (`approve` / `reject`), the link between approval requests and internal tasks (`taskId` / `approvalRequestId`), and the status mapping in **Internal tasks**.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing approval handlers, internal task update methods, and state refresh hooks. Do NOT duplicate business logic.
+- **Do NOT break any existing UI or functionality**: Keep all existing approval flows (Buyer/Seller Credits, Discounts, etc.), email notifications, and Internal Tasks filters/actions 100% intact.
+
+---
+
+### 1. Auto-Close Linked Internal Task on Approve or Reject (Backend)
+- In the existing approval decision flow (covering **all** approval types — Buyer Credit Addition/Deletion, Seller Credit Addition/Deletion, Discounts, etc.):
+  - Whenever an approver clicks **Approve** OR **Reject**, automatically update the linked Internal Task in the database:
+    - Transition its status from `Open` (or `Pending Approval`) to `Closed` (matching the exact canonical closed status used by Internal Tasks).
+    - Mark the task as done (`Done` checkbox checked / `completedAt` set) so the Due Date column shows `Closed` just like manually completed tasks.
+  - Verify the foreign key / reference lookup (`approvalRequestId`, `taskId`, or metadata reference) so the linked task is always found and updated reliably.
+
+---
+
+### 2. Reconcile Already-Decided Approval Tasks & Sync Frontend State
+- **Frontend state refresh**: When an approval is approved or rejected in the **Approvals** tab, immediately refresh/invalidate the **Internal tasks** query/state and KPI counters (`NEW TASKS`, `PENDING APPROVAL`, `COMPLETED`, and the `Internal tasks` tab badge count) so the row flips from `Open` to `Closed` immediately without a manual reload.
+- **Existing stuck records**: Ensure any internal task linked to an approval request that is already `Approved` or `Rejected` (e.g., `REQ-060DAC704BE2`) resolves as `Closed` instead of staying stuck in `Open`.
+
+---
+
+### 3. Regression Tests (Prevent Future Recurrence)
+- Add automated tests asserting that:
+  1. Approving a request automatically transitions its linked Internal Task from `Open` to `Closed` (with `Done` checked) and updates the KPI counts.
+  2. Rejecting a request also automatically transitions its linked Internal Task from `Open` to `Closed` (with `Done` checked) and updates the KPI counts.
+```
+
+---
+
+### Prompt 399
+
+**Timestamp**: 2026-11-23T23:09:57+05:30
+
+```text
+contineu finish that?
+```

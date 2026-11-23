@@ -576,6 +576,36 @@ export default function InternalTasksDashboard() {
     prevTabRef.current = activeTab;
   }, [activeTab, loadTasks, loadSummary]);
 
+  // Handle sync when an approval decision (Approve / Reject) occurs in the Approvals tab
+  const handleApprovalDecision = useCallback(
+    (_approvalId?: string, action?: 'APPROVE' | 'REJECT', requestNumber?: string) => {
+      if (requestNumber) {
+        setTasks((prev) =>
+          prev.map((t) => {
+            const isLinked =
+              t.title?.includes(requestNumber) ||
+              t.raw?.approval_request_number === requestNumber ||
+              t.raw?.approvalRequestNumber === requestNumber ||
+              t.related_entity_id === requestNumber ||
+              t.related_entity_label === requestNumber;
+            if (isLinked) {
+              return {
+                ...t,
+                status: 'Closed',
+                approval_status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+                completed_at: t.completed_at || new Date().toISOString(),
+              };
+            }
+            return t;
+          })
+        );
+      }
+      void loadTasks();
+      void loadSummary();
+    },
+    [loadTasks, loadSummary]
+  );
+
   useEffect(() => {
     loadTasks();
   }, [loadTasks]);
@@ -1356,7 +1386,7 @@ export default function InternalTasksDashboard() {
       {activeTab === 'tickets' && <TicketsDashboard />}
       {activeTab === 'approvals' && (
         <div className="w-full min-w-0 max-w-full overflow-x-hidden">
-          <ApprovalsDashboard />
+          <ApprovalsDashboard onApprovalDecision={handleApprovalDecision} />
         </div>
       )}
       {activeTab === 'scorecard' && <ScorecardDashboard />}

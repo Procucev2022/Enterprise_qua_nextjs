@@ -1528,4 +1528,33 @@ describe('ApprovalsDashboard', () => {
     fireEvent.click(screen.getByRole('button', { name: strings.authModePassword }));
     expect(screen.getByPlaceholderText(strings.passwordPlaceholder)).toBeInTheDocument();
   });
+
+  it('triggers onApprovalDecision callback with approval details upon action completion', async () => {
+    const onApprovalDecision = jest.fn();
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { id: 'appr-1', status: 'Approved' },
+    });
+
+    render(<ApprovalsDashboard onApprovalDecision={onApprovalDecision} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    const approverInput = screen.getByLabelText(strings.approverLabel);
+    fireEvent.change(approverInput, { target: { value: 'Sudheer Sir' } });
+
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Secret123!' } });
+
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    expect(onApprovalDecision).toHaveBeenCalledWith('appr-101', 'APPROVE', 'REQ-CR-9041');
+  });
 });

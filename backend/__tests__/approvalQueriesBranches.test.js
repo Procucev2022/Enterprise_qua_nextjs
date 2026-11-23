@@ -16,6 +16,7 @@ const d1Bridge = require('../src/db/d1Bridge');
 const pool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
 const approvalQueries = require('../src/db/approvalQueries');
+const notifier = require('../src/services/actionCenterNotificationService');
 
 const APPROVER_SECRET = 'unit-test-approver-secret';
 const ACTOR = { uuid: 'approver-1', name: 'Srinu Sir', email: 'srinu@procure.test' };
@@ -129,6 +130,36 @@ describe('processApprovalAction on the D1 path', () => {
       expect.objectContaining({ approvalId: 'ma-1', requestNumber: 'MA-1' }),
       'MA-1'
     );
+  });
+
+  test('synchronizes linked internal tasks and notifies applicant on management approval', async () => {
+    const internalTaskQueries = require('../src/db/internalTaskQueries');
+    const syncSpy = jest.spyOn(internalTaskQueries, 'syncLinkedTasksForApproval').mockResolvedValue([]);
+    d1Bridge.batchD1.mockResolvedValueOnce([
+      { rows: [{ id: 'ma-1', request_number: 'MA-1', status: 'Approved', applicant_email: 'applicant@procure.test', value_impact: '10 Credits' }] },
+      { rows: [{ id: 'evt-1' }] },
+    ]);
+
+    try {
+      await approvalQueries.processApprovalAction('MA-1', { ...APPROVAL_INPUT, remarks: 'Looks solid.' }, ACTOR);
+      expect(syncSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'ma-1', request_number: 'MA-1' }),
+        'Approved',
+        ACTOR,
+        'Looks solid.'
+      );
+      expect(notifier.dispatchActionCenterCommunication).toHaveBeenCalledWith(
+        expect.objectContaining({
+          entityType: 'approval',
+          entityId: 'ma-1',
+          recipientEmail: 'applicant@procure.test',
+          subject: expect.stringContaining('Request MA-1 has been Approved'),
+        }),
+        ACTOR
+      );
+    } finally {
+      syncSpy.mockRestore();
+    }
   });
 });
 
@@ -371,5 +402,35 @@ describe('processApprovalAction on the generic approvals table', () => {
       expect.objectContaining({ recipientName: 'vendor@procure.test' }),
       ACTOR
     );
+  });
+
+  test('calls syncLinkedTasksForApproval on approval decision', async () => {
+    const internalTaskQueries = require('../src/db/internalTaskQueries');
+    const syncSpy = jest.spyOn(internalTaskQueries, 'syncLinkedTasksForApproval').mockResolvedValue([]);
+
+    try {
+      await approvalQueries.processApprovalAction('APR-1', { ...APPROVAL_INPUT, remarks: 'Looks solid.' }, ACTOR);
+      expect(syncSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'appr-1', request_number: 'APR-1' }),
+        'Approved',
+        ACTOR,
+        'Looks solid.'
+      );
+    } finally {
+      syncSpy.mockRestore();
+    }
+  });
+
+  test('survives internal task synchronization failure without interrupting approval return', async () => {
+    const internalTaskQueries = require('../src/db/internalTaskQueries');
+    const syncSpy = jest.spyOn(internalTaskQueries, 'syncLinkedTasksForApproval').mockRejectedValue(new Error('Sync failure'));
+
+    try {
+      const res = await approvalQueries.processApprovalAction('APR-1', APPROVAL_INPUT, ACTOR);
+      expect(res).toBeDefined();
+      expect(res.status).toBe('Approved');
+    } finally {
+      syncSpy.mockRestore();
+    }
   });
 });

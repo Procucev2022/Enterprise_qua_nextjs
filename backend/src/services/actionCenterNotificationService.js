@@ -415,7 +415,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         taskCategory: INTERNAL_TASK_CATEGORIES.COMMUNICATION,
         taskType: ACTION_CENTER_TASK_TYPE_BY_CHANNEL[channelUpper],
         priority: 'Low',
-        status: 'Completed',
+        status: 'Closed',
         assignedToUserId: actor.id || null,
         assignedToName: senderName,
         assignedTeam: 'Category Management',
