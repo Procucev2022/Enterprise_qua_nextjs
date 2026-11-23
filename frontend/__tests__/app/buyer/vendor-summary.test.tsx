@@ -1,6 +1,11 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
+import VendorSummary, {
+  isBuyerUploaded,
+  isProcucevVendor,
+  setEnableVendorRating,
+  setEnableVendorEvaluationRequest,
+} from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
@@ -92,7 +97,14 @@ function vendorRecord(overrides: Partial<VendorEntry>): VendorEntry {
 describe('app/buyer/vendor-summary.tsx', () => {
   const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
+  beforeAll(() => {
+    setEnableVendorRating(true);
+    setEnableVendorEvaluationRequest(true);
+  });
+
   afterAll(() => {
+    setEnableVendorRating(false);
+    setEnableVendorEvaluationRequest(false);
     logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
     logger.clearLogs();
   });
@@ -288,6 +300,49 @@ describe('app/buyer/vendor-summary.tsx', () => {
       };
     });
     mockFetchBuyerProfile.mockResolvedValue({ success: false, error: 'unavailable' });
+  });
+
+  describe('Vendor Directory: Feature Flags for Rating and Evaluation Actions', () => {
+    beforeEach(() => {
+      setEnableVendorRating(false);
+      setEnableVendorEvaluationRequest(false);
+    });
+
+    afterEach(() => {
+      setEnableVendorRating(true);
+      setEnableVendorEvaluationRequest(true);
+    });
+
+    it('hides Revise Rating button from Actions column in table when ENABLE_VENDOR_RATING is false', async () => {
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      expect(screen.queryByRole('button', { name: /Revise Rating/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Revise Rating/i)).not.toBeInTheDocument();
+    });
+
+    it('hides Request Vendor Evaluation button inside Revise Rating modal when ENABLE_VENDOR_EVALUATION_REQUEST is false', async () => {
+      setEnableVendorRating(true);
+      setEnableVendorEvaluationRequest(false);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      expect(reviseBtns.length).toBeGreaterThan(0);
+      fireEvent.click(reviseBtns[0]);
+
+      expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+    });
   });
 
   describe('helper classification functions', () => {

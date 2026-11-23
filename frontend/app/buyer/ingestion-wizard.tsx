@@ -18,6 +18,7 @@ import {
   subscribeVendorUploadHistory,
   createBackdropClickHandler,
 } from '@/lib/constants';
+import { FEATURE_FLAGS } from '@/lib/featureFlags';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
   createRFQ,
@@ -95,7 +96,13 @@ import {
   Search,
   ExternalLink,
   Zap,
+  Clock,
 } from 'lucide-react';
+
+export let ENABLE_MODE_3 = FEATURE_FLAGS.ENABLE_MODE_3;
+export const setEnableMode3 = (val: boolean) => {
+  ENABLE_MODE_3 = val;
+};
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const MODAL = UI_STRINGS.manualRfqModal;
@@ -661,7 +668,7 @@ export default function IngestionWizard({
   // Re-runs when the mode, category, or delivery location changes.
   const procucevV3FetchSeqRef = useRef(0);
   useEffect(() => {
-    if (form.sourcingMode !== 'mode_3') {
+    if (!ENABLE_MODE_3 || form.sourcingMode !== 'mode_3') {
       setProcucevV3Ranked([]);
       return;
     }
@@ -2006,6 +2013,7 @@ export default function IngestionWizard({
                   data-testid={`mode-option-${mode.id}`}
                 >
                   {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                  {mode.id === 'mode_3' && !ENABLE_MODE_3 ? ` (${UI_STRINGS.sourcingModeVersions.comingSoonBadge})` : ''}
                 </option>
               ))}
             </select>
@@ -2046,12 +2054,20 @@ export default function IngestionWizard({
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
                       {isSelected && <Check size={13} className="shrink-0 stroke-[2.5]" />}
                       <span>{label}</span>
-                      {!isEntitled && (
+                      {mode.id === 'mode_3' && !ENABLE_MODE_3 ? (
+                        <span
+                          data-testid="mode-3-coming-soon-badge"
+                          className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5 ml-1"
+                        >
+                          <Clock size={9} />
+                          {UI_STRINGS.sourcingModeVersions.comingSoonBadge}
+                        </span>
+                      ) : !isEntitled ? (
                         <span className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5">
                           <Sparkles size={9} />
                           Upgrade
                         </span>
-                      )}
+                      ) : null}
                     </span>
                   </button>
                 );
@@ -2860,8 +2876,34 @@ export default function IngestionWizard({
             </div>
           )}
 
+          {/* ── Mode 3: Coming Soon State (When Feature Flag Disabled) ── */}
+          {form.sourcingMode === 'mode_3' && !ENABLE_MODE_3 && (
+            <div
+              data-testid="mode-3-coming-soon-panel"
+              className="mt-5 rounded-2xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 p-6 text-center space-y-3 animate-fade-in shadow-xs"
+            >
+              <div className="mx-auto w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-xs">
+                <Clock size={24} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonTitle}
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonDescription}
+                </p>
+              </div>
+              <div className="pt-1 flex items-center justify-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                  <Sparkles size={13} />
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonTag}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol (Version 3) ── */}
-          {form.sourcingMode === 'mode_3' && (
+          {form.sourcingMode === 'mode_3' && ENABLE_MODE_3 && (
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
                 const allMyVendors = activeReconciledVendors.filter(isBuyerUploaded);
@@ -3248,8 +3290,13 @@ export default function IngestionWizard({
         ) : (
           <button
             onClick={handleSubmit}
-            disabled={isDispatching}
-            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
+            disabled={isDispatching || (form.sourcingMode === 'mode_3' && !ENABLE_MODE_3)}
+            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+            title={
+              form.sourcingMode === 'mode_3' && !ENABLE_MODE_3
+                ? UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip
+                : undefined
+            }
           >
             {isDispatching ? (
               <>

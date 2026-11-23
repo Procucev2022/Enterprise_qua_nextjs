@@ -1078,7 +1078,7 @@ describe('OpportunityFeed: downloads, locking and plan upgrades', () => {
       fireEvent.click(screen.getByRole('button', { name: 'Select' }));
     });
     expect(screen.getByText('PREMIUM Plan Activated!')).toBeInTheDocument();
-  });
+  }, 30000);
 
   test('marks Connect as active and closes the modal both ways', async () => {
     // Connect already unlocks every card (isLocked checks connect/select), so

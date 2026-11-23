@@ -8504,3 +8504,121 @@ Update the **Internal tasks** table rows so every row is a compact, single-line 
 ```text
 raise the pr and with this branch and don't merge directly pass all the covergaes and gemini pr checck?
 ```
+
+---
+
+### Prompt 393
+
+**Timestamp**: 2026-11-23T16:43:14+05:30
+
+```text
+Refactor the Buyer RFQ Console into a compact, single-line Excel-style table matching Vendor Performance and Action Center, with 100-buyers-per-page pagination, full ascending/descending sorting on every column (including date-wise), and drag-and-drop column reordering.
+
+### STRICT CONSTRAINTS — READ FIRST
+- Strictly reuse existing code, methods, and functionality: Reuse the existing Buyer Console data fetching, search/company/buyer filter state, KPI calculations, Review RFQ Details drill-down handler, and the Action Center shared table utilities (drag-to-rearrange columns, gear-icon column settings, sorting helpers, and pagination bar). Do NOT duplicate business logic or build parallel table/drag systems.
+- 100% Feature Parity — Every Existing Button & Data Point Must Stay Connected:
+  - Do NOT drop or disconnect any button, click handler, filter, or data field from the previous Buyer RFQ Console UI.
+  - Every existing element must be wired directly into the new layout:
+    - Top 3 KPI cards (Total Active Spend Sourced, Total Sourcing Volume, Avg Quotes Per RFQ) -> connected to the exact existing live KPI calculations.
+    - Search Buyer name or company..., All Companies, and All Buyers -> connected to the exact existing context/filter state and handlers.
+    - Every buyer card's data (Buyer Name, Company Name, Email, Phone, Sourcing Mode, Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ, Date) -> mapped cleanly into the table columns.
+    - Every buyer's Review RFQ Details > button -> wired to the exact existing click/drawer/navigation handler.
+- Do NOT break any existing UI or functionality: Keep all unrelated tabs, modals, popups, and workflows 100% intact.
+
+---
+
+### 1. Compact Top KPI Row & Remove Bulky Distribution List
+- Place the 3 KPI cards (Total Active Spend Sourced, Total Sourcing Volume, Avg Quotes Per RFQ) in a single slim horizontal row at the top.
+- Remove the tall Buyer Company Wise Spend & RFQ Volume Distribution list and the 2-column card grid so the main buyer table is immediately visible above the fold.
+
+---
+
+### 2. Single-Row Filter Toolbar (No Horizontal Overflow)
+- Unify the existing context filters and search bar into one single-row horizontal toolbar (flex items-center gap-2 w-full, no horizontal scrollbar):
+  1. Search input: flex-1 min-w-[200px] with pl-9 so the magnifying glass icon does not overlap the placeholder.
+  2. All Companies dropdown: w-[160px] shrink-0 (reusing existing company filter state).
+  3. All Buyers dropdown: w-[160px] shrink-0 (reusing existing buyer filter state).
+  4. Export button: Solid emerald green button (shrink-0 whitespace-nowrap), reusing the existing export utility.
+  5. Refresh icon button: w-9 h-9 shrink-0 (reusing existing reload handler).
+  6. Gear icon button: w-9 h-9 shrink-0 (reusing the Action Center column visibility/reset settings popover).
+
+---
+
+### 3. Strict Single-Line Excel-Style Table
+- Render every buyer on strictly one horizontal line (whitespace-nowrap, compact row height py-2, subtle row dividers) — zero stacked two-line cells. Use truncate with hover tooltips for long company names or emails.
+- Columns:
+  1. Buyer Name (single line with small initial avatar)
+  2. Company Name (single line, truncated with hover tooltip)
+  3. Email (single line, truncated with hover tooltip)
+  4. Phone (single line)
+  5. Sourcing Mode (compact pill badge)
+  6. Total RFQs (right-aligned numeric)
+  7. Active RFQs (right-aligned numeric)
+  8. Sourced Spend (right-aligned currency)
+  9. Avg Quotes / RFQ (right-aligned numeric)
+  10. Date (single line, for date-wise sorting)
+  11. Actions (compact single-line Review RFQ Details > button wired to the existing handler)
+
+---
+
+### 4. Full Column Sorting (Asc / Desc) & Drag-to-Rearrange Columns (Like Action Center)
+- Sort every column (Ascending & Descending):
+  - Make every data column header clickable with sort arrows (↑↓), supporting date-wise (Date), numeric (Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ), and alphabetical (Buyer Name, Company Name, Email, Phone, Sourcing Mode) ascending/descending sorting.
+- Drag-to-rearrange columns:
+  - Reuse the exact drag-and-drop column reordering and persistence logic already used in the Action Center tables so users can drag headers to rearrange columns (and toggle/reset columns via the Gear icon).
+
+---
+
+### 5. Exact DB Count & 100-Buyers-Per-Page Pagination
+- Page Size: Display 100 buyers per page (PAGE_SIZE = 100).
+- Remove the 500 cap: Fetch and display the exact live DB count (COUNT(*)) rather than capping at 500 or deriving totals from rows.length.
+- Pagination Bar: Dock the existing compact single-row pagination bar at the bottom of the table card (Showing 1–100 of <exact total> Buyers on the left; < Previous, active teal page numbers, Next > on the right).
+- Reset to Page 1 whenever search, company, buyer, or sort filters change, and smoothly scroll the table back to the top on page change.
+```
+
+
+---
+
+### Prompt 394
+
+**Timestamp**: 2026-11-23T16:05:44+05:30
+
+```text
+Implement the following frontend-only UI changes in the **Buyer Login** portal. 
+
+**Strict Constraint:** Do NOT delete, modify, or remove any backend code, API endpoints, database logic, or existing frontend handlers. Wrap hidden/disabled features in a simple boolean feature flag (e.g., `const ENABLE_MODE_3 = false;`, `const ENABLE_VENDOR_RATING = false;`) so they can be easily re-enabled later.
+
+### 1. AI RFQ Create — Disable Mode 3 Flow ("Coming Soon")
+- **Location:** Buyer Login → `AI RFQ Create` → `Select Sourcing Mode`
+- **Requirement:**
+  - Keep **Mode 3 – Autonomous AI + 360 Qualification** visible in the sourcing mode selector, but mark it as **Coming Soon** (e.g., add a "Coming Soon" badge or show a "Coming Soon" state/message when clicked).
+  - When a buyer selects Mode 3, do **not** render the active Mode 3 supplier roster/protocol flow, and disable the **Create & Dispatch RFQ** button (or prevent form submission) so Mode 3 RFQs cannot be dispatched.
+  - Ensure Mode 0, Mode 1, and Mode 2 continue working normally without any regression.
+
+### 2. Vendor Directory — Hide Rating & Evaluation Actions
+- **Location:** Buyer Login → `Vendor Directory`
+- **Requirement:**
+  - Hide the **Revise Rating** button from the **Actions** column in the Vendor Directory table.
+  - Inside the **Revise Supplier Performance Rating** modal, hide the **Request Vendor Evaluation** button (and keep the modal/rating code intact behind the feature flag).
+  - Do not remove any underlying API calls, state logic, or components—only conditionally hide them from the UI.
+```
+
+---
+
+### Prompt 395
+
+**Timestamp**: 2026-11-23T16:46:12+05:30
+
+```text
+create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
+```
+
+---
+
+### Prompt 394
+
+**Timestamp**: 2026-11-23T17:40:12+05:30
+
+```text
+create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
+```

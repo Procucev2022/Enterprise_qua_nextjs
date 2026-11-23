@@ -1,7 +1,12 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import IngestionWizard, { resolveConfirmationVendorCount, resolveOwnVendorCount, isV2OrV3SourcingMode } from '@/app/buyer/ingestion-wizard';
-import { AppProvider } from '@/lib/store';
+import IngestionWizard, {
+  resolveConfirmationVendorCount,
+  resolveOwnVendorCount,
+  isV2OrV3SourcingMode,
+  setEnableMode3,
+} from '@/app/buyer/ingestion-wizard';
+import { AppProvider, useApp } from '@/lib/store';
 import { entitledSourcingModes, VENDOR_UPLOAD_HISTORY_STORAGE_KEY } from '@/lib/constants';
 import { validatePincode } from '@/lib/validationSchemas';
 import {
@@ -1527,56 +1532,61 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
 
     it('displays the dynamically retrieved Procucev vendor count in the confirmation modal for Version 0, 2, and 3', async () => {
-      // Simulate backend response with dynamically retrieved procucevVendorCount: 6 for Version 3
-      mockCreateRFQ.mockResolvedValueOnce({
-        success: true,
-        rfq: {
-          ...mockCreatedRFQ(),
-          sourcingMode: 'mode_3',
-          procucevVendorCount: 6,
-        },
-      });
+      setEnableMode3(true);
+      try {
+        // Simulate backend response with dynamically retrieved procucevVendorCount: 6 for Version 3
+        mockCreateRFQ.mockResolvedValueOnce({
+          success: true,
+          rfq: {
+            ...mockCreatedRFQ(),
+            sourcingMode: 'mode_3',
+            procucevVendorCount: 6,
+          },
+        });
 
-      renderWizard();
-      chooseSourcingMode('mode_3');
+        renderWizard();
+        chooseSourcingMode('mode_3');
 
-      // Fill in required fields
-      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
-        target: { value: 'Navi Mumbai Plant' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
-        target: { value: '400701' },
-      });
+        // Fill in required fields
+        fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+          target: { value: 'Navi Mumbai Plant' },
+        });
+        fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+          target: { value: '400701' },
+        });
 
-      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
-        target: { value: 'Precision Industrial Valve' },
-      });
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
-        target: { value: '8' },
-      });
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
-        target: { value: 'Nos' },
-      });
+        const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+          target: { value: 'Precision Industrial Valve' },
+        });
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+          target: { value: '8' },
+        });
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+          target: { value: 'Nos' },
+        });
 
-      // Submit RFQ
-      completeRFQFields();
-      fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+        // Submit RFQ
+        completeRFQFields();
+        fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
-      await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
-      expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+        await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+        expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
 
-      // The dedicated "Procucev Vendors" box renders the server's 6 dynamically
-      // (NOT a hardcoded 'AI Blind').
-      expect(screen.queryByText('AI Blind')).not.toBeInTheDocument();
-      const procucevBox = screen.getByTestId('confirmation-procucev-vendor-box');
-      expect(procucevBox).toBeInTheDocument();
-      expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('6');
-      expect(within(procucevBox).getByText('Procucev Vendors')).toBeInTheDocument();
+        // The dedicated "Procucev Vendors" box renders the server's 6 dynamically
+        // (NOT a hardcoded 'AI Blind').
+        expect(screen.queryByText('AI Blind')).not.toBeInTheDocument();
+        const procucevBox = screen.getByTestId('confirmation-procucev-vendor-box');
+        expect(procucevBox).toBeInTheDocument();
+        expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('6');
+        expect(within(procucevBox).getByText('Procucev Vendors')).toBeInTheDocument();
 
-      // The "Your Invited Vendors" box counts only the buyer's own roster — none
-      // in this flow — so it reads 0 rather than duplicating the Procucev count.
-      expect(screen.getByTestId('confirmation-vendor-count')).toHaveTextContent('0');
+        // The "Your Invited Vendors" box counts only the buyer's own roster — none
+        // in this flow — so it reads 0 rather than duplicating the Procucev count.
+        expect(screen.getByTestId('confirmation-vendor-count')).toHaveTextContent('0');
+      } finally {
+        setEnableMode3(false);
+      }
     });
 
     it('shows the actual invited Procucev count for Version 0, not the directory-wide tally', async () => {
@@ -1737,6 +1747,13 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 });
 
 describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)', () => {
+  beforeAll(() => {
+    setEnableMode3(true);
+  });
+
+  afterAll(() => {
+    setEnableMode3(false);
+  });
   // Captured fresh per test so the fallback and restore use the genuine
   // jest.setup default fetch, never a leaked override from a prior describe.
   let realFetch: typeof global.fetch;
@@ -2300,12 +2317,17 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     expect(screen.queryByText('How QUA AI Categorizes Line Items & Matches Suppliers')).not.toBeInTheDocument();
 
     // Mode 3: click "AI Matching Criteria"
-    fireEvent.click(screen.getByTestId('mode-mode_3'));
-    await waitFor(() => expect(screen.getByRole('button', { name: /AI Matching Criteria/i })).toBeInTheDocument());
-    const aiBtn3 = screen.getByRole('button', { name: /AI Matching Criteria/i });
-    fireEvent.click(aiBtn3);
-    expect(screen.getByText(/How QUA AI Categorizes Line Items & Matches Suppliers/i)).toBeInTheDocument();
-    expect(screen.getByText('🛡️ Double-Blind Active')).toBeInTheDocument();
+    setEnableMode3(true);
+    try {
+      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      await waitFor(() => expect(screen.getByRole('button', { name: /AI Matching Criteria/i })).toBeInTheDocument());
+      const aiBtn3 = screen.getByRole('button', { name: /AI Matching Criteria/i });
+      fireEvent.click(aiBtn3);
+      expect(screen.getByText(/How QUA AI Categorizes Line Items & Matches Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText('🛡️ Double-Blind Active')).toBeInTheDocument();
+    } finally {
+      setEnableMode3(false);
+    }
   });
 
   it('covers Quota Exhausted Banner and actions', async () => {
@@ -2791,8 +2813,10 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         return (origFetch as any)(url, init);
       }) as any;
 
-      renderWizard();
-      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      setEnableMode3(true);
+      try {
+        renderWizard();
+        fireEvent.click(screen.getByTestId('mode-mode_3'));
 
       fireEvent.change(screen.getByPlaceholderText(MODAL.titlePlaceholder), { target: { value: 'Mode 3 Test' } });
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Navi Mumbai Plant' } });
@@ -2860,8 +2884,10 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       // Done button with onComplete
       const doneBtn = screen.getByRole('button', { name: /Done/i });
       fireEvent.click(doneBtn);
-
+    } finally {
+      setEnableMode3(false);
       global.fetch = origFetch;
+    }
     });
 
     it('covers classification onProgress callback and detectedMajor from line items', async () => {
@@ -3571,16 +3597,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         return (origFetch as any)(url, init);
       }) as any;
 
-      renderWizard();
-      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      setEnableMode3(true);
+      try {
+        renderWizard();
+        fireEvent.click(screen.getByTestId('mode-mode_3'));
 
       // Verify line 2809/2814/2820 render
       await waitFor(() => {
         expect(screen.getByText('No ID Vendor')).toBeInTheDocument();
         expect(screen.getByText('General Industrial')).toBeInTheDocument();
       });
-
+    } finally {
+      setEnableMode3(false);
       global.fetch = origFetch;
+    }
     });
 
     it('covers confirmation modal sourcingMode variants, title fallbacks, and button actions (lines 3270-3388)', async () => {
@@ -3693,6 +3723,7 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
     ];
     localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(uploadBatches));
 
+    setEnableMode3(true);
     try {
       renderWizard();
 
@@ -3723,6 +3754,7 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       fireEvent(window, new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
       expect(await screen.findByText('Live Storage Vendor')).toBeInTheDocument();
     } finally {
+      setEnableMode3(false);
       localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     }
   });
@@ -3756,5 +3788,78 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       expect(screen.getByText(UI_STRINGS.rfqExtraction.dropZoneIdlePrompt)).toBeInTheDocument();
     });
     expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
+  });
+
+  describe('IngestionWizard: Mode 3 Coming Soon feature flag', () => {
+    beforeEach(() => {
+      setEnableMode3(false);
+    });
+    afterEach(() => {
+      setEnableMode3(false);
+    });
+
+    it('marks Mode 3 as Coming Soon in the sourcing mode selector and shows coming soon badge', () => {
+      renderWizard();
+      const btn3 = screen.getByTestId('sourcing-mode-btn-mode_3');
+      expect(btn3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.comingSoonBadge);
+      expect(screen.getByTestId('mode-3-coming-soon-badge')).toBeInTheDocument();
+
+      // Check native select option has coming soon
+      const opt3 = screen.getByTestId('mode-option-mode_3');
+      expect(opt3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.comingSoonBadge);
+    });
+
+    it('renders the Coming Soon state panel when Mode 3 is selected, does not render active roster, and disables Create & Dispatch RFQ', () => {
+      renderWizard();
+      const btn3 = screen.getByTestId('sourcing-mode-btn-mode_3');
+      fireEvent.click(btn3);
+      expect(btn3).toHaveAttribute('aria-checked', 'true');
+
+      // Does NOT render active Mode 3 supplier roster / protocol flow
+      expect(screen.queryByTestId('procucev-v3-panel')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Buyer Approved Suppliers \(Double-Blind Protocol\)/i)).not.toBeInTheDocument();
+
+      // Renders Coming Soon state panel
+      expect(screen.getByTestId('mode-3-coming-soon-panel')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.sourcingModeVersions.mode3ComingSoonTitle)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.sourcingModeVersions.mode3ComingSoonDescription)).toBeInTheDocument();
+
+      // Create & Dispatch RFQ button is disabled
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      expect(dispatchBtn).toBeDisabled();
+      expect(dispatchBtn).toHaveAttribute('title', UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip);
+    });
+
+    it('disables Create & Dispatch RFQ button and prevents form submission when Mode 3 is selected while disabled', () => {
+      renderWizard();
+      chooseSourcingMode('mode_3');
+
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      expect(dispatchBtn).toBeDisabled();
+      expect(dispatchBtn).toHaveAttribute('title', UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip);
+      expect(mockCreateRFQ).not.toHaveBeenCalled();
+    });
+
+    it('ensures Mode 0, Mode 1, and Mode 2 continue working normally without regression', () => {
+      renderWizard();
+
+      // Mode 0
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_0'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_0')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+
+      // Mode 1
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_1'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_1')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+
+      // Mode 2
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_2'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_2')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+    });
   });
 });

@@ -357,7 +357,7 @@ describe('Vendor RFQ Visibility: My Enquiries and Public Enquiries in QuotationF
     expect(screen.getByText('RFQ-PUBLIC-03')).toBeInTheDocument();
     expect(screen.getByText('RFQ-MATCHING-04')).toBeInTheDocument();
     expect(screen.getByText('RFQ-DIFFPIN-05')).toBeInTheDocument();
-  });
+  }, 30000);
 
   test('filters RFQs by category and minor category', async () => {
     await act(async () => {

@@ -2648,6 +2648,14 @@ export const UI_STRINGS = {
     mode_1: 'Mode 1 – Internal Vendors',
     mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
     mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
+    comingSoonBadge: 'Coming Soon',
+    mode3ComingSoonTitle: 'Mode 3: Autonomous AI + 360° Qualification — Coming Soon',
+    mode3ComingSoonDescription:
+      'Autonomous AI sourcing and double-blind 360° qualification protocol is currently under final calibration and will be available soon. Please select Mode 0, Mode 1, or Mode 2 to proceed with dispatching your RFQ.',
+    mode3ComingSoonTag: 'Launching in upcoming release',
+    mode3DisabledButtonTooltip: 'Mode 3 is coming soon. Please select Mode 0, Mode 1, or Mode 2 to dispatch.',
+    mode3SubmitBlockedTitle: 'Mode 3 Coming Soon',
+    mode3SubmitBlockedDesc: 'Mode 3 Sourcing is coming soon. Please select Mode 0, Mode 1, or Mode 2 to dispatch your RFQ.',
   },
 
   vendorSubscriptionModal: {
@@ -3988,6 +3996,24 @@ export const UI_STRINGS = {
     ocrEvaluatedLabel: 'OCR & 360° Evaluated',
     activeVendorLabel: 'Active',
     inactiveVendorLabel: 'Inactive',
+  },
+
+  buyerConsole: {
+    kpiSpendTitle: 'Total Active Spend Sourced',
+    kpiVolumeTitle: 'Total Sourcing Volume',
+    kpiAvgQuotesTitle: 'Avg Quotes Per RFQ',
+    rfqsLiveSuffix: 'RFQs Live',
+    searchPlaceholder: 'Search Buyer name or company...',
+    allCompanies: 'All Companies',
+    allBuyers: 'All Buyers',
+    exportBtn: 'Export',
+    refreshBtn: 'Refresh',
+    columnSettingsBtn: 'Column Settings',
+    noBuyersFound: 'No buyer accounts found matching your query.',
+    showingPagination: 'Showing {start}–{end} of {total} Buyers',
+    showingEmptyPagination: 'Showing 0 of 0 Buyers',
+    prevPage: 'Previous',
+    nextPage: 'Next',
   },
 
 };
