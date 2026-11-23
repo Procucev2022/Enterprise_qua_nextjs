@@ -5818,8 +5818,75 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByRole('button', { name: /Edit Profile/i })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     });
+
+    it('renders horizontal scrolling container with custom scrollbar, min-width, and sticky header', () => {
+      const vendorMock = {
+        id: 'v-scroll-test',
+        name: 'Horizontal Scroll Vendor',
+        vendorCode: 'VND-SCROLL-01',
+        majorCategory: 'IT',
+        minorCategories: ['Laptops'],
+        source: 'buyer',
+        origin: 'Buyer Manual Empanelment',
+        contactPerson: 'Scroll Tester',
+        email: 'scroll@tester.test',
+        phone: '+91 9999999999',
+        location: 'Bengaluru, Karnataka',
+        score: 92,
+        rating: 4.6,
+        status: 'ACTIVE',
+        buyerId: 'buyer-current',
+        buyerEmail: 'current@corp.com',
+        active: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorMock],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: {
+          id: 'buyer-current',
+          corporateEmail: 'current@corp.com',
+          organizationName: 'Current Corp',
+        },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const tableContainer = screen.getByTestId('vendor-directory-table-container');
+      expect(tableContainer).toBeInTheDocument();
+      expect(tableContainer).toHaveClass('overflow-x-auto');
+      expect(tableContainer).toHaveClass('vendor-directory-table-scroll');
+      expect(tableContainer).toHaveAttribute('role', 'region');
+      expect(tableContainer).toHaveAttribute('aria-label', 'Vendor Directory Table');
+
+      const table = tableContainer.querySelector('table');
+      expect(table).toBeInTheDocument();
+      expect(table?.className).toContain('min-w-[2260px]');
+
+      const thead = table?.querySelector('thead');
+      expect(thead).toBeInTheDocument();
+      expect(thead?.className).toContain('sticky');
+      expect(thead?.className).toContain('top-0');
+    });
   });
 });
+
 
 
 
