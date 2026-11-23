@@ -2434,11 +2434,11 @@ export const UI_STRINGS = {
       duplicatesSkippedBannerTitle: '{count} Duplicate PO {rowWord} Skipped',
       duplicatesSkippedBannerHint:
         'The following duplicate PO records were detected and rejected so they will not be uploaded again:',
-      allDuplicatesBannerTitle: 'No New PO Records Imported ({count} Duplicates Skipped)',
+      allDuplicatesBannerTitle: 'Upload Unsuccessful: All PO Records Are Duplicates ({count} Duplicates Skipped)',
       allDuplicatesBannerHint:
-        'Every PO record in "{fileName}" was already uploaded previously or is duplicated within the file.',
+        'Upload cannot be successful because all records in "{fileName}" are duplicates of already uploaded PO data. Please upload a file with new data.',
       allDuplicatesError:
-        'All {count} PO records in "{fileName}" are duplicates of previously uploaded or earlier rows and were not accepted.',
+        'Upload cannot be successful because all {count} PO records in "{fileName}" are duplicates of already uploaded data. Please upload a file with new data.',
       duplicatesSummaryInline: ' ({count} duplicate(s) skipped)',
       duplicateRowSingular: 'Row',
       duplicateRowPlural: 'Rows',
@@ -2454,7 +2454,7 @@ export const UI_STRINGS = {
       duplicatesWarningToastBody:
         '{imported} new PO records loaded from {fileName}. {skipped} duplicate PO record(s) skipped.',
       allDuplicatesToastBody:
-        'All {skipped} PO records in {fileName} were already uploaded or duplicated and were rejected.',
+        'Upload cannot be successful because all {skipped} PO records in {fileName} are duplicates. Please upload a file with new data.',
       downloadDuplicatesCsv: 'Download Duplicate POs CSV',
       dismissDuplicatesAction: 'Clear Duplicate List',
     },

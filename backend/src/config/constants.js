@@ -3170,7 +3170,7 @@ const VENDOR_INGESTION_MESSAGES = {
   DUPLICATE_PO_EXISTING: 'Duplicate PO record ({summary}) — already uploaded previously',
   DUPLICATE_PO_FILE: 'Duplicate PO record ({summary}) — already present in uploaded file (row {firstRow})',
   PO_DUMP_ALL_DUPLICATES:
-    'All {count} PO line item(s) match previously uploaded or earlier duplicate PO records and were skipped.',
+    'Upload cannot be successful because all {count} PO line item(s) are duplicates of existing records. Please upload a file with new data.',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
