@@ -32,6 +32,7 @@ import {
   type TableColumnOption,
   type TableSortState,
 } from '@/lib/constants';
+import { FEATURE_FLAGS } from '@/lib/featureFlags';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
@@ -84,6 +85,15 @@ import {
 } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
+
+export let ENABLE_VENDOR_RATING = FEATURE_FLAGS.ENABLE_VENDOR_RATING;
+export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+export const setEnableVendorRating = (val: boolean) => {
+  ENABLE_VENDOR_RATING = val;
+};
+export const setEnableVendorEvaluationRequest = (val: boolean) => {
+  ENABLE_VENDOR_EVALUATION_REQUEST = val;
+};
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
@@ -2093,14 +2103,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             )}
 
             {/* Rate Vendor / AI Rating Button */}
-            <button
-              type="button"
-              onClick={() => openRevisionModal(vendor)}
-              className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-              title="Rate supplier manually or request vendor evaluation"
-            >
-              <Star size={11} className="fill-current" /> Revise Rating
-            </button>
+            {ENABLE_VENDOR_RATING && (
+              <button
+                type="button"
+                onClick={() => openRevisionModal(vendor)}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+                title="Rate supplier manually or request vendor evaluation"
+              >
+                <Star size={11} className="fill-current" /> Revise Rating
+              </button>
+            )}
 
             {showEvaluation ? (
               <button
@@ -3903,24 +3915,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
                         1. Rate Performance (Manual)
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRequestVendorEvaluation(vendor)}
-                        disabled={isRequestingEvaluation || isVendorInactive(vendor)}
-                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={
-                          isVendorInactive(vendor)
-                            ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
-                            : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
-                        }
-                      >
-                        {isRequestingEvaluation ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : (
-                          <Send size={11} />
-                        )}
-                        {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
-                      </button>
+                      {ENABLE_VENDOR_EVALUATION_REQUEST && (
+                        <button
+                          type="button"
+                          onClick={() => handleRequestVendorEvaluation(vendor)}
+                          disabled={isRequestingEvaluation || isVendorInactive(vendor)}
+                          className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={
+                            isVendorInactive(vendor)
+                              ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                              : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                          }
+                        >
+                          {isRequestingEvaluation ? (
+                            <Loader2 size={11} className="animate-spin" />
+                          ) : (
+                            <Send size={11} />
+                          )}
+                          {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                        </button>
+                      )}
                     </div>
 
                     {vendor.evaluationRequested && (
