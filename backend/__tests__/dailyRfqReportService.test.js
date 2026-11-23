@@ -112,9 +112,9 @@ describe('dailyRfqReportService Suite', () => {
     });
 
     test('uses DAILY_RFQ_REPORT_EMAILS env variable when set and strips excluded internal aliases', () => {
-      process.env.DAILY_RFQ_REPORT_EMAILS = 'gmtrfq@procucev.com, quateam@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com';
+      process.env.DAILY_RFQ_REPORT_EMAILS = 'gmtrfq@procucev.com, quateam@procucev.com, anshul.goel@procucev.com, veerababu.v@procucev.com, sudheer.kangala@procucev.com';
       const rec = dailyRfqReportService.resolveRecipients();
-      expect(rec).toEqual(['gmtrfq@procucev.com', 'anshul.goel@procucev.com', 'veerababu.v@procucev.com']);
+      expect(rec).toEqual(['quateam@procucev.com', 'veerababu.v@procucev.com', 'sudheer.kangala@procucev.com']);
     });
 
     test('DAILY_RFQ_REPORT_EMAILS with only whitespace yields no recipients', () => {

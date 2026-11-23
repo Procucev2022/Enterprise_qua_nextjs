@@ -939,7 +939,11 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     for (const key of keyMatches) counts.set(key, (counts.get(key) || 0) + 1);
     const duplicates = [...counts.entries()].filter(([, c]) => c > 1);
     expect(duplicates).toEqual([]);
-    expect(rawWrangler).not.toContain('quateam@procucev.com');
+    expect(rawWrangler).toContain('quateam@procucev.com');
+    expect(rawWrangler).toContain('sudheer.kangala@procucev.com');
+    expect(rawWrangler).not.toContain('anshul.goel@procucev.com');
+    expect(rawWrangler).not.toContain('gmtrfq@procucev.com');
+    expect(constantsSource).toContain('EXCLUDED_DAILY_REPORT_RECIPIENTS');
   });
 
   test('QUOTE_FAILURE_ALERT and VENDOR_QUOTE_SUPPORT_CC exclude quateam@procucev.com and default to gmtrfq, anshul, veerababu', () => {
