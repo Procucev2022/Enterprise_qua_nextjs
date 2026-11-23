@@ -3014,8 +3014,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       }
       expect(within(historyModal).getByText('Zenith Electricals')).toBeInTheDocument();
 
-      // Export Upload CSV button in batch details
-      fireEvent.click(screen.getByRole('button', { name: /Export Upload CSV/i }));
+      // Download button in batch details directly shows document records and analytics
+      expect(within(historyModal).getByText('Uploaded Document Records')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Total Suppliers')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Imported & Validated')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Duplicates Deduplicated')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Categories')).toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 1/i)).not.toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 2/i)).not.toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 3/i)).not.toBeInTheDocument();
+
+      fireEvent.click(within(historyModal).getByRole('button', { name: /^Download$/i }));
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
         expect.stringContaining('Procurement_Vendors_Q1.xlsx'),
@@ -3058,7 +3067,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       expect(screen.getByText(/Summary record maintained for Summary_Only_Batch.xlsx/i)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /Re-export Upload CSV/i }));
+      const downloadBtns = within(screen.getByTestId('upload-history-modal')).getAllByRole('button', { name: /^Download$/i });
+      fireEvent.click(downloadBtns[downloadBtns.length - 1]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
         expect.stringContaining('Summary_Only_Batch.xlsx'),

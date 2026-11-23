@@ -4162,12 +4162,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       {selectedHistoryBatch ? 'Vendor Template Upload Batch Details' : 'Vendor Template Upload History'}
                     </h3>
                     <span className="badge badge-indigo font-bold text-[10px]">
-                      {selectedHistoryBatch ? 'Full Step Audit' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
+                      {selectedHistoryBatch ? 'Batch Records' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
                     </span>
                   </div>
                   {selectedHistoryBatch && (
                     <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                      Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.
+                      Overview of uploaded supplier document records and batch ingestion metrics.
                     </p>
                   )}
                 </div>
@@ -4201,7 +4201,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <div className="overflow-y-auto flex-1 pr-1 space-y-4">
               {selectedHistoryBatch ? (
                 /* ========================================================================= */
-                /* DETAILED 4-STEP BREAKDOWN VIEW FOR A SELECTED BATCH                       */
+                /* DIRECT UPLOADED DOCUMENT RECORDS & ANALYTICS VIEW FOR SELECTED BATCH     */
                 /* ========================================================================= */
                 (() => {
                   const records = selectedHistoryBatch.records || [];
@@ -4209,6 +4209,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   const totalCount: number | string = selectedHistoryBatch.total ?? selectedHistoryBatch.imported ?? (records.length > 0 ? records.length : '—');
                   const importedCount: number | string = selectedHistoryBatch.imported ?? totalCount;
                   const duplicateCount: number | string = selectedHistoryBatch.duplicates ?? '—';
+                  const uniqueCategories = Array.from(new Set(records.map((r: any) => r.category).filter(Boolean)));
+                  const categoriesCount: number | string = records.length > 0
+                    ? (uniqueCategories.length > 0 ? uniqueCategories.length : 1)
+                    : (selectedHistoryBatch.category ? 1 : '—');
 
                   const filteredRecords = records.filter((r: any) => {
                     if (!batchSearchQuery.trim()) return true;
@@ -4256,81 +4260,52 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
                             className="btn btn-primary btn-xs font-bold text-xs flex items-center gap-1.5 shadow-sm"
                           >
-                            <Download size={13} /> Export Upload CSV
+                            <Download size={13} /> Download
                           </button>
                         </div>
                       </div>
 
-                      {/* STEP 1: Ingestion & Time Horizon Parameters */}
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                            1
-                          </span>
-                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Step 1: Upload &amp; Time Horizon Configuration
-                          </h4>
+                      {/* Immediate Analytics Cards */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-center space-y-0.5">
+                          <span className="text-[10px] uppercase font-bold text-slate-400">Total Suppliers</span>
+                          <div className="text-xl font-black text-slate-900 dark:text-white">
+                            {totalCount}
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium">Rows Ingested</span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Template File Source</span>
-                            <p className="font-bold text-slate-800 dark:text-white font-mono truncate flex items-center gap-1.5">
-                              <FileText size={13} className="text-indigo-500 shrink-0" />
-                              {selectedHistoryBatch.fileName || '—'}
-                            </p>
-                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Excel / Spreadsheet Dataset</p>
-                          </div>
 
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-0.5 bg-emerald-50/20">
+                          <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Imported &amp; Validated</span>
+                          <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
+                            {importedCount}
+                          </div>
+                          <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">Rows recorded in this batch</span>
                         </div>
-                      </div>
 
-                      {/* STEP 2: Processing & Data Pipeline Metrics */}
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                            2
-                          </span>
-                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Step 2: Processing &amp; Data Pipeline Metrics
-                          </h4>
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
+                          <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Duplicates Deduplicated</span>
+                          <div className="text-xl font-black text-amber-600 dark:text-amber-400">
+                            {duplicateCount}
+                          </div>
+                          <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-center space-y-0.5">
-                            <span className="text-[10px] uppercase font-bold text-slate-400">Total Suppliers</span>
-                            <div className="text-xl font-black text-slate-900 dark:text-white">
-                              {totalCount}
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-medium">Rows Ingested</span>
-                          </div>
 
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-0.5 bg-emerald-50/20">
-                            <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Imported &amp; Validated</span>
-                            <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
-                              {importedCount}
-                            </div>
-                            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">Rows recorded in this batch</span>
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-center space-y-0.5 bg-indigo-50/20">
+                          <span className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400">Categories</span>
+                          <div className="text-xl font-black text-indigo-600 dark:text-indigo-400">
+                            {categoriesCount}
                           </div>
-
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
-                            <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Duplicates Deduplicated</span>
-                            <div className="text-xl font-black text-amber-600 dark:text-amber-400">
-                              {duplicateCount}
-                            </div>
-                            <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
-                          </div>
-
+                          <span className="text-[10px] text-indigo-600/80 dark:text-indigo-400/80 font-medium">Identified Categories</span>
                         </div>
                       </div>
 
-                      {/* STEP 3: Supplier Directory Records Table */}
+                      {/* Uploaded Document Records Table */}
                       <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
                         <div className="flex items-center justify-between flex-wrap gap-2">
                           <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                              3
-                            </span>
                             <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                              Step 3: Uploaded Supplier Coordinates &amp; Directory Records
+                              Uploaded Document Records
                             </h4>
                             <span className="badge badge-indigo font-bold text-[10px]">
                               Showing {filteredRecords.length} of {records.length || totalCount}
@@ -4464,7 +4439,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                               onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
                               className="btn btn-primary btn-xs font-bold text-[11px] inline-flex items-center gap-1 mt-2 shadow-sm"
                             >
-                              <Download size={12} /> Re-export Upload CSV
+                              <Download size={12} /> Download
                             </button>
                           </div>
                         )}
