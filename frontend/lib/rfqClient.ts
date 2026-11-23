@@ -592,12 +592,27 @@ export async function fetchRFQList(
  * endpoint. The rows come back newest first.
  */
 export async function fetchAllRFQs(
-  options: { summary?: boolean; limit?: number } = {}
+  options: {
+    summary?: boolean;
+    limit?: number;
+    page?: number;
+    search?: string;
+    status?: string;
+    buyer?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {}
 ): Promise<RFQListResult> {
   const token = authClient.getToken();
   const params = new URLSearchParams();
   if (options.summary) params.set('summary', 'true');
   if (options.limit) params.set('limit', String(options.limit));
+  if (options.page) params.set('page', String(options.page));
+  if (options.search && options.search.trim()) params.set('search', options.search.trim());
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+  if (options.buyer && options.buyer !== 'all') params.set('buyer', options.buyer);
+  if (options.startDate) params.set('startDate', options.startDate);
+  if (options.endDate) params.set('endDate', options.endDate);
   const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
@@ -609,7 +624,16 @@ export async function fetchAllRFQs(
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem[]; error?: string } = {};
+  let body: {
+    success?: boolean;
+    data?: RFQItem[];
+    rfqs?: RFQItem[];
+    total?: number;
+    page?: number;
+    limit?: number;
+    totalPages?: number;
+    error?: string;
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -626,11 +650,25 @@ export async function fetchAllRFQs(
     }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
-  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+  const rawList = Array.isArray(body.data) ? body.data : (Array.isArray(body.rfqs) ? body.rfqs : null);
+  if (!res.ok || !body.success || !rawList) {
     return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
   }
 
-  return { success: true, rfqs: body.data };
+  const rfqs = rawList;
+  const total = typeof body.total === 'number' ? body.total : rfqs.length;
+  const page = typeof body.page === 'number' ? body.page : (options.page || 1);
+  const limit = typeof body.limit === 'number' ? body.limit : (options.limit || 100);
+  const totalPages = typeof body.totalPages === 'number' ? body.totalPages : Math.max(1, Math.ceil(total / limit));
+
+  return {
+    success: true,
+    rfqs,
+    total,
+    page,
+    limit,
+    totalPages,
+  };
 }
 
 /**

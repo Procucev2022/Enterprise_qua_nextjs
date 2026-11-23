@@ -375,7 +375,14 @@ export type RFQFetchResult =
 
 /** Outcome of listing this organisation's RFQs. An empty list is a success. */
 export type RFQListResult =
-  | { success: true; rfqs: RFQItem[] }
+  | {
+      success: true;
+      rfqs: RFQItem[];
+      total?: number;
+      page?: number;
+      limit?: number;
+      totalPages?: number;
+    }
   | { success: false; reason: RFQTransportFailure; error: string };
 
 /** Outcome of listing an RFQ's category-matched vendor invite candidates. */

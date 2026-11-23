@@ -4577,6 +4577,87 @@ class StoreService {
     return syncPromise;
   }
 
+  async getRFQsPage({
+    page = 1,
+    limit = 100,
+    search = '',
+    status = '',
+    buyer = '',
+    startDate = '',
+    endDate = '',
+  } = {}) {
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+
+    if (pool.hasStorage()) {
+      const { rows, total } = await domainQueries.getRFQsPageFromDB({
+        page: parsedPage,
+        limit: parsedLimit,
+        search,
+        status,
+        buyer,
+        startDate,
+        endDate,
+      });
+      const reconciled = rows.map((r) => this._reconcileRFQFollowUpStats(normalizeRFQForRead(r)));
+      return {
+        rows: reconciled,
+        total,
+        page: parsedPage,
+        limit: parsedLimit,
+        totalPages: Math.max(1, Math.ceil(total / parsedLimit)),
+      };
+    }
+
+    // In-memory fallback (used when authoritative storage is not connected or in unit tests)
+    const q = (search || '').trim().toLowerCase();
+    const trimmedStatus = (status || '').trim();
+    const trimmedBuyer = (buyer || '').trim();
+    let startMs = null;
+    let endMs = null;
+    if (startDate) {
+      try { startMs = new Date(`${startDate}T00:00:00`).getTime(); } catch {}
+    }
+    if (endDate) {
+      try { endMs = new Date(`${endDate}T23:59:59.999`).getTime(); } catch {}
+    }
+
+    const all = this.getRFQs().slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    const filtered = all.filter((r) => {
+      if (trimmedStatus && trimmedStatus !== 'all' && r.status !== trimmedStatus) return false;
+      if (trimmedBuyer && trimmedBuyer !== 'all') {
+        const matchesBuyer = (r.buyerAccountName === trimmedBuyer) || (r.buyerAccountId === trimmedBuyer) || (r.buyerId === trimmedBuyer);
+        if (!matchesBuyer) return false;
+      }
+      if (startMs || endMs) {
+        const createdMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+        if (!createdMs) return false;
+        if (startMs && createdMs < startMs) return false;
+        if (endMs && createdMs > endMs) return false;
+      }
+      if (!q) return true;
+      return (
+        (r.rfqNumber || '').toLowerCase().includes(q) ||
+        (r.title || '').toLowerCase().includes(q) ||
+        (r.category || '').toLowerCase().includes(q) ||
+        (r.buyerAccountName || '').toLowerCase().includes(q) ||
+        (r.quotes || []).some((qt) => (qt.vendorName || '').toLowerCase().includes(q)) ||
+        (r.assignedVendors || []).some((av) => (av.name || av.vendorName || '').toLowerCase().includes(q))
+      );
+    });
+
+    const total = filtered.length;
+    const start = (parsedPage - 1) * parsedLimit;
+    const pageRows = filtered.slice(start, start + parsedLimit);
+    return {
+      rows: pageRows,
+      total,
+      page: parsedPage,
+      limit: parsedLimit,
+      totalPages: Math.max(1, Math.ceil(total / parsedLimit)),
+    };
+  }
+
   async getRFQByIdAsync(id) {
     if (!pool.hasStorage()) return this.getRFQById(id);
 

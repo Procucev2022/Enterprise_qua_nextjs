@@ -2954,6 +2954,175 @@ describe('storeService comprehensive branch boost tests', () => {
       hasStorageSpy.mockRestore();
     });
   });
+
+  describe('getRFQsPage branch coverage', () => {
+    test('getRFQsPage with pool.hasStorage() true delegates to domainQueries and reconciles rows', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const rawRfq = {
+        id: 'rfq-db-1',
+        rfqNumber: 'RFQ-DB-1',
+        title: 'DB RFQ',
+        category: 'Electrical',
+        status: 'Quotes Pending',
+        quotes: [{ vendorId: 'v-1', vendorName: 'V1', submittedAt: '2026-01-01' }],
+        assignedVendors: [{ vendorId: 'v-1', vendorName: 'V1' }],
+      };
+      const getPageSpy = jest.spyOn(domainQueries, 'getRFQsPageFromDB').mockResolvedValue({
+        rows: [rawRfq],
+        total: 250,
+      });
+
+      const res = await storeService.getRFQsPage({
+        page: 2,
+        limit: 50,
+        search: 'db',
+        status: 'Quotes Pending',
+        buyer: 'Buyer Acc',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      expect(res.total).toBe(250);
+      expect(res.page).toBe(2);
+      expect(res.limit).toBe(50);
+      expect(res.totalPages).toBe(5);
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0].rfqNumber).toBe('RFQ-DB-1');
+      expect(getPageSpy).toHaveBeenCalledWith({
+        page: 2,
+        limit: 50,
+        search: 'db',
+        status: 'Quotes Pending',
+        buyer: 'Buyer Acc',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      hasStorageSpy.mockRestore();
+      getPageSpy.mockRestore();
+    });
+
+    test('getRFQsPage with pool.hasStorage() false filters in-memory records and handles pagination', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+      const rfq1 = {
+        id: 'rfq-mem-1',
+        rfqNumber: 'RFQ-MEM-001',
+        title: 'Copper Wires',
+        category: 'Wires',
+        status: 'Quotes Pending',
+        buyerAccountName: 'Buyer Alpha',
+        createdAt: '2026-05-10T10:00:00.000Z',
+        quotes: [{ vendorName: 'Wire Supplier Inc' }],
+        assignedVendors: [{ name: 'Wire Supplier Inc' }],
+      };
+      const rfq2 = {
+        id: 'rfq-mem-2',
+        rfqNumber: 'RFQ-MEM-002',
+        title: 'Steel Pipes',
+        category: 'Pipes',
+        status: 'Closed',
+        buyerAccountId: 'buyer-beta-id',
+        createdAt: '2026-06-15T12:00:00.000Z',
+        quotes: [],
+        assignedVendors: [{ vendorName: 'Steel Co' }],
+      };
+      const rfq3 = {
+        id: 'rfq-mem-3',
+        rfqNumber: 'RFQ-MEM-003',
+        title: 'Fiber Cable',
+        category: 'Wires',
+        status: 'PO Generated',
+        buyerId: 'buyer-gamma-id',
+        createdAt: '2026-07-20T15:00:00.000Z',
+        quotes: [],
+        assignedVendors: [],
+      };
+      const rfqNoDate = {
+        id: 'rfq-mem-4',
+        rfqNumber: 'RFQ-MEM-004',
+        title: 'No Date Item',
+        category: 'Misc',
+        status: 'Quotes Pending',
+        createdAt: null,
+      };
+
+      storeService.rfqs = [rfq1, rfq2, rfq3, rfqNoDate];
+
+      // 1. Default parameters (page 1, limit 100, no filters)
+      const resDefault = await storeService.getRFQsPage();
+      expect(resDefault.total).toBe(4);
+      expect(resDefault.page).toBe(1);
+      expect(resDefault.limit).toBe(100);
+      expect(resDefault.totalPages).toBe(1);
+
+      // 2. Filter by status
+      const resStatus = await storeService.getRFQsPage({ status: 'Closed' });
+      expect(resStatus.rows).toHaveLength(1);
+      expect(resStatus.rows[0].id).toBe('rfq-mem-2');
+
+      // 3. Filter by buyer (matching buyerAccountName, buyerAccountId, buyerId)
+      const resBuyerAlpha = await storeService.getRFQsPage({ buyer: 'Buyer Alpha' });
+      expect(resBuyerAlpha.rows).toHaveLength(1);
+      expect(resBuyerAlpha.rows[0].id).toBe('rfq-mem-1');
+
+      const resBuyerBeta = await storeService.getRFQsPage({ buyer: 'buyer-beta-id' });
+      expect(resBuyerBeta.rows).toHaveLength(1);
+      expect(resBuyerBeta.rows[0].id).toBe('rfq-mem-2');
+
+      const resBuyerGamma = await storeService.getRFQsPage({ buyer: 'buyer-gamma-id' });
+      expect(resBuyerGamma.rows).toHaveLength(1);
+      expect(resBuyerGamma.rows[0].id).toBe('rfq-mem-3');
+
+      // 4. Date filtering (start date, end date, out of range, missing createdAt)
+      const resDateRange = await storeService.getRFQsPage({
+        startDate: '2026-06-01',
+        endDate: '2026-06-30',
+      });
+      expect(resDateRange.rows).toHaveLength(1);
+      expect(resDateRange.rows[0].id).toBe('rfq-mem-2');
+
+      // 5. Search matching title, rfqNumber, category, quotes vendorName, assignedVendors
+      const resSearchNumber = await storeService.getRFQsPage({ search: 'mem-001' });
+      expect(resSearchNumber.rows).toHaveLength(1);
+      expect(resSearchNumber.rows[0].id).toBe('rfq-mem-1');
+
+      const resSearchTitle = await storeService.getRFQsPage({ search: 'steel' });
+      expect(resSearchTitle.rows).toHaveLength(1);
+      expect(resSearchTitle.rows[0].id).toBe('rfq-mem-2');
+
+      const resSearchCategory = await storeService.getRFQsPage({ search: 'wires' });
+      expect(resSearchCategory.rows).toHaveLength(2);
+
+      const resSearchQuoteVendor = await storeService.getRFQsPage({ search: 'wire supplier' });
+      expect(resSearchQuoteVendor.rows).toHaveLength(1);
+      expect(resSearchQuoteVendor.rows[0].id).toBe('rfq-mem-1');
+
+      const resSearchAssignedVendor = await storeService.getRFQsPage({ search: 'steel co' });
+      expect(resSearchAssignedVendor.rows).toHaveLength(1);
+      expect(resSearchAssignedVendor.rows[0].id).toBe('rfq-mem-2');
+
+      // 6. Pagination with slice: page 2, limit 2
+      const resPagination = await storeService.getRFQsPage({ page: 2, limit: 2 });
+      expect(resPagination.page).toBe(2);
+      expect(resPagination.limit).toBe(2);
+      expect(resPagination.total).toBe(4);
+      expect(resPagination.totalPages).toBe(2);
+      expect(resPagination.rows).toHaveLength(2);
+
+      // 7. Edge cases: invalid page & limit fallback, status='all', buyer='all'
+      const resEdge = await storeService.getRFQsPage({
+        page: 'invalid',
+        limit: 'invalid',
+        status: 'all',
+        buyer: 'all',
+      });
+      expect(resEdge.page).toBe(1);
+      expect(resEdge.limit).toBe(100);
+
+      hasStorageSpy.mockRestore();
+    });
+  });
 });
 
 
