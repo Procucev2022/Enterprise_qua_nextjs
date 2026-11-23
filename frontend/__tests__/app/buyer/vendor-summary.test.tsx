@@ -5539,7 +5539,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('vendor evaluation status in table and View Profile modal', () => {
-    it('shows REGISTERED / NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
+    it('shows NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
       const unevaluatedVendor = {
         id: 'v-uneval-test',
         name: 'Unrequested Supplier Corp',
@@ -5592,16 +5592,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // In the table, unevaluated vendor shows REGISTERED / NOT EVALUATED
-      expect(screen.getByText('REGISTERED / NOT EVALUATED')).toBeInTheDocument();
+      // In the table, unevaluated vendor shows NOT EVALUATED
+      expect(screen.getByText('NOT EVALUATED')).toBeInTheDocument();
 
       // Open View Profile modal on the unevaluated vendor
       const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
       fireEvent.click(viewButtons[0]);
 
-      // Inside View Profile modal: shows REGISTERED / NOT EVALUATED (1 in table, 1 in modal)
+      // Inside View Profile modal: shows NOT EVALUATED (1 in table, 1 in modal)
       expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
       expect(screen.getByText(UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorStatusControl.registrationStatusCardHeading)).toBeInTheDocument();
       expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.notEvaluatedStatus).length).toBe(2);
 
       // Close modal

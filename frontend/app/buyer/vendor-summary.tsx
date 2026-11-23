@@ -1016,9 +1016,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       ? VENDOR_ACTIVE_STATUSES.INACTIVE
       : hasEvalRequest
       ? 'PENDING EVALUATION'
-      : richer.status && richer.status !== 'PENDING EVALUATION'
+      : richer.status && richer.status !== 'PENDING EVALUATION' && richer.status !== 'REGISTERED / NOT EVALUATED'
       ? richer.status
-      : 'REGISTERED / NOT EVALUATED';
+      : 'NOT EVALUATED';
 
     setSelectedVendorForCrud({
       ...richer,
@@ -1494,9 +1494,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         ? VENDOR_ACTIVE_STATUSES.INACTIVE
         : hasEvaluationRequest
         ? 'PENDING EVALUATION'
-        : bv.status && bv.status !== 'PENDING EVALUATION'
+        : bv.status && bv.status !== 'PENDING EVALUATION' && bv.status !== 'REGISTERED / NOT EVALUATED'
         ? bv.status
-        : 'REGISTERED / NOT EVALUATED';
+        : 'NOT EVALUATED';
 
       return {
         ...bv,
@@ -1630,7 +1630,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       (selectedStatus === 'ACTIVE' && isVendorActive(v)) ||
       (selectedStatus === 'INACTIVE' && isVendorInactive(v)) ||
       (selectedStatus === 'EVALUATED' && v.evaluated) ||
-      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
+      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated && !v.evaluationRequested && !v.evaluationRequestedAt) ||
+      (selectedStatus === 'PENDING_EVALUATION' && (v.evaluationRequested || v.evaluationRequestedAt)) ||
       (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
       (selectedStatus === 'CONDITIONAL' && v.status === 'CONDITIONAL / UNDER REVIEW');
 
@@ -2024,7 +2025,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   ? 'LOCKED (PENDING BID)'
                   : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
                     ? 'BUYER ROSTER (NO EVAL)'
-                    : vendor.status}
+                    : vendor.status === 'REGISTERED / NOT EVALUATED'
+                    ? 'NOT EVALUATED'
+                    : (!vendor.evaluationRequested && !vendor.evaluationRequestedAt && vendor.status === 'PENDING EVALUATION')
+                    ? 'NOT EVALUATED'
+                    : vendor.status || 'NOT EVALUATED'}
             </span>
           )}
           {vendor.evaluationRequested && (
@@ -3102,7 +3107,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Modal Body */}
             <div className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Score & Key Highlights Bar */}
-              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 gap-2.5 text-center">
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
                   <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
@@ -3140,16 +3145,20 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <div
                     className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
                       ? 'text-rose-600 dark:text-rose-400'
+                      : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
+                      ? 'text-amber-600 dark:text-amber-400'
                       : 'text-emerald-600 dark:text-emerald-400'
                       }`}
                   >
                     {isVendorInactive(selectedVendorForCrud)
                       ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' && !selectedVendorForCrud.evaluationRequested && !selectedVendorForCrud.evaluationRequestedAt
+                      : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
+                      ? 'PENDING EVALUATION'
+                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' || selectedVendorForCrud.status === 'REGISTERED / NOT EVALUATED' || selectedVendorForCrud.status === 'NOT EVALUATED' || !selectedVendorForCrud.status
                         ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
-                        : selectedVendorForCrud.status || '—')}
+                        : selectedVendorForCrud.status)}
                   </div>
-                  {selectedVendorForCrud.evaluationRequested && (
+                  {(selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt) && (
                     <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
                       {selectedVendorForCrud.evaluationRequestedAt
                         ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
@@ -3158,6 +3167,22 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                         : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
                     </span>
                   )}
+                </div>
+
+                {/* Registration Status (Separately added field) */}
+                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
+                    {UI_STRINGS.vendorStatusControl.registrationStatusCardHeading || 'Registration Status'}
+                  </span>
+                  <div className={`font-bold text-[10.5px] mt-0.5 truncate ${
+                    Boolean(selectedVendorForCrud.isExistingInDatabase || selectedVendorForCrud.source === 'procucev_network' || selectedVendorForCrud.firstLoginCompleted || (selectedVendorForCrud as any).registered || (selectedVendorForCrud as any).isRegistered)
+                      ? 'text-indigo-600 dark:text-indigo-400'
+                      : 'text-slate-600 dark:text-gray-400'
+                  }`}>
+                    {Boolean(selectedVendorForCrud.isExistingInDatabase || selectedVendorForCrud.source === 'procucev_network' || selectedVendorForCrud.firstLoginCompleted || (selectedVendorForCrud as any).registered || (selectedVendorForCrud as any).isRegistered)
+                      ? (UI_STRINGS.vendorStatusControl.registeredBadge || 'Registered')
+                      : (UI_STRINGS.vendorStatusControl.notRegisteredBadge || 'Not Registered')}
+                  </div>
                 </div>
 
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
