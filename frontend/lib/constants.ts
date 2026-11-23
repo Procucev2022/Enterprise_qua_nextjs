@@ -1896,10 +1896,17 @@ export function isVendorActive(v: Partial<VendorEntry> | null | undefined): bool
  * missing name here, and a generic placeholder is used instead.
  */
 export function resolveVendorDisplayName(
-  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id'>> | null | undefined,
+  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id' | 'email'>> | null | undefined,
   genericLabel: string,
   ...fallbackCandidates: Array<string | null | undefined>
 ): string {
+  const vEmail = String(vendor?.email || '').trim().toLowerCase();
+  if (vEmail === 'bhumika@vaysinfotech.com') {
+    return 'Vays Infotech';
+  }
+  if (vEmail === 'helpdesk@vaysinfotech.com') {
+    return 'Vays Infotech 1';
+  }
   const codeOrId = [vendor?.vendorCode, vendor?.id].map((v) => String(v || '').trim()).filter(Boolean);
   const candidates = [vendor?.name, ...fallbackCandidates];
   for (const candidate of candidates) {

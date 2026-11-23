@@ -209,6 +209,16 @@ function parseVendorRaw(value) {
       vendor.gstin = resolvedGstin;
       vendor.gst = resolvedGstin;
     }
+    const email = String(vendor.email || '').trim().toLowerCase();
+    if (email === 'bhumika@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech';
+      vendor.brandName = 'Vays Infotech';
+      vendor.companyName = 'Vays Infotech';
+    } else if (email === 'helpdesk@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech 1';
+      vendor.brandName = 'Vays Infotech 1';
+      vendor.companyName = 'Vays Infotech 1';
+    }
   }
   return vendor;
 }
