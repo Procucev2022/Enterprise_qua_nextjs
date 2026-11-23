@@ -1859,7 +1859,9 @@ class StoreService {
       (sId) =>
         (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
         (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
-        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId)
+        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId) ||
+        (vendor.email && String(vendor.email).toLowerCase() === sId) ||
+        (vendor.addedByBuyerCompany && String(vendor.addedByBuyerCompany).toLowerCase() === sId)
     );
     return matches ? vendor : undefined;
   }

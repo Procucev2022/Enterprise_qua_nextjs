@@ -1679,18 +1679,45 @@ async function reviseRating(req, res, next) {
     }
     // Resolve buyer scope for buyer-owned vendors (v-hist-, v-buyer-, etc.)
     let buyerId = null;
+    let buyerScope = null;
+    let buyerCompany = 'Buyer';
     if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      const resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
       if (buyerAccount) {
         buyerId = buyerAccount.id;
       } else {
         // Fallback: try to find by sub or email directly
         buyerId = req.user.sub || req.user.email;
       }
+      buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
       logger.info(`Resolved buyer scope for rating revision`, { email: req.user.email, buyerId, buyerAccountExists: !!buyerAccount }, 'VENDOR_CONTROLLER');
     }
     logger.info(`Revising rating for vendor ${id}`, { id, ratingFields: Object.keys(ratingData || {}), buyerId }, 'VENDOR_CONTROLLER');
-    const result = await storeService.reviseVendorRatingDurably(id, ratingData, buyerId);
+    const scopedArg = buyerScope && buyerScope.length > 0 ? buyerScope : buyerId;
+    let result = await storeService.reviseVendorRatingDurably(id, ratingData, scopedArg);
+    if (!result && req.user.role === 'buyer') {
+      const globalVendor = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+      if (globalVendor) {
+        const uEmail = String(req.user.email || '').trim().toLowerCase();
+        const bCompany = String(buyerCompany || '').trim().toLowerCase();
+        const vEmail = String(globalVendor.email || '').trim().toLowerCase();
+        const vCompany = String(globalVendor.addedByBuyerCompany || '').trim().toLowerCase();
+        const isOwner =
+          (uEmail && vEmail === uEmail) ||
+          (bCompany && vCompany === bCompany) ||
+          checkVendorOwnershipWithContext(req.user, globalVendor, {
+            scopeSet: new Set((buyerScope || []).map((s) => String(s).toLowerCase())),
+            sId: String(buyerId || '').toLowerCase(),
+            uEmail,
+            orgName: bCompany,
+          });
+        if (isOwner) {
+          result = await storeService.reviseVendorRatingDurably(id, ratingData, 'all');
+        }
+      }
+    }
     if (!result) {
       logger.warn(`Vendor not found for rating revision: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1806,13 +1833,31 @@ async function resolveFallbackVendorRecord({
 
   const sanitizedVendorEmail = String(bodyData.vendorEmail || updates?.email || bodyData.email || '').trim().toLowerCase();
   const checkForeignOwnership = (foreign) => {
+    if (!foreign) return false;
+    const uEmail = String(user?.email || '').trim().toLowerCase();
+    const bCompany = String(buyerCompany || '').trim().toLowerCase();
+    const vEmail = String(foreign.email || '').trim().toLowerCase();
+    const vCompany = String(foreign.addedByBuyerCompany || '').trim().toLowerCase();
+    if (user?.role === 'buyer' && ((uEmail && vEmail && vEmail === uEmail) || (bCompany && vCompany && vCompany === bCompany))) {
+      return true;
+    }
     return checkVendorOwnershipWithContext(user, foreign, {
       scopeSet: new Set(buyerScope.map((s) => String(s).toLowerCase())),
       sId: String(resolvedOrgId || '').toLowerCase(),
-      uEmail: String(user.email || '').toLowerCase(),
+      uEmail: String(user?.email || '').toLowerCase(),
       orgName: String(buyerCompany).trim().toLowerCase(),
     });
   };
+
+  if (!sanitizedVendorEmail) {
+    const foreignCheckById = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+    if (foreignCheckById) {
+      if (checkForeignOwnership(foreignCheckById)) {
+        return { vendor: foreignCheckById, missingEmail: !foreignCheckById.email && requireEmail, missingCategory: false, promoted: false };
+      }
+      return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    }
+  }
 
   if (sanitizedVendorEmail) {
     vendor = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, buyerScope, { fresh: true });
@@ -2096,12 +2141,21 @@ async function requestEvaluation(req, res, next) {
 
     logger.info(`Sending evaluation request for vendor ${vendor.name} (${vendor.id}) by ${buyerCompany}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
 
-    const result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+    let result = await storeService.requestVendorEvaluationDurably(vendor.id, {
       buyerCompany,
       buyerName,
       buyerEmail,
       notes: bodyValidation.sanitizedData.notes || '',
     }, buyerScope);
+
+    if (!result) {
+      result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+        buyerCompany,
+        buyerName,
+        buyerEmail,
+        notes: bodyValidation.sanitizedData.notes || '',
+      }, 'all');
+    }
 
     return res.status(200).json({
       success: true,
