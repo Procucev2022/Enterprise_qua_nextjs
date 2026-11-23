@@ -5,6 +5,7 @@ import VendorSummary, {
   isProcucevVendor,
   setEnableVendorRating,
   setEnableVendorEvaluationRequest,
+  setEnableVendorEvaluation,
 } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -100,11 +101,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
   beforeAll(() => {
     setEnableVendorRating(true);
     setEnableVendorEvaluationRequest(true);
+    setEnableVendorEvaluation(true);
   });
 
   afterAll(() => {
     setEnableVendorRating(false);
     setEnableVendorEvaluationRequest(false);
+    setEnableVendorEvaluation(false);
     logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
     logger.clearLogs();
   });
@@ -312,11 +315,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
     beforeEach(() => {
       setEnableVendorRating(false);
       setEnableVendorEvaluationRequest(false);
+      setEnableVendorEvaluation(false);
     });
 
     afterEach(() => {
       setEnableVendorRating(true);
       setEnableVendorEvaluationRequest(true);
+      setEnableVendorEvaluation(true);
     });
 
     it('hides Revise Rating button from Actions column in table when ENABLE_VENDOR_RATING is false', async () => {
@@ -349,6 +354,49 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
       expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+    });
+
+    it('hides Request Vendor Evaluation button inside View Profile modal footer when ENABLE_VENDOR_EVALUATION is false, while keeping Edit Profile, Mark Inactive and Close visible', async () => {
+      setEnableVendorEvaluation(false);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      // View Profile modal is open
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      // Request Vendor Evaluation button should NOT be in the document
+      expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+
+      // Edit Profile, Close should be present and visible
+      expect(screen.getAllByRole('button', { name: /Edit Profile/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('button', { name: /Close/i }).length).toBeGreaterThan(0);
+    });
+
+    it('shows Request Vendor Evaluation button in View Profile modal footer when ENABLE_VENDOR_EVALUATION is true', async () => {
+      setEnableVendorEvaluation(true);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      expect(screen.getAllByRole('button', { name: /Request Vendor Evaluation/i }).length).toBeGreaterThan(0);
     });
   });
 
