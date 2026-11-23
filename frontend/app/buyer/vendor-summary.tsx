@@ -88,11 +88,15 @@ import { logger } from '@/lib/logger';
 
 export let ENABLE_VENDOR_RATING = FEATURE_FLAGS.ENABLE_VENDOR_RATING;
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+export let ENABLE_VENDOR_EVALUATION = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION;
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
 };
 export const setEnableVendorEvaluationRequest = (val: boolean) => {
   ENABLE_VENDOR_EVALUATION_REQUEST = val;
+};
+export const setEnableVendorEvaluation = (val: boolean) => {
+  ENABLE_VENDOR_EVALUATION = val;
 };
 
 interface VendorSummaryProps {
@@ -3395,24 +3399,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       : UI_STRINGS.vendorStatusControl.markInactiveButton}
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
-                  disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
-                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={
-                    isVendorInactive(selectedVendorForCrud)
-                      ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
-                      : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
-                  }
-                >
-                  {isRequestingEvaluation ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Send size={13} />
-                  )}
-                  {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
-                </button>
+                {ENABLE_VENDOR_EVALUATION && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
+                    disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
+                    className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={
+                      isVendorInactive(selectedVendorForCrud)
+                        ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                        : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                    }
+                  >
+                    {isRequestingEvaluation ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Send size={13} />
+                    )}
+                    {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                  </button>
+                )}
               </div>
 
               <button
