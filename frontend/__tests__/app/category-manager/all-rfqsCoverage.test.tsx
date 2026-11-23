@@ -202,7 +202,7 @@ describe('AllRFQsConsole load handling', () => {
     await renderLoaded([makeRfq({ id: 'ld01' })]);
 
     expect(mockFetch).toHaveBeenCalledTimes(1);
-    expect(mockFetch).toHaveBeenCalledWith({ summary: true, limit: 100 });
+    expect(mockFetch).toHaveBeenCalledWith(expect.objectContaining({ summary: true, limit: 100, page: 1 }));
   });
 
   it('disables the refresh button and withholds the counts until the first load settles', async () => {

@@ -1001,6 +1001,82 @@ describe('Domain queries (vendors + RFQs, Neon PostgreSQL)', () => {
       expect(pool.pool.query.mock.calls[0][1]).toEqual(['buyer-acc-2', 15]);
     });
 
+    test('getRFQsPageFromDB returns empty when pool has no storage', async () => {
+      pool.pool = null;
+      const res = await domainQueries.getRFQsPageFromDB({ page: 1, limit: 100 });
+      expect(res).toEqual({ rows: [], total: 0 });
+    });
+
+    test('getRFQsPageFromDB executes count query and paginated slice with filters', async () => {
+      const page1Rows = Array.from({ length: 100 }, (_, i) => ({ raw: { id: `rfq-${i + 1}`, rfqNumber: `RFQ-${i + 1}` } }));
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ total: 250 }] })
+          .mockResolvedValueOnce({ rows: page1Rows }),
+      };
+
+      const startIso = new Date('2026-01-01T00:00:00').toISOString();
+      const endIso = new Date('2026-12-31T23:59:59.999').toISOString();
+
+      const res1 = await domainQueries.getRFQsPageFromDB({
+        page: 1,
+        limit: 100,
+        search: 'cable',
+        status: 'Quotes Pending',
+        buyer: 'Buyer Co',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      expect(res1.total).toBe(250);
+      expect(res1.rows.length).toBe(100);
+      expect(res1.rows[0].id).toBe('rfq-1');
+
+      // Verify count query call
+      const [countSql, countParams] = pool.pool.query.mock.calls[0];
+      expect(countSql).toContain('SELECT COUNT(*)::int AS total FROM rfqs');
+      expect(countSql).toContain('status = $1');
+      expect(countSql).toContain("raw->>'buyerAccountName' = $2");
+      expect(countSql).toContain('LOWER(rfq_number) LIKE $3');
+      expect(countSql).toContain('created_at >= $4');
+      expect(countSql).toContain('created_at <= $5');
+      expect(countParams).toEqual([
+        'Quotes Pending',
+        'Buyer Co',
+        '%cable%',
+        startIso,
+        endIso,
+      ]);
+
+      // Verify data query call with LIMIT and OFFSET
+      const [dataSql, dataParams] = pool.pool.query.mock.calls[1];
+      expect(dataSql).toContain('ORDER BY created_at DESC LIMIT $6 OFFSET $7');
+      expect(dataParams).toEqual([
+        'Quotes Pending',
+        'Buyer Co',
+        '%cable%',
+        startIso,
+        endIso,
+        100, // LIMIT
+        0,   // OFFSET
+      ]);
+
+      // Test page 2 (OFFSET = 100)
+      const page2Rows = Array.from({ length: 100 }, (_, i) => ({ raw: { id: `rfq-${i + 101}`, rfqNumber: `RFQ-${i + 101}` } }));
+      pool.pool = {
+        query: jest.fn()
+          .mockResolvedValueOnce({ rows: [{ total: 250 }] })
+          .mockResolvedValueOnce({ rows: page2Rows }),
+      };
+
+      const res2 = await domainQueries.getRFQsPageFromDB({ page: 2, limit: 100 });
+      expect(res2.total).toBe(250);
+      expect(res2.rows.length).toBe(100);
+      expect(res2.rows[0].id).toBe('rfq-101');
+      const [, dataParams2] = pool.pool.query.mock.calls[1];
+      expect(dataParams2).toEqual([100, 100]); // LIMIT 100, OFFSET 100
+    });
+
     test('upsertRFQInDB serializes the RFQ and returns the stored raw row', async () => {
       const rfq = {
         id: 'rfq-1',

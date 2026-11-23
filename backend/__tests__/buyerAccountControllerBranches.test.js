@@ -1428,4 +1428,240 @@ describe('buyerAccountController branches', () => {
       expect(next).toHaveBeenCalledWith(err);
     });
   });
+
+  describe('getCreditHistory & RBAC Regression Gate', () => {
+    test('category_manager role is authorized to access and reconcile buyer credit history', async () => {
+      const buyer = buyerAccount({ id: 'buyer-reconcile-1', remainingFreeRFQs: 5 });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockResolvedValueOnce([
+        {
+          id: 'ctx-add-1',
+          transaction_type: 'Admin Credit Addition',
+          credits_added: 5,
+          credits_consumed: 0,
+          created_at: '2026-11-20T10:00:00Z',
+        },
+      ]);
+      jest.spyOn(domainQueries, 'getRFQsFromDB').mockResolvedValueOnce([
+        {
+          id: 'rfq-rec-1',
+          rfqNumber: 'RFQ-001',
+          title: 'Copper Wires',
+          sourcingMode: 'mode_1',
+          createdAt: '2026-11-21T09:00:00Z',
+        },
+        {
+          id: 'rfq-rec-2',
+          rfqNumber: 'RFQ-002',
+          title: 'Steel Fasteners',
+          sourcingMode: 'mode_0',
+          createdAt: '2026-11-21T10:00:00Z',
+        },
+      ]);
+
+      const res = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'buyer-reconcile-1' },
+        user: { role: 'category_manager', email: 'cm@procucev.test' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalled();
+      const payload = res.json.mock.calls[0][0];
+      expect(payload.success).toBe(true);
+      expect(payload.summary.totalCreditsConsumed).toBe(2);
+      expect(payload.summary.totalCreditsAllocated).toBe(7); // 5 remaining + 2 consumed
+      expect(payload.summary.remainingFreeCredits).toBe(5);
+      expect(payload.transactions).toHaveLength(3); // 1 addition + 2 reconciled RFQs
+    });
+
+    test('assertBuyerAccountRole rejects category_manager role for direct account updates', async () => {
+      const res = mockRes();
+      await buyerAccountController.updateBuyerAccount({
+        params: { id: 'buyer-cm-mod-1' },
+        user: { role: 'category_manager', email: 'cm@procucev.test' },
+        body: { organizationName: 'Updated By CM' },
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(403);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false, error: 'You do not have permission to modify buyer accounts.' })
+      );
+    });
+
+    test('getCreditHistory with storage available executes persistent reconciliation and update queries', async () => {
+      const buyer = buyerAccount({ id: 'buyer-storage-1', remainingFreeRFQs: 4 });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getRFQsFromDB').mockResolvedValueOnce([
+        { id: 'rfq-persist-1', rfqNumber: 'RFQ-P1', sourcingMode: 'mode_1', createdAt: '2026-11-22T10:00:00Z' },
+      ]);
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rows: [] });
+
+      const res = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'buyer-storage-1' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, res, jest.fn());
+
+      expect(querySpy).toHaveBeenCalled();
+      hasStorageSpy.mockRestore();
+      querySpy.mockRestore();
+    });
+
+    test('getCreditHistory handles storage query rejection in reconciliation catch block', async () => {
+      const buyer = buyerAccount({ id: 'buyer-storage-err-1', remainingFreeRFQs: 4 });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getRFQsFromDB').mockResolvedValueOnce([
+        { id: 'rfq-persist-2', rfqNumber: 'RFQ-P2', sourcingMode: 'mode_1', createdAt: '2026-11-22T10:00:00Z' },
+      ]);
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockRejectedValue(new Error('Persistence failed'));
+
+      const res = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'buyer-storage-err-1' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalled();
+      hasStorageSpy.mockRestore();
+      querySpy.mockRestore();
+    });
+
+    test('getCreditHistory catches and logs getBuyerCreditTransactionsFromDB and getRFQsFromDB errors', async () => {
+      const buyer = buyerAccount({ id: 'buyer-storage-err-2', remainingFreeRFQs: 4 });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      jest.spyOn(domainQueries, 'getBuyerCreditTransactionsFromDB').mockRejectedValueOnce(new Error('DB credit trans fail'));
+      jest.spyOn(domainQueries, 'getRFQsFromDB').mockRejectedValueOnce(new Error('DB RFQs fail'));
+
+      const res = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'buyer-storage-err-2' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalled();
+      const payload = res.json.mock.calls[0][0];
+      expect(payload.success).toBe(true);
+    });
+
+    test('requestCreditApproval returns 404 when buyer account is not found', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+      const res = mockRes();
+      await buyerAccountController.requestCreditApproval({
+        params: { id: 'non-existent-buyer' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+        body: {},
+      }, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(404);
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({ success: false })
+      );
+    });
+
+    test('getBuyerCommunications returns empty list when getCommunicationHistory throws', async () => {
+      const buyer = buyerAccount({ id: 'buyer-comm-err-1' });
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([buyer]);
+      const paymentDuesQueries = require('../src/db/paymentDuesQueries');
+      jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockRejectedValueOnce(new Error('Comms DB error'));
+
+      const res = mockRes();
+      await buyerAccountController.getBuyerCommunications({
+        params: { id: 'buyer-comm-err-1' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
+    });
+
+    test('resolveBuyerAccount exercises database query fallback, profile identity fallback, and error handling', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      // 1. Storage email fallback
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      jest.spyOn(domainQueries, 'getBuyerAccountByEmailFromDB').mockResolvedValueOnce({ id: 'buyer-email-found' });
+      const resEmail = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'test@found.com' },
+        user: { role: 'admin' },
+      }, resEmail, jest.fn());
+      expect(resEmail.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // 2. Pool query fallback with raw JSON row
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({
+        rows: [{ raw: JSON.stringify({ id: 'buyer-raw-query-found', corporateEmail: 'raw@found.com' }) }],
+      });
+      const resRaw = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'user-raw-id' },
+        user: { role: 'admin' },
+      }, resRaw, jest.fn());
+      expect(resRaw.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // 3. Pool query throws catch block
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Pool query failed'));
+      const resErr = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'user-pool-fail' },
+        user: { role: 'admin' },
+      }, resErr, jest.fn());
+
+      // 4. Buyer profile queries fallback
+      const buyerProfileQueries = require('../src/db/buyerProfileQueries');
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [] });
+      jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockResolvedValueOnce({
+        found: true,
+        profile: { userId: 'p-user-1', contactEmail: 'p@buyer.com', organizationId: 'org-p' },
+      });
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({ id: 'buyer-from-profile' });
+      const resProfile = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'p-user-1' },
+        user: { role: 'admin' },
+      }, resProfile, jest.fn());
+      expect(resProfile.json).toHaveBeenCalledWith(expect.objectContaining({ success: true }));
+
+      // 5. Buyer profile queries throws catch block
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({ rows: [] });
+      jest.spyOn(buyerProfileQueries, 'findProfileByIdentifier').mockRejectedValueOnce(new Error('Profile lookup error'));
+      const resProfileErr = mockRes();
+      await buyerAccountController.getCreditHistory({
+        params: { id: 'p-user-error' },
+        user: { role: 'admin' },
+      }, resProfileErr, jest.fn());
+
+      hasStorageSpy.mockRestore();
+    });
+
+    test('getBuyerUploadedVendors returns 404 for missing buyer and forwards exceptions to next', async () => {
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+      const res404 = mockRes();
+      await buyerAccountController.getBuyerUploadedVendors({
+        params: { id: 'missing-buyer-up' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, res404, jest.fn());
+
+      expect(res404.status).toHaveBeenCalledWith(404);
+
+      const nextErr = jest.fn();
+      jest.spyOn(storeService, 'getBuyerAccounts').mockImplementationOnce(() => {
+        throw new Error('Fatal lookup crash');
+      });
+      await buyerAccountController.getBuyerUploadedVendors({
+        params: { id: 'crash-buyer' },
+        user: { role: 'admin', email: 'admin@procucev.test' },
+      }, mockRes(), nextErr);
+
+      expect(nextErr).toHaveBeenCalledWith(expect.any(Error));
+    });
+  });
 });

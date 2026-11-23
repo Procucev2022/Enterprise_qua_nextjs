@@ -2210,6 +2210,115 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   return result.rows.map((row) => parseRaw(row.raw));
 }
 
+async function getRFQsPageFromDB({
+  page = 1,
+  limit = 100,
+  search = '',
+  status = '',
+  buyer = '',
+  startDate = '',
+  endDate = '',
+} = {}) {
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
+
+  const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+  const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+  const offset = (parsedPage - 1) * parsedLimit;
+
+  const pgConditions = [];
+  const d1Conditions = [];
+  const params = [];
+
+  const trimmedStatus = typeof status === 'string' ? status.trim() : '';
+  if (trimmedStatus && trimmedStatus !== 'all') {
+    params.push(trimmedStatus);
+    const p = params.length;
+    pgConditions.push(`(status = $${p} OR raw->>'status' = $${p})`);
+    d1Conditions.push(`(status = $${p} OR json_extract(raw, '$.status') = $${p})`);
+  }
+
+  const trimmedBuyer = typeof buyer === 'string' ? buyer.trim() : '';
+  if (trimmedBuyer && trimmedBuyer !== 'all') {
+    params.push(trimmedBuyer);
+    const p = params.length;
+    pgConditions.push(`(raw->>'buyerAccountName' = $${p} OR raw->>'buyerAccountId' = $${p} OR raw->>'buyerId' = $${p})`);
+    d1Conditions.push(`(json_extract(raw, '$.buyerAccountName') = $${p} OR json_extract(raw, '$.buyerAccountId') = $${p} OR json_extract(raw, '$.buyerId') = $${p})`);
+  }
+
+  const trimmedSearch = typeof search === 'string' ? search.trim().toLowerCase() : '';
+  if (trimmedSearch) {
+    params.push(`%${trimmedSearch}%`);
+    const p = params.length;
+    pgConditions.push(`(
+      LOWER(rfq_number) LIKE $${p}
+      OR LOWER(category) LIKE $${p}
+      OR LOWER(COALESCE(raw->>'title', '')) LIKE $${p}
+      OR LOWER(COALESCE(raw->>'buyerAccountName', '')) LIKE $${p}
+      OR LOWER(raw::text) LIKE $${p}
+    )`);
+    d1Conditions.push(`(
+      LOWER(rfq_number) LIKE $${p}
+      OR LOWER(category) LIKE $${p}
+      OR LOWER(COALESCE(json_extract(raw, '$.title'), '')) LIKE $${p}
+      OR LOWER(COALESCE(json_extract(raw, '$.buyerAccountName'), '')) LIKE $${p}
+      OR LOWER(raw) LIKE $${p}
+    )`);
+  }
+
+  if (startDate) {
+    try {
+      const startIso = new Date(`${startDate}T00:00:00`).toISOString();
+      params.push(startIso);
+      const p = params.length;
+      pgConditions.push(`created_at >= $${p}`);
+      d1Conditions.push(`created_at >= $${p}`);
+    } catch {
+      // Ignore unparseable start date
+    }
+  }
+
+  if (endDate) {
+    try {
+      const endIso = new Date(`${endDate}T23:59:59.999`).toISOString();
+      params.push(endIso);
+      const p = params.length;
+      pgConditions.push(`created_at <= $${p}`);
+      d1Conditions.push(`created_at <= $${p}`);
+    } catch {
+      // Ignore unparseable end date
+    }
+  }
+
+  const pgWhere = pgConditions.length > 0 ? `WHERE ${pgConditions.join(' AND ')}` : '';
+  const d1Where = d1Conditions.length > 0 ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+
+  const countSql = `SELECT COUNT(*)::int AS total FROM rfqs ${pgWhere}`.trim();
+  const d1CountSql = `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM rfqs ${d1Where}`.trim();
+
+  const countResult = await pool.query(
+    countSql,
+    params,
+    { d1: true, d1Text: d1CountSql }
+  );
+  const total = parseInt(countResult.rows[0]?.total || 0, 10);
+
+  const dataParams = [...params, parsedLimit, offset];
+  const limitIdx = dataParams.length - 1;
+  const offsetIdx = dataParams.length;
+
+  const dataSql = `SELECT raw FROM rfqs ${pgWhere} ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`.trim();
+  const d1DataSql = `SELECT raw FROM rfqs ${d1Where} ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`.trim();
+
+  const dataResult = await pool.query(
+    dataSql,
+    dataParams,
+    { d1: true, d1Text: d1DataSql }
+  );
+
+  const rows = (dataResult && dataResult.rows) ? dataResult.rows.map((row) => parseRaw(row.raw)) : [];
+  return { rows, total };
+}
+
 async function getRFQsByBuyerFromDB(buyerAccountId, limit = 50) {
   return getRFQsFromDB(buyerAccountId, limit);
 }
@@ -4226,4 +4335,5 @@ module.exports = {
   createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
+  getRFQsPageFromDB,
 };

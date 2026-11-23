@@ -3495,4 +3495,207 @@ describe('Action Center & Internal Tasks Redesign', () => {
     fireEvent.click(dialog);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
+
+  test('enforces unclipped toolbar selects, single-line rows, and working edit task flow', async () => {
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [mockTasks[0], mockTasks[1]],
+      total: 2,
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
+      ...mockTasks[0],
+      title: 'Audit Mechanical Spares RFQ Quotes (Updated)',
+      priority: 'Critical',
+      status: 'In Progress',
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    });
+
+    // 1. Toolbar elements verification: unclipped selects, pl-9 search input, h-9 height
+    const categorySelect = screen.getByTestId('toolbar-category-select');
+    expect(categorySelect).toHaveClass('h-9');
+    expect(categorySelect).toHaveClass('py-0');
+    expect(categorySelect).toHaveClass('leading-normal');
+
+    const assigneeSelect = screen.getByTestId('toolbar-assignee-select');
+    expect(assigneeSelect).toHaveClass('h-9');
+    expect(assigneeSelect).toHaveClass('py-0');
+    expect(assigneeSelect).toHaveClass('leading-normal');
+
+    const searchInput = screen.getByPlaceholderText('Search by title, ID, entity...');
+    expect(searchInput).toHaveClass('pl-9');
+    expect(searchInput).toHaveClass('h-9');
+
+    expect(screen.getByTestId('toolbar-create-task-btn')).toHaveClass('h-9');
+    expect(screen.getByTestId('toolbar-send-sms-email-btn')).toHaveClass('h-9');
+    expect(screen.getByTestId('toolbar-filter-btn')).toHaveClass('h-9');
+    expect(screen.getByTestId('toolbar-export-csv-btn')).toHaveClass('h-9');
+
+    // 2. Compact single-line table row verification
+    const row1 = screen.getByTestId('task-row-tsk_101');
+    expect(row1).toHaveClass('h-10');
+
+    // 3. Edit task button and edit modal flow
+    const editBtn = screen.getByTestId('task-row-edit-tsk_101');
+    expect(editBtn).toBeInTheDocument();
+    expect(editBtn).toHaveAttribute('title', 'Edit task');
+
+    fireEvent.click(editBtn);
+
+    const editDialog = screen.getByRole('dialog');
+    expect(editDialog).toBeInTheDocument();
+    expect(within(editDialog).getByText('Edit Internal Task: TASK-1001')).toBeInTheDocument();
+    expect(
+      within(editDialog).getByText('Update task details, assignment, priority, or deadline')
+    ).toBeInTheDocument();
+
+    const submitBtn = screen.getByTestId('modal-submit-task-btn');
+    expect(submitBtn).toHaveTextContent('Save Changes');
+
+    // Modify task title
+    const titleInput = screen.getByPlaceholderText(UI_STRINGS.actionCenter.tasks.taskTitlePlaceholder);
+    expect(titleInput).toHaveValue('Audit Mechanical Spares RFQ Quotes');
+    fireEvent.change(titleInput, { target: { value: 'Audit Mechanical Spares RFQ Quotes (Updated)' } });
+
+    // Submit changes
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_101',
+        expect.objectContaining({
+          title: 'Audit Mechanical Spares RFQ Quotes (Updated)',
+        })
+      );
+    });
+
+    await waitFor(() => {
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    // Verify row displays updated title
+    expect(screen.getByText('Audit Mechanical Spares RFQ Quotes (Updated)')).toBeInTheDocument();
+
+    // 4. Test closing Edit modal via Cancel button, backdrop, and Escape key
+    fireEvent.click(screen.getByTestId('task-row-edit-tsk_101'));
+    let modal = screen.getByRole('dialog');
+    expect(modal).toBeInTheDocument();
+    const cancelBtn = within(modal).getByRole('button', { name: 'Cancel' });
+    fireEvent.click(cancelBtn);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and test Escape key
+    fireEvent.click(screen.getByTestId('task-row-edit-tsk_101'));
+    modal = screen.getByRole('dialog');
+    expect(modal).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and test backdrop click
+    fireEvent.click(screen.getByTestId('task-row-edit-tsk_101'));
+    modal = screen.getByRole('dialog');
+    expect(modal).toBeInTheDocument();
+    fireEvent.click(modal);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 5. Test editing Credit Task with SELLER type and updating selectedTaskDetails
+    const creditTask: internalTaskClient.InternalTask = {
+      id: 'tsk_credit_edit',
+      task_number: 'TASK-CREDIT-99',
+      title: 'Credit Task To Edit',
+      task_category: 'CREDIT_MANAGEMENT',
+      credit_account_type: 'SELLER',
+      credit_account_name: 'Seller Org',
+      credit_account_id: 'acc_seller_99',
+      credit_quantity: 15,
+      credit_reason: 'Balance adjustment',
+      priority: 'High',
+      status: 'Pending',
+      due_date: '2026-11-25',
+      created_at: '2026-11-20T10:00:00Z',
+      updated_at: '2026-11-20T10:00:00Z',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [creditTask],
+      total: 1,
+    });
+    (internalTaskClient.fetchTaskById as jest.Mock).mockResolvedValue(creditTask);
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
+      ...creditTask,
+      status: 'Closed',
+      title: 'Credit Task To Edit (Closed)',
+    });
+
+    fireEvent.click(screen.getByTestId('toolbar-refresh-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Credit Task To Edit')).toBeInTheDocument();
+    });
+
+    // Open drawer first so selectedTaskDetails is set
+    fireEvent.click(screen.getByTestId('task-row-tsk_credit_edit'));
+    await waitFor(() => {
+      expect(screen.getByTestId('task-details-drawer')).toBeInTheDocument();
+    });
+
+    // Now click edit button
+    fireEvent.click(screen.getByTestId('task-row-edit-tsk_credit_edit'));
+    const creditDialog = screen.getByRole('dialog');
+    expect(creditDialog).toBeInTheDocument();
+
+    // Change status to Closed and submit
+    fireEvent.click(within(creditDialog).getByTestId('modal-submit-task-btn'));
+
+    await waitFor(() => {
+      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
+        'tsk_credit_edit',
+        expect.objectContaining({
+          status: 'Pending',
+          relatedEntityType: 'VENDOR',
+        })
+      );
+    });
+
+    // 6. Test editing Demo Task with date/time and update failure branch
+    const demoTask: internalTaskClient.InternalTask = {
+      id: 'tsk_demo_edit',
+      task_number: 'TASK-DEMO-99',
+      title: 'Demo Task To Edit',
+      task_category: 'DEMO_SCHEDULE',
+      demo_date: '2026-11-26',
+      demo_time: '14:00',
+      demo_status: 'Scheduled',
+      priority: 'Medium',
+      status: 'Open',
+      created_at: '2026-11-20T10:00:00Z',
+      updated_at: '2026-11-20T10:00:00Z',
+    };
+
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [demoTask],
+      total: 1,
+    });
+    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
+
+    fireEvent.click(screen.getByTestId('toolbar-refresh-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Demo Task To Edit')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getByTestId('task-row-edit-tsk_demo_edit'));
+    const demoDialog = screen.getByRole('dialog');
+    expect(demoDialog).toBeInTheDocument();
+
+    // Submit with failure returning null
+    fireEvent.click(within(demoDialog).getByTestId('modal-submit-task-btn'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Failed to update task in database.')).toBeInTheDocument();
+    });
+  });
 });

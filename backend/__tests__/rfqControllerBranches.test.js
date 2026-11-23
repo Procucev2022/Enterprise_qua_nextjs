@@ -83,6 +83,54 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       storeService.getRFQs.mockRestore();
     });
+
+    test('getAllRFQs respects pagination and filter query parameters', async () => {
+      const pageResult = {
+        rows: [{ id: 'rfq-p2-1', rfqNumber: 'RFQ-P2-1' }],
+        total: 250,
+        page: 2,
+        limit: 100,
+        totalPages: 3,
+      };
+      jest.spyOn(storeService, 'getRFQsPage').mockReturnValue(pageResult);
+
+      const req = {
+        user: { role: 'admin' },
+        query: {
+          page: '2',
+          limit: '100',
+          search: 'cable',
+          status: 'Quotes Pending',
+          buyer: 'Buyer Co',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await rfqController.getAllRFQs(req, res, next);
+      expect(res.statusCode).toBe(200);
+      expect(res.data.success).toBe(true);
+      expect(res.data.total).toBe(250);
+      expect(res.data.page).toBe(2);
+      expect(res.data.limit).toBe(100);
+      expect(res.data.totalPages).toBe(3);
+      expect(res.data.data).toEqual(pageResult.rows);
+      expect(storeService.getRFQsPage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 2,
+          limit: 100,
+          search: 'cable',
+          status: 'Quotes Pending',
+          buyer: 'Buyer Co',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        })
+      );
+
+      storeService.getRFQsPage.mockRestore();
+    });
   });
 
   describe('getVendorCandidates, inviteVendors, and validateVendorCategories', () => {

@@ -3989,6 +3989,11 @@ const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
 // Daily RFQ report recipients are not stored here. dailyRfqReportService reads them from
 // DAILY_RFQ_REPORT_EMAILS (comma-separated) at call time. An empty value means the report has
 // no recipients, and the run is reported as not_configured rather than as delivered.
+const EXCLUDED_DAILY_REPORT_RECIPIENTS = Object.freeze([
+  'anshul.goel@procucev.com',
+  'gmtrfq@procucev.com',
+]);
+
 const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
   DEFAULT_SCHEDULE_MINUTE: 0,
@@ -3996,6 +4001,7 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_TIMEZONE: 'Asia/Kolkata',
   MAX_TIMEZONE_LENGTH: 100,
   DEFAULT_ENABLED: true,
+  EXCLUDED_RECIPIENTS: EXCLUDED_DAILY_REPORT_RECIPIENTS,
   INGESTION_CHANNEL_LABELS: Object.freeze({
     web_portal: 'Web Portal',
     email_gateway: 'Email Gateway',
@@ -4362,6 +4368,7 @@ module.exports = {
   buildApprovalOtpKey,
   isApproverPasswordConfigured,
   verifyApproverPassword,
+  EXCLUDED_DAILY_REPORT_RECIPIENTS,
   DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,

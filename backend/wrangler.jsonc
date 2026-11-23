@@ -82,7 +82,7 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "DAILY_RFQ_REPORT_EMAILS": "gmtrfq@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com",
+        "DAILY_RFQ_REPORT_EMAILS": "veerababu.v@procucev.com,quateam@procucev.com,sudheer.kangala@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
@@ -156,7 +156,7 @@
       "name": "procucev-enterprise-backend",
       "vars": {
         "NODE_ENV": "production",
-        "DAILY_RFQ_REPORT_EMAILS": "gmtrfq@procucev.com,anshul.goel@procucev.com,veerababu.v@procucev.com",
+        "DAILY_RFQ_REPORT_EMAILS": "veerababu.v@procucev.com,quateam@procucev.com,sudheer.kangala@procucev.com",
         "EMAIL_GATEWAY_ENABLED": "true",
         "VENDOR_EMAIL_GATEWAY_ENABLED": "true",
         "GEMINI_MAX_KEY_ATTEMPTS_PER_MODEL": "3",
