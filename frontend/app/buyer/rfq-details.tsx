@@ -316,7 +316,6 @@ export function lineItemsToCsv(items: ExtractedEntity[]): string {
     DETAILS.colQty,
     DETAILS.colUnit,
     DETAILS.colTargetDate,
-    DETAILS.colConfidence,
   ];
   // Every ExtractedEntity field this exports is a required, non-nullable string or
   // number, so no nullish fallback is needed. Doubling embedded quotes is the RFC
@@ -334,7 +333,6 @@ export function lineItemsToCsv(items: ExtractedEntity[]): string {
         item.quantity,
         item.unit,
         item.targetDate,
-        item.confidence,
       ]
         .map(cell)
         .join(',')
@@ -491,7 +489,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
 }
 
 /** Confidence pill shared by the desktop table cell and the mobile card. */
-function ConfidenceBadge({ confidence }: { confidence: number }) {
+export function ConfidenceBadge({ confidence }: { confidence: number }) {
   if (confidence <= 0) {
     // A keyed row carries no AI confidence, so it says so instead of claiming a
     // score that was never computed.
@@ -2331,9 +2329,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         direction={sortDirection}
                         onSort={toggleSort}
                       />
-                      <th scope="col" className="px-3 py-2 text-center font-bold">
-                        {DETAILS.colConfidence}
-                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2371,15 +2366,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           <span className="block text-[10px] text-slate-500 dark:text-gray-400">{item.unit}</span>
                         </td>
                         <td className="px-3 py-2 mono whitespace-nowrap tabular-nums">{orUnset(formatIndianDate(item.targetDate))}</td>
-                        <td className="px-3 py-2 text-center">
-                          <ConfidenceBadge confidence={item.confidence} />
-                        </td>
                       </tr>
                     ))}
 
                     {visibleItems.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-4 py-10 text-center space-y-2">
+                        <td colSpan={5} className="px-4 py-10 text-center space-y-2">
                           <span className="block text-slate-400 dark:text-gray-500">{DETAILS.noLineItemMatches}</span>
                           <button
                             onClick={clearFilters}
@@ -2426,7 +2418,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           </span>
                         )}
                       </div>
-                      <ConfidenceBadge confidence={item.confidence} />
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold whitespace-nowrap">

@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import RFQDetails, {
+  ConfidenceBadge,
   buildSupplierCategoryFilters,
   daysUntil,
   lineItemsToCsv,
@@ -249,6 +250,17 @@ describe('lineItemsToCsv', () => {
 
   test('handles an empty list', () => {
     expect(lineItemsToCsv([]).split('\n')).toHaveLength(1);
+  });
+});
+
+describe('ConfidenceBadge component', () => {
+  it('renders high confidence, review, and manual states', () => {
+    const { rerender } = render(<ConfidenceBadge confidence={95} />);
+    expect(screen.getByText(DETAILS.confidenceHigh)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={50} />);
+    expect(screen.getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={0} />);
+    expect(screen.getByText(DETAILS.manualConfidence)).toBeInTheDocument();
   });
 });
 
@@ -525,7 +537,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(screen.queryByText(/Package(?:s)? requirement specification/i)).not.toBeInTheDocument();
     });
 
-    it('renders every line item with its classification and confidence', () => {
+    it('renders every line item with its classification and without confidence column', () => {
       renderDetails(twoItems());
 
       // Scoped to the table: the minor category also appears as a filter option.
@@ -534,13 +546,15 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(table).getByText('Flanged Gate Valve')).toBeInTheDocument();
       expect(within(table).getByText('ASTM A216 WCB body')).toBeInTheDocument();
       expect(within(table).getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
-      expect(within(table).getAllByText(DETAILS.confidenceHigh)).toHaveLength(2);
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.confidenceHigh)).not.toBeInTheDocument();
       expect(within(table).queryByText(/95%/)).not.toBeInTheDocument();
     });
 
-    it('flags a low-confidence row as needing review without percentage', () => {
+    it('does not display confidence column or review pill in line items table', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 50 })] }));
-      expect(within(lineItemTable()).getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.confidenceReview)).not.toBeInTheDocument();
       expect(within(lineItemTable()).queryByText(/50%/)).not.toBeInTheDocument();
     });
 
@@ -571,12 +585,13 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(totalQuantity()).toBe('12');
     });
 
-    // A keyed row has no AI confidence, so reporting 0% would misrepresent it.
-    it('labels a manually keyed row instead of claiming zero confidence', () => {
+    // The confidence column is removed in the buyer portal, so manualConfidence is omitted from the table.
+    it('omits confidence column for manually keyed row', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 0 })] }));
 
       const table = screen.getByRole('table');
-      expect(within(table).getByText(DETAILS.manualConfidence)).toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.manualConfidence)).not.toBeInTheDocument();
       expect(within(table).queryByText(/0% /)).not.toBeInTheDocument();
     });
 
