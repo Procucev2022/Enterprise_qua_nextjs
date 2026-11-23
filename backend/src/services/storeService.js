@@ -6917,6 +6917,47 @@ class StoreService {
     return { updatedRfq: updated, inquiry: updatedInquiry };
   }
 
+  async addBroadcastToRFQ(rfqId, broadcast) {
+    const rfq = await this.getRFQByIdAsync(rfqId);
+    if (!rfq) return null;
+
+    const existingBroadcasts = Array.isArray(rfq.broadcasts) ? [...rfq.broadcasts] : [];
+    const timestamp = broadcast.createdAt || new Date().toISOString();
+    const newBroadcast = {
+      id: broadcast.id || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `bcast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title: broadcast.title ? String(broadcast.title).trim() : '',
+      message: String(broadcast.message || '').trim(),
+      attachments: Array.isArray(broadcast.attachments) ? broadcast.attachments : [],
+      authorName: broadcast.authorName || 'Procurement Team',
+      authorRole: broadcast.authorRole || 'buyer',
+      authorEmail: broadcast.authorEmail || null,
+      createdAt: timestamp,
+    };
+
+    const updatedBroadcasts = [...existingBroadcasts, newBroadcast];
+    const updated = await this.updateRFQDurably(rfq.id, { broadcasts: updatedBroadcasts });
+    if (!updated) return null;
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Information Broadcast on ${rfq.rfqNumber}`,
+      message: `Announcement: "${newBroadcast.title ? `${newBroadcast.title}: ` : ''}${newBroadcast.message.slice(0, 100)}"`,
+      recipient: 'All Vendors',
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Information broadcast published on ${rfq.rfqNumber}: "${(newBroadcast.title || newBroadcast.message).slice(0, 80)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: broadcast.authorEmail || 'system@procucev.ai',
+    });
+
+    return { updatedRfq: updated, broadcast: newBroadcast };
+  }
+
   deleteRFQ(id) {
     const rfq = this.rfqs.find((record) => record.id === id || record.rfqNumber === id);
     if (!rfq) return false;

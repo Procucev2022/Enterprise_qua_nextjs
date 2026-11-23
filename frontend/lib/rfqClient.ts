@@ -9,6 +9,7 @@ import type {
   FetchAllVendorsOptions,
   RFQAttachment,
   RFQAttachmentResult,
+  RFQBroadcast,
   RFQCreatePayload,
   RFQDeleteResult,
   RFQExtractionRequest,
@@ -1111,6 +1112,60 @@ export async function replyToRFQInquiry(
   } catch (err: unknown) {
     logRfqTransportFailure('RFQ inquiry reply request failed', err);
     return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting reply.') };
+  }
+}
+
+/**
+ * Publish an information broadcast / announcement on an RFQ (buyer/category manager).
+ */
+export async function publishRFQBroadcast(
+  rfqIdOrNumber: string,
+  payload: { title?: string; message: string; attachments?: RFQAttachment[] }
+): Promise<{ success: boolean; data?: RFQBroadcast; rfq?: RFQItem; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to publish broadcast announcement.' };
+    }
+    return { success: true, data: body.data, rfq: body.rfq };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcast publish request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error publishing broadcast announcement.') };
+  }
+}
+
+/**
+ * Fetch all broadcast announcements for an RFQ.
+ */
+export async function fetchRFQBroadcasts(
+  rfqIdOrNumber: string
+): Promise<{ success: boolean; data?: RFQBroadcast[]; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to fetch broadcast announcements.' };
+    }
+    return { success: true, data: body.data || [] };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcasts fetch request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching broadcast announcements.') };
   }
 }
 
