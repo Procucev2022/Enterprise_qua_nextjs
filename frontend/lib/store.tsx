@@ -872,7 +872,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       if (json.success && json.data) {
         const d = json.data;
-        const vendorsList = d.vendors || [];
+        const rawVendorsList = d.vendors || [];
+        const vendorsList = rawVendorsList.map((v: VendorEntry) => {
+          const email = String(v?.email || '').trim().toLowerCase();
+          if (email === 'bhumika@vaysinfotech.com') {
+            return { ...v, name: 'Vays Infotech', brandName: 'Vays Infotech', companyName: 'Vays Infotech' };
+          }
+          if (email === 'helpdesk@vaysinfotech.com') {
+            return { ...v, name: 'Vays Infotech 1', brandName: 'Vays Infotech 1', companyName: 'Vays Infotech 1' };
+          }
+          return v;
+        });
         const evalsList = d.evaluations || [];
         setBuyerAccounts(d.buyerAccounts || []);
         setBuyerVendors(vendorsList);
