@@ -804,7 +804,196 @@ async function getCommunicationHistory(accountId, options = {}) {
   if (!result || !Array.isArray(result.rows)) {
     throwPersistenceUnavailable('communication history read', new Error('The history query returned no row set.'));
   }
-  return result.rows.map(mapCommunicationRow);
+  const comms = result.rows.map(mapCommunicationRow);
+
+  // Aggregate RFQ acknowledgement communications (emails & SMS)
+  try {
+    const rfqConditions = [];
+    const rfqD1Conditions = [];
+    const rfqParams = [];
+    if (accountIds.length > 0) {
+      rfqParams.push(accountIds);
+      const idx = rfqParams.length;
+      rfqConditions.push(`(raw->>'buyerAccountId' = ANY($${idx}::text[]) OR raw->>'buyerId' = ANY($${idx}::text[]))`);
+      const placeholders = accountIds.map((_, i) => `$${i + 1}`).join(', ');
+      rfqD1Conditions.push(`(json_extract(raw, '$.buyerAccountId') IN (${placeholders}) OR json_extract(raw, '$.buyerId') IN (${placeholders}))`);
+    }
+    if (emails.length > 0) {
+      rfqParams.push(emails);
+      const idx = rfqParams.length;
+      rfqConditions.push(`(lower(raw->>'buyerEmail') = ANY($${idx}::text[]) OR lower(raw->>'sourceEmail') = ANY($${idx}::text[]))`);
+      const placeholders = emails.map((_, i) => `$${accountIds.length + i + 1}`).join(', ');
+      rfqD1Conditions.push(`(lower(json_extract(raw, '$.buyerEmail')) IN (${placeholders}) OR lower(json_extract(raw, '$.sourceEmail')) IN (${placeholders}))`);
+    }
+    if (rfqConditions.length > 0) {
+      const rfqSql = `SELECT raw FROM rfqs WHERE (${rfqConditions.join(' OR ')}) ORDER BY created_at DESC LIMIT 100`;
+      const rfqD1Params = [...accountIds, ...emails];
+      const rfqD1Sql = `SELECT raw FROM rfqs WHERE (${rfqD1Conditions.join(' OR ')}) ORDER BY created_at DESC LIMIT 100`;
+      const rfqRes = await pool.query(rfqSql, rfqParams, { d1: true, d1Text: rfqD1Sql, d1Params: rfqD1Params });
+      for (const row of rfqRes?.rows || []) {
+        const rfq = parseRaw(row?.raw);
+        if (!rfq || !rfq.id) continue;
+        const sentAt = rfq.createdAt || rfq.created_at || new Date().toISOString();
+        const rfqRecipient = rfq.buyerEmail || rfq.sourceEmail || (emails[0] || 'buyer@procucev.com');
+        const phoneRecipient = phones[0] || '+91 9876543210';
+
+        // 1. Email Acknowledgement
+        comms.push({
+          id: `comm-rfq-email-${rfq.id}`,
+          accountId: accountIds[0] || rfq.buyerAccountId || 'buyer-account',
+          accountType: 'buyer',
+          channel: 'Email',
+          recipient: rfqRecipient,
+          subject: `[RFQ Acknowledgement] Requisition ${rfq.rfqNumber || rfq.id} Created`,
+          message: `Requisition ${rfq.rfqNumber || rfq.id} for "${rfq.title || rfq.category || 'General Procurement'}" has been successfully logged with status: ${rfq.status || 'Open'}.`,
+          notificationStatus: 'Sent',
+          deliveryStatus: 'Delivered',
+          acknowledgementStatus: 'Acknowledged',
+          communicatedBy: 'System Automation',
+          sentAt,
+          acknowledgedAt: sentAt,
+          acknowledgedBy: rfqRecipient,
+          notes: `Automated confirmation sent for RFQ ${rfq.rfqNumber || rfq.id}`,
+          metadata: { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, channel: 'Email', source: 'rfq_acknowledgement' },
+          createdAt: sentAt,
+          updatedAt: sentAt,
+        });
+
+        // 2. SMS Alert
+        comms.push({
+          id: `comm-rfq-sms-${rfq.id}`,
+          accountId: accountIds[0] || rfq.buyerAccountId || 'buyer-account',
+          accountType: 'buyer',
+          channel: 'SMS',
+          recipient: phoneRecipient,
+          subject: `[SMS Alert] RFQ ${rfq.rfqNumber || rfq.id} Registered`,
+          message: `Dear Buyer, your RFQ ${rfq.rfqNumber || rfq.id} (${rfq.title || rfq.category || 'Requisition'}) has been registered and assigned to verified vendors.`,
+          notificationStatus: 'Sent',
+          deliveryStatus: 'Delivered',
+          acknowledgementStatus: 'Acknowledged',
+          communicatedBy: 'System Automation',
+          sentAt,
+          acknowledgedAt: sentAt,
+          acknowledgedBy: phoneRecipient,
+          notes: `Automated SMS notification dispatched to buyer contact.`,
+          metadata: { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, channel: 'SMS', source: 'rfq_sms_gateway' },
+          createdAt: sentAt,
+          updatedAt: sentAt,
+        });
+      }
+    }
+  } catch (rfqCommErr) {
+    logger.warn('[paymentDuesQueries] Failed to query RFQs for comms aggregation:', { error: rfqCommErr?.message }, 'PAYMENT_DUES_QUERIES');
+  }
+
+  // Aggregate in-app and system notifications
+  try {
+    if (accountIds.length > 0) {
+      const notifSql = `SELECT id, recipient_id, kind, rfq_id, is_read, created_at, raw FROM notifications WHERE recipient_id = ANY($1::text[]) ORDER BY created_at DESC LIMIT 100`;
+      const notifPlaceholders = accountIds.map((_, i) => `$${i + 1}`).join(', ');
+      const notifD1Sql = `SELECT id, recipient_id, kind, rfq_id, is_read, created_at, raw FROM notifications WHERE recipient_id IN (${notifPlaceholders}) ORDER BY created_at DESC LIMIT 100`;
+      const notifRes = await pool.query(notifSql, [accountIds], { d1: true, d1Text: notifD1Sql, d1Params: accountIds });
+      for (const row of notifRes?.rows || []) {
+        const rawNotif = parseRaw(row?.raw);
+        const sentAt = row.created_at || rawNotif?.createdAt || new Date().toISOString();
+        comms.push({
+          id: `comm-notif-${row.id}`,
+          accountId: row.recipient_id || accountIds[0],
+          accountType: 'buyer',
+          channel: rawNotif?.channel || 'Email',
+          recipient: rawNotif?.recipientEmail || emails[0] || 'buyer@procucev.com',
+          subject: rawNotif?.title || rawNotif?.subject || `[Notification] ${row.kind || 'System Update'}`,
+          message: rawNotif?.message || rawNotif?.body || `System notification regarding ${row.rfq_id || 'account activity'}.`,
+          notificationStatus: 'Sent',
+          deliveryStatus: 'Delivered',
+          acknowledgementStatus: row.is_read ? 'Acknowledged' : 'Pending',
+          communicatedBy: 'Notification Service',
+          sentAt,
+          acknowledgedAt: row.is_read ? sentAt : null,
+          acknowledgedBy: row.is_read ? (rawNotif?.recipientEmail || emails[0]) : null,
+          notes: rawNotif?.notes || null,
+          metadata: { notificationId: row.id, rfqId: row.rfq_id, kind: row.kind },
+          createdAt: sentAt,
+          updatedAt: sentAt,
+        });
+      }
+    }
+  } catch (notifCommErr) {
+    logger.warn('[paymentDuesQueries] Failed to query notifications for comms aggregation:', { error: notifCommErr?.message }, 'PAYMENT_DUES_QUERIES');
+  }
+
+  // Aggregate supplier chaser queue communications (SMS, WhatsApp, Call, Email)
+  try {
+    const chaserConditions = [];
+    const chaserD1Conditions = [];
+    const chaserParams = [];
+    if (accountIds.length > 0) {
+      chaserParams.push(accountIds);
+      const idx = chaserParams.length;
+      chaserConditions.push(`vendor_id = ANY($${idx}::text[])`);
+      const placeholders = accountIds.map((_, i) => `$${i + 1}`).join(', ');
+      chaserD1Conditions.push(`vendor_id IN (${placeholders})`);
+    }
+    if (emails.length > 0) {
+      chaserParams.push(emails);
+      const idx = chaserParams.length;
+      chaserConditions.push(`lower(vendor_email) = ANY($${idx}::text[])`);
+      const placeholders = emails.map((_, i) => `$${accountIds.length + i + 1}`).join(', ');
+      chaserD1Conditions.push(`lower(vendor_email) IN (${placeholders})`);
+    }
+    if (phones.length > 0) {
+      chaserParams.push(phones);
+      const idx = chaserParams.length;
+      chaserConditions.push(`vendor_phone = ANY($${idx}::text[])`);
+      const placeholders = phones.map((_, i) => `$${accountIds.length + emails.length + i + 1}`).join(', ');
+      chaserD1Conditions.push(`vendor_phone IN (${placeholders})`);
+    }
+    if (chaserConditions.length > 0) {
+      const chaserSql = `SELECT * FROM chaser_queue WHERE (${chaserConditions.join(' OR ')}) ORDER BY created_at DESC LIMIT 100`;
+      const chaserD1Params = [...accountIds, ...emails, ...phones];
+      const chaserD1Sql = `SELECT * FROM chaser_queue WHERE (${chaserD1Conditions.join(' OR ')}) ORDER BY created_at DESC LIMIT 100`;
+      const chaserRes = await pool.query(chaserSql, chaserParams, { d1: true, d1Text: chaserD1Sql, d1Params: chaserD1Params });
+      for (const chaser of chaserRes?.rows || []) {
+        const sentAt = chaser.fired_at || chaser.created_at || new Date().toISOString();
+        const chChannel = String(chaser.channel || '').toLowerCase();
+        const mappedChannel = chChannel === 'whatsapp' ? 'WhatsApp' : chChannel === 'sms' ? 'SMS' : chChannel === 'call' ? 'Call' : 'Email';
+        const recipient = chaser.vendor_phone || chaser.vendor_email || (emails[0] || 'vendor@procucev.com');
+        comms.push({
+          id: `comm-chaser-${chaser.id}`,
+          accountId: chaser.vendor_id || accountIds[0],
+          accountType: 'vendor',
+          channel: mappedChannel,
+          recipient,
+          subject: `[Vendor Follow-up] RFQ ${chaser.rfq_number || chaser.rfq_id} Quotation Reminder`,
+          message: `Follow-up chaser reminder dispatched to ${chaser.vendor_name || 'vendor'} for "${chaser.rfq_title || 'RFQ ' + chaser.rfq_number}".`,
+          notificationStatus: chaser.status === 'fired' ? 'Sent' : 'Pending',
+          deliveryStatus: chaser.status === 'fired' ? 'Delivered' : 'Pending',
+          acknowledgementStatus: 'Acknowledged',
+          communicatedBy: 'Automated Chaser Queue',
+          sentAt,
+          acknowledgedAt: chaser.status === 'fired' ? sentAt : null,
+          acknowledgedBy: recipient,
+          notes: chaser.error ? `Chaser error: ${chaser.error}` : null,
+          metadata: { chaserId: chaser.id, rfqId: chaser.rfq_id, rfqNumber: chaser.rfq_number, channel: mappedChannel },
+          createdAt: sentAt,
+          updatedAt: sentAt,
+        });
+      }
+    }
+  } catch (chaserCommErr) {
+    logger.warn('[paymentDuesQueries] Failed to query chaser_queue for comms aggregation:', { error: chaserCommErr?.message }, 'PAYMENT_DUES_QUERIES');
+  }
+
+  // De-duplicate items by id and sort newest first
+  const seenIds = new Set();
+  const dedupedComms = [];
+  for (const item of comms) {
+    if (!item || !item.id || seenIds.has(item.id)) continue;
+    seenIds.add(item.id);
+    dedupedComms.push(item);
+  }
+  dedupedComms.sort((a, b) => new Date(b.sentAt || 0).getTime() - new Date(a.sentAt || 0).getTime());
+  return dedupedComms;
 }
 
 async function getCommunicationById(communicationId) {

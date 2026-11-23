@@ -6,6 +6,7 @@ import {
   Filter,
   Download,
   Plus,
+  Pencil,
   X,
   Calendar,
   AlertCircle,
@@ -399,6 +400,7 @@ export default function InternalTasksDashboard() {
 
   // Modals state
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+  const [editingTask, setEditingTask] = useState<InternalTask | null>(null);
   const [selectedTaskDetails, setSelectedTaskDetails] = useState<InternalTask | null>(null);
   const [toastMessage, setToastMessage] = useState<string | null>(null);
 
@@ -407,7 +409,10 @@ export default function InternalTasksDashboard() {
     if (!isCreateModalOpen && !selectedTaskDetails && !isFilterDrawerOpen) return;
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        if (isCreateModalOpen) setIsCreateModalOpen(false);
+        if (isCreateModalOpen) {
+          setIsCreateModalOpen(false);
+          setEditingTask(null);
+        }
         if (selectedTaskDetails) setSelectedTaskDetails(null);
         if (isFilterDrawerOpen) setIsFilterDrawerOpen(false);
       }
@@ -695,11 +700,9 @@ export default function InternalTasksDashboard() {
       } else {
         filtered = tasks.filter((t) =>
           statusKey === 'Completed'
-            ? t.status === 'Completed' || t.status === 'Closed' || t.status === 'closed'
-            : statusKey === 'Pending'
-            ? t.status === 'Pending' || t.status === 'pending' || t.status === 'Pending Approval' || t.status === 'In Progress'
+            ? t.status === 'Completed' || t.status === 'Closed'
             : statusKey === 'New'
-            ? t.status === 'New' || t.status === 'Open' || t.status === 'open'
+            ? t.status === 'New' || t.status === 'Open'
             : t.status === statusKey
         );
         modalTitle = `${statusKey} Tasks`;
@@ -1073,13 +1076,61 @@ export default function InternalTasksDashboard() {
     setIsFilterDrawerOpen(false);
   };
 
-  // Open Create Modal with pre-selected category and type
+  // Open Create Modal with clean blank values
   const handleOpenCreateModal = () => {
+    setEditingTask(null);
+    setNewTitle('');
+    setNewDescription('');
+    setNewNotes('');
+    setNewCategory('CALL_TASK');
+    setNewTaskType('Phone Call');
+    setNewPriority('Medium');
+    setNewStatus('Open');
+    setNewAssignedToName(DEFAULT_INTERNAL_ASSIGNEES[0]);
+    setNewAssignedToUserId('');
+    setIsCustomAssignee(false);
+    setCustomAssigneeInput('');
+    setNewDueDate('');
+    setNewDueTime('');
+    setNewCreditAccountName('');
+    setNewCreditAccountId('');
+    setNewCreditReason('');
+    setNewDemoDate('');
+    setNewDemoTime('');
     if (!newTaskTypeId && taskTypes.length > 0) {
       setNewTaskTypeId(taskTypes[0].id);
     }
     setIsCreateModalOpen(true);
   };
+
+  // Open Edit Modal pre-populated with task data
+  const handleOpenEditModal = useCallback((task: InternalTask) => {
+    setEditingTask(task);
+    setNewTitle(task.title || '');
+    setNewDescription(task.description || '');
+    setNewNotes(task.notes || '');
+    const cat = (task.task_category as InternalTaskCategory) || 'CALL_TASK';
+    setNewCategory(cat);
+    const catTypes = INTERNAL_TASK_CATEGORY_TYPES[cat] || [];
+    setNewTaskType(task.task_type || task.task_type_name || (catTypes[0] ?? 'General Task'));
+    setNewPriority((task.priority as TaskPriority) || 'Medium');
+    setNewStatus((task.status as TaskStatus) || 'Open');
+    setNewAssignedToName(task.assigned_to_name || DEFAULT_INTERNAL_ASSIGNEES[0]);
+    setNewAssignedToUserId(task.assigned_to_user_id || '');
+    setIsCustomAssignee(false);
+    setCustomAssigneeInput('');
+    setNewDueDate(task.due_date || '');
+    setNewDueTime(task.due_time || '');
+    setNewCreditAccountType(task.credit_account_type || 'BUYER');
+    setNewCreditAccountName(task.credit_account_name || task.related_entity_label || '');
+    setNewCreditAccountId(task.credit_account_id || task.related_entity_id || '');
+    setNewCreditQuantity(Number(task.credit_quantity) || 10);
+    setNewCreditReason(task.credit_reason || '');
+    setNewDemoDate(task.demo_date || '');
+    setNewDemoTime(task.demo_time || '');
+    setNewDemoStatus((task.demo_status as DemoStatus) || 'Scheduled');
+    setIsCreateModalOpen(true);
+  }, []);
 
   // Handle Quick Status Toggle
   const handleToggleStatus = async (task: InternalTask) => {
@@ -1103,22 +1154,74 @@ export default function InternalTasksDashboard() {
     }
   };
 
-  // Handle Create Task Submission with Category Architecture
+  // Handle Create or Update Task Submission with Category Architecture
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!newTitle.trim()) return;
 
     setIsSubmitting(true);
     try {
+      const isCredit = newCategory === 'CREDIT_MANAGEMENT';
+
+      if (editingTask) {
+        const isDemo = newCategory === 'DEMO_SCHEDULE' || newCategory === 'DEMO_SCHEDULING';
+        const payload: Record<string, unknown> = {
+          title: newTitle.trim(),
+          description: newDescription.trim(),
+          taskCategory: newCategory,
+          taskType: newTaskType || 'General Task',
+          priority: newPriority,
+          status: newStatus,
+          assignedToUserId: newAssignedToUserId || undefined,
+          assignedToName: newAssignedToName.trim() || DEFAULT_INTERNAL_ASSIGNEES[0],
+          dueDate: newDueDate || undefined,
+          dueTime: newDueTime || undefined,
+          notes: newNotes.trim(),
+        };
+
+        if (isCredit) {
+          payload.status = newStatus === 'Closed' || newStatus === 'Completed' ? 'Closed' : 'Pending';
+          payload.creditAccountType = newCreditAccountType;
+          payload.creditAccountId = newCreditAccountId || undefined;
+          payload.creditAccountName = newCreditAccountName || undefined;
+          payload.creditQuantity = Number(newCreditQuantity) || 0;
+          payload.creditReason = newCreditReason || undefined;
+          payload.relatedEntityType = newCreditAccountType === 'SELLER' ? 'VENDOR' : 'BUYER';
+          payload.relatedEntityId = payload.creditAccountId;
+          payload.relatedEntityLabel = payload.creditAccountName;
+        }
+
+        if (isDemo) {
+          payload.demoDate = newDemoDate || undefined;
+          payload.demoTime = newDemoTime || undefined;
+          payload.demoStatus = newDemoStatus;
+        }
+
+        const updated = await updateInternalTask(editingTask.id, payload);
+
+        if (updated) {
+          setTasks((prev) => prev.map((t) => (t.id === editingTask.id ? updated : t)));
+          if (selectedTaskDetails && selectedTaskDetails.id === editingTask.id) {
+            setSelectedTaskDetails(updated);
+          }
+          setIsCreateModalOpen(false);
+          setEditingTask(null);
+          loadSummary();
+          showToast(`Task ${editingTask.task_number || editingTask.id} updated successfully.`);
+        } else {
+          showToast('Failed to update task in database.');
+        }
+        return;
+      }
+
       const finalTypeId = newTaskTypeId;
       const selectedType = taskTypes.find((t) => t.id === finalTypeId);
-      const isCredit = newCategory === 'CREDIT_MANAGEMENT';
 
       const newTask = await createInternalTask({
         title: newTitle.trim(),
         description: newDescription.trim(),
         taskCategory: newCategory,
-        taskType: newTaskType || INTERNAL_TASK_CATEGORY_LABELS[newCategory] || 'General Task',
+        taskType: newTaskType || 'General Task',
         taskTypeId: undefined,
         priority: newPriority,
         status: isCredit ? 'Pending' : newStatus,
@@ -1144,6 +1247,7 @@ export default function InternalTasksDashboard() {
 
       if (newTask) {
         setIsCreateModalOpen(false);
+        setEditingTask(null);
         // Reset form
         setNewTitle('');
         setNewDescription('');
@@ -1243,7 +1347,7 @@ export default function InternalTasksDashboard() {
       <ActionCenterSubNav
         activeTab={activeTab}
         onSelectTab={handleSelectTab}
-        tasksCount={summary ? summary.newTasks || summary.pending : undefined}
+        tasksCount={summary?.newTasks ?? summary?.pending}
         ticketsCount={ticketSummary ? ticketSummary.pending : undefined}
         approvalsCount={approvalSummary ? approvalSummary.pending : undefined}
         paymentDuesCount={paymentDuesSummary ? paymentDuesSummary.totalLowCreditAccounts : undefined}
@@ -1462,7 +1566,7 @@ export default function InternalTasksDashboard() {
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl px-2.5 py-1.5 shadow-xs flex flex-row items-center gap-1 sm:gap-1.5 w-full min-w-0 max-w-full box-border flex-nowrap">
             {/* 1. Search Bar */}
             <div className="relative flex-1 min-w-[130px]">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none" />
               <input
                 type="text"
                 value={searchQuery}
@@ -1471,7 +1575,7 @@ export default function InternalTasksDashboard() {
                   setCurrentPage(1);
                 }}
                 placeholder="Search by title, ID, entity..."
-                className="w-full pl-8 pr-7 h-8 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
+                className="w-full pl-9 pr-7 h-9 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-slate-100 placeholder:text-slate-400 focus:outline-none focus:ring-1 focus:ring-blue-500"
               />
               {searchQuery && (
                 <button
@@ -1492,7 +1596,7 @@ export default function InternalTasksDashboard() {
             <button
               type="button"
               onClick={handleOpenCreateModal}
-              className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer whitespace-nowrap"
+              className="shrink-0 h-9 inline-flex items-center gap-1 px-2.5 text-xs font-semibold bg-blue-600 hover:bg-blue-700 text-white rounded-lg shadow-xs shadow-blue-600/20 transition-all cursor-pointer whitespace-nowrap"
               title={UI_STRINGS.actionCenter.tasks.createTask}
               aria-label={UI_STRINGS.actionCenter.tasks.createTask}
               data-testid="toolbar-create-task-btn"
@@ -1505,7 +1609,7 @@ export default function InternalTasksDashboard() {
             <select
               value={activeFilters.taskCategory || 'all'}
               onChange={(e) => handleCategoryChange(e.target.value)}
-              className="shrink-0 h-8 w-[150px] xl:w-[165px] pl-2.5 pr-7 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              className="shrink-0 h-9 py-0 leading-normal w-[150px] xl:w-[165px] pl-2.5 pr-7 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
               data-testid="toolbar-category-select"
             >
               <option value="all">All Categories</option>
@@ -1520,7 +1624,7 @@ export default function InternalTasksDashboard() {
             <select
               value={activeFilters.assignedTo || 'all'}
               onChange={(e) => handleAssigneeChange(e.target.value)}
-              className="shrink-0 h-8 w-[130px] xl:w-[145px] pl-2.5 pr-7 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
+              className="shrink-0 h-9 py-0 leading-normal w-[130px] xl:w-[145px] pl-2.5 pr-7 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer"
               aria-label={UI_STRINGS.actionCenter.tasks.selectAssignee}
               data-testid="toolbar-assignee-select"
             >
@@ -1539,7 +1643,7 @@ export default function InternalTasksDashboard() {
                 setSelectedTaskDetails(null);
                 setIsComposeModalOpen(true);
               }}
-              className="shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all shadow-xs cursor-pointer whitespace-nowrap"
+              className="shrink-0 h-9 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border border-indigo-200 dark:border-indigo-800/80 bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-100 dark:hover:bg-indigo-900/40 transition-all shadow-xs cursor-pointer whitespace-nowrap"
               title="Dispatch SMS or Email Notification"
               aria-label={UI_STRINGS.actionCenter.tasks.sendSmsEmailBtn}
               data-testid="toolbar-send-sms-email-btn"
@@ -1552,7 +1656,7 @@ export default function InternalTasksDashboard() {
             <button
               type="button"
               onClick={handleOpenFilterDrawer}
-              className={`shrink-0 h-8 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
+              className={`shrink-0 h-9 inline-flex items-center gap-1 px-2 text-xs font-medium rounded-lg border transition-all cursor-pointer whitespace-nowrap ${
                 activeFilterCount > 0
                   ? 'bg-blue-50 dark:bg-blue-950/60 border-blue-400 text-blue-700 dark:text-blue-300 shadow-xs'
                   : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
@@ -1572,7 +1676,7 @@ export default function InternalTasksDashboard() {
             <a
               href={clientCsvExportUri || exportUrl}
               download="internal_tasks.csv"
-              className="shrink-0 h-8 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all cursor-pointer whitespace-nowrap"
+              className="shrink-0 h-9 inline-flex items-center gap-1 px-2.5 text-xs font-semibold rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white shadow-xs transition-all cursor-pointer whitespace-nowrap"
               data-testid="toolbar-export-csv-btn"
               title={UI_STRINGS.actionCenter.tasks.exportCsvBtn}
               aria-label={UI_STRINGS.actionCenter.tasks.exportCsvBtn}
@@ -1593,7 +1697,7 @@ export default function InternalTasksDashboard() {
                 }}
                 aria-label={UI_STRINGS.actionCenter.tasks.refreshBtn}
                 title={UI_STRINGS.actionCenter.tasks.refreshBtn}
-                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 hover:text-blue-600 transition-colors cursor-pointer"
+                className="shrink-0 h-9 w-9 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700/60 text-slate-500 hover:text-blue-600 transition-colors cursor-pointer"
                 data-testid="toolbar-refresh-btn"
               >
                 <RotateCcw className={`w-3.5 h-3.5 ${isLoading ? 'animate-spin text-blue-600' : ''}`} />
@@ -1603,7 +1707,7 @@ export default function InternalTasksDashboard() {
               <button
                 type="button"
                 onClick={() => setShowTaskColumnSettings(true)}
-                className="shrink-0 h-8 w-8 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
+                className="shrink-0 h-9 w-9 inline-flex items-center justify-center border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 rounded-lg text-slate-500 hover:text-indigo-600 hover:border-indigo-300 dark:hover:text-indigo-400 transition-colors cursor-pointer"
                 title={UI_STRINGS.actionCenter.tasks.columnSettingsBtn}
                 aria-label={UI_STRINGS.actionCenter.tasks.columnSettingsBtn}
                 data-testid="toolbar-gear-btn"
@@ -1663,10 +1767,10 @@ export default function InternalTasksDashboard() {
                 <table className="w-full text-left text-xs min-w-[1020px] border-collapse">
                   <thead className="bg-slate-50/90 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide select-none">
                     <tr>
-                      {isColVisible('done') && <th className="py-3 px-3 w-12 min-w-[48px] max-w-[48px] text-center">Done</th>}
+                      {isColVisible('done') && <th className="py-2.5 px-3 w-12 min-w-[48px] max-w-[48px] text-center">Done</th>}
                       {isColVisible('status') && (
                         <th
-                          className="py-3 px-3.5 w-32 min-w-[110px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 w-32 min-w-[110px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('status')}
                         >
                           Status
@@ -1675,7 +1779,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('task') && (
                         <th
-                          className="py-3 px-3.5 min-w-[220px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 min-w-[220px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('task')}
                         >
                           Task Subject & ID
@@ -1684,7 +1788,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('category') && (
                         <th
-                          className="py-3 px-3.5 w-44 min-w-[145px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 w-44 min-w-[145px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('category')}
                         >
                           Category & Type
@@ -1692,11 +1796,11 @@ export default function InternalTasksDashboard() {
                         </th>
                       )}
                       {isColVisible('entity') && (
-                        <th className="py-3 px-3.5 w-44 min-w-[145px]">Related Entity</th>
+                        <th className="py-2.5 px-3.5 w-44 min-w-[145px]">Related Entity</th>
                       )}
                       {isColVisible('priority') && (
                         <th
-                          className="py-3 px-3.5 w-24 min-w-[90px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 w-24 min-w-[90px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('priority')}
                         >
                           Priority
@@ -1705,7 +1809,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('assignedTo') && (
                         <th
-                          className="py-3 px-3.5 w-36 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 w-36 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('assignedTo')}
                         >
                           Assigned To
@@ -1714,7 +1818,7 @@ export default function InternalTasksDashboard() {
                       )}
                       {isColVisible('dueDate') && (
                         <th
-                          className="py-3 px-3.5 w-36 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
+                          className="py-2.5 px-3.5 w-36 min-w-[130px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
                           onClick={() => handleTaskSort('dueDate')}
                         >
                           Due Date & Time
@@ -1722,7 +1826,7 @@ export default function InternalTasksDashboard() {
                         </th>
                       )}
                       {isColVisible('actions') && (
-                        <th className="py-3 px-3.5 text-right w-24 min-w-[96px]">Actions</th>
+                        <th className="py-2.5 px-3.5 text-right w-28 min-w-[110px]">Actions</th>
                       )}
                     </tr>
                   </thead>
@@ -1734,12 +1838,12 @@ export default function InternalTasksDashboard() {
                         <tr
                           key={task.id}
                           onClick={() => handleOpenTaskDetails(task)}
-                          className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group"
+                          className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group h-10"
                           data-testid={`task-row-${task.id}`}
                         >
                           {/* Checkbox toggle */}
                           {isColVisible('done') && (
-                            <td className="py-3 px-3 w-12 min-w-[48px] max-w-[48px] text-center" onClick={(e) => e.stopPropagation()}>
+                            <td className="py-2 px-3 w-12 min-w-[48px] max-w-[48px] text-center align-middle whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                               <input
                                 type="checkbox"
                                 checked={task.status === 'Closed' || task.status === 'Completed'}
@@ -1751,7 +1855,7 @@ export default function InternalTasksDashboard() {
 
                           {/* Status Badge */}
                           {isColVisible('status') && (
-                            <td className="py-3 px-3.5 w-32 min-w-[110px] whitespace-nowrap">
+                            <td className="py-2 px-3.5 w-32 min-w-[110px] align-middle whitespace-nowrap">
                               <span
                                 className={`inline-flex px-2 py-0.5 text-[10px] font-bold rounded-full ${
                                   task.status === 'Closed' || task.status === 'Completed'
@@ -1766,54 +1870,33 @@ export default function InternalTasksDashboard() {
                             </td>
                           )}
 
-                          {/* Task title, ID & description */}
+                          {/* Task title, ID & description - single-line layout */}
                           {isColVisible('task') && (
-                            <td className="py-3 px-3.5 min-w-[220px]">
+                            <td className="py-2 px-3.5 min-w-[220px] max-w-[340px] align-middle whitespace-nowrap">
                               <div
                                 className="font-bold text-slate-900 dark:text-slate-100 group-hover:text-blue-600 transition-colors truncate"
-                                title={task.title}
+                                title={`${task.title || task.task_number || task.id}${task.task_number && task.title ? ` • ${task.task_number}` : ''}${task.description ? ` • ${task.description}` : ''}`}
                               >
-                                {task.title}
-                              </div>
-                              <div className="flex items-center gap-1.5 mt-0.5">
-                                <span className="font-mono text-[10px] text-slate-400 font-medium shrink-0">
-                                  {task.task_number || task.id}
-                                </span>
-                                {task.description && (
-                                  <span
-                                    className="text-[11px] text-slate-500 dark:text-slate-400 truncate max-w-sm xl:max-w-md"
-                                    title={task.description}
-                                  >
-                                    • {task.description}
-                                  </span>
-                                )}
+                                {task.title || task.task_number || task.id}
                               </div>
                             </td>
                           )}
 
-                          {/* Category & Task Type */}
+                          {/* Category & Task Type - single-line layout */}
                           {isColVisible('category') && (
-                            <td className="py-3 px-3.5 w-44 min-w-[145px]">
+                            <td className="py-2 px-3.5 w-44 min-w-[145px] max-w-[180px] align-middle whitespace-nowrap">
                               <div
                                 className="font-semibold text-slate-800 dark:text-slate-200 truncate"
-                                title={task.task_type || task.task_type_name || 'General Task'}
+                                title={`${task.task_type || task.task_type_name || 'General Task'}${task.task_category ? ` (${INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] || task.task_category})` : ''}`}
                               >
                                 {task.task_type || task.task_type_name || 'General Task'}
                               </div>
-                              <span
-                                className="text-[10px] text-slate-400 font-medium block truncate mt-0.5"
-                                title={INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] || task.task_category || 'Operations'}
-                              >
-                                {INTERNAL_TASK_CATEGORY_LABELS[task.task_category as InternalTaskCategory] ||
-                                  task.task_category ||
-                                  'Operations'}
-                              </span>
                             </td>
                           )}
 
                           {/* Related Entity Badge */}
                           {isColVisible('entity') && (
-                            <td className="py-3 px-3.5 w-44 min-w-[145px]">
+                            <td className="py-2 px-3.5 w-44 min-w-[145px] max-w-[190px] align-middle whitespace-nowrap">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <span
                                   className={`px-1.5 py-0.5 text-[9px] font-bold rounded uppercase shrink-0 ${
@@ -1844,7 +1927,7 @@ export default function InternalTasksDashboard() {
 
                           {/* Priority */}
                           {isColVisible('priority') && (
-                            <td className="py-3 px-3.5 w-24 min-w-[90px] whitespace-nowrap">
+                            <td className="py-2 px-3.5 w-24 min-w-[90px] align-middle whitespace-nowrap">
                               <span
                                 className={`inline-flex px-2 py-0.5 text-[10px] font-bold rounded ${
                                   task.priority === 'Critical'
@@ -1863,7 +1946,7 @@ export default function InternalTasksDashboard() {
 
                           {/* Assigned To */}
                           {isColVisible('assignedTo') && (
-                            <td className="py-3 px-3.5 w-36 min-w-[130px]">
+                            <td className="py-2 px-3.5 w-36 min-w-[130px] max-w-[160px] align-middle whitespace-nowrap">
                               <div className="flex items-center gap-1.5 min-w-0">
                                 <div className="w-5 h-5 rounded-full bg-slate-200 dark:bg-slate-700 text-[10px] flex items-center justify-center font-bold text-slate-600 dark:text-slate-300 shrink-0">
                                   {(task.assigned_to_name || 'U').slice(0, 1)}
@@ -1878,30 +1961,52 @@ export default function InternalTasksDashboard() {
                             </td>
                           )}
 
-                          {/* Due Date & Overdue Badge */}
+                          {/* Due Date & Time - single-line layout */}
                           {isColVisible('dueDate') && (
-                            <td className="py-3 px-3.5 w-36 min-w-[130px] whitespace-nowrap">
-                              <div className="text-[11px] font-medium text-slate-700 dark:text-slate-300">
-                                {task.due_date || '—'} {task.due_time ? `• ${task.due_time}` : ''}
-                              </div>
-                              <span
-                                className={`text-[10px] font-semibold block ${
-                                  overdueInfo.isCompleted
-                                    ? 'text-emerald-600'
-                                    : overdueInfo.isOverdue
-                                    ? 'text-rose-600 font-bold'
-                                    : 'text-slate-400'
-                                }`}
-                              >
-                                {overdueInfo.text}
-                              </span>
+                            <td className="py-2 px-3.5 w-36 min-w-[130px] align-middle whitespace-nowrap">
+                              {overdueInfo.isCompleted ? (
+                                <span className="text-[11px] font-medium text-emerald-600">Closed</span>
+                              ) : !task.due_date ? (
+                                <span className="text-[11px] font-medium text-slate-400">No Due Date</span>
+                              ) : (
+                                <div className="flex items-center gap-1.5 text-[11px] font-medium whitespace-nowrap">
+                                  <span className="text-slate-700 dark:text-slate-300">
+                                    {task.due_date}
+                                    {task.due_time ? ` ${task.due_time}` : ''}
+                                  </span>
+                                  {overdueInfo.text && (
+                                    <>
+                                      <span className="text-slate-400">•</span>
+                                      <span
+                                        className={
+                                          overdueInfo.isOverdue
+                                            ? 'text-rose-600 font-bold'
+                                            : 'text-slate-500 dark:text-slate-400 font-semibold'
+                                        }
+                                      >
+                                        {overdueInfo.text}
+                                      </span>
+                                    </>
+                                  )}
+                                </div>
+                              )}
                             </td>
                           )}
 
-                          {/* Actions */}
+                          {/* Actions: Edit (Pencil), Compose (Send), Details (ExternalLink), Delete (Trash2) */}
                           {isColVisible('actions') && (
-                            <td className="py-3 px-3.5 text-right w-24 min-w-[96px] whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
+                            <td className="py-2 px-3.5 text-right w-28 min-w-[110px] align-middle whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
                               <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenEditModal(task)}
+                                  className="p-1.5 text-slate-400 hover:text-blue-600 hover:bg-slate-100 dark:hover:bg-slate-800 rounded-md transition-colors cursor-pointer"
+                                  title="Edit task"
+                                  aria-label="Edit task"
+                                  data-testid={`task-row-edit-${task.id}`}
+                                >
+                                  <Pencil className="w-3.5 h-3.5" />
+                                </button>
                                 <button
                                   type="button"
                                   onClick={() => {
@@ -2113,14 +2218,17 @@ export default function InternalTasksDashboard() {
           )}
 
           {/* ============================================================== */}
-          {/* MODAL: CREATE INTERNAL TASK (With Categories & Approval Flow)  */}
+          {/* MODAL: CREATE / EDIT INTERNAL TASK (With Categories & Approval) */}
           {/* ============================================================== */}
           {isCreateModalOpen && (
             <div
               role="dialog"
               aria-modal="true"
               onClick={(e) => {
-                if (e.target === e.currentTarget) setIsCreateModalOpen(false);
+                if (e.target === e.currentTarget) {
+                  setIsCreateModalOpen(false);
+                  setEditingTask(null);
+                }
               }}
               className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4"
             >
@@ -2131,18 +2239,26 @@ export default function InternalTasksDashboard() {
                 <div className="flex items-center justify-between border-b border-slate-100 dark:border-slate-800 pb-3">
                   <div className="flex items-center gap-2">
                     <div className="w-8 h-8 rounded-lg bg-blue-50 dark:bg-blue-950 flex items-center justify-center text-blue-600">
-                      <Plus className="w-4 h-4" />
+                      {editingTask ? <Pencil className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
                     </div>
                     <div>
-                      <h3 className="text-base font-bold text-slate-900 dark:text-white">Create Internal Task</h3>
+                      <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                        {editingTask ? `Edit Internal Task: ${editingTask.task_number || editingTask.id}` : 'Create Internal Task'}
+                      </h3>
                       <p className="text-[11px] text-slate-400">
-                        Create activity, assign responsibility, or submit credit approval request
+                        {editingTask
+                          ? 'Update task details, assignment, priority, or deadline'
+                          : 'Create activity, assign responsibility, or submit credit approval request'}
                       </p>
                     </div>
                   </div>
                   <button
-                    onClick={() => setIsCreateModalOpen(false)}
+                    onClick={() => {
+                      setIsCreateModalOpen(false);
+                      setEditingTask(null);
+                    }}
                     className="text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-1 rounded-lg"
+                    aria-label="Close"
                   >
                     <X className="w-5 h-5" />
                   </button>
@@ -2433,7 +2549,10 @@ export default function InternalTasksDashboard() {
                   <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
                     <button
                       type="button"
-                      onClick={() => setIsCreateModalOpen(false)}
+                      onClick={() => {
+                        setIsCreateModalOpen(false);
+                        setEditingTask(null);
+                      }}
                       className="px-4 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold"
                     >
                       Cancel
@@ -2442,8 +2561,9 @@ export default function InternalTasksDashboard() {
                       type="submit"
                       disabled={isSubmitting}
                       className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-lg shadow-sm shadow-blue-600/20 disabled:opacity-50"
+                      data-testid="modal-submit-task-btn"
                     >
-                      {isSubmitting ? 'Saving to Database...' : 'Create Task'}
+                      {isSubmitting ? 'Saving to Database...' : editingTask ? 'Save Changes' : 'Create Task'}
                     </button>
                   </div>
                 </form>
@@ -2609,7 +2729,7 @@ export default function InternalTasksDashboard() {
                               )}
                               <div className="flex justify-between text-emerald-700 dark:text-emerald-400 font-bold">
                                 <span>Payment Amount:</span>
-                                <span>₹{Number(selectedTaskDetails.raw.payment_amount ?? selectedTaskDetails.raw.amount ?? selectedTaskDetails.credit_quantity ?? 0).toLocaleString('en-IN')}</span>
+                                <span>₹{Number(selectedTaskDetails.raw.payment_amount || selectedTaskDetails.credit_quantity || 0).toLocaleString('en-IN')}</span>
                               </div>
                               {Boolean(selectedTaskDetails.raw.proof_file_name) && (
                                 <div className="pt-1.5 border-t border-slate-100 dark:border-slate-800">
@@ -2658,7 +2778,7 @@ export default function InternalTasksDashboard() {
                               <div className="flex justify-between">
                                 <span className="text-slate-500">Trial Days:</span>
                                 <span className="font-bold text-emerald-600 dark:text-emerald-400">
-                                  {String(selectedTaskDetails.raw.trial_days ?? selectedTaskDetails.raw.duration_days ?? selectedTaskDetails.credit_quantity ?? 0)} Days
+                                  {String(selectedTaskDetails.raw.trial_days || selectedTaskDetails.credit_quantity || 0)} Days
                                 </span>
                               </div>
                               <div className="flex justify-between">

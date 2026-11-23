@@ -2566,4 +2566,138 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     });
   });
 
+  describe('Permanent Bug Fixes & Regression Gate', () => {
+    it('viewing credit history does not trigger buyer account write mutation or permission error and settles loading cleanly', async () => {
+      (buyerProfileClient.fetchBuyerCreditHistory as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        summary: {
+          totalCreditsAllocated: 56,
+          totalCreditsConsumed: 51,
+          remainingFreeCredits: 5,
+          purchasedCredits: 0,
+          adjustedCredits: 0,
+          currentEntitlementMode: 'mode_1',
+          currentSubscriptionPlan: 'version_3',
+        },
+        transactions: [
+          {
+            id: 'ctx-rfq-1',
+            transactionId: 'ctx-rfq-1',
+            transactionDate: '2026-11-20T10:00:00Z',
+            transactionType: 'Credits Consumed',
+            creditSource: 'MODE_1',
+            creditsAdded: null,
+            creditsConsumed: 1,
+            previousBalance: 5,
+            updatedBalance: 5,
+            relatedRfqId: 'rfq-test-1',
+            status: 'COMPLETED',
+            description: 'Credit consumed for RFQ RFQ001: Test Requisition',
+          },
+          {
+            id: 'ctx-add-1',
+            transactionId: 'ctx-add-1',
+            transactionDate: '2026-11-22T03:00:00Z',
+            transactionType: 'Admin Credit Addition',
+            creditSource: 'Action Center Internal Tasks Approval',
+            creditsAdded: 5,
+            creditsConsumed: null,
+            previousBalance: 0,
+            updatedBalance: 5,
+            status: 'COMPLETED',
+            description: 'Internal Task approved: 5 credits',
+          },
+        ],
+        historyAvailable: true,
+      });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          initialTab="credits"
+        />
+      );
+
+      // Verify that credit history is loaded and cards are rendered
+      await waitFor(() => {
+        expect(screen.getByText('56')).toBeInTheDocument();
+        expect(screen.getByText('51')).toBeInTheDocument();
+      });
+
+      // Assert that no permission error toast is shown
+      expect(screen.queryByText(/You do not have permission to modify buyer accounts/i)).toBeNull();
+      expect(screen.queryByText(/Update Failed/i)).toBeNull();
+
+      // Assert loading spinner has settled
+      expect(screen.queryByText(/Loading complete credit history/i)).toBeNull();
+
+      // Assert transactions are rendered
+      expect(screen.getByText('Credit consumed for RFQ RFQ001: Test Requisition')).toBeInTheDocument();
+      expect(screen.getByText('Internal Task approved: 5 credits')).toBeInTheDocument();
+
+      // Test filter by Credits Consumed
+      const filterSelect = screen.getByDisplayValue('All Types');
+      fireEvent.change(filterSelect, { target: { value: 'Credits Consumed' } });
+      expect(screen.getByText('Credit consumed for RFQ RFQ001: Test Requisition')).toBeInTheDocument();
+      expect(screen.queryByText('Internal Task approved: 5 credits')).toBeNull();
+    });
+
+    it('viewing communications tab loads all aggregated emails, SMS, and notifications without error', async () => {
+      (buyerProfileClient.fetchBuyerCommunications as jest.Mock).mockResolvedValue({
+        success: true,
+        data: [
+          {
+            id: 'pdc_1',
+            channel: 'Email',
+            recipient: 'buyer@example.com',
+            subject: '[Approval Update] Request REQ-1 Approved',
+            message: 'Your approval request has been approved.',
+            deliveryStatus: 'Delivered',
+            acknowledgementStatus: 'Acknowledged',
+            sentAt: '2026-11-22T10:00:00Z',
+          },
+          {
+            id: 'comm-rfq-email-1',
+            channel: 'Email',
+            recipient: 'buyer@example.com',
+            subject: '[RFQ Acknowledgement] Requisition RFQ-1 Created',
+            message: 'Requisition RFQ-1 has been successfully logged.',
+            deliveryStatus: 'Delivered',
+            acknowledgementStatus: 'Acknowledged',
+            sentAt: '2026-11-21T09:00:00Z',
+          },
+          {
+            id: 'comm-rfq-sms-1',
+            channel: 'SMS',
+            recipient: '+91 9876543210',
+            subject: '[SMS Alert] RFQ RFQ-1 Registered',
+            message: 'Dear Buyer, your RFQ RFQ-1 has been registered.',
+            deliveryStatus: 'Delivered',
+            acknowledgementStatus: 'Acknowledged',
+            sentAt: '2026-11-21T09:00:00Z',
+          },
+        ],
+      });
+
+      render(
+        <BuyerDossierDrawer
+          buyer={mockBuyer}
+          onClose={onCloseMock}
+          onSelectRFQ={onSelectRFQMock}
+          initialTab="communications"
+        />
+      );
+
+      await waitFor(() => {
+        expect(screen.getByText('[Approval Update] Request REQ-1 Approved')).toBeInTheDocument();
+        expect(screen.getByText('[RFQ Acknowledgement] Requisition RFQ-1 Created')).toBeInTheDocument();
+      });
+
+      expect(screen.queryByText(/Update Failed/i)).toBeNull();
+      expect(screen.queryByText(/You do not have permission to modify buyer accounts/i)).toBeNull();
+    });
+  });
+
 });
