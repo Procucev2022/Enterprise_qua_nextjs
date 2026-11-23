@@ -254,10 +254,12 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     }
 
 
-    // Click Edit button on a vendor
-    const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-    if (editBtns.length > 0) {
-      fireEvent.click(editBtns[0]);
+    // Click View Profile then Edit Profile on a vendor
+    const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+    if (viewBtns.length > 0) {
+      fireEvent.click(viewBtns[0]);
+      const editProfileBtn = screen.getByRole('button', { name: /Edit Profile/i });
+      fireEvent.click(editProfileBtn);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // Add a minor category tag

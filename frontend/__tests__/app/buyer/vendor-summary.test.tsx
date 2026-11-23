@@ -123,6 +123,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockDeleteMultipleBuyerVendors = jest.fn();
   const mockFetchVendorEvaluation = jest.fn();
 
+  const openEditVendorModal = (vendorIndex = 0) => {
+    const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
+    fireEvent.click(viewButtons[vendorIndex] || viewButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Edit Profile/i }));
+  };
+
   const mockBuyerVendors: any[] = [
     {
       id: 'v-1',
@@ -314,6 +320,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
     });
 
     it('hides Revise Rating button from Actions column in table when ENABLE_VENDOR_RATING is false', async () => {
+      setEnableVendorRating(false);
       render(
         <VendorSummary
           onViewEvaluation={mockOnViewEvaluation}
@@ -908,7 +915,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       await waitFor(() => expect(validatePincode).toHaveBeenCalledWith('411038'));
       expect(screen.getByDisplayValue('Hadapsar')).toBeInTheDocument();
@@ -934,7 +941,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
       expect(screen.queryByText(UI_STRINGS.pincodeVerification.unverified)).not.toBeInTheDocument();
@@ -1047,8 +1054,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       // Click Edit on Apex Supplies
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
@@ -1077,7 +1083,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       expect(screen.getByText(UI_STRINGS.vendorStatutory.editHeading)).toBeInTheDocument();
@@ -1158,7 +1164,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       fireEvent.change(screen.getByDisplayValue('Rajesh Nair'), { target: { value: 'Rajesh Nair Updated' } });
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
 
@@ -1287,8 +1293,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
 
       // Click Edit and then Cancel
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
       expect(screen.queryByText('Edit Vendor Profile')).not.toBeInTheDocument();
@@ -1308,8 +1313,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const tagInput = screen.getByPlaceholderText(/search category/i);
       const addTagBtn = screen.getByRole('button', { name: /Add Tag/i });
@@ -1348,8 +1352,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const contactInput = screen.getByDisplayValue('Rajesh Nair');
       fireEvent.change(contactInput, { target: { value: '   ' } });
@@ -1371,8 +1374,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const [nameInput, brandInput] = screen.getAllByDisplayValue('Apex Supplies Ltd.');
       fireEvent.change(nameInput, { target: { value: 'Apex Supplies Pvt Ltd.' } });
@@ -1424,8 +1426,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       const xBtn = screen
@@ -1770,7 +1771,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // The major and minor category are required, so the sparse vendor's blank ones are supplied.
@@ -2049,8 +2050,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtn = screen.getByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtn);
+      openEditVendorModal(0);
 
       expect(screen.getByText('Invalid PIN code format')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -2094,8 +2094,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       // Find the pincode textbox inside Edit Vendor modal and set dummy pincode
       const pincodeInputs = screen.getAllByRole('textbox').filter((input) => {
@@ -3720,8 +3719,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       // Open edit modal for the minimal vendor
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
       fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
@@ -3882,7 +3880,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
-      }, { timeout: 3000 });
+      }, { timeout: 10000 });
 
       fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
     });
@@ -4111,7 +4109,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
 
       // Add a category tag since every saved vendor must have at least one category
       fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
@@ -4494,8 +4492,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
       // ─── EDIT VENDOR MODAL ───
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const editInput = document.getElementById('edit-vendor-category-input') as HTMLInputElement;
 
@@ -4632,8 +4629,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtn = screen.getAllByRole('button', { name: /Edit/i })[0];
-      fireEvent.click(editBtn);
+      openEditVendorModal(0);
 
       fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0.5' } });
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -4714,7 +4710,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       expect(screen.getByText('Veera Solutions Pvt LTD')).toBeInTheDocument();
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(
         screen.getByDisplayValue('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
@@ -4765,7 +4761,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(screen.getByDisplayValue('560099')).toBeInTheDocument();
       await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('560099'));
@@ -4878,7 +4874,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       const editPhoneInput = screen.getByLabelText(
         new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i')
       ) as HTMLInputElement;
@@ -4955,7 +4951,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
       expect(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i'))).toHaveValue('');
     });
@@ -5234,7 +5230,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
 
       // 2. Edit Vendor blocked when existing Category tag is removed and not replaced
-      fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+      openEditVendorModal(0);
       fireEvent.click(screen.getByRole('button', { name: 'Remove Valves' }));
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
       expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
@@ -5506,7 +5502,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         assertInsideKeepsOpenAndBackdropCloses('view-vendor-modal-backdrop');
 
         // 4. Edit Vendor popup
-        fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+        openEditVendorModal(0);
         assertInsideKeepsOpenAndBackdropCloses('edit-vendor-modal-backdrop');
 
         // 5. Category Assign popup

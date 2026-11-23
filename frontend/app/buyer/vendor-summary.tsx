@@ -1764,7 +1764,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 1. Supplier Name */}
-        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[180px] max-w-[240px] align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[220px] max-w-[300px] align-middle')}>
           <div className="space-y-0.5">
             <h3
               className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[220px]"
@@ -1780,33 +1780,54 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Performance Rating Revision Badge / History Line */}
             {vendor.latestRatingRevision && (
-              <div className="mt-1 p-1.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
-                <div className="flex items-center justify-between gap-1">
+              <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 text-[10px] space-y-1 max-w-[280px] overflow-hidden shadow-xs">
+                <div className="flex items-center justify-between gap-1 flex-wrap">
                   <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
-                    <Star size={11} className="fill-amber-500 text-amber-500" />
-                    <span>
-                      Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
-                      {vendor.latestRatingRevision.newCompositeScore}%)
-                    </span>
-                    <span className="text-[9px] font-normal text-slate-500">
-                      by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
+                    <Star size={11} className="fill-amber-500 text-amber-500 shrink-0" />
+                    <span>Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★</span>
+                    <span className="text-[9.5px] font-semibold text-amber-700 dark:text-amber-400">
+                      ({vendor.latestRatingRevision.newCompositeScore}%)
                     </span>
                   </div>
+                  <span
+                    className="text-[9px] font-medium text-slate-500 dark:text-gray-400 truncate max-w-[130px]"
+                    title={vendor.latestRatingRevision.buyerCompany}
+                  >
+                    by {vendor.latestRatingRevision.buyerCompany}
+                  </span>
+                </div>
+
+                <div className="text-[9px] text-slate-500 dark:text-gray-400">
+                  {(() => {
+                    const rawTs = String(vendor.latestRatingRevision.timestamp || '');
+                    const datePart = rawTs.includes('T') ? rawTs.split('T')[0] : rawTs.split(' ')[0];
+                    return datePart || rawTs;
+                  })()}
+                </div>
+
+                {vendor.latestRatingRevision.remarks && (
+                  <p
+                    className="text-slate-600 dark:text-gray-300 italic text-[9.5px] line-clamp-2 leading-tight"
+                    title={vendor.latestRatingRevision.remarks}
+                  >
+                    &ldquo;{vendor.latestRatingRevision.remarks}&rdquo;
+                  </p>
+                )}
+
+                <div className="flex items-center justify-between gap-1 pt-1 border-t border-amber-200/60 dark:border-amber-800/40 text-[9px] flex-wrap">
+                  <span className="text-slate-600 dark:text-gray-400 font-medium">
+                    Quality: {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery: {vendor.latestRatingRevision.deliveryScore}
+                  </span>
                   <button
                     type="button"
                     onClick={() =>
                       vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
                     }
-                    className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
+                    className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
                   >
                     <Mail size={10} /> View Dispatched Email Notice
                   </button>
                 </div>
-                <p className="text-slate-600 dark:text-gray-300 italic text-[9.5px]">
-                  &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
-                  {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
-                  {vendor.latestRatingRevision.deliveryScore})
-                </p>
               </div>
             )}
           </div>
@@ -2078,18 +2099,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             >
               <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
             </button>
-
-            {/* Edit Vendor Button - Hidden on page per user request */}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => handleOpenEditModal(vendor)}
-                className="hidden btn btn-secondary btn-xs font-semibold items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
-                title="Edit vendor company information, categories, and contact details"
-              >
-                <Pencil size={11} /> Edit
-              </button>
-            )}
 
             {/* Mark Inactive / Reactivate Button - Only for buyer-owned vendors */}
             {canManage && (
@@ -2392,7 +2401,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <th
                       onClick={createColumnSortClickHandler('name', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'name')}
-                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[180px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[220px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
                     </th>

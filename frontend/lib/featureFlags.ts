@@ -4,6 +4,6 @@
  */
 export const FEATURE_FLAGS = {
   ENABLE_MODE_3: false,
-  ENABLE_VENDOR_RATING: false,
+  ENABLE_VENDOR_RATING: true,
   ENABLE_VENDOR_EVALUATION_REQUEST: false,
 };
