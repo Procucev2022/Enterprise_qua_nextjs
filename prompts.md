@@ -8515,3 +8515,84 @@ raise the pr and with this branch and don't merge directly pass all the covergae
 ```text
 continuw
 ```
+
+
+---
+
+### Prompt 394
+
+**Timestamp**: 2026-11-23T15:37:32+05:30
+
+```text
+1. Root Cause Diagnosis & Solutions
+Issue 1: Update Failed: You do not have permission to modify buyer accounts. & Infinite Credit Loading Spinner
+Root Cause:
+In BuyerDossierDrawer.tsx, loadCreditHistory was calling appContext?.updateBuyerAccount(buyer.id, ...) as a side-effect of reading credit history.
+In the backend, PUT /api/buyer-accounts/:id enforces strict RBAC: only buyer and admin roles can mutate buyer accounts; category_manager is intentionally denied with 403 Update Failed: You do not have permission to modify buyer accounts.
+Because appContext was in the useCallback dependency array and the write failure triggered re-renders, the drawer entered an infinite re-fetch/mutation loop.
+Fix:
+Removed the write mutation updateBuyerAccount entirely from the read/view flow in BuyerDossierDrawer.tsx. Viewing the dossier or switching between tabs never issues unauthorized writes.
+Preserved strict backend RBAC in buyerAccountController.js (assertBuyerAccountRole).
+Enforced robust state resets and finally { setLoadingCredit(false); } so the spinner never hangs.
+Issue 2: Complete Buyer Credit History (Reflect All 51 RFQs + Consumed Credits)
+Root Cause:
+The buyer had 51 RFQs in the system, but historical RFQ creations did not insert rows into buyer_credit_transactions (or had credits_consumed = 0).
+As a result, GET /api/buyers/:id/credit-history returned only the single row (Admin Credit Addition +5) and creditsConsumed = 0.
+Fix:
+In buyerAccountController.js (getCreditHistory), added automatic reconciliation with existing RFQs:
+Fetches all historical RFQs for the buyer using domainQueries.getRFQsFromDB(buyerId, 1000).
+Identifies any RFQ without a matching debit transaction in buyer_credit_transactions and synthesizes an rfq_creation transaction (-1 credit) with metadata (rfq_id, rfq_number, title).
+Persists reconciled transactions into buyer_credit_transactions via ON CONFLICT (id) DO NOTHING or in-memory fallback.
+Computes balances accurately:
+Total Allocated
+=
+Remaining Free
++
+Total Consumed
+Total Allocated=Remaining Free+Total Consumed
+When history exists, this guarantees the summary cards balance: for example, 5 remaining + 51 consumed = 56 allocated.
+Issue 3: Complete Communications History (Buyer & Seller Dossiers)
+Root Cause:
+paymentDuesQueries.js (getCommunicationHistory) was querying only payment_dues_communications, returning only the single approval update email.
+Outbound RFQ acknowledgement emails/SMS, system notifications (notifications table), and vendor follow-ups (chaser_queue table) were completely omitted.
+Fix:
+Updated getCommunicationHistory in paymentDuesQueries.js to aggregate across all communication sources:
+payment_dues_communications (direct payment/approval notices).
+Buyer RFQ acknowledgements (synthesizing email and SMS confirmations sent during RFQ creation).
+notifications table (in-app, email, and push communications matching recipient email or account ID).
+chaser_queue table (vendor follow-up SMS, WhatsApp, email, and call logs).
+Deduplicated and sorted by sentAt DESC.
+Updated BuyerDossierDrawer.tsx and SupplierDossierDrawer.tsx to support case-insensitive channel filtering (email, sms, whatsapp, call).
+The Communications (N) badge now reflects the aggregate count across all channels.
+2. Verification & Coverage Results
+Quality Pipeline (npm run check:fast)
+text
+✔ PostgreSQL / D1 Schema Parity passed (5.96s)
+✔ Schema Parity Regression Tests passed (2.49s)
+✔ TypeScript Typecheck passed (6.67s)
+✔ Frontend ESLint Check passed (0 errors, 0 warnings)
+✔ Backend Related Tests & 90% Per-File Coverage passed
+✔ Frontend Related Tests & 90% Per-File Coverage passed (29.79s)
+✔ ⚡ QUALITY GATE COMPLETE - ALL CHECKED PATHS MEET 90% COVERAGE & BUILD STANDARDS
+Per-File 
+≥
+90
+%
+≥90% Benchmark Metrics
+File Statements Branches Functions Lines Status
+buyerAccountController.js 99.23% 90.78% 100.0% 100.0% PASS
+paymentDuesQueries.js 98.39% 90.34% 100.0% 100.0% PASS
+BuyerDossierDrawer.tsx 96.52% 91.70% 95.80% 96.77% PASS
+SupplierDossierDrawer.tsx 95.40% 90.23% 92.55% 96.11% PASS
+Test Suites Executed
+buyerAccountControllerBranches.test.js (66 tests passed)
+paymentDuesQueriesBranches.test.js (38 tests passed)
+BuyerDossierDrawer.test.tsx (59 tests passed)
+BuyerDossierDrawerBranches.test.tsx (53 tests passed)
+SupplierDossierDrawerRequests.test.tsx (64 tests passed)
+buyerProfileEnhancements.test.js (28 tests passed)
+api.test.js (143 tests passed)
+User prompt history updated in prompts.md.
+
+i am asking about this issue it is already merrge the code or not?
+```
