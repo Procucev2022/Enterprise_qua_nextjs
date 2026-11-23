@@ -171,6 +171,27 @@ async function loadIdentityUser(normalizedEmail, mobile) {
 }
 
 /**
+ * Same fail-closed/error-translation contract as loadIdentityUser, but keyed
+ * by the account's own UUID primary key rather than its (non-unique) email.
+ */
+async function loadIdentityUserByUuid(uuid) {
+  if (!pool.hasStorage()) {
+    const error = new Error(AUTH_MESSAGES.IDENTITY_DB_NOT_CONFIGURED);
+    error.code = 'PERSISTENCE_UNAVAILABLE';
+    throw error;
+  }
+  try {
+    return await identityQueries.findUserByUuid(uuid);
+  } catch (err) {
+    logger.error('Account lookup failed', err, 'AUTH_SERVICE');
+    const unavailable = new Error(AUTH_MESSAGES.IDENTITY_DB_UNAVAILABLE);
+    unavailable.code = 'PERSISTENCE_UNAVAILABLE';
+    unavailable.cause = err;
+    throw unavailable;
+  }
+}
+
+/**
  * Reject accounts that exist but are not permitted to sign in, with a message
  * that explains which gate failed and how to clear it.
  */
@@ -506,8 +527,17 @@ async function changePassword({ userUuid, email, currentPassword, newPassword, c
   const normalizedEmail = String(email || '').trim().toLowerCase();
 
   // Read the row rather than trusting the token: the token carries no password,
-  // and the account may have been deactivated since it was issued.
-  const user = await loadIdentityUser(normalizedEmail);
+  // and the account may have been deactivated since it was issued. Resolved by
+  // the session's own UUID primary key first, not by email: `user.username`
+  // has no unique index (see loadIdentityUser), and a duplicate-email row
+  // created after this session was issued can tie-break ahead of the actual
+  // signed-in account in an email-only lookup — the genuinely valid session
+  // then resolves to a different row and the real account looks "missing".
+  // Falls back to the email lookup only if the UUID itself no longer resolves
+  // (e.g. the row was deleted outright).
+  const user = userUuid
+    ? (await loadIdentityUserByUuid(userUuid)) || (await loadIdentityUser(normalizedEmail))
+    : await loadIdentityUser(normalizedEmail);
   if (!user || (userUuid && user.id !== userUuid)) {
     logger.warn(
       `Password change blocked, account record not resolvable for ${normalizedEmail}`,
