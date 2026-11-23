@@ -1171,6 +1171,76 @@ describe('rfqClient RFQ persistence', () => {
       expect(res.success === false && res.reason).toBe('SERVER');
       expect(res.success === false && res.error).toBe(UI_STRINGS.rfqDetails.loadFailed);
     });
+
+    test('passes page, search, status, buyer, startDate and endDate query options', async () => {
+      global.fetch = reply(200, {
+        success: true,
+        rfqs: [RFQ],
+        total: 250,
+        page: 2,
+        limit: 100,
+        totalPages: 3,
+      });
+
+      const res = await fetchAllRFQs({
+        page: 2,
+        limit: 100,
+        search: '  pump  ',
+        status: 'Quotes Pending',
+        buyer: 'Acme Buyer',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      expect(res.success).toBe(true);
+      if (res.success) {
+        expect(res.rfqs).toEqual([RFQ]);
+        expect(res.total).toBe(250);
+        expect(res.page).toBe(2);
+        expect(res.limit).toBe(100);
+        expect(res.totalPages).toBe(3);
+      }
+      expect(lastPath()).toBe(
+        '/api/rfqs/all?limit=100&page=2&search=pump&status=Quotes+Pending&buyer=Acme+Buyer&startDate=2026-01-01&endDate=2026-12-31'
+      );
+    });
+
+    test('ignores "all" status and buyer, and empty strings in options', async () => {
+      global.fetch = reply(200, {
+        success: true,
+        data: [RFQ],
+      });
+
+      const res = await fetchAllRFQs({
+        search: '   ',
+        status: 'all',
+        buyer: 'all',
+      });
+
+      expect(res.success).toBe(true);
+      if (res.success) {
+        expect(res.total).toBe(1);
+        expect(res.page).toBe(1);
+        expect(res.limit).toBe(100);
+        expect(res.totalPages).toBe(1);
+      }
+      expect(lastPath()).toBe('/api/rfqs/all');
+    });
+
+    test('resets session on 401 response', async () => {
+      const clearSpy = jest.spyOn(authClient, 'setSession');
+      global.fetch = reply(401, { error: 'Token invalid' });
+
+      const res = await fetchAllRFQs();
+
+      expect(res).toEqual({
+        success: false,
+        reason: 'UNAUTHORIZED',
+        error: 'Token invalid',
+      });
+      expect(clearSpy).toHaveBeenCalledWith(null, null);
+      clearSpy.mockRestore();
+    });
   });
 
   describe('fetchVendorCandidates', () => {

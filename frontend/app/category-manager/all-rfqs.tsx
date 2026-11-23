@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { RFQItem, QuoteComparison, RFQAssignedVendor } from '@/lib/types';
 import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
@@ -130,6 +130,10 @@ function rfqHasCategorySignal(rfq: RFQItem): boolean {
  */
 export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: AllRFQsConsoleProps) {
   const [rfqs, setRfqs] = useState<RFQItem[]>([]);
+  const [totalCount, setTotalCount] = useState<number>(0);
+  const [totalPages, setTotalPages] = useState<number>(1);
+  const [isServerPaginated, setIsServerPaginated] = useState<boolean>(false);
+  const [allBuyerNames, setAllBuyerNames] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -140,6 +144,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
   const [endDate, setEndDate] = useState<string>('');
   const [currentPage, setCurrentPage] = useState<number>(1);
   const tableContainerRef = useRef<HTMLDivElement>(null);
+  const prevFiltersRef = useRef({ search, statusFilter, buyerFilter, startDate, endDate });
   const [inviteTargetRfq, setInviteTargetRfq] = useState<RFQItem | null>(null);
   const [allRfqsSort, setAllRfqsSort] = useState<TableSortState>({ key: null, dir: 'asc' });
   const [allRfqsColumns, setAllRfqsColumns] = useState<TableColumnOption[]>(() =>
@@ -225,20 +230,61 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     endDateInputRef.current?.focus();
   };
 
-  const load = async () => {
-    setLoading(true);
-    setError(null);
-    const result = await fetchAllRFQs({ summary: true, limit: 100 });
-    if (result.success) {
-      setRfqs(result.rfqs);
-    } else {
-      setError(result.error || S.loadFailed);
-    }
-    setLoading(false);
-  };
+  const load = useCallback(
+    async (
+      targetPage: number = 1,
+      targetSearch: string = search,
+      targetStatus: string = statusFilter,
+      targetBuyer: string = buyerFilter,
+      targetStart: string = startDate,
+      targetEnd: string = endDate
+    ) => {
+      setLoading(true);
+      setError(null);
+      const fetchParams: {
+        summary: boolean;
+        limit: number;
+        page: number;
+        search?: string;
+        status?: string;
+        buyer?: string;
+        startDate?: string;
+        endDate?: string;
+      } = {
+        summary: true,
+        limit: PAGE_SIZE,
+        page: targetPage,
+      };
+      if (targetSearch && targetSearch.trim()) fetchParams.search = targetSearch.trim();
+      if (targetStatus && targetStatus !== 'all') fetchParams.status = targetStatus;
+      if (targetBuyer && targetBuyer !== 'all') fetchParams.buyer = targetBuyer;
+      if (targetStart) fetchParams.startDate = targetStart;
+      if (targetEnd) fetchParams.endDate = targetEnd;
+
+      const result = await fetchAllRFQs(fetchParams);
+      if (result.success) {
+        setRfqs(result.rfqs);
+        const resolvedTotal = typeof result.total === 'number' ? result.total : result.rfqs.length;
+        setTotalCount(resolvedTotal);
+        setTotalPages(
+          typeof result.totalPages === 'number'
+            ? result.totalPages
+            : Math.max(1, Math.ceil(resolvedTotal / PAGE_SIZE))
+        );
+        if (typeof result.total === 'number' || typeof result.totalPages === 'number') {
+          setIsServerPaginated(true);
+        }
+      } else {
+        setError(result.error || S.loadFailed);
+      }
+      setLoading(false);
+    },
+    [search, statusFilter, buyerFilter, startDate, endDate]
+  );
 
   useEffect(() => {
-    void load();
+    void load(1, '', 'all', 'all', '', '');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Escape key support to close vendor list modal
@@ -253,13 +299,26 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [vendorListModalData]);
 
+  useEffect(() => {
+    if (rfqs.length > 0) {
+      setAllBuyerNames((prev) => {
+        const set = new Set(prev);
+        for (const r of rfqs) {
+          if (r.buyerAccountName) set.add(r.buyerAccountName);
+        }
+        return Array.from(set).sort((a, b) => a.localeCompare(b));
+      });
+    }
+  }, [rfqs]);
+
   const buyerNames = useMemo(() => {
+    if (allBuyerNames.length > 0) return allBuyerNames;
     const names = new Set<string>();
     for (const r of rfqs) {
       if (r.buyerAccountName) names.add(r.buyerAccountName);
     }
     return Array.from(names).sort((a, b) => a.localeCompare(b));
-  }, [rfqs]);
+  }, [allBuyerNames, rfqs]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -305,52 +364,81 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
     setCurrentPage(1);
   };
 
-  // Reset to Page 1 whenever search, status, buyer or date filters change
+  // Reset to Page 1 whenever search, status, buyer or date filters change, and fetch from server if server-paginated
   useEffect(() => {
-    setCurrentPage(1);
-  }, [search, statusFilter, buyerFilter, startDate, endDate]);
+    const prev = prevFiltersRef.current;
+    const changed =
+      prev.search !== search ||
+      prev.statusFilter !== statusFilter ||
+      prev.buyerFilter !== buyerFilter ||
+      prev.startDate !== startDate ||
+      prev.endDate !== endDate;
+    if (changed) {
+      prevFiltersRef.current = { search, statusFilter, buyerFilter, startDate, endDate };
+      setCurrentPage(1);
+      if (isServerPaginated) {
+        void load(1, search, statusFilter, buyerFilter, startDate, endDate);
+      }
+    }
+  }, [search, statusFilter, buyerFilter, startDate, endDate, isServerPaginated, load]);
 
   const sortedRfqs = useMemo(() => {
     return sortTableRows(filtered, allRfqsSort);
   }, [filtered, allRfqsSort]);
 
-  const totalPages = Math.max(1, Math.ceil(sortedRfqs.length / PAGE_SIZE));
+  const effectiveTotal = isServerPaginated
+    ? totalCount
+    : rfqs.length > PAGE_SIZE
+    ? filtered.length
+    : totalCount;
+  const effectiveTotalPages = isServerPaginated
+    ? totalPages
+    : rfqs.length > PAGE_SIZE
+    ? Math.max(1, Math.ceil(filtered.length / PAGE_SIZE))
+    : totalPages;
 
   const paginatedRfqs = useMemo(() => {
-    const start = (currentPage - 1) * PAGE_SIZE;
-    return sortedRfqs.slice(start, start + PAGE_SIZE);
-  }, [sortedRfqs, currentPage]);
+    if (!isServerPaginated && rfqs.length > PAGE_SIZE) {
+      const start = (currentPage - 1) * PAGE_SIZE;
+      return sortedRfqs.slice(start, start + PAGE_SIZE);
+    }
+    return sortedRfqs;
+  }, [isServerPaginated, rfqs.length, sortedRfqs, currentPage]);
 
   const handlePageChange = (newPage: number) => {
-    const targetPage = Math.max(1, Math.min(totalPages, newPage));
+    const targetPage = Math.max(1, Math.min(effectiveTotalPages, newPage));
+    if (targetPage === currentPage) return;
     setCurrentPage(targetPage);
     if (typeof tableContainerRef.current?.scrollTo === 'function') {
       tableContainerRef.current.scrollTo({ top: 0, behavior: 'smooth' });
     }
+    if (isServerPaginated) {
+      void load(targetPage, search, statusFilter, buyerFilter, startDate, endDate);
+    }
   };
 
   const pageNumbers = useMemo(() => {
-    if (totalPages <= 7) {
-      return Array.from({ length: totalPages }, (_, i) => i + 1);
+    if (effectiveTotalPages <= 7) {
+      return Array.from({ length: effectiveTotalPages }, (_, i) => i + 1);
     }
     const pages: (number | string)[] = [];
     if (currentPage <= 4) {
       for (let i = 1; i <= 5; i++) pages.push(i);
       pages.push('...');
-      pages.push(totalPages);
-    } else if (currentPage >= totalPages - 3) {
+      pages.push(effectiveTotalPages);
+    } else if (currentPage >= effectiveTotalPages - 3) {
       pages.push(1);
       pages.push('...');
-      for (let i = totalPages - 4; i <= totalPages; i++) pages.push(i);
+      for (let i = effectiveTotalPages - 4; i <= effectiveTotalPages; i++) pages.push(i);
     } else {
       pages.push(1);
       pages.push('...');
       for (let i = currentPage - 1; i <= currentPage + 1; i++) pages.push(i);
       pages.push('...');
-      pages.push(totalPages);
+      pages.push(effectiveTotalPages);
     }
     return pages;
-  }, [totalPages, currentPage]);
+  }, [effectiveTotalPages, currentPage]);
 
   const handleExportCsv = () => {
     const rows = filtered.map((rfq) => {
@@ -399,10 +487,10 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
       {!loading && !error && (
         <>
           <p className="sr-only" data-testid="all-rfqs-count">
-            {formatString(S.countSummary, { count: rfqs.length, buyers: buyerNames.length })}
+            {formatString(S.countSummary, { count: effectiveTotal, buyers: buyerNames.length })}
           </p>
           <p className="sr-only" aria-live="polite">
-            {formatString(S.resultCount, { shown: filtered.length, total: rfqs.length })}
+            {formatString(S.resultCount, { shown: filtered.length, total: effectiveTotal })}
           </p>
           {hasFilters && <span className="sr-only">{S.filtersApplied}</span>}
         </>
@@ -894,7 +982,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
           {/* Pagination Bar */}
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 px-4 py-3 border-t border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-950">
             <span className="text-xs text-slate-500 dark:text-gray-400 font-medium">
-              Showing {(currentPage - 1) * PAGE_SIZE + 1}–{Math.min(currentPage * PAGE_SIZE, filtered.length)} of {filtered.length} RFQs
+              Showing {effectiveTotal === 0 ? '0–0' : `${(currentPage - 1) * PAGE_SIZE + 1}–${Math.min(currentPage * PAGE_SIZE, effectiveTotal)}`} of {effectiveTotal} RFQs
             </span>
             <div className="flex items-center gap-1.5 select-none">
               <button
@@ -934,7 +1022,7 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               <button
                 type="button"
                 onClick={() => handlePageChange(currentPage + 1)}
-                disabled={currentPage >= totalPages}
+                disabled={currentPage >= effectiveTotalPages}
                 aria-label="Next page"
                 className="inline-flex items-center px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-gray-900 text-slate-600 dark:text-gray-300 hover:bg-slate-50 dark:hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed transition-colors cursor-pointer"
               >

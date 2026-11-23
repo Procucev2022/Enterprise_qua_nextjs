@@ -942,6 +942,102 @@ describe('AllRFQsConsole', () => {
       Element.prototype.scrollTo = originalScrollTo;
     });
 
+    it('handles server-side pagination when more than 100 RFQs exist in DB (250 RFQs)', async () => {
+      const originalScrollTo = Element.prototype.scrollTo;
+      Element.prototype.scrollTo = jest.fn();
+
+      const page1Rows = Array.from({ length: 100 }, (_, i) =>
+        makeRfq({
+          id: `srv-${i + 1}`,
+          title: `Server RFQ ${i + 1}`,
+          category: 'Cables',
+          status: 'Quotes Pending',
+          buyerAccountName: 'Alpha Buyer Co',
+        })
+      );
+      const page2Rows = Array.from({ length: 100 }, (_, i) =>
+        makeRfq({
+          id: `srv-${i + 101}`,
+          title: `Server RFQ ${i + 101}`,
+          category: 'Cables',
+          status: 'Quotes Pending',
+          buyerAccountName: 'Alpha Buyer Co',
+        })
+      );
+      const filteredRows = Array.from({ length: 5 }, (_, i) =>
+        makeRfq({
+          id: `srv-filt-${i + 1}`,
+          title: `Filtered RFQ filter-test ${i + 1}`,
+          category: 'Pumps',
+          status: 'PO Generated',
+          buyerAccountName: 'Beta Buyer Co',
+        })
+      );
+
+      mockFetch.mockImplementation(async (opts: any = {}) => {
+        if (opts.search === 'filter-test') {
+          return {
+            success: true,
+            rfqs: filteredRows,
+            total: 5,
+            page: 1,
+            limit: 100,
+            totalPages: 1,
+          };
+        }
+        if (opts.page === 2) {
+          return {
+            success: true,
+            rfqs: page2Rows,
+            total: 250,
+            page: 2,
+            limit: 100,
+            totalPages: 3,
+          };
+        }
+        return {
+          success: true,
+          rfqs: page1Rows,
+          total: 250,
+          page: 1,
+          limit: 100,
+          totalPages: 3,
+        };
+      });
+
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('Server RFQ 1')).toBeInTheDocument());
+
+      // 1. Footer displays Showing 1–100 of 250 RFQs with Next > enabled and Previous disabled
+      expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument();
+      const prevBtn = screen.getByRole('button', { name: 'Previous page' });
+      const nextBtn = screen.getByRole('button', { name: 'Next page' });
+      expect(prevBtn).toBeDisabled();
+      expect(nextBtn).not.toBeDisabled();
+
+      // 2. Clicking Next > requests page=2&limit=100 and renders RFQs 101–200
+      fireEvent.click(nextBtn);
+      await waitFor(() => expect(screen.getByText('Server RFQ 101')).toBeInTheDocument());
+      expect(screen.getByText('Showing 101–200 of 250 RFQs')).toBeInTheDocument();
+      expect(screen.queryByText('Server RFQ 1')).not.toBeInTheDocument();
+      expect(Element.prototype.scrollTo).toHaveBeenCalled();
+
+      // 3. Changing any filter resets page to 1 and recalculates total accurately from DB
+      const searchInput = screen.getByPlaceholderText(S.searchPlaceholder);
+      fireEvent.change(searchInput, { target: { value: 'filter-test' } });
+      await waitFor(() => expect(screen.getByText('Filtered RFQ filter-test 1')).toBeInTheDocument());
+      expect(screen.getByText('Showing 1–5 of 5 RFQs')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Next page' })).toBeDisabled();
+
+      // 4. Clearing search restores page 1 and recalculates total to 250
+      const clearSearchBtn = screen.getByRole('button', { name: S.clearSearch });
+      fireEvent.click(clearSearchBtn);
+      await waitFor(() => expect(screen.getByText('Server RFQ 1')).toBeInTheDocument());
+      expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument();
+
+      Element.prototype.scrollTo = originalScrollTo;
+    });
+
     it('renders ellipsis pagination for large number of pages (>7 pages)', async () => {
       const originalScrollTo = Element.prototype.scrollTo;
       Element.prototype.scrollTo = jest.fn();

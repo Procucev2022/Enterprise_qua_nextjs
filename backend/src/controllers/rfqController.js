@@ -506,19 +506,30 @@ async function getRFQs(req, res, next) {
 async function getAllRFQs(req, res, next) {
   try {
     await storeService.syncRFQsFromDB(true);
-    let rfqs = storeService
-      .getRFQs()
-      .slice()
-      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
 
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
       ? Math.min(Number(req.query.limit), 500)
-      : 200;
-    rfqs = rfqs.slice(0, limit);
+      : 100;
+    const search = typeof req.query?.search === 'string' ? req.query.search : '';
+    const status = typeof req.query?.status === 'string' ? req.query.status : '';
+    const buyer = typeof req.query?.buyer === 'string' ? req.query.buyer : '';
+    const startDate = typeof req.query?.startDate === 'string' ? req.query.startDate : '';
+    const endDate = typeof req.query?.endDate === 'string' ? req.query.endDate : '';
+
+    const pageResult = await storeService.getRFQsPage({
+      page,
+      limit,
+      search,
+      status,
+      buyer,
+      startDate,
+      endDate,
+    });
 
     const summaryOnly = req.query && (req.query.summary === 'true' || req.query.summary === true);
     const data = summaryOnly
-      ? rfqs.map((r) => ({
+      ? pageResult.rows.map((r) => ({
           id: r.id,
           rfqNumber: r.rfqNumber,
           title: r.title,
@@ -567,13 +578,18 @@ async function getAllRFQs(req, res, next) {
             aiMatchScore: q.aiMatchScore,
           })),
         }))
-      : rfqs;
+      : pageResult.rows;
 
-    logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly, page, limit, total: pageResult.total }, 'RFQ_CONTROLLER');
     res.json({
       success: true,
-      source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
+      source: (pool.hasStorage() || storeService.isHydratedFromDB) ? 'persisted' : 'in_memory',
       data,
+      rfqs: data,
+      total: pageResult.total,
+      page: pageResult.page,
+      limit: pageResult.limit,
+      totalPages: pageResult.totalPages,
     });
   } catch (err) {
     logger.error('Error fetching all RFQs', err, 'RFQ_CONTROLLER');
