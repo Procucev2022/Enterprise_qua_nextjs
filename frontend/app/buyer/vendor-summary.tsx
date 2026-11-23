@@ -1768,10 +1768,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 1. Supplier Name */}
-        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[220px] max-w-[300px] align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[260px] max-w-[320px] align-middle')}>
           <div className="space-y-0.5">
             <h3
-              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[220px]"
+              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[240px]"
               title={vendor.name}
             >
               <span className="truncate block" title={vendor.name}>
@@ -1784,7 +1784,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Performance Rating Revision Badge / History Line */}
             {vendor.latestRatingRevision && (
-              <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 text-[10px] space-y-1 max-w-[280px] overflow-hidden shadow-xs">
+              <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 text-[10px] space-y-1 w-full max-w-[280px] shadow-xs">
                 <div className="flex items-center justify-between gap-1 flex-wrap">
                   <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
                     <Star size={11} className="fill-amber-500 text-amber-500 shrink-0" />
@@ -1794,7 +1794,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     </span>
                   </div>
                   <span
-                    className="text-[9px] font-medium text-slate-500 dark:text-gray-400 truncate max-w-[130px]"
+                    className="text-[9px] font-medium text-slate-500 dark:text-gray-400 truncate max-w-[120px]"
                     title={vendor.latestRatingRevision.buyerCompany}
                   >
                     by {vendor.latestRatingRevision.buyerCompany}
@@ -1811,7 +1811,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
                 {vendor.latestRatingRevision.remarks && (
                   <p
-                    className="text-slate-600 dark:text-gray-300 italic text-[9.5px] line-clamp-2 leading-tight"
+                    className="text-slate-600 dark:text-gray-300 italic text-[9.5px] line-clamp-2 leading-tight break-words"
                     title={vendor.latestRatingRevision.remarks}
                   >
                     &ldquo;{vendor.latestRatingRevision.remarks}&rdquo;
@@ -1838,7 +1838,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 2. Vendor Code */}
-        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
+        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 min-w-[110px] whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
           <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
             {vendor.vendorCode}
           </span>
@@ -2405,14 +2405,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <th
                       onClick={createColumnSortClickHandler('name', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'name')}
-                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[220px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[260px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
-                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
                     </th>

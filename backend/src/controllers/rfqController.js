@@ -955,7 +955,15 @@ async function createRFQ(req, res, next) {
 
     // Every line item must be complete. The form asks for the same fields, and a vendor cannot
     // quote against a row that leaves any of them out.
-    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const rawLineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const lineItems = rawLineItems.map((item) => {
+      const qty = Number(item?.quantity) || 0;
+      const rawUnit = typeof item?.unit === 'string' ? item.unit.trim() : '';
+      return {
+        ...item,
+        unit: rawUnit || (qty > 0 ? 'Nos' : rawUnit),
+      };
+    });
     const lineItemValidation = validateRFQLineItemsForCreate(lineItems);
     if (!lineItemValidation.isValid) {
       logger.warn('Failed to create RFQ: line item validation failed', { errors: lineItemValidation.errors }, 'RFQ_CONTROLLER');

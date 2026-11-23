@@ -6,6 +6,6 @@ describe('lib/featureFlags', () => {
     expect(FEATURE_FLAGS.ENABLE_MODE_3).toBe(false);
     expect(FEATURE_FLAGS.ENABLE_VENDOR_RATING).toBe(true);
     expect(FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST).toBe(false);
-    expect(FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION).toBe(false);
+    expect(FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION).toBe(true);
   });
 });

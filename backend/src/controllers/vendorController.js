@@ -1681,9 +1681,11 @@ async function reviseRating(req, res, next) {
     let buyerId = null;
     let buyerScope = null;
     let buyerCompany = 'Buyer';
+    let buyerAccount = null;
+    let resolvedOrgId = null;
     if (req.user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
-      const resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
       buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
       if (buyerAccount) {
         buyerId = buyerAccount.id;
@@ -1698,24 +1700,22 @@ async function reviseRating(req, res, next) {
     const scopedArg = buyerScope && buyerScope.length > 0 ? buyerScope : buyerId;
     let result = await storeService.reviseVendorRatingDurably(id, ratingData, scopedArg);
     if (!result && req.user.role === 'buyer') {
-      const globalVendor = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
-      if (globalVendor) {
-        const uEmail = String(req.user.email || '').trim().toLowerCase();
-        const bCompany = String(buyerCompany || '').trim().toLowerCase();
-        const vEmail = String(globalVendor.email || '').trim().toLowerCase();
-        const vCompany = String(globalVendor.addedByBuyerCompany || '').trim().toLowerCase();
-        const isOwner =
-          (uEmail && vEmail === uEmail) ||
-          (bCompany && vCompany === bCompany) ||
-          checkVendorOwnershipWithContext(req.user, globalVendor, {
-            scopeSet: new Set((buyerScope || []).map((s) => String(s).toLowerCase())),
-            sId: String(buyerId || '').toLowerCase(),
-            uEmail,
-            orgName: bCompany,
-          });
-        if (isOwner) {
-          result = await storeService.reviseVendorRatingDurably(id, ratingData, 'all');
-        }
+      const resolved = await resolveFallbackVendorRecord({
+        id,
+        user: req.user,
+        buyerAccount,
+        buyerScope: buyerScope && buyerScope.length > 0 ? buyerScope : (buyerId ? [buyerId] : ['all']),
+        resolvedOrgId,
+        buyerCompany,
+        bodyData: ratingData,
+        updates: { rating: Number(ratingData.qualityScore) },
+        requireEmail: false,
+        allowUnassignedCategory: true,
+      });
+      if (resolved.vendor) {
+        result =
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, scopedArg)) ||
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, 'all'));
       }
     }
     if (!result) {
@@ -1733,7 +1733,7 @@ const SYNTHETIC_MASTER_PREFIX = 'v-master-';
 const SYNTHETIC_LOCAL_HISTORY_PREFIX = 'v-hist-local-';
 
 function isSyntheticFallbackVendorId(id) {
-  return typeof id === 'string' && (id.startsWith(SYNTHETIC_MASTER_PREFIX) || id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX));
+  return typeof id === 'string' && (id.startsWith(SYNTHETIC_MASTER_PREFIX) || id.startsWith('v-hist-'));
 }
 
 async function resolveBuyerOrgIdForScope(user, buyerAccount) {
@@ -2019,7 +2019,7 @@ async function resolveFallbackVendorRecord({
     }
   }
 
-  if (id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX) && user?.role === 'buyer') {
+  if (id.startsWith('v-hist-') && user?.role === 'buyer') {
     if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
     const effectiveCandidate = {
       ...(updates || {}),

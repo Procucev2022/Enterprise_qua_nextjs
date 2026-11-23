@@ -267,11 +267,12 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
  */
 export function toExtractedEntity(item: ManualRFQLineItem): ExtractedEntity {
   const rawTargetDate = clean(item.targetDate);
+  const qty = Number(item.quantity) || 0;
   return {
     id: item.id,
     itemName: clean(item.itemName),
-    quantity: Number(item.quantity) || 0,
-    unit: clean(item.unit),
+    quantity: qty,
+    unit: clean(item.unit) || (qty > 0 ? 'Nos' : ''),
     targetDate: isPastDateString(rawTargetDate) ? '' : rawTargetDate,
     technicalSpecs: clean(item.technicalSpecs),
     confidence: MANUAL_ENTRY_CONFIDENCE,
