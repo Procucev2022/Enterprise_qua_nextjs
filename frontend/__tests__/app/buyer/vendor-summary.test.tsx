@@ -5,6 +5,7 @@ import VendorSummary, {
   isProcucevVendor,
   setEnableVendorRating,
   setEnableVendorEvaluationRequest,
+  setEnableEditVendorProfile,
 } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -100,6 +101,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   beforeAll(() => {
     setEnableVendorRating(true);
     setEnableVendorEvaluationRequest(true);
+    setEnableEditVendorProfile(true);
   });
 
   afterAll(() => {

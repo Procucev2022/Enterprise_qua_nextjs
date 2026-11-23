@@ -87,13 +87,17 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
-export let ENABLE_VENDOR_RATING = FEATURE_FLAGS.ENABLE_VENDOR_RATING;
+export let ENABLE_VENDOR_RATING = false; // Changed from FEATURE_FLAGS.ENABLE_VENDOR_RATING
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
 };
 export const setEnableVendorEvaluationRequest = (val: boolean) => {
   ENABLE_VENDOR_EVALUATION_REQUEST = val;
+};
+export const setEnableEditVendorProfile = (val: boolean) => {
+  ENABLE_EDIT_VENDOR_PROFILE = val;
 };
 
 interface VendorSummaryProps {
@@ -3404,7 +3408,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
+                {ENABLE_EDIT_VENDOR_PROFILE && canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     onClick={() => {

@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import VendorSummary from '@/app/buyer/vendor-summary';
+import VendorSummary, { setEnableEditVendorProfile, setEnableVendorRating } from '@/app/buyer/vendor-summary';
 import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
@@ -129,6 +129,11 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       ],
     },
   ];
+
+  beforeAll(() => {
+    setEnableEditVendorProfile(true);
+    setEnableVendorRating(true);
+  });
 
   beforeEach(() => {
     jest.clearAllMocks();
