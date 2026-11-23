@@ -8377,3 +8377,83 @@ Successful in 27s
 
 pass gemini pr check as well
 ```
+
+
+---
+
+### Prompt 386
+
+**Timestamp**: 2026-11-23T11:07:38+05:30
+
+```text
+remove this 2 emails from production anshul.goel@procucev.com , gmtrfq@procucev.com
+add quateam@procucev.com , sudheer.kangala@procucev.com  
+```
+
+
+---
+
+### Prompt 387
+
+**Timestamp**: 2026-11-23T11:38:01+05:30
+
+```text
+raise the pr for this only code of 6 files and pass all  the coverages and gemini pr and  don't merge in test-v3 i can merge the pr manuallly 
+```
+
+---
+
+### Prompt 388
+
+**Timestamp**: 2026-11-23T04:42:37Z
+
+```text
+Investigate the root cause and permanently fix the pagination bug on the Category Manager **All RFQs** page, where the footer is stuck at `Showing 1–100 of 100 RFQs` with only page `1` and `Next >` disabled.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Identify and fix the root cause first**: Trace both the backend query/endpoint and frontend state to find why `total` is capped at `100` instead of reflecting the actual DB count. Do NOT apply workarounds like raising a hardcoded limit to 500 or 1000.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing All RFQs API endpoint, filter/search/date query builders, fetch hooks, and shared pagination UI component. Do not rewrite or duplicate existing business logic.
+- **Ensure this issue never happens again in the future**: Enforce a strict contract where pagination always reads from an exact DB `COUNT(*)` (never `rows.length`), and add automated regression tests so this bug cannot be reintroduced.
+- **Do not break any existing UI or functionality**: Keep all existing table columns, search, status/date filters, sorting, row actions (`Invite Vendors`, `Details`, `Quote Matrix`), and export functionality 100% intact.
+
+### 1. Backend Root Cause Fix (`All RFQs` Endpoint)
+- Reuse the existing All RFQs controller/service and filter conditions (`search`, `status`, `startDate`, `endDate`).
+- Accept `page` (default `1`) and `limit` (default `100`) query parameters without breaking existing callers.
+- Execute an exact DB `COUNT(*)` query with the same active filter conditions to compute `total` (never derive `total` from the returned page's `rows.length`).
+- Apply `OFFSET (page - 1) * limit` and `LIMIT limit` (or ORM `skip`/`take`) to fetch the exact 100-row slice for the requested page.
+- Return `{ data/rfqs, total, page, limit, totalPages }` consistently.
+
+### 2. Frontend Root Cause Fix (`All RFQs` Page)
+- Reuse the existing fetch handler and pass `page` and `limit: 100` whenever `page` or any filter changes.
+- Drive the existing pagination footer (`Showing X–Y of Z RFQs`, page numbers, and `Previous` / `Next` disabled states) strictly from the backend's `total` and `totalPages`—never from `rfqs.length`.
+- Ensure clicking `Next >` or any page number fetches the next 100 RFQs from the server and smoothly scrolls the table back to the top.
+- Reset `page` to `1` whenever search, status, or date filters change.
+
+### 3. Future-Proofing & Regression Tests
+- Add backend and frontend tests asserting that:
+  1. When more than 100 RFQs exist in the DB (e.g., 250 RFQs), Page 1 returns 100 rows with `total: 250` and `totalPages: 3`.
+  2. The UI displays `Showing 1–100 of 250 RFQs` with `Next >` enabled.
+  3. Clicking `Next >` requests `page=2&limit=100` and renders RFQs `101–200`.
+  4. Changing any filter resets `page` to `1` and recalculates `total` accurately from the DB.
+```
+
+---
+
+### Prompt 389
+
+**Timestamp**: 2026-11-23T12:02:22+05:30
+
+```text
+ALL done?
+```
+
+
+---
+
+### Prompt 390
+
+**Timestamp**: 2026-11-23T12:02:29+05:30
+
+```text
+continue
+```

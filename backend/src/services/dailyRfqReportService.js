@@ -18,7 +18,7 @@ const pool = require('../db/pool');
 const { logger } = require('./loggerService');
 const {
   DAILY_RFQ_REPORT_CONFIG,
-  EXCLUDED_NOTIFICATION_RECIPIENTS,
+  EXCLUDED_DAILY_REPORT_RECIPIENTS,
   EVENT_OUTBOX_TYPES,
   RFQ_MODE_LABELS,
   RFQ_MODES,
@@ -134,8 +134,9 @@ function formatDateLabel(dateStr) {
  * Returns an empty list when neither provides an address, so no report is sent.
  */
 function resolveRecipients(overrideRecipients) {
+  const excluded = EXCLUDED_DAILY_REPORT_RECIPIENTS || DAILY_RFQ_REPORT_CONFIG.EXCLUDED_RECIPIENTS || [];
   const filterExcluded = (list) =>
-    list.filter((e) => !EXCLUDED_NOTIFICATION_RECIPIENTS.includes(e.toLowerCase()));
+    list.filter((e) => !excluded.includes(e.toLowerCase()));
 
   if (Array.isArray(overrideRecipients) && overrideRecipients.length > 0) {
     const list = filterExcluded(overrideRecipients.map((e) => String(e || '').trim()).filter(Boolean));
