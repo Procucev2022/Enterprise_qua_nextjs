@@ -9782,3 +9782,44 @@ continue
 ```text
 continue
 ```
+
+
+---
+
+### Prompt 425
+
+**Timestamp**: 2026-11-24T21:50:08+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 426
+
+```text
+Fix the Category Manager Dashboard (`/category-manager/dashboard`) so it displays real live data from the database, reuses the existing working backend logic/APIs, and closes the KPI popup modal when clicking outside.
+
+### 1. Fix "All Zeros & Blank Charts" (Live DB Data Not Loading)
+Currently, all 10 KPI cards show `0` and all 3 monthly charts are empty even though tests passed. Diagnose and fix the real end-to-end data flow (do not rely only on mocked unit tests):
+- **Check Frontend API Call & Auth:** Verify the dashboard fetch call uses the exact same API client, base URL, auth headers/cookies, and error handling as the other working Category Manager pages (`All RFQs`, `Buyer RFQ Console`, `Vendor Directory`, `Action Center`). Do not swallow API errors silently into `0`s.
+- **Reuse Existing Backend Queries & Services:** Inspect how the existing working endpoints query RFQs, Open RFQs, Quotes, Buyers, Vendors, Subscriptions, and Category Manager Login Logs in the live DB (PostgreSQL / D1). Reuse those exact table names, column names, status values, and query logic instead of writing mismatched queries.
+- **Fix Date Filter & Chart Aggregation:**
+  - Verify the date filter SQL comparison works properly with the actual timestamp format stored in the DB (e.g., ISO strings vs. timestamps, timezone handling).
+  - Ensure **Total Buyers**, **Total Vendors**, **Total RFQs**, **Open RFQs**, **RFQs Without Quotes**, **Buyer Subscriptions**, and **Vendor Subscriptions** return accurate live counts from the DB.
+  - Ensure the 3 monthly trend charts always render the last 6 months on the X-axis (e.g., `Jun`–`Nov`) with actual aggregated monthly DB counts and visible plotted lines (do not leave the X-axis blank).
+- **Preserve Existing Functionality:** Keep all existing backend routes, methods, and UI handlers across all other tabs completely intact.
+
+### 2. Fix KPI Popup Modal (Click Outside to Close + Live Data)
+- **Close on Outside Click:** When any KPI card in Row 1 or Row 2 is clicked and the popup modal opens, clicking anywhere outside the modal box (on the dark/blurred backdrop overlay) must immediately close the popup.
+  - Attach `onClick={onClose}` to the backdrop overlay container and `onClick={(e) => e.stopPropagation()}` to the inner modal card.
+  - Also support closing the popup with the `Escape` key in addition to the close (`×`) button.
+- **Live Filtered Records:** Ensure clicking each of the 10 KPI cards fetches and displays the exact matching live DB records in the popup table (including **TOTAL LOGINS** scoped strictly to internal Category Manager Portal user logins).
+
+### 3. Verification Before Finishing
+- Verify the live `/category-manager/dashboard` API response returns non-zero real DB counts and populated 6-month chart series (check Network tab / server logs for any 401/403/404/500 or SQL errors).
+- Confirm clicking outside the opened KPI popup closes it cleanly.
+- Re-run typecheck, lint, tests, and production build.
+```

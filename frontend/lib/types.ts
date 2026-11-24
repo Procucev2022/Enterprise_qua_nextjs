@@ -451,7 +451,7 @@ export type RFQInviteVendorsResult =
       excludedCount?: number;
       excludedVendors?: RFQExcludedVendor[];
       provisionedCount?: number;
-      provisioningErrors?: Array<{ id?: string; email?: string; error?: string }>;
+      provisioningErrors?: Array<{ id: string; email: string; error?: string }>;
     }
   | { success: false; reason: RFQTransportFailure; error: string };
 

@@ -182,3 +182,65 @@ test('does not add or select a created vendor when the saved record comes back w
   expect(screen.queryByText('Unsaved supplier')).not.toBeInTheDocument();
   expect(showToast).toHaveBeenCalledWith('Vendor Creation Failed', s.createdVendorIdMissing, 'warning');
 });
+
+test('handles Escape key to close add-vendor modal first, then the main modal', async () => {
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  await waitFor(() => expect(screen.getByText(s.noCandidates)).toBeInTheDocument());
+
+  // Open Add New Vendor
+  fireEvent.click(screen.getByTestId('add-new-vendor-button'));
+  expect(screen.getByTestId('add-vendor-modal')).toBeInTheDocument();
+
+  // Pressing Escape closes add-vendor sub-modal
+  fireEvent.keyDown(window, { key: 'Escape' });
+  expect(screen.queryByTestId('add-vendor-modal')).not.toBeInTheDocument();
+  expect(onClose).not.toHaveBeenCalled();
+
+  // Pressing Escape again closes main modal
+  fireEvent.keyDown(window, { key: 'Escape' });
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+test('supports pasting vendor names and contact persons to match and auto-select', async () => {
+  const namedVendors = [
+    { ...candidate, id: 'named-1', name: 'Alpha Steel Corp', contactPerson: 'Ramesh Patel', email: 'patel@alpha.com' },
+    { ...candidate, id: 'named-2', name: 'Beta Fasteners Ltd', contactPerson: 'Suresh Kumar', email: 'kumar@beta.com' },
+  ];
+  (fetchVendorCandidates as jest.Mock).mockResolvedValue({ success: true, candidates: namedVendors });
+
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  await waitFor(() => expect(screen.getByText('Alpha Steel Corp')).toBeInTheDocument());
+
+  const searchInput = screen.getByTestId('invite-vendors-search');
+  // Paste by Name and Contact Person separated by tab
+  fireEvent.paste(searchInput, {
+    clipboardData: {
+      getData: () => 'Alpha Steel Corp\tSuresh Kumar',
+    },
+  });
+
+  await waitFor(() => {
+    expect(screen.getByTestId('invite-paste-summary')).toHaveTextContent(
+      formatString(s.pasteSummaryAllMatched, { matched: 2 })
+    );
+  });
+});
+
+test('allows selecting a minor category filter from candidate minor categories', async () => {
+  const vendorWithCustomMinor = {
+    ...candidate,
+    id: 'custom-minor-v',
+    name: 'Custom Minor Supplier',
+    majorCategory: 'Cables',
+    minorCategories: ['Optical Cable'],
+  };
+  (fetchVendorCandidates as jest.Mock).mockResolvedValue({ success: true, candidates: [vendorWithCustomMinor] });
+
+  render(<InviteVendorsModal isOpen rfq={rfq} onClose={onClose} />);
+  await waitFor(() => expect(screen.getByText('Custom Minor Supplier')).toBeInTheDocument());
+
+  const minorSelect = screen.getByTestId('invite-vendors-minor-category-filter') as HTMLSelectElement;
+  fireEvent.change(minorSelect, { target: { value: 'Optical Cable' } });
+  expect(minorSelect.value).toBe('Optical Cable');
+});
+

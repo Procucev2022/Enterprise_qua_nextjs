@@ -806,6 +806,9 @@ describe('InviteVendorsModal — All Vendors tab', () => {
       });
 
       // Clearing search clears paste summary
+      await waitFor(() => {
+        expect(screen.getByTestId('clear-search-btn')).toBeInTheDocument();
+      });
       fireEvent.click(screen.getByTestId('clear-search-btn'));
       expect(screen.queryByTestId('invite-paste-summary')).not.toBeInTheDocument();
     });

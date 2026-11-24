@@ -139,19 +139,48 @@ describe('Category Manager Dashboard Backend Suite', () => {
       expect(controller.isVendorSubscribed({})).toBe(false);
     });
 
+    test('getItemDate resolves timestamps across heterogeneous entity shapes and fallbacks', () => {
+      expect(controller.getItemDate(null)).toBeNull();
+      expect(controller.getItemDate({})).toBeNull();
+      expect(controller.getItemDate({ createdAt: 'invalid-date' })).toBeNull();
+
+      expect(controller.getItemDate({ createdAt: '2026-11-01T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ created_at: '2026-11-02T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ creationDate: '2026-11-03T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ creation_date: '2026-11-04T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ timestamp: '2026-11-05T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ loginAt: '2026-11-06T10:00:00Z' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ login_at: '2026-11-07T10:00:00Z' })).toBeInstanceOf(Date);
+
+      // Raw object and raw JSON string parsing (including malformed JSON handling)
+      expect(controller.getItemDate({ raw: '{"createdAt":"2026-11-08T10:00:00Z"}' })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ raw: 'not-valid-json' })).toBeNull();
+      expect(controller.getItemDate({ raw: { createdAt: '2026-11-09T10:00:00Z' } })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ raw: { created_at: '2026-11-10T10:00:00Z' } })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ raw: { creationDate: '2026-11-11T10:00:00Z' } })).toBeInstanceOf(Date);
+      expect(controller.getItemDate({ raw: { timestamp: '2026-11-12T10:00:00Z' } })).toBeInstanceOf(Date);
+    });
+
     test('loadCollections handles DB storage paths and fallbacks gracefully', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue(true);
-      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValue([
-        { id: 'b-db-1', corporate_email: 'buyer@test.local', company_name: 'DB Buyer' },
+      jest.spyOn(storeService, 'syncBuyerAccountsFromDB').mockResolvedValue(true);
+      jest.spyOn(storeService, 'getRFQs').mockReturnValue([]);
+      jest.spyOn(domainQueries, 'getRFQsFromDB').mockResolvedValue([
+        { id: 'rfq-db-1', title: 'DB RFQ', status: 'OPEN', createdAt: '2026-11-01' },
       ]);
-      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
-        rows: [{ id: 'v-db-1', email: 'vendor@test.local', name: 'DB Vendor' }],
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValue({
+        accounts: [{ id: 'b-db-1', corporate_email: 'buyer@test.local', company_name: 'DB Buyer' }],
       });
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue([
+        { id: 'v-db-1', email: 'vendor@test.local', name: 'DB Vendor' },
+      ]);
 
       const collections = await controller.loadCollections();
+      expect(collections.rfqs.length).toBe(1);
       expect(collections.buyers.length).toBe(1);
       expect(collections.vendors.length).toBe(1);
+      expect(collections.totalVendorsCount).toBe(1);
 
       // Branch where DB throws
       jest.spyOn(storeService, 'syncRFQsFromDB').mockRejectedValue(new Error('Sync failed'));
@@ -450,6 +479,22 @@ describe('Category Manager Dashboard Backend Suite', () => {
       expect(r10.status).toBe(200);
       expect(r10.body.total).toBe(1);
       expect(r10.body.records[0].email).toBe('priya.s@procucev.com');
+
+      // Date-bounded records retrieval
+      const rDateBounded = await request(app)
+        .get('/api/category-manager/dashboard/records?type=total_rfqs&preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(rDateBounded.status).toBe(200);
+
+      const rOpenBounded = await request(app)
+        .get('/api/category-manager/dashboard/records?type=open_rfqs&preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(rOpenBounded.status).toBe(200);
+
+      const rWithoutQuotesBounded = await request(app)
+        .get('/api/category-manager/dashboard/records?type=rfqs_without_quotes&preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(rWithoutQuotesBounded.status).toBe(200);
 
       // Quick Search
       const rSearch = await request(app)

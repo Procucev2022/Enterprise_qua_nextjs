@@ -14,6 +14,7 @@ import {
   Clock,
   ShieldCheck,
 } from 'lucide-react';
+import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import type {
   CategoryManagerDashboardKPI,
@@ -74,6 +75,20 @@ export default function DashboardView() {
   const [modalSearch, setModalSearch] = useState<string>('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'createdAt', direction: 'desc' });
 
+  // Fallback dynamic last 6 months in case charts.months has not loaded yet
+  const fallbackMonths = useMemo(() => {
+    const allMonths = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const now = new Date();
+    const months: string[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(allMonths[d.getMonth()]);
+    }
+    return months;
+  }, []);
+
+  const displayMonths = charts.months && charts.months.length > 0 ? charts.months : fallbackMonths;
+
   // Fetch KPI & Charts metrics from backend
   const fetchMetrics = useCallback(async () => {
     setIsLoadingMetrics(true);
@@ -85,7 +100,16 @@ export default function DashboardView() {
       if (startDate) params.set('startDate', startDate);
       if (endDate) params.set('endDate', endDate);
 
-      const res = await fetch(`/api/category-manager/dashboard/metrics?${params.toString()}`);
+      const token = authClient.getToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      const res = await fetch(`/api/category-manager/dashboard/metrics?${params.toString()}`, {
+        headers,
+        credentials: 'include',
+      });
       if (res.ok) {
         const data: CategoryManagerDashboardMetricsResponse = await res.json();
         if (data.success && data.kpi && data.charts) {
@@ -119,7 +143,16 @@ export default function DashboardView() {
       if (startDate) params.set('startDate', startDate);
       if (endDate) params.set('endDate', endDate);
 
-      const res = await fetch(`/api/category-manager/dashboard/records?${params.toString()}`);
+      const token = authClient.getToken();
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      };
+
+      const res = await fetch(`/api/category-manager/dashboard/records?${params.toString()}`, {
+        headers,
+        credentials: 'include',
+      });
       if (res.ok) {
         const data: CategoryManagerDashboardRecordsResponse = await res.json();
         if (data.success && Array.isArray(data.records)) {
@@ -138,6 +171,18 @@ export default function DashboardView() {
     setActiveMetricType(null);
     setModalRecords([]);
   };
+
+  // Close modal on Escape key press
+  useEffect(() => {
+    if (!isModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleCloseModal();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen]);
 
   // Preset button actions
   const handleSelectPreset = (newPreset: PresetType) => {
@@ -539,7 +584,7 @@ export default function DashboardView() {
                 values: charts.totalRfqsAndSubs.map((item) => item.vendorSubs),
               },
             ],
-            charts.months
+            displayMonths
           )}
         </div>
 
@@ -559,7 +604,7 @@ export default function DashboardView() {
                 values: charts.newRegistrations.map((item) => item.newVendors),
               },
             ],
-            charts.months
+            displayMonths
           )}
         </div>
 
@@ -579,7 +624,7 @@ export default function DashboardView() {
                 values: charts.activityRfqsVsQuotes.map((item) => item.vendorQuotes),
               },
             ],
-            charts.months
+            displayMonths
           )}
         </div>
       </div>
@@ -587,12 +632,16 @@ export default function DashboardView() {
       {/* Drill-down High Density Popup Modal */}
       {isModalOpen && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-sm"
+          className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-6 bg-slate-900/60 backdrop-blur-sm cursor-pointer"
           role="dialog"
           aria-modal="true"
           data-testid="drilldown-modal"
+          onClick={handleCloseModal}
         >
-          <div className="flex flex-col w-full max-w-5xl max-h-[85vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden">
+          <div
+            className="flex flex-col w-full max-w-5xl max-h-[85vh] bg-white rounded-2xl shadow-2xl border border-slate-200 overflow-hidden cursor-default"
+            onClick={(e) => e.stopPropagation()}
+          >
             {/* Modal Header */}
             <div className="flex items-center justify-between px-6 py-4 border-b border-slate-200/80 bg-slate-50/50">
               <div className="flex items-center gap-3">

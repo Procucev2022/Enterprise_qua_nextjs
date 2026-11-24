@@ -2527,11 +2527,11 @@ export function parseSearchTokens(search?: string | null): string[] {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[,\n\r;\t]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[,\n\r;\t]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )

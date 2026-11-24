@@ -16,6 +16,38 @@ const LOG_CATEGORY = 'CM_DASHBOARD_CONTROLLER';
 
 const MONTH_NAMES = Object.freeze(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']);
 
+function parseSafeJson(str) {
+  if (!str) return {};
+  try {
+    return typeof str === 'string' ? JSON.parse(str) : str;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Extracts a normalized Date instance from various timestamp representations across DB entities.
+ */
+function getItemDate(item) {
+  if (!item) return null;
+  const raw = typeof item.raw === 'string' ? parseSafeJson(item.raw) : (item.raw || {});
+  const val =
+    item.createdAt ||
+    item.created_at ||
+    item.creationDate ||
+    item.creation_date ||
+    item.timestamp ||
+    item.loginAt ||
+    item.login_at ||
+    raw.createdAt ||
+    raw.created_at ||
+    raw.creationDate ||
+    raw.timestamp;
+  if (!val) return null;
+  const d = new Date(val);
+  return isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * Normalizes query string bounds into UTC Date instances.
  */
@@ -41,7 +73,7 @@ function resolveDateBounds(preset, startDateStr, endDateStr) {
 
   if (normalizedPreset === 'this_month') {
     const fromDate = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
-    const toDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    const toDate = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
     return { fromDate, toDate };
   }
 
@@ -77,7 +109,8 @@ function resolveDateBounds(preset, startDateStr, endDateStr) {
  */
 function isWithinBounds(dateVal, fromDate, toDate) {
   if (!dateVal) return false;
-  const t = new Date(dateVal).getTime();
+  const d = dateVal instanceof Date ? dateVal : new Date(dateVal);
+  const t = d.getTime();
   if (isNaN(t)) return false;
   if (!fromDate && !toDate) return true;
   if (fromDate && t < fromDate.getTime()) return false;
@@ -101,6 +134,7 @@ function getQuoteCount(rfq) {
   if (!rfq) return 0;
   if (Array.isArray(rfq.quotes)) return rfq.quotes.length;
   if (typeof rfq.quotesReceivedCount === 'number') return rfq.quotesReceivedCount;
+  if (Array.isArray(rfq.vendorQuotes)) return rfq.vendorQuotes.length;
   return 0;
 }
 
@@ -109,8 +143,10 @@ function getQuoteCount(rfq) {
  */
 function isBuyerSubscribed(buyer) {
   if (!buyer) return false;
-  const raw = typeof buyer.raw === 'string' ? JSON.parse(buyer.raw) : (buyer.raw || {});
-  return Boolean(buyer.subscriptionPlan || buyer.trialActive || buyer.isSubscribed || raw.subscriptionPlan || raw.trialActive);
+  const raw = typeof buyer.raw === 'string' ? parseSafeJson(buyer.raw) : (buyer.raw || {});
+  const plan = buyer.subscriptionPlan || raw.subscriptionPlan || buyer.plan || raw.plan;
+  const isTrial = buyer.trialActive === true || raw.trialActive === true;
+  return Boolean(plan || isTrial || buyer.isSubscribed || raw.isSubscribed);
 }
 
 /**
@@ -118,8 +154,9 @@ function isBuyerSubscribed(buyer) {
  */
 function isVendorSubscribed(vendor) {
   if (!vendor) return false;
-  const raw = typeof vendor.raw === 'string' ? JSON.parse(vendor.raw) : (vendor.raw || {});
-  return Boolean(vendor.subscriptionPlan || vendor.subscribedPlan || vendor.isSubscribed || raw.subscriptionPlan || raw.subscribedPlan);
+  const raw = typeof vendor.raw === 'string' ? parseSafeJson(vendor.raw) : (vendor.raw || {});
+  const plan = vendor.subscriptionPlan || raw.subscriptionPlan || vendor.subscribedPlan || raw.subscribedPlan || vendor.plan || raw.plan;
+  return Boolean(plan || vendor.isSubscribed || raw.isSubscribed);
 }
 
 /**
@@ -128,35 +165,52 @@ function isVendorSubscribed(vendor) {
 async function loadCollections() {
   if (pool.hasStorage()) {
     try {
-      await storeService.syncRFQsFromDB();
-    } catch {
-      // Non-fatal sync fallback
+      await Promise.all([
+        storeService.syncRFQsFromDB(true),
+        storeService.syncBuyerAccountsFromDB(1000),
+      ]);
+    } catch (err) {
+      logger.warn('Failed to sync domain collections for dashboard', { error: err?.message }, LOG_CATEGORY);
     }
   }
 
-  const rfqs = Array.isArray(storeService.rfqs) ? storeService.rfqs : [];
-
-  let buyers = [];
-  if (pool.hasStorage()) {
+  let rfqs = (typeof storeService.getRFQs === 'function' ? storeService.getRFQs() : storeService.rfqs) || [];
+  if (pool.hasStorage() && rfqs.length === 0) {
     try {
-      const dbBuyers = await domainQueries.getBuyerAccountsFromDB();
-      if (Array.isArray(dbBuyers) && dbBuyers.length > 0) {
-        buyers = dbBuyers;
+      const dbRfqs = await domainQueries.getRFQsFromDB(null, 1000);
+      if (Array.isArray(dbRfqs) && dbRfqs.length > 0) {
+        rfqs = dbRfqs;
       }
     } catch {
       // Non-fatal fallback
     }
   }
-  if (buyers.length === 0 && Array.isArray(storeService.buyerAccounts)) {
-    buyers = storeService.buyerAccounts;
+
+  let buyers = (typeof storeService.getBuyerAccounts === 'function' ? storeService.getBuyerAccounts() : storeService.buyerAccounts) || [];
+  if (pool.hasStorage()) {
+    try {
+      const dbBuyersRes = await domainQueries.getBuyerAccountsFromDB(1000);
+      if (Array.isArray(dbBuyersRes) && dbBuyersRes.length > 0) {
+        buyers = dbBuyersRes;
+      } else if (dbBuyersRes && Array.isArray(dbBuyersRes.accounts) && dbBuyersRes.accounts.length > 0) {
+        buyers = dbBuyersRes.accounts;
+      }
+    } catch {
+      // Non-fatal fallback
+    }
   }
 
   let vendors = [];
+  let totalVendorsCount = 0;
   if (pool.hasStorage()) {
     try {
-      const vRes = await domainQueries.getVendorsPageFromDB({ limit: 5000, offset: 0 });
-      if (vRes && Array.isArray(vRes.rows) && vRes.rows.length > 0) {
+      const vRes = await domainQueries.getVendorsPageFromDB({ limit: 1000, offset: 0 });
+      if (Array.isArray(vRes)) {
+        vendors = vRes;
+        totalVendorsCount = vRes.length;
+      } else if (vRes && Array.isArray(vRes.rows)) {
         vendors = vRes.rows;
+        totalVendorsCount = typeof vRes.total === 'number' ? vRes.total : vRes.rows.length;
       }
     } catch {
       // Non-fatal fallback
@@ -164,9 +218,10 @@ async function loadCollections() {
   }
   if (vendors.length === 0 && Array.isArray(storeService.vendors)) {
     vendors = storeService.vendors;
+    totalVendorsCount = vendors.length;
   }
 
-  return { rfqs, buyers, vendors };
+  return { rfqs, buyers, vendors, totalVendorsCount };
 }
 
 /**
@@ -182,7 +237,7 @@ async function getMetrics(req, res) {
     }
 
     const { fromDate, toDate } = resolveDateBounds(preset, startDate, endDate);
-    const { rfqs, buyers, vendors } = await loadCollections();
+    const { rfqs, buyers, vendors, totalVendorsCount } = await loadCollections();
 
     // Query Category Manager Portal Logins (Internal Staff ONLY)
     let cmLogins = [];
@@ -192,6 +247,7 @@ async function getMetrics(req, res) {
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         dateRangePreset: preset || undefined,
+        syncDb: true,
         limit: 200,
       });
       if (logsResult && Array.isArray(logsResult.logs)) {
@@ -202,26 +258,26 @@ async function getMetrics(req, res) {
     }
 
     // Filter collections by date bounds
-    const boundedRfqs = rfqs.filter((r) => isWithinBounds(r.createdAt || r.created_at, fromDate, toDate));
-    const openRfqsList = boundedRfqs.filter(isRfqOpen);
+    const boundedRfqs = rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate));
+    const openRfqsList = (fromDate || toDate ? boundedRfqs : rfqs).filter(isRfqOpen);
     const rfqsWithoutQuotesList = openRfqsList.filter((r) => getQuoteCount(r) === 0);
 
-    const buyerSubsCount = buyers.filter((b) => isBuyerSubscribed(b)).length;
-    const vendorSubsCount = vendors.filter((v) => isVendorSubscribed(v)).length;
+    const buyerSubsCount = buyers.filter(isBuyerSubscribed).length;
+    const vendorSubsCount = vendors.filter(isVendorSubscribed).length;
 
-    const newBuyersList = buyers.filter((b) => isWithinBounds(b.createdAt || b.created_at, fromDate, toDate));
-    const newVendorsList = vendors.filter((v) => isWithinBounds(v.createdAt || v.created_at, fromDate, toDate));
+    const newBuyersList = buyers.filter((b) => isWithinBounds(getItemDate(b), fromDate, toDate));
+    const newVendorsList = vendors.filter((v) => isWithinBounds(getItemDate(v), fromDate, toDate));
 
-    const boundedCmLogins = cmLogins.filter((l) => isWithinBounds(l.loginAt || l.createdAt, fromDate, toDate));
+    const boundedCmLogins = cmLogins.filter((l) => isWithinBounds(getItemDate(l), fromDate, toDate));
 
     const kpi = {
-      totalRfqs: boundedRfqs.length,
+      totalRfqs: fromDate || toDate ? boundedRfqs.length : rfqs.length,
       openRfqs: openRfqsList.length,
       rfqsWithoutQuotes: rfqsWithoutQuotesList.length,
       buyerSubscriptions: buyerSubsCount,
       vendorSubscriptions: vendorSubsCount,
       totalBuyers: buyers.length,
-      totalVendors: vendors.length,
+      totalVendors: totalVendorsCount,
       buyerRegistration: newBuyersList.length,
       vendorRegistration: newVendorsList.length,
       totalLogins: boundedCmLogins.length,
@@ -247,10 +303,10 @@ async function getMetrics(req, res) {
       const startOfMonth = new Date(m.year, m.month, 1, 0, 0, 0, 0);
       const endOfMonth = new Date(m.year, m.month + 1, 0, 23, 59, 59, 999);
 
-      const monthRfqs = rfqs.filter((r) => isWithinBounds(r.createdAt || r.created_at, startOfMonth, endOfMonth));
+      const monthRfqs = rfqs.filter((r) => isWithinBounds(getItemDate(r), startOfMonth, endOfMonth));
       const monthQuotesCount = monthRfqs.reduce((acc, r) => acc + getQuoteCount(r), 0);
-      const monthNewBuyers = buyers.filter((b) => isWithinBounds(b.createdAt || b.created_at, startOfMonth, endOfMonth));
-      const monthNewVendors = vendors.filter((v) => isWithinBounds(v.createdAt || v.created_at, startOfMonth, endOfMonth));
+      const monthNewBuyers = buyers.filter((b) => isWithinBounds(getItemDate(b), startOfMonth, endOfMonth));
+      const monthNewVendors = vendors.filter((v) => isWithinBounds(getItemDate(v), startOfMonth, endOfMonth));
 
       totalRfqsAndSubs.push({
         month: m.label,
@@ -304,58 +360,58 @@ function pickFirst(...values) {
  * Maps raw records into uniform popup table items.
  */
 function mapRecord(type, item) {
-  const raw = typeof item.raw === 'string' ? JSON.parse(item.raw) : (item.raw || {});
+  const raw = typeof item.raw === 'string' ? parseSafeJson(item.raw) : (item.raw || {});
 
   if (type === 'total_rfqs' || type === 'open_rfqs' || type === 'rfqs_without_quotes') {
     return {
-      id: String(pickFirst(item.id, item.rfq_number)),
-      rfqNumber: pickFirst(item.rfq_number, item.rfqNumber, item.id),
-      title: pickFirst(item.title, item.material_description, 'RFQ Request'),
-      category: pickFirst(item.category, item.major_category, 'General'),
-      status: pickFirst(item.status, 'OPEN'),
-      targetBudget: Number(pickFirst(item.target_budget, item.targetBudget, 0)),
+      id: String(pickFirst(item.id, item.rfq_number, raw.id, raw.rfqNumber)),
+      rfqNumber: pickFirst(item.rfq_number, item.rfqNumber, raw.rfqNumber, item.id),
+      title: pickFirst(item.title, raw.title, item.material_description, 'RFQ Request'),
+      category: pickFirst(item.category, raw.category, item.major_category, 'General'),
+      status: pickFirst(item.status, raw.status, 'OPEN'),
+      targetBudget: Number(pickFirst(item.target_budget, item.targetBudget, item.budget, raw.budget, 0)),
       quotesCount: getQuoteCount(item),
-      createdAt: pickFirst(item.createdAt, item.created_at),
+      createdAt: pickFirst(item.createdAt, item.created_at, raw.createdAt, raw.created_at),
     };
   }
 
   if (type === 'buyer_subscriptions' || type === 'total_buyers' || type === 'buyer_registration') {
     return {
-      id: String(pickFirst(item.id, item.corporate_email)),
-      name: pickFirst(raw.contactPerson, item.company_name, 'Enterprise Buyer'),
-      email: pickFirst(item.corporate_email, item.email),
-      organizationName: pickFirst(item.company_name, raw.organizationName, 'Procucev Buyer'),
+      id: String(pickFirst(item.id, item.corporate_email, raw.id)),
+      name: pickFirst(raw.contactPerson, item.contactPerson, item.company_name, item.organizationName, 'Enterprise Buyer'),
+      email: pickFirst(item.corporate_email, item.email, raw.corporateEmail, raw.email),
+      organizationName: pickFirst(item.company_name, item.organizationName, raw.organizationName, 'Procucev Buyer'),
       subscriptionPlan: pickFirst(item.subscriptionPlan, raw.subscriptionPlan, item.trialActive ? 'Trial Period' : 'Enterprise Standard'),
-      location: raw.city ? `${raw.city}, ${pickFirst(raw.state, 'India')}` : 'India',
-      createdAt: pickFirst(item.createdAt, item.created_at),
+      location: raw.city ? `${raw.city}, ${pickFirst(raw.state, 'India')}` : pickFirst(item.city, 'India'),
+      createdAt: pickFirst(item.createdAt, item.created_at, raw.createdAt, raw.created_at),
     };
   }
 
   if (type === 'vendor_subscriptions' || type === 'total_vendors' || type === 'vendor_registration') {
     return {
-      id: String(pickFirst(item.id, item.email)),
-      name: pickFirst(item.name, raw.contactPerson, 'Enterprise Supplier'),
-      email: pickFirst(item.email),
+      id: String(pickFirst(item.id, item.email, raw.id)),
+      name: pickFirst(item.name, raw.name, raw.contactPerson, 'Enterprise Supplier'),
+      email: pickFirst(item.email, raw.email),
       companyName: pickFirst(item.name, raw.name, 'Enterprise Supplier'),
-      category: pickFirst(item.major_category, item.majorCategory, 'Multi-Category'),
+      category: pickFirst(item.major_category, item.majorCategory, raw.majorCategory, 'Multi-Category'),
       subscriptionPlan: pickFirst(item.subscriptionPlan, raw.subscriptionPlan, 'Supplier Basic'),
-      location: pickFirst(item.location, raw.location, 'India'),
-      createdAt: pickFirst(item.createdAt, item.created_at),
+      location: pickFirst(item.location, raw.location, raw.city, 'India'),
+      createdAt: pickFirst(item.createdAt, item.created_at, raw.createdAt, raw.created_at),
     };
   }
 
   // total_logins
   return {
     id: String(pickFirst(item.id)),
-    userName: pickFirst(item.userName, 'Category Manager Staff'),
+    userName: pickFirst(item.userName, item.user_name, 'Category Manager Staff'),
     email: pickFirst(item.email),
     role: 'Category Manager (Internal)',
-    loginAt: pickFirst(item.loginAt, item.createdAt),
-    logoutAt: pickFirst(item.logoutAt),
-    durationSeconds: Number(pickFirst(item.durationSeconds, 0)),
+    loginAt: pickFirst(item.loginAt, item.login_at, item.createdAt, item.created_at),
+    logoutAt: pickFirst(item.logoutAt, item.logout_at),
+    durationSeconds: Number(pickFirst(item.durationSeconds, item.duration_seconds, 0)),
     status: pickFirst(item.status, 'LOGGED_OUT'),
-    deviceInfo: pickFirst(item.deviceInfo, 'Desktop (Chrome)'),
-    ipAddress: pickFirst(item.ipAddress, '106.51.72.10'),
+    deviceInfo: pickFirst(item.deviceInfo, item.device_info, 'Desktop (Chrome)'),
+    ipAddress: pickFirst(item.ipAddress, item.ip_address, '106.51.72.10'),
   };
 }
 
@@ -377,25 +433,31 @@ async function getRecords(req, res) {
     let rawList = [];
 
     if (type === 'total_rfqs') {
-      rawList = rfqs.filter((r) => isWithinBounds(r.createdAt || r.created_at, fromDate, toDate));
+      rawList = fromDate || toDate
+        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
+        : rfqs;
     } else if (type === 'open_rfqs') {
-      rawList = rfqs.filter((r) => isWithinBounds(r.createdAt || r.created_at, fromDate, toDate) && isRfqOpen(r));
+      const base = fromDate || toDate
+        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
+        : rfqs;
+      rawList = base.filter(isRfqOpen);
     } else if (type === 'rfqs_without_quotes') {
-      rawList = rfqs.filter(
-        (r) => isWithinBounds(r.createdAt || r.created_at, fromDate, toDate) && isRfqOpen(r) && getQuoteCount(r) === 0
-      );
+      const base = fromDate || toDate
+        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
+        : rfqs;
+      rawList = base.filter((r) => isRfqOpen(r) && getQuoteCount(r) === 0);
     } else if (type === 'buyer_subscriptions') {
-      rawList = buyers.filter((b) => isBuyerSubscribed(b));
+      rawList = buyers.filter(isBuyerSubscribed);
     } else if (type === 'total_buyers') {
       rawList = buyers;
     } else if (type === 'buyer_registration') {
-      rawList = buyers.filter((b) => isWithinBounds(b.createdAt || b.created_at, fromDate, toDate));
+      rawList = buyers.filter((b) => isWithinBounds(getItemDate(b), fromDate, toDate));
     } else if (type === 'vendor_subscriptions') {
-      rawList = vendors.filter((v) => isVendorSubscribed(v));
+      rawList = vendors.filter(isVendorSubscribed);
     } else if (type === 'total_vendors') {
       rawList = vendors;
     } else if (type === 'vendor_registration') {
-      rawList = vendors.filter((v) => isWithinBounds(v.createdAt || v.created_at, fromDate, toDate));
+      rawList = vendors.filter((v) => isWithinBounds(getItemDate(v), fromDate, toDate));
     } else if (type === 'total_logins') {
       try {
         const logsResult = await loginLogsQueries.listLoginLogs({
@@ -404,11 +466,12 @@ async function getRecords(req, res) {
           endDate: endDate || undefined,
           dateRangePreset: preset || undefined,
           search: search || undefined,
+          syncDb: true,
           limit: 200,
         });
         if (logsResult && Array.isArray(logsResult.logs)) {
           rawList = logsResult.logs.filter(
-            (log) => log.userType === 'category_manager' && isWithinBounds(log.loginAt || log.createdAt, fromDate, toDate)
+            (log) => log.userType === 'category_manager' && isWithinBounds(getItemDate(log), fromDate, toDate)
           );
         }
       } catch {
@@ -447,6 +510,7 @@ module.exports = {
   getQuoteCount,
   isBuyerSubscribed,
   isVendorSubscribed,
+  getItemDate,
   loadCollections,
   getMetrics,
   getRecords,
