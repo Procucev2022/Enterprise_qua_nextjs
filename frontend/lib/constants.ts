@@ -3229,8 +3229,8 @@ export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = 
   { key: 'email', label: 'Email', visible: true },
   { key: 'phone', label: 'Phone', visible: true },
   { key: 'location', label: 'Location', visible: true },
-  { key: 'score', label: 'AI Score', visible: false },
-  { key: 'rating', label: 'Rating', visible: false },
+  { key: 'score', label: 'AI Score', visible: false }, // Hidden: Evaluation-related
+  { key: 'rating', label: 'Rating', visible: true }, // Re-enabled: Show vendor ratings
   { key: 'status', label: 'Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];

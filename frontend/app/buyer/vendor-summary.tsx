@@ -2150,7 +2150,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })()}
         </td>
 
-        {/* 14. Status */}
+        {/* 14. Status - Only show ACTIVE or INACTIVE */}
         <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 min-w-[140px] whitespace-nowrap text-center align-middle')}>
           {vendorInactive ? (
             <span
@@ -2163,37 +2163,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </span>
           ) : (
             <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
-                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                : getStatusStyle(
-                    (vendor.evaluationRequested || vendor.evaluationRequestedAt)
-                      ? 'PENDING EVALUATION'
-                      : vendor.status === 'REGISTERED / NOT EVALUATED' || vendor.status === 'NOT EVALUATED' || (!vendor.evaluationRequested && !vendor.evaluationRequestedAt && vendor.status === 'PENDING EVALUATION')
-                      ? 'NOT EVALUATED'
-                      : vendor.status || 'NOT EVALUATED'
-                  )
-                }`}
+              data-testid={`status-badge-active-${vendor.id}`}
+              title="Active vendor"
+              className="px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60"
             >
-              {currentMode === 'mode_1' && !isUploaded
-                ? 'UNAVAILABLE IN V1'
-                : isLockedForProcucevV2
-                  ? 'LOCKED (PENDING BID)'
-                  : (vendor.evaluationRequested || vendor.evaluationRequestedAt)
-                  ? 'PENDING EVALUATION'
-                  : vendor.status === 'REGISTERED / NOT EVALUATED' || (!vendor.evaluationRequested && !vendor.evaluationRequestedAt && vendor.status === 'PENDING EVALUATION')
-                  ? 'NOT EVALUATED'
-                  : vendor.status && vendor.status !== 'BUYER ROSTER (NO EVAL)'
-                  ? vendor.status
-                  : 'NOT EVALUATED'}
-            </span>
-          )}
-          {(vendor.evaluationRequested || vendor.evaluationRequestedAt) && (
-            <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-              {vendor.evaluationRequestedAt
-                ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                  date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
-                })
-                : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+              <Power size={10} />
+              {UI_STRINGS.vendorStatusControl.activeBadge}
             </span>
           )}
         </td>
@@ -3263,24 +3238,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Modal Body */}
             <div className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Score & Key Highlights Bar */}
-              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-center">
-                {/* Rating card hidden per user request - Issue #12 */}
-                {false && (
-                  <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
-                    <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
-                      <Star size={13} className="fill-amber-500 text-amber-500" />
-                      {(() => {
-                        const displayRating =
-                          normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) ??
-                          normalizeVendorRating(selectedVendorForCrud.latestRatingRevision?.newRating) ??
-                          normalizeVendorRating(selectedVendorForCrud.storeRecord?.rating, selectedVendorForCrud.storeRecord?.overallScore) ??
-                          (typeof (selectedVendorForCrud as any).actualRating === 'number' ? (selectedVendorForCrud as any).actualRating : null);
-                        return displayRating !== null ? `${displayRating.toFixed(1)} / 5.0` : '—';
-                      })()}
-                    </div>
+              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-center">
+                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
+                  <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
+                    <Star size={13} className="fill-amber-500 text-amber-500" />
+                    {(() => {
+                      const displayRating =
+                        normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) ??
+                        normalizeVendorRating(selectedVendorForCrud.latestRatingRevision?.newRating) ??
+                        normalizeVendorRating(selectedVendorForCrud.storeRecord?.rating, selectedVendorForCrud.storeRecord?.overallScore) ??
+                        (typeof (selectedVendorForCrud as any).actualRating === 'number' ? (selectedVendorForCrud as any).actualRating : null);
+                      return displayRating !== null ? `${displayRating.toFixed(1)} / 5.0` : '—';
+                    })()}
                   </div>
-                )}
+                </div>
+
+                {/* Status card - Only show ACTIVE/INACTIVE */}
+                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
+                  <div
+                    className={`font-bold text-[10.5px] mt-0.5 truncate ${
+                      isVendorInactive(selectedVendorForCrud)
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }`}
+                  >
+                    {isVendorInactive(selectedVendorForCrud)
+                      ? UI_STRINGS.vendorStatusControl.inactiveBadge
+                      : UI_STRINGS.vendorStatusControl.activeBadge}
+                  </div>
+                </div>
 
                 {/* Evaluation status card hidden per user request - Issue #12 */}
                 {false && (
