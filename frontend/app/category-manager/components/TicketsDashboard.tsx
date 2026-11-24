@@ -634,7 +634,14 @@ export default function TicketsDashboard() {
               aria-label="Filter From Date"
               value={dateFrom}
               onChange={(e) => setDateFrom(e.target.value)}
-              className="w-full p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
+              }}
+              className="w-full p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg cursor-pointer"
             />
           </div>
 
@@ -645,7 +652,14 @@ export default function TicketsDashboard() {
               aria-label="Filter To Date"
               value={dateTo}
               onChange={(e) => setDateTo(e.target.value)}
-              className="w-full p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg"
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
+              }}
+              className="w-full p-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg cursor-pointer"
             />
           </div>
 

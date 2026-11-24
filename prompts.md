@@ -8905,3 +8905,70 @@ Can't see any change, is the issue fixed & commited
 ```text
 resume
 ```
+
+---
+
+### Prompt 405
+
+**Timestamp**: 2026-11-24T10:20:28+05:30
+
+```text
+Tell me category manager invite button feature he can invite the vendors with mismatch the category also or not?
+```
+
+---
+
+### Prompt 406
+
+**Timestamp**: 2026-11-24T10:47:51+05:30
+
+```text
+check why category manager internal task not working for site visiting?
+```
+
+---
+
+### Prompt 407
+
+**Timestamp**: 2026-11-24T11:10:17+05:30
+
+```text
+Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlers—only modify what is needed to resolve these bugs.
+
+1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
+- Root cause: The Filter Tasks drawer extends to the bottom-right corner behind/under the floating chat icon, so clicking "Apply Filters" triggers the chat widget.
+- Fix:
+  - Make the Filter Tasks popup slightly more compact vertically (e.g., floating panel with top/right/bottom margin or bottom clearance above the chat button) with an internal scrollable body and sticky footer.
+  - Ensure the Filter Tasks drawer and its backdrop have a higher z-index than the floating chat widget so the chat icon never intercepts clicks while the filter panel is open.
+
+2. Open Date Picker on Clicking Anywhere in Date Input Boxes (Action Center & Category Manager)
+- For all date filter inputs (Action Center "Due From" / "Due To" and Category Manager date filters), attach an `onClick` handler that triggers `e.currentTarget.showPicker?.()` inside a `try/catch` block (with `.focus()` fallback) and add `cursor-pointer`.
+- Clicking anywhere inside the date input box—not just the small calendar icon—must open the native date calendar.
+
+3. Full Audit & Root-Cause Fix for Action Center
+- Inspect the Action Center component end-to-end and fix any broken functionality, console errors, or edge cases, specifically verifying:
+  - Category, Status, Priority, Assigned User search (case-insensitive, null-safe), and Due Date Range filters (proper date format/timezone comparison).
+  - "Reset" clears both draft and active filter states and refreshes the table.
+  - "Apply Filters" applies the selected filters cleanly and closes the popup.
+  - All existing table actions, handlers, and backend integrations continue working without regression.
+```
+
+---
+
+### Prompt 408
+
+**Timestamp**: 2026-11-24T11:59:58+05:30
+
+```text
+raise the pr and pass all the covergaes and gemini pr check and ready to merge i can merge after that
+```
+
+---
+
+### Prompt 409
+
+**Timestamp**: 2026-11-24T12:29:14+05:30
+
+```text
+Is there any admin portal role  in this project
+```

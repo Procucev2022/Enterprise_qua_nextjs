@@ -1953,7 +1953,14 @@ export default function BuyerDossierDrawer({
                   type="date"
                   value={commDateFilter}
                   onChange={(e) => setCommDateFilter(e.target.value)}
-                  className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300"
+                  onClick={(e) => {
+                    try {
+                      e.currentTarget.showPicker?.();
+                    } catch {
+                      e.currentTarget.focus();
+                    }
+                  }}
+                  className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 cursor-pointer"
                 />
               </div>
 
@@ -2967,7 +2974,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={trialStartDate}
                             onChange={(e) => handleTrialDateChange(e.target.value, trialEndDate)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                           />
                         </div>
 
@@ -2980,7 +2994,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={trialEndDate}
                             onChange={(e) => handleTrialDateChange(trialStartDate, e.target.value)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                           />
                         </div>
                       </div>
@@ -3152,7 +3173,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={offlinePaymentDate}
                             onChange={(e) => setOfflinePaymentDate(e.target.value)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                             required
                           />
                         </div>
@@ -4277,7 +4305,14 @@ export default function BuyerDossierDrawer({
                       type="datetime-local"
                       value={composeNextFollowupDate}
                       onChange={(e) => setComposeNextFollowupDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      onClick={(e) => {
+                        try {
+                          e.currentTarget.showPicker?.();
+                        } catch {
+                          e.currentTarget.focus();
+                        }
+                      }}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
                     />
                   </div>
                   <div>
