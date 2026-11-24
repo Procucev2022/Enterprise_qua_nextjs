@@ -9048,4 +9048,12 @@ Add automated backend and frontend tests asserting that:
 2. A buyer with an active 7-day trial can create multiple RFQs (e.g., 10+ RFQs) across any mode/version with **0 credit deductions**.
 3. The UI displays `7 Days Trial Period` on Day 1, `6 Days Trial Period` on Day 2, and reverts to normal credit/plan display after expiry.
 4. Normal **Buyer Credit Addition** (e.g., `+5 Credits`) continues to add numeric credits and deduct 1 per RFQ as expected when no trial is active.
+---
+### Prompt 405
+**Timestamp**: 2026-11-24T12:37:20+05:30
+```text
+1. ignore old or earlier RFQ's. 
+2. No need to re-send failed emails. 
+3. I think, the  own vendor limit is already 25 per minor, we don't need to change. 
+4. No need to send duplicate email, keep it from queue.
 ```
