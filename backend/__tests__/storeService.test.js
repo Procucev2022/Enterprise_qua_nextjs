@@ -3148,6 +3148,35 @@ describe('Store Service & Business Operations', () => {
       expect(result.updatedRFQ.assignedVendors.map((v) => v.id)).toContain(mismatchedVendor.id);
       expect(mismatchEmailSpy).not.toHaveBeenCalled();
     });
+
+    test('auto-provisions login account and credentials when invited vendor has no identity', async () => {
+      const vendor = storeService.addVendor({ name: 'Unregistered Vendor', email: 'unregistered.vendor@test.com' });
+      const rfq = storeService.createRFQ({ title: 'Steel RFQ', category: 'Raw Materials' });
+
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const provSpy = jest.spyOn(storeService, '_provisionVendorOnboarding').mockResolvedValue({ status: 'sent', error: null });
+
+      const result = await storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
+
+      expect(result.invitedCount).toBe(1);
+      expect(result.provisionedCount).toBe(1);
+      expect(provSpy).toHaveBeenCalledWith(expect.objectContaining({ id: vendor.id }), 'cm@ex.com');
+      provSpy.mockRestore();
+    });
+
+    test('does not re-provision or overwrite credentials when invited vendor already has identity', async () => {
+      const vendor = storeService.addVendor({ name: 'Existing Vendor', email: 'existing.vendor@test.com' });
+      const rfq = storeService.createRFQ({ title: 'Steel RFQ', category: 'Raw Materials' });
+
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue({ id: 'u-123', email: vendor.email });
+      const provSpy = jest.spyOn(storeService, '_provisionVendorOnboarding');
+
+      const result = await storeService.inviteVendorsToRFQ(rfq.id, [vendor.id], 'cm@ex.com');
+
+      expect(result.invitedCount).toBe(1);
+      expect(result.provisionedCount).toBe(0);
+      expect(provSpy).not.toHaveBeenCalled();
+    });
   });
 
   describe('validateAndShortlistVendors', () => {

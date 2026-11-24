@@ -642,6 +642,14 @@ describe('normalizePoDate', () => {
 
       // Space separated emails
       expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+
+      // Excel copy-paste with tabs and newlines
+      expect(parseSearchTokens('Vendor One\tVendor Two\r\nVendor Three\nvendor4@example.com')).toEqual([
+        'Vendor One',
+        'Vendor Two',
+        'Vendor Three',
+        'vendor4@example.com',
+      ]);
     });
   });
 });

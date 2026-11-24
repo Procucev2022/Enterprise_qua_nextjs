@@ -733,6 +733,16 @@ describe('parseSearchTokens', () => {
     expect(parseSearchTokens('a@b.com; c@d.com\r\ne@f.com')).toEqual(['a@b.com', 'c@d.com', 'e@f.com']);
     expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
   });
+
+  test('parses tabs and newlines from Excel raw copy-paste', () => {
+    const excelPasted = 'Vendor One\tVendor Two\r\nVendor Three\nvendor4@example.com';
+    expect(parseSearchTokens(excelPasted)).toEqual([
+      'Vendor One',
+      'Vendor Two',
+      'Vendor Three',
+      'vendor4@example.com',
+    ]);
+  });
 });
 
 describe('persistence recovery messages', () => {

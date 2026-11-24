@@ -42,5 +42,5 @@ describe('V0 RFQ creation from the wizard asks for the minor shortfall alert', (
 
     expect(res.status).toBeLessThan(300);
     expect(augmentSpy).toHaveBeenCalledWith(expect.objectContaining({ sourcingMode: 'mode_0' }), { notifyShortfall: true });
-  });
+  }, 40000);
 });

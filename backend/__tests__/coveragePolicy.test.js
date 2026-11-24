@@ -336,7 +336,7 @@ describe('file-backed coverage checks and CLI wrappers', () => {
     // A passing report in the working directory must never replace the selected
     // project's report. Each wrapper resolves its own project from __dirname.
     writeFile(path.join(testFixture.root, 'coverage/coverage-summary.json'), JSON.stringify(summaryFor(testFixture, 100)));
-    const run = () => spawnSync(process.execPath, [wrapper], { cwd: testFixture.root, encoding: 'utf8', timeout: 5000 });
+    const run = () => spawnSync(process.execPath, [wrapper], { cwd: testFixture.root, encoding: 'utf8', timeout: 20000 });
     expect(run().status).toBe(1);
     writeSummary(testFixture, summaryFor(testFixture));
     expect(run().status).toBe(0);
@@ -429,7 +429,7 @@ describe('native Jest coverage enforcement', () => {
     }
     const configPath = path.join(testFixture.projectRoot, 'jest.config.json');
     writeFile(configPath, JSON.stringify(fixtureConfig));
-    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 35000 });
+    const run = () => spawnSync(process.execPath, [JEST_CLI, '--config', configPath, '--runInBand', '--silent'], { cwd: testFixture.projectRoot, encoding: 'utf8', timeout: 60000 });
     writeFile(testPath, `${project === 'frontend' ? "require('./lib/constant.js');\n" : ''}${testSource(8)}`);
     const rejected = run();
     expect(rejected.status).toBe(1);

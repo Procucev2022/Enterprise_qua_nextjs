@@ -2260,6 +2260,11 @@ class StoreService {
         email: vendor.email,
         outboxId: onboardingEvent.id,
       }, 'STORE_SERVICE');
+      this._background(
+        eventOutboxService.dispatchDueEventOutboxJobs(1, [onboardingEvent.id]),
+        'Failed to immediately dispatch vendor onboarding event',
+        { vendorId: vendor.id, outboxId: onboardingEvent.id }
+      );
       return { status: 'pending', error: null };
     }
 
@@ -9514,6 +9519,8 @@ class StoreService {
       };
     }
 
+    const newlyProvisioned = [];
+    const provisioningErrors = [];
     for (const vendor of dispatchedInvites) {
       const isOverride = dispatchedOverrides.some((ov) => ov.id === vendor.id);
       this.addAuditLog({
@@ -9523,6 +9530,34 @@ class StoreService {
           : `Category Manager manual assignment: Vendor ${vendor.name} (${vendor.id}) invited to RFQ ${rfq.rfqNumber}`,
         rfqNumber: rfq.rfqNumber,
       });
+
+      // Auto-Provision Directory/Unregistered Vendors on RFQ Invite
+      const vendorEmail = resolveVendorEmail(vendor);
+      if (vendorEmail) {
+        try {
+          const existingIdentity = await identityQueries.findUserByEmail(vendorEmail);
+          if (!existingIdentity) {
+            logger.info(
+              `Auto-provisioning login account for invited vendor ${vendorEmail} (${vendor.id}) on RFQ ${rfq.rfqNumber}`,
+              { vendorId: vendor.id, rfqNumber: rfq.rfqNumber },
+              'STORE_SERVICE'
+            );
+            const onboarding = await this._provisionVendorOnboarding(vendor, actorEmail);
+            if (onboarding?.status === 'sent' || onboarding?.status === 'pending') {
+              newlyProvisioned.push({ id: vendor.id, email: vendorEmail, status: onboarding.status });
+            } else if (onboarding?.status === 'failed') {
+              provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: onboarding.error });
+            }
+          }
+        } catch (provErr) {
+          logger.warn(
+            `Failed to check or auto-provision identity for invited vendor ${vendorEmail}`,
+            { error: provErr, vendorId: vendor.id },
+            'STORE_SERVICE'
+          );
+          provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: provErr?.message || 'Provisioning error' });
+        }
+      }
 
       // Real in-app notification
       const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
@@ -9541,7 +9576,6 @@ class StoreService {
       this._persistNotification(notification);
 
       // Real invite email
-      const vendorEmail = resolveVendorEmail(vendor);
       if (vendorEmail && !pool.hasStorage()) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
@@ -9614,6 +9648,8 @@ class StoreService {
       overrideCount: dispatchedOverrides.length,
       excludedCount: excludedVendors.length,
       excludedVendors,
+      provisionedCount: newlyProvisioned.length,
+      provisioningErrors,
     };
   }
 

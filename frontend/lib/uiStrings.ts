@@ -1730,6 +1730,11 @@ export const UI_STRINGS = {
     // The vendor was saved, but the response had no id, so it cannot be selected safely.
     createdVendorIdMissing: 'The vendor was saved, but the server did not return its ID, so it was not added to the selection. Reload the candidate list and check before adding the vendor again.',
     categoryOptionsLoadFailed: 'The category list could not be loaded from the server, so the category options may be incomplete. Reload to try again.',
+    pasteSummary: '{matched} matched & selected, {notFound} not found',
+    pasteSummaryAllMatched: '{matched} matched & selected',
+    successWithAccountsMessage: '{count} vendor(s) invited to {rfqNumber}. {provisioned} new login account(s) created and credentials sent.',
+    onboardingDeliveryWarningTitle: 'Credential Delivery Issue',
+    onboardingDeliveryWarning: 'Some vendor accounts could not receive credentials automatically ({count} failed).',
   },
 
   notifications: {

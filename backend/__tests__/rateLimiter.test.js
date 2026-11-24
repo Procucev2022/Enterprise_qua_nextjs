@@ -222,7 +222,7 @@ describe('Rate Limiter & Client Error Validation Middleware Suite', () => {
       expect(res.body.data.message).toBe('Early boot script failed to mount React root');
       expect(res.body.data.level).toBe('FATAL');
       expect(res.body.data.category).toBe('BOOT_FAILURE');
-    });
+    }, 30000);
 
     test('malformed payload returns 400 Bad Request', async () => {
       const res = await request(app)

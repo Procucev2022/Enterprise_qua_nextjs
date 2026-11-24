@@ -9554,3 +9554,231 @@ noo the data is not correct narasimha also there fetch and tell exact number and
 ```text
 continue
 ```
+
+
+---
+
+### Prompt 418
+
+**Timestamp**: 2026-11-24T17:47:00+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 419
+
+**Timestamp**: 2026-11-24T17:50:48+05:30
+
+```text
+Tell me the category manager invite button 20 vendor copy paste option is there are not and in every mode the category manager can add new vendors and invite vendors are not?
+if catgeory manager invite new vendor the login credentials not going and account not created check the issue?
+```
+
+
+---
+
+### Prompt 420
+
+**Timestamp**: 2026-11-24T18:31:11+05:30
+
+```text
+i don't know why it is shoowing 404 because of code is not merge in dev 
+check if all the covergaes pass create pr and merge in  test-v3 directly and after that 404 not found error not come
+```
+
+
+---
+
+### Prompt 413: Create New PR from Current Branch with All Coverages Passing and Ready to Merge with test-v3
+Root Cause & Permanent Solution Summary
+1. Root Cause Analysis
+Observed Defect: Previously, approving a "Trial Period" request (e.g. 7 days) treated requestedQuantity: 7 as 7 numeric credits by calling the credit balance mutator (creditQty = 7). This added 7 credits under an Admin Credit Addition (+7) transaction. Each RFQ creation in Mode 1/2/3 then deducted 1 credit (RFQ_CREATE (-1) with reason FREE_TRIAL), consuming the 7 days' worth of "trial" in minutes if a buyer raised 7 RFQs.
+Underlying Cause:
+In internalTaskQueries.js, credit approval logic lumped 'Trial Periods' under general numeric credit additions.
+In buyerRfqCreationQueries.js, credit-deduction middleware checked numeric remainingFreeRFQs rather than checking whether the buyer had an active time-based trial (now < trialEndDate).
+The Buyer Header and Category Manager Buyer Dossier displayed credit badges and quota cards based solely on the integer remainingFreeCredits.
+2. Implemented Architecture & Permanent Fixes
+A. Backend Engine
+Canonical Time-Based Trial Persistence: In internalTaskQueries.js, when approving a task with type 'Trial Periods' or 'Trial Period':
+creditQty and creditDelta are set to 0 (the numeric credit balance remaining_free_rfqs is never mutated).
+Canonical time-based fields are persisted on the buyer account in PostgreSQL and Cloudflare D1:
+trialActive: true
+trialDays: <N> (e.g. 7)
+trialStartDate: <now ISO string>
+trialEndDate: <now + N days ISO string>
+A clean audit ledger entry is appended to buyer_credit_transactions:
+transaction_type: 'TRIAL_GRANTED'
+credits_added: 0, credits_consumed: 0
+description: 'TRIAL_GRANTED: 7 Days Unlimited Trial'
+Unlimited RFQs Across Any Mode / Version (Zero Credit Deductions):
+In constants.js, added isTrialActive(account) checking canonical trialEndDate > Date.now() and trialActive !== false.
+Updated hasUnlimitedRfqAccess(account) so active trial accounts receive unconstrained RFQ capabilities across all modes (Mode 0, Mode 1, Mode 2, Mode 3).
+In buyerRfqCreationQueries.js, RFQ creation during an active trial sets shouldCharge: false and consumes 0 credits. The buyer is never blocked even if remainingFreeRFQs === 0.
+Reconciliation & Credit History:
+In buyerAccountController.js, getCreditHistory includes trialActive, trialDays, trialStartDate, and trialEndDate in the summary and skips synthesizing synthetic credit debits for RFQs created during active trials.
+B. Frontend UI & Live Day-by-Day Countdown
+Live Dynamic Countdown Utility:
+In constants.ts, added isBuyerTrialActive(account) and getRemainingTrialDays(trialEndDate):
+remainingDays = max(0, ceil((trialEndDate - now) / (1000 * 60 * 60 * 24)))
+Buyer Account Dashboard Header (/buyer/dashboard):
+In Header.tsx, whenever a trial is active, the header renders an indigo trial badge:
+Day 1: 7 Days Trial Period (Unlimited RFQs)
+Day 2: 6 Days Trial Period (Unlimited RFQs)
+Day 7: 1 Day Left (Unlimited RFQs)
+Expired: Reverts back to standard plan/credits display.
+Category Manager > Buyer Dossier Drawer:
+In BuyerDossierDrawer.tsx:
+Profile Tab: Under "Available Quota", displays {trialDaysLeft} Days Trial Period / Unlimited RFQs (Expires {expiryDate}).
+Credit Tab: Under "Remaining Free Credits", displays {trialDaysLeft} Days Trial Period — Unlimited RFQs / Expires: {expiryDate}.
+Transaction history filters now include the TRIAL_GRANTED transaction type.
+Creation Modals:
+In ManualRFQModal.tsx, ingestion-wizard.tsx, and store.tsx, active trial users can select and submit RFQs across all modes without encountering "Quota Exhausted" locks.
+3. Verification & Automated Regression Tests
+Backend Integration Suite (trialPeriodTimeBased.test.js):
+12/12 PASSING:
+Approving a 7-day trial sets trialEndDate to +7 days without adding numeric credits.
+Cloudflare D1 query builder generates zero-credit TRIAL_GRANTED transaction.
+Buyer with active trial can raise 10+ sequential RFQs across Modes 0, 1, 2, and 3 with 0 credit deductions even with 0 remaining credits.
+Expired trial automatically reverts to standard quota enforcement.
+Normal credit additions (+5 Credits) continue adding numeric credits and deducting 1 credit per RFQ.
+Frontend Component & Countdown Suite (trialPeriodTimeBased.test.tsx):
+9/9 PASSING:
+Verified Day 1 countdown badge renders 7 Days Trial Period (Unlimited RFQs).
+Verified Day 2 countdown badge updates to 6 Days Trial Period (Unlimited RFQs).
+Verified Day 7 countdown badge shows 1 Day Left (Unlimited RFQs).
+Verified expired trial reverts to normal credits badge.
+Verified Buyer Dossier Profile & Credit tabs render countdown and unlimited RFQ access.
+Quality & Coverage Gate (npm run qc:fast):
+DB Schema Parity: Passed (0.82s).
+TypeScript Typecheck: Passed (tsc --noEmit, 0 type errors).
+ESLint: Passed with 0 warnings/errors.
+Backend Related Unit Tests: Passed (12/12 tests).
+Frontend Test Suite: 99/99 test suites passed, 3044/3044 tests passed with >= 90% code coverage across all modified files.
+
+for this use the current branch and create new pr for this code and pass all the coverages and gemini pr and ready to merge with test-v3
+
+
+---
+
+### Prompt 421
+
+**Timestamp**: 2026-11-24T19:24:30+05:30
+
+```text
+continnue
+```
+
+
+---
+
+### Prompt 420
+
+**Timestamp**: 2026-11-24T19:27:24+05:30
+
+```text
+Implement the following three updates across the Category Manager vendor invitation and onboarding workflow.
+
+---
+
+### 1. Direct Excel Copy-Paste & Auto-Select (Up to 20 Vendors)
+**Files:** `InviteVendorsModal.tsx`, `constants.ts`
+
+- Update the vendor search/bulk-paste input (and `parseSearchTokens`) to natively support raw copy-paste directly from Excel columns or rows (newline `\n`, carriage return `\r\n`, and tab `\t` delimited) without requiring commas, colons, or manual formatting.
+- When a user pastes a list of vendor names or emails (e.g., 20 rows copied straight from Excel):
+  1. Parse and normalize the pasted entries (trim whitespace, ignore empty lines, preserve multi-word vendor names when separated by newlines/tabs instead of splitting on spaces).
+  2. Automatically match them against the available vendors list.
+  3. **Automatically check/select** all matched vendors up to `MAX_INVITE_VENDORS` (20).
+- If more than 20 matches are found, select the first 20 and trigger the existing limit warning toast (`"Limit Reached: You can select a maximum of 20 vendors per invitation batch."`).
+- Display a brief inline summary of the paste result (e.g., `"18 matched & selected, 2 not found"`) so the Category Manager can immediately review and click **Send Invitations**.
+
+---
+
+### 2. Enable "+ Add New Vendor" Across All Sourcing Modes (Mode 0, 1, 2, 3)
+**Files:** `InviteVendorsModal.tsx` (lines ~897–919), backend `POST /api/vendors` route/middleware
+
+- Remove the `isV0OrV2` conditional restriction around the **"+ Add New Vendor"** button in `InviteVendorsModal.tsx` so Category Managers can add new vendors in **Mode 0 (V0), Mode 1 (V1), Mode 2 (V2), and Mode 3 (V3)**.
+- Verify there are no mode-based guards in the backend (`POST /api/vendors`) or parent pages (`all-rfqs.tsx`, `rfq-details.tsx`) that block adding new vendors in Mode 1 or Mode 3.
+
+---
+
+### 3. Guarantee Account Creation & Login Credential Delivery on Vendor Invite
+**Files:** `storeService.js` (`inviteVendorsToRFQ`, `_provisionVendorOnboarding`), `eventOutboxService`, `mailerService`
+
+Ensure that whenever a vendor is invited to an RFQ and does not yet have a login account, their account is created and their login credentials are reliably emailed so they can log in and communicate:
+
+1. **Auto-Provision Directory/Unregistered Vendors on RFQ Invite (`POST /api/rfqs/:id/invite-vendors`):**
+   - Inside `storeService.inviteVendorsToRFQ`, check each invited vendor with `identityQueries.findUserByEmail(vendor.email)`.
+   - If no user identity record exists, call `_provisionVendorOnboarding` to create their login account in the `user` table and send their onboarding/login credentials in addition to the RFQ Bid Alert email.
+   - If an account already exists (`account_exists`), keep the existing behavior (do not overwrite their password; send only the RFQ Bid Alert email).
+
+2. **Fix Silent Failures in `_provisionVendorOnboarding` (`POST /api/vendors` & Invite Flow):**
+   - **Encryption Key Check:** Do not silently swallow missing `AES_ENCRYPTION_KEY` / `AES_SECRET_KEY`. Log a clear error and return an actionable error status/message to the frontend if credential encryption is misconfigured.
+   - **Reliable Email Dispatch:** Ensure `EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL` is either dispatched immediately via `mailerService.sendVendorIngestionEmail` upon onboarding or immediately triggers `eventOutboxService.dispatchScheduledEventOutboxJobs` so credentials are not stuck waiting in `event_outbox`.
+   - **Delivery Feedback:** Return the onboarding/credential delivery status (`sent`, `account_exists`, `failed`) in the API response so the UI can show a clear confirmation or warning toast if SMTP/SendGrid delivery fails.
+
+---
+
+### Verification Checklist
+- [ ] Pasting 20 vendor emails/names copied directly from an Excel column auto-matches and auto-selects them without needing commas or colons.
+- [ ] The **"+ Add New Vendor"** button is visible and functional in Mode 0, Mode 1, Mode 2, and Mode 3.
+- [ ] Inviting a newly added vendor or an unregistered directory vendor creates their `user` account and immediately delivers their login credentials email.
+```
+
+
+---
+
+### Prompt 422
+
+**Timestamp**: 2026-11-24T19:28:53+05:30
+
+```text
+continnue
+```
+
+
+---
+
+### Prompt 423
+
+**Timestamp**: 2026-11-24T20:52:35+05:30
+
+```text
+continue create pr and pass all the coverages and ready to merge in test-v3 i can merge
+```
+
+
+---
+
+### Prompt 423
+
+**Timestamp**: 2026-11-24T20:52:52+05:30
+
+```text
+continue it is running still 8 hr please do it fast
+```
+
+
+---
+
+### Prompt 424
+
+**Timestamp**: 2026-11-24T21:06:20+05:30
+
+```text
+continue
+```
+
+
+---
+
+### Prompt 424
+
+**Timestamp**: 2026-11-24T21:06:37+05:30
+
+```text
+continue
+```

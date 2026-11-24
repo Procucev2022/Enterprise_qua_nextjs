@@ -663,6 +663,8 @@ async function inviteVendors(req, res, next) {
       invitedCount: result.invitedCount,
       excludedCount: result.excludedCount || 0,
       excludedVendors: result.excludedVendors || [],
+      provisionedCount: result.provisionedCount || 0,
+      provisioningErrors: result.provisioningErrors || [],
     });
   } catch (err) {
     logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');

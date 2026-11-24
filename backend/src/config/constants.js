@@ -3688,11 +3688,11 @@ function parseSearchTokens(search) {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[\n\r,;]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[\n\r,;]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )

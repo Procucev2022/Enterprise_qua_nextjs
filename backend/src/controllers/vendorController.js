@@ -1043,6 +1043,7 @@ async function createVendor(req, res, next) {
     res.status(201).json({
       success: true,
       data: vendor,
+      onboardingStatus: onboarding?.status || (created.email ? 'skipped' : 'no_email'),
       ...(onboarding?.error ? { warning: onboarding.error } : {}),
     });
   } catch (err) {

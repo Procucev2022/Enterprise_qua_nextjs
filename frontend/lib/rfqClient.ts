@@ -847,6 +847,8 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     invitedCount?: number;
     excludedCount?: number;
     excludedVendors?: RFQExcludedVendor[];
+    provisionedCount?: number;
+    provisioningErrors?: Array<{ id?: string; email?: string; error?: string }>;
     error?: string;
   } = {};
   try {
@@ -884,6 +886,8 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     ...(Array.isArray(body.excludedVendors) && body.excludedVendors.length > 0
       ? { excludedVendors: body.excludedVendors }
       : {}),
+    ...(typeof body.provisionedCount === 'number' ? { provisionedCount: body.provisionedCount } : {}),
+    ...(Array.isArray(body.provisioningErrors) ? { provisioningErrors: body.provisioningErrors } : {}),
   };
 }
 
