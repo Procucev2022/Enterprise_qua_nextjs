@@ -3303,22 +3303,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     )}
                   </div>
                 )}
-
-                {/* Registration Status (Separately added field) */}
-                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
-                    {UI_STRINGS.vendorStatusControl.registrationStatusCardHeading || 'Registration Status'}
-                  </span>
-                  <div className={`font-bold text-[10.5px] mt-0.5 truncate ${
-                    Boolean(selectedVendorForCrud.isExistingInDatabase || selectedVendorForCrud.source === 'procucev_network' || selectedVendorForCrud.firstLoginCompleted || (selectedVendorForCrud as any).registered || (selectedVendorForCrud as any).isRegistered)
-                      ? 'text-indigo-600 dark:text-indigo-400'
-                      : 'text-slate-600 dark:text-gray-400'
-                  }`}>
-                    {Boolean(selectedVendorForCrud.isExistingInDatabase || selectedVendorForCrud.source === 'procucev_network' || selectedVendorForCrud.firstLoginCompleted || (selectedVendorForCrud as any).registered || (selectedVendorForCrud as any).isRegistered)
-                      ? (UI_STRINGS.vendorStatusControl.registeredBadge || 'Registered')
-                      : (UI_STRINGS.vendorStatusControl.notRegisteredBadge || 'Not Registered')}
-                  </div>
-                </div>
               </div>
 
               {/* Taxonomy Details */}
