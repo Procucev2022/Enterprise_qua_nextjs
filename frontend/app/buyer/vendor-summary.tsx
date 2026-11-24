@@ -1796,16 +1796,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorIds([]);
   };
 
-  const getStatusStyle = (status: string) => {
-    if (status === 'PREFERRED ENTERPRISE SUPPLIER') {
-      return 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
-    }
-    if (status === 'CONDITIONAL / UNDER REVIEW' || status === 'PENDING EVALUATION') {
-      return 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-    }
-    return 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border-slate-200 dark:border-gray-700';
-  };
-
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
@@ -2308,17 +2298,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {buyerFilteredVendors.length}
           </div>
         </div>
-        {/* Evaluation stats card hidden per user request - Issue #12 */}
-        {false && (
-          <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-            <div className="text-[10px] uppercase font-bold text-slate-400">
-              {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
-            </div>
-            <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-              {buyerFilteredVendors.filter((v) => v.evaluated).length}
-            </div>
-          </div>
-        )}
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
             {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
@@ -3269,40 +3248,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       : UI_STRINGS.vendorStatusControl.activeBadge}
                   </div>
                 </div>
-
-                {/* Evaluation status card hidden per user request - Issue #12 */}
-                {false && (
-                  <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block">
-                      {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
-                    </span>
-                    <div
-                      className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : 'text-emerald-600 dark:text-emerald-400'
-                        }`}
-                    >
-                      {isVendorInactive(selectedVendorForCrud)
-                        ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                        ? 'PENDING EVALUATION'
-                        : (selectedVendorForCrud.status === 'PENDING EVALUATION' || selectedVendorForCrud.status === 'REGISTERED / NOT EVALUATED' || selectedVendorForCrud.status === 'NOT EVALUATED' || !selectedVendorForCrud.status
-                          ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
-                          : selectedVendorForCrud.status)}
-                    </div>
-                    {(selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt) && (
-                      <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
-                        {selectedVendorForCrud.evaluationRequestedAt
-                          ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                            date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
-                          })
-                          : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
-                      </span>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* Taxonomy Details */}

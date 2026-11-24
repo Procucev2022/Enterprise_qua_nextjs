@@ -140,6 +140,21 @@ function selectAllIn(name: string): void {
   fireEvent.click(button as HTMLButtonElement);
 }
 
+/** Click "Clear" inside a specific major, expanding it first if needed. */
+function clearIn(name: string): void {
+  const panel = majorPanel(name);
+  let button = Array.from(panel.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === 'Clear'
+  );
+  if (!button) {
+    expandMajor(name);
+    button = Array.from(majorPanel(name).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Clear'
+    );
+  }
+  fireEvent.click(button as HTMLButtonElement);
+}
+
 describe('app/buyer/buyer-profile.tsx', () => {
   beforeEach(() => {
     jest.clearAllMocks();
@@ -423,10 +438,10 @@ describe('app/buyer/buyer-profile.tsx', () => {
   it('toggles a major category on and off', async () => {
     await renderLoaded();
 
-    fireEvent.click(screen.getByText('Logistics'));
+    selectAllIn('Logistics');
     expect(selectionSummary()).toBe('3 Divisions • 3 Categories Selected');
 
-    fireEvent.click(screen.getByText('Logistics'));
+    clearIn('Logistics');
     expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
@@ -781,7 +796,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // At the 5-division cap: selecting a 6th is blocked with a toast and the
     // selection is left exactly as it was.
-    fireEvent.click(screen.getByText('Category 6'));
+    selectAllIn('Category 6');
 
     expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -1018,7 +1033,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // Selecting Major Cat 3 would auto-add all 5 of its minors, pushing the
     // total to 15 — blocked outright rather than partially filled.
-    fireEvent.click(screen.getByText('Major Cat 3'));
+    selectAllIn('Major Cat 3');
     expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
     expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.limitReachedTitle,

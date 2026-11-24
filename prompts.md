@@ -7672,6 +7672,7 @@ check all the previous  pr pass all the coverages are not if not pass  all theco
 ```
 
 ---
+
 ### Prompt 359
 
 **Timestamp**: 2026-11-21T07:42:41+05:30
@@ -7811,7 +7812,6 @@ Fix all the issue in the category manager portal everyything every button should
 
 ---
 
-
 ### Prompt 364
 
 **Timestamp**: 2026-11-21T12:01:20+05:30
@@ -7871,6 +7871,7 @@ create the pr for this code and pass all the coverges and gemini pr check unit t
 ```
 
 ---
+
 ### Prompt 376
 
 **Timestamp**: 2026-11-21T19:11:18+05:30
@@ -7880,6 +7881,7 @@ contiinue
 ```
 
 ---
+
 ### Prompt 377
 
 **Timestamp**: 2026-11-21T19:43:00+05:30
@@ -7889,6 +7891,7 @@ contiinue
 ```
 
 ---
+
 ### Prompt 378
 
 **Timestamp**: 2026-11-21T20:51:06+05:30
@@ -7935,6 +7938,7 @@ REUSE Existing code and functionality don't merge the code in test-v3 use same b
 ```
 
 ---
+
 ### Prompt 379
 
 **Timestamp**: 2026-11-21T21:37:36+05:30
@@ -7944,6 +7948,7 @@ why it is not showing available credits
 ```
 
 ---
+
 ### Prompt 380
 
 **Timestamp**: 2026-11-21T22:08:37+05:30
@@ -7953,6 +7958,7 @@ Remove the 6th and 12th in discount request in seller directory and update the  
 ```
 
 ---
+
 ### Prompt 381
 
 **Timestamp**: 2026-11-21T22:09:09+05:30
@@ -7962,6 +7968,7 @@ Remove the 6th and 12th  months in discount request in seller directory and upda
 ```
 
 ---
+
 ### Prompt 382
 
 **Timestamp**: 2026-11-21T22:24:16+05:30
@@ -8028,10 +8035,10 @@ In **both Buyers Directory and Sellers Directory** (and every Request Approval m
 continue
 ```
 
-
 ---
 
 ### User Prompt 385 (Timestamp: 22 Nov 2026, 12:12 AM IST)
+
 ```text
 continue
 ```
@@ -8039,14 +8046,15 @@ continue
 ---
 
 ### User Prompt 386 (Timestamp: 22 Nov 2026, 02:37 AM IST)
+
 ```text
 continue
 ```
 
-
 ---
 
 ### User Prompt 387 (Timestamp: 22 Nov 2026, 09:27 AM IST)
+
 ```text
 Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, Approvals, Credits, and Communications).
 
@@ -8103,8 +8111,8 @@ Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 iss
 - Run fast verification (`npm run qc:fast` or `npm run check:fast`) and ensure 0 test failures.
 ```
 
-
 ## Prompt 388 — 2026-11-22T13:26:12+05:30
+
 ```text
 Summary of Changes
 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
@@ -8214,8 +8222,8 @@ Merging can be performed automatically.
 pass all the coverages
 ```
 
-
 ## Prompt 389 — 2026-11-22T14:00:55+05:30
+
 ```text
 Quality checks
 Check
@@ -8265,11 +8273,13 @@ Pass all the coverages and ready to merge
 ```
 
 ## Prompt 390 — 2026-11-22T14:45:00+05:30
+
 ```text
 continue
 ```
 
 ## Prompt 391 — 2026-11-22T15:23:47+05:30
+
 ```text
 Summary of Changes
 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
@@ -8378,7 +8388,6 @@ Successful in 27s
 pass gemini pr check as well
 ```
 
-
 ---
 
 ### Prompt 386
@@ -8387,9 +8396,8 @@ pass gemini pr check as well
 
 ```text
 remove this 2 emails from production anshul.goel@procucev.com , gmtrfq@procucev.com
-add quateam@procucev.com , sudheer.kangala@procucev.com  
+add quateam@procucev.com , sudheer.kangala@procucev.com
 ```
-
 
 ---
 
@@ -8398,7 +8406,7 @@ add quateam@procucev.com , sudheer.kangala@procucev.com
 **Timestamp**: 2026-11-23T11:38:01+05:30
 
 ```text
-raise the pr for this only code of 6 files and pass all  the coverages and gemini pr and  don't merge in test-v3 i can merge the pr manuallly 
+raise the pr for this only code of 6 files and pass all  the coverages and gemini pr and  don't merge in test-v3 i can merge the pr manuallly
 ```
 
 ---
@@ -8456,7 +8464,6 @@ ALL done?
 ```text
 continue
 ```
-
 
 ---
 
@@ -8576,7 +8583,6 @@ Refactor the Buyer RFQ Console into a compact, single-line Excel-style table mat
 - Reset to Page 1 whenever search, company, buyer, or sort filters change, and smoothly scroll the table back to the top on page change.
 ```
 
-
 ---
 
 ### Prompt 394
@@ -8584,7 +8590,7 @@ Refactor the Buyer RFQ Console into a compact, single-line Excel-style table mat
 **Timestamp**: 2026-11-23T16:05:44+05:30
 
 ```text
-Implement the following frontend-only UI changes in the **Buyer Login** portal. 
+Implement the following frontend-only UI changes in the **Buyer Login** portal.
 
 **Strict Constraint:** Do NOT delete, modify, or remove any backend code, API endpoints, database logic, or existing frontend handlers. Wrap hidden/disabled features in a simple boolean feature flag (e.g., `const ENABLE_MODE_3 = false;`, `const ENABLE_VENDOR_RATING = false;`) so they can be easily re-enabled later.
 
@@ -8623,7 +8629,6 @@ create the pr and pass all the covergaes don't merge in test-v3 pass all the gem
 create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
 ```
 
-
 ---
 
 ### Prompt 396
@@ -8643,7 +8648,6 @@ Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** 
   - Do not remove any underlying API calls or handler functions—only conditionally hide the button from the frontend UI.
 ```
 
-
 ---
 
 ### Prompt 397
@@ -8653,7 +8657,6 @@ Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** 
 ```text
 create the pr using this branch and pass all the coverages and gemini pr and ready to merge with test-v3 i can merge after that
 ```
-
 
 ---
 
@@ -8872,7 +8875,6 @@ Enforce the two-track workflow whenever an **Add / Delete Credit** request is cr
 4. Logged communication categories persist to DB and reflect accurately in Category Manager Analytics.
 ```
 
-
 ---
 
 ### Prompt 401
@@ -8894,14 +8896,21 @@ continue
 ```
 
 ---
+
 ### Prompt 403
+
 **Timestamp**: 2026-11-24T11:24:26+05:30 (approximate: the send time was not recorded. Sent after Prompt 216 while that work was being reported, and recorded when work resumed.)
+
 ```text
 Can't see any change, is the issue fixed & commited
 ```
+
 ---
+
 ### Prompt 404
+
 **Timestamp**: 2026-11-24T11:24:26+05:30
+
 ```text
 resume
 ```
@@ -8971,4 +8980,72 @@ raise the pr and pass all the covergaes and gemini pr check and ready to merge i
 
 ```text
 Is there any admin portal role  in this project
+```
+
+---
+
+### Prompt 410
+
+**Timestamp**: 2026-11-24T12:49:35+05:30
+
+```text
+run locally that admin portal
+```
+
+
+---
+
+### Prompt 411
+
+**Timestamp**: 2026-11-24T13:30:05+05:30
+
+```text
+Identify the root cause and permanently fix the **Trial Period** logic so that granting a trial period (e.g., 7 days) provides **time-based unlimited RFQs across any version/mode** with a live **day-by-day countdown**, instead of adding numeric credits and deducting 1 credit per RFQ.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Trace the Trial Period request/approval flow, buyer entitlement/credit schema, and RFQ creation credit-deduction middleware BEFORE editing.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)—keep Trial Period and Credit Addition cleanly separated.
+- **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, plans, and workflows 100% intact.
+
+---
+
+### 1. Root Cause Fix — Separate Trial Period (Time-Based) from Numeric Credits (Backend)
+- **Observed Bug**: Granting a 7-day trial period currently executes `Admin Credit Addition (+7)` and logs `RFQ_CREATE (-1)` per RFQ (`FREE_TRIAL`), burning through the 7 "credits" in a single day.
+- **Required Fix**:
+  - When a **Trial Period** request (e.g., `7 days`) is approved, do **NOT** add `7` to `remainingFreeCredits` and do **NOT** create an `Admin Credit Addition (+7)` transaction.
+  - Instead, persist canonical time-based trial fields on the buyer account in the DB (reusing existing trial/entitlement columns or JSON fields if present):
+    - `trialActive: true`
+    - `trialDays: <N>` (e.g., `7`)
+    - `trialStartDate: <ISO timestamp>`
+    - `trialEndDate: <ISO timestamp = start + N days>`
+  - Log a clean audit/ledger entry for the trial grant (e.g., `TRIAL_GRANTED: 7 Days Unlimited Trial`) without mutating the numeric credit balance.
+
+---
+
+### 2. Unlimited RFQs in Any Version/Mode During Active Trial (Backend)
+- Update the RFQ creation and credit-deduction service/middleware:
+  - Before checking or deducting credits, check if the buyer has an **active trial period** (`trialEndDate && now < trialEndDate`).
+  - **While the trial is active**:
+    - Allow the buyer to raise **unlimited RFQs** in **any version / sourcing mode** (Mode 0, Mode 1, Mode 2, Mode 3, etc.).
+    - **Do NOT deduct any credits** (`0` credits consumed) and do **NOT** block RFQ creation even if `remainingFreeCredits === 0`.
+  - **Once the trial expires** (`now >= trialEndDate`):
+    - Automatically revert to normal credit / subscription plan enforcement.
+
+---
+
+### 3. Live Day-by-Day Trial Countdown in Buyer Account & Category Manager Dossier (Frontend)
+Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` → next day `6 Days Trial Period` → ... → `1 Day Left` → expired):
+- **Buyer Account (`/buyer/dashboard` header & credit/plan display)**:
+  - Where the buyer's credits / active plan are shown, clearly display the live trial badge (e.g., `7 Days Trial Period (Unlimited RFQs)`), updating automatically to `6 Days Trial Period` the next day, `5 Days`, etc.
+- **Category Manager > Buyer Dossier (`Profile` & `Credit` tabs)**:
+  - Display the active trial countdown (`7 Days Trial Period — Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
+
+---
+
+### 4. Verification & Regression Tests (Prevent Future Recurrence)
+Add automated backend and frontend tests asserting that:
+1. Approving a **7-day trial** sets `trialEndDate` to 7 days from approval and does **not** add 7 numeric credits.
+2. A buyer with an active 7-day trial can create multiple RFQs (e.g., 10+ RFQs) across any mode/version with **0 credit deductions**.
+3. The UI displays `7 Days Trial Period` on Day 1, `6 Days Trial Period` on Day 2, and reverts to normal credit/plan display after expiry.
+4. Normal **Buyer Credit Addition** (e.g., `+5 Credits`) continues to add numeric credits and deduct 1 per RFQ as expected when no trial is active.
 ```

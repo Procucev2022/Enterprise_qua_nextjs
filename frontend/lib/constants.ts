@@ -258,6 +258,28 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
 };
 
 /**
+ * Check if a buyer has an active trial period based on canonical trialEndDate.
+ */
+export function isBuyerTrialActive(account?: { trialActive?: boolean; trialEndDate?: string } | null): boolean {
+  if (!account || account.trialActive === false || !account.trialEndDate) return false;
+  const end = new Date(account.trialEndDate).getTime();
+  return Number.isFinite(end) && end > Date.now();
+}
+
+/**
+ * Calculates remaining trial days dynamically from trialEndDate.
+ * Returns 0 if expired or invalid.
+ */
+export function getRemainingTrialDays(trialEndDate?: string | null): number {
+  if (!trialEndDate) return 0;
+  const end = new Date(trialEndDate).getTime();
+  if (!Number.isFinite(end)) return 0;
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+/**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
  * For free_trial:

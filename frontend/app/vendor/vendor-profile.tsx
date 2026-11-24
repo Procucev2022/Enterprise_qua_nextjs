@@ -279,22 +279,6 @@ export default function VendorProfilePage() {
   const isPanValid = (pan: string) => Boolean(usablePan(pan));
   // No longer need local isGstValid - using imported comprehensive validation
 
-  // Toggle Major Category
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-    } else {
-      setSelectedMajor((prev) => [...prev, majorName]);
-      const allMinor = getMinorCategories(majorName);
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: [...allMinor] }));
-    }
-  };
-
   // Toggle Minor Category (unlimited selections)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];

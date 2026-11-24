@@ -377,6 +377,13 @@ describe('VendorProfilePage Comprehensive Suite', () => {
     // Select at least one category
     const mechanicalHeader = screen.getByText('Engineering Spares - Mechanical');
     fireEvent.click(mechanicalHeader);
+    const categoryOption = screen.queryByText('Fasteners') || screen.queryByText(/Bearings/i);
+    if (categoryOption) {
+      fireEvent.click(categoryOption);
+    } else {
+      const checkboxes = screen.queryAllByRole('checkbox');
+      if (checkboxes.length > 0) fireEvent.click(checkboxes[0]);
+    }
 
     const saveBtn = screen.getByRole('button', { name: /Save Supplier Profile/i });
     await act(async () => {

@@ -4,7 +4,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose } from '@/lib/constants';
+import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose, isBuyerTrialActive, getRemainingTrialDays, formatString } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
@@ -338,31 +338,57 @@ export default function Header() {
           {/* Buyer Credits / Active Plan Display */}
           {currentRole === 'buyer' && (
             <>
-              {(!activeSubscription || activeSubscription === 'free_trial') ? (
-                <div
-                  className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
-                  title={
-                    remainingFreeRFQs == null
-                      ? `Sourcing Credits: ${UI_STRINGS.headerNav.creditBalanceUnknown}`
-                      : `Sourcing Credits: ${remainingFreeRFQs} remaining`
-                  }
-                >
-                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300">Sourcing Credits:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800">
-                    Remaining: {remainingFreeRFQs ?? UI_STRINGS.headerNav.creditBalanceUnknown}
-                  </span>
-                </div>
-              ) : (
-                <div
-                  className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
-                  title={`Active Plan: ${activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}`}
-                >
-                  <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
-                    {activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const trialActive = isBuyerTrialActive(activeBuyerAccount);
+                const trialDaysLeft = trialActive ? getRemainingTrialDays(activeBuyerAccount?.trialEndDate) : 0;
+
+                if (trialActive && trialDaysLeft > 0) {
+                  const badgeText = trialDaysLeft === 1
+                    ? UI_STRINGS.headerNav.trialPeriodBadgeSingle
+                    : formatString(UI_STRINGS.headerNav.trialPeriodBadge, { days: trialDaysLeft });
+                  return (
+                    <div
+                      className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
+                      title={`Active Plan: ${badgeText}`}
+                    >
+                      <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
+                        {badgeText}
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (!activeSubscription || activeSubscription === 'free_trial') {
+                  return (
+                    <div
+                      className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
+                      title={
+                        remainingFreeRFQs == null
+                          ? `Sourcing Credits: ${UI_STRINGS.headerNav.creditBalanceUnknown}`
+                          : `Sourcing Credits: ${remainingFreeRFQs} remaining`
+                      }
+                    >
+                      <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300">Sourcing Credits:</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800">
+                        Remaining: {remainingFreeRFQs ?? UI_STRINGS.headerNav.creditBalanceUnknown}
+                      </span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
+                    title={`Active Plan: ${activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}`}
+                  >
+                    <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
+                      {activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}
+                    </span>
+                  </div>
+                );
+              })()}
             </>
           )}
 

@@ -399,48 +399,6 @@ export default function BuyerProfilePage() {
   const minorsOf = (majorName: string) =>
     activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
-  // Toggle Major Category, capped at BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES
-  // divisions and BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES minor categories in
-  // total — selecting a major auto-selects every minor under it, so that bulk
-  // add is blocked outright (not partially filled) whenever it would push the
-  // total minor count over the cap, re-enforced server-side on save.
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-      return;
-    }
-
-    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
-    if (typeof MAX_MAJOR_CATEGORIES === 'number' && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      showToast(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
-        'warning'
-      );
-      return;
-    }
-    const allMinor = minorsOf(majorName);
-    if (
-      typeof MAX_MINOR_CATEGORIES === 'number' &&
-      totalSelectedMinorCount + allMinor.length > MAX_MINOR_CATEGORIES
-    ) {
-      showToast(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
-        'warning'
-      );
-      return;
-    }
-
-    setSelectedMajor((prev) => [...prev, majorName]);
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
-  };
-
   // Toggle Minor Category, capped at BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES in total.
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
@@ -488,12 +446,24 @@ export default function BuyerProfilePage() {
     setSelectedMinor((prev) => ({ ...prev, [majorName]: [...(prev[majorName] || []), minorName] }));
   };
 
-  // Select all minor for a major, capped the same way as toggleMajorCategory.
+  // Select all minor for a major, capped at MAX_MAJOR_CATEGORIES and MAX_MINOR_CATEGORIES.
   const selectAllMinorInMajor = (majorName: string) => {
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (
+      !selectedMajor.includes(majorName) &&
+      typeof MAX_MAJOR_CATEGORIES === 'number' &&
+      selectedMajor.length >= MAX_MAJOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
     const allMinor = minorsOf(majorName);
     const alreadySelected = selectedMinor[majorName] || [];
     const additional = allMinor.filter((m) => !alreadySelected.includes(m)).length;
-    const { MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
     if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount + additional > MAX_MINOR_CATEGORIES) {
       showToast(
         UI_STRINGS.buyerProfile.limitReachedTitle,

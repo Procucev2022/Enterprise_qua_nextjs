@@ -2285,6 +2285,10 @@ export interface BuyerAccount {
   remainingFreeRFQs: number;
   creditBalance?: number;
   available_credits?: number;
+  trialActive?: boolean;
+  trialDays?: number;
+  trialStartDate?: string;
+  trialEndDate?: string;
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
@@ -3409,6 +3413,10 @@ export interface BuyerCreditSummary {
   adjustedCredits: number;
   currentEntitlementMode: string;
   currentSubscriptionPlan: string;
+  trialActive?: boolean;
+  trialDays?: number;
+  trialStartDate?: string;
+  trialEndDate?: string;
 }
 
 export interface BuyerCreditTransaction {

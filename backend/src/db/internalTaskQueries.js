@@ -1125,6 +1125,14 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
   const idempotencyKey = `task-approval-${task.id}`;
   const transactionId = `${buyerAccount ? 'ctx' : 'vtx'}-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
   const activityId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const isTrial =
+    (task.task_type || '') === 'Trial Periods' ||
+    (task.task_type || '') === 'Trial Period' ||
+    task.raw?.request_type === 'Trial Periods' ||
+    task.raw?.request_type === 'Trial Period';
+  const trialDays = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 7);
+  const trialStartDate = task.raw?.start_date || new Date().toISOString();
+  const trialEndDate = task.raw?.end_date || new Date(new Date(trialStartDate).getTime() + trialDays * 24 * 60 * 60 * 1000).toISOString();
   const creditDelta = isDeduct ? -creditQty : creditQty;
   const currentBalanceExpr = buyerAccount
     ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), json_extract(raw, '$.remainingFreeRFQs'), 0) AS INTEGER)`
@@ -1153,7 +1161,9 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
     },
     {
       text: `UPDATE ${accountTable}
-        SET raw = ${buyerAccount
+        SET raw = ${isTrial && buyerAccount
+          ? `json_set(raw, '$.trialActive', json('true'), '$.trialDays', ${trialDays}, '$.trialStartDate', '${trialStartDate}', '$.trialEndDate', '${trialEndDate}')`
+          : buyerAccount
           ? `json_set(raw, '$.creditBalance', ${updatedBalanceExpr}, '$.available_credits', ${updatedBalanceExpr}, '$.remainingFreeRFQs', ${updatedBalanceExpr})`
           : `json_set(raw, '$.freeQuotationCredits', ${updatedBalanceExpr}, '$.freeRfqDownloadCredits', ${updatedBalanceExpr}, '$.credits', ${updatedBalanceExpr})`},
             updated_at = CURRENT_TIMESTAMP
@@ -1161,7 +1171,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
           AND EXISTS (SELECT 1 FROM internal_tasks WHERE id = $3 AND approval_status = 'PROCESSING')
           AND NOT EXISTS (SELECT 1 FROM ${ledgerTable} WHERE idempotency_key = $4)
         RETURNING id`,
-      params: [creditDelta, accountId, task.id, idempotencyKey],
+      params: [isTrial ? 0 : creditDelta, accountId, task.id, idempotencyKey],
     },
     buyerAccount
       ? {
@@ -1171,7 +1181,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
             payment_reference, status, description, idempotency_key, created_at
           )
           SELECT $1, b.id, NULL, $2, $3, $4, $5, ${previousBalanceFromTask},
-                 ${updatedBuyerBalance}, NULL, 'COMPLETED', $6, $7, CURRENT_TIMESTAMP
+                 ${isTrial ? previousBalanceFromTask : updatedBuyerBalance}, NULL, 'COMPLETED', $6, $7, CURRENT_TIMESTAMP
           FROM buyer_accounts b
           JOIN internal_tasks t ON t.id = $8
           WHERE b.id = $9
@@ -1182,11 +1192,11 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
           RETURNING id`,
         params: [
           transactionId,
-          isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+          isTrial ? 'TRIAL_GRANTED' : (isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition'),
           'Action Center Internal Tasks Approval',
-          isDeduct ? 0 : creditQty,
-          isDeduct ? creditQty : 0,
-          `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+          isTrial ? 0 : (isDeduct ? 0 : creditQty),
+          isTrial ? 0 : (isDeduct ? creditQty : 0),
+          isTrial ? `TRIAL_GRANTED: ${trialDays} Days Unlimited Trial` : `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
           idempotencyKey,
           task.id,
           accountId,
@@ -1356,8 +1366,14 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
     } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
-      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      const days = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 30);
+      const startDate = task.raw?.start_date || new Date().toISOString();
+      const endDate = task.raw?.end_date || new Date(new Date(startDate).getTime() + days * 24 * 60 * 60 * 1000).toISOString();
       storeService.updateBuyerAccount(accountId, {
+        trialActive: true,
+        trialDays: days,
+        trialStartDate: startDate,
+        trialEndDate: endDate,
         subscriptionTier: 'Free_trial',
         trialPeriodDays: days,
       }, { persist: false });
@@ -1414,6 +1430,14 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     (task.task_type || '').toLowerCase().includes('delete') ||
     (task.title || '').toLowerCase().includes('deduct') ||
     (task.title || '').toLowerCase().includes('delete');
+  const isTrial =
+    (task.task_type || '') === 'Trial Periods' ||
+    (task.task_type || '') === 'Trial Period' ||
+    task.raw?.request_type === 'Trial Periods' ||
+    task.raw?.request_type === 'Trial Period';
+  const trialDays = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 7);
+  const trialStartDate = task.raw?.start_date || new Date().toISOString();
+  const trialEndDate = task.raw?.end_date || new Date(new Date(trialStartDate).getTime() + trialDays * 24 * 60 * 60 * 1000).toISOString();
   const rawQty = Number(task.credit_quantity);
   const creditQty = Number.isFinite(rawQty) && rawQty > 0 ? Math.floor(rawQty) : 0;
   const accountType = (task.credit_account_type || task.related_entity_type || 'BUYER').toUpperCase();
@@ -1480,29 +1504,63 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
         const targetBuyerId = bRow.id;
         const prevBal = requireRecordedBalance(bRaw.creditBalance ?? bRaw.available_credits ?? bRaw.remainingFreeRFQs, task, accountId);
-        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), '{remainingFreeRFQs}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-        await client.query(bSql, [updatedBal, targetBuyerId]);
+        if (isTrial) {
+          const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(raw, '{trialActive}', 'true'::jsonb, true),
+                '{trialDays}', to_jsonb($1::integer), true
+              ),
+              '{trialStartDate}', to_jsonb($2::text), true
+            ),
+            '{trialEndDate}', to_jsonb($3::text), true
+          ), updated_at = now() WHERE id = $4`;
+          await client.query(bSql, [trialDays, trialStartDate, trialEndDate, targetBuyerId]);
 
-        if (domainQueries.recordBuyerCreditTransactionInDB) {
-          const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-          await domainQueries.recordBuyerCreditTransactionInDB({
-            id: txId,
-            buyerId: targetBuyerId,
-            rfqId: null,
-            transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-            creditSource: 'Action Center Internal Tasks Approval',
-            creditsAdded: isDeduct ? 0 : creditQty,
-            creditsConsumed: isDeduct ? creditQty : 0,
-            previousBalance: prevBal,
-            updatedBalance: updatedBal,
-            status: 'COMPLETED',
-            description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-            idempotencyKey: `task-approval-${task.id}`,
-            queryClient: client,
-          });
+          if (domainQueries.recordBuyerCreditTransactionInDB) {
+            const txId = `ctx-trial-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+            await domainQueries.recordBuyerCreditTransactionInDB({
+              id: txId,
+              buyerId: targetBuyerId,
+              rfqId: null,
+              transactionType: 'TRIAL_GRANTED',
+              creditSource: 'Action Center Internal Tasks Approval',
+              creditsAdded: 0,
+              creditsConsumed: 0,
+              previousBalance: prevBal,
+              updatedBalance: prevBal,
+              status: 'COMPLETED',
+              description: `TRIAL_GRANTED: ${trialDays} Days Unlimited Trial`,
+              idempotencyKey: `task-approval-${task.id}`,
+              queryClient: client,
+            });
+          }
+          updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal: prevBal };
+        } else {
+          const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+          const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), '{remainingFreeRFQs}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+          await client.query(bSql, [updatedBal, targetBuyerId]);
+
+          if (domainQueries.recordBuyerCreditTransactionInDB) {
+            const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+            await domainQueries.recordBuyerCreditTransactionInDB({
+              id: txId,
+              buyerId: targetBuyerId,
+              rfqId: null,
+              transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+              creditSource: 'Action Center Internal Tasks Approval',
+              creditsAdded: isDeduct ? 0 : creditQty,
+              creditsConsumed: isDeduct ? creditQty : 0,
+              previousBalance: prevBal,
+              updatedBalance: updatedBal,
+              status: 'COMPLETED',
+              description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+              idempotencyKey: `task-approval-${task.id}`,
+              queryClient: client,
+            });
+          }
+          updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
         }
-        updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
       } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
         const dbVendorRes = await client.query(
           'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
@@ -1634,7 +1692,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   }
 
   // Synchronize in-memory caches ONLY after database transaction has successfully committed
-  if (updatedBuyerInfo && storeService.updateBuyerAccount) {
+  if (updatedBuyerInfo && storeService.updateBuyerAccount && !isTrial) {
     storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
@@ -1656,11 +1714,27 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
     } else if (task.task_type === 'Trial Periods' || task.task_type === 'Trial Period' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
-      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      const days = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 30);
+      const startDate = task.raw?.start_date || new Date().toISOString();
+      const endDate = task.raw?.end_date || new Date(new Date(startDate).getTime() + days * 24 * 60 * 60 * 1000).toISOString();
       storeService.updateBuyerAccount(accountId, {
+        trialActive: true,
+        trialDays: days,
+        trialStartDate: startDate,
+        trialEndDate: endDate,
         subscriptionTier: 'Free_trial',
         trialPeriodDays: days,
       }, { persist: false });
+      if (updatedBuyerInfo?.buyerId && updatedBuyerInfo.buyerId !== accountId) {
+        storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
+          trialActive: true,
+          trialDays: days,
+          trialStartDate: startDate,
+          trialEndDate: endDate,
+          subscriptionTier: 'Free_trial',
+          trialPeriodDays: days,
+        }, { persist: false });
+      }
     } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
       storeService.updateBuyerAccount(accountId, {
         offlinePaymentStatus: 'VERIFIED',

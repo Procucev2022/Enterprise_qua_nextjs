@@ -182,7 +182,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
     [reconciledBuyerVendors]
   );
-  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
+  const isTrialActive = Boolean(
+    activeBuyerAccount?.trialEndDate &&
+    new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+    activeBuyerAccount.trialActive !== false
+  );
+  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess || isTrialActive);
   const reportedPlan = toReportedPlan(activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
   const reportedBalance = toReportedCount(activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs);
   // With no plan reported, the modes are not restricted here. The server checks the plan on every RFQ it receives.

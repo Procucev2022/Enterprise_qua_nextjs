@@ -74,6 +74,9 @@ import {
   calculateTrialDaysFromDates,
   CREDIT_APPROVAL_APPROVERS,
   INTERNAL_TASK_USERS,
+  isBuyerTrialActive,
+  getRemainingTrialDays,
+  formatString,
 } from '@/lib/constants';
 import {
   fetchApprovalApprovers,
@@ -487,6 +490,17 @@ export default function BuyerDossierDrawer({
   const [creditSortOrder, setCreditSortOrder] = useState<'asc' | 'desc'>('desc');
   const [creditPage, setCreditPage] = useState<number>(1);
   const creditPageSize = 10;
+
+  const isTrialActive = Boolean(
+    ((creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate) &&
+    new Date((creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate).getTime() > Date.now() &&
+    (creditSummary as any)?.trialActive !== false &&
+    (buyer as any)?.trialActive !== false
+  );
+  const trialEndDateStr = (creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate;
+  const trialDaysLeft = isTrialActive && trialEndDateStr
+    ? getRemainingTrialDays(trialEndDateStr)
+    : 0;
 
   // Add Credit / Request Type modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
@@ -1505,10 +1519,27 @@ export default function BuyerDossierDrawer({
                 </div>
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Available Quota</p>
-                  <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
-                  </p>
-                  <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
+                  {isTrialActive && trialDaysLeft > 0 ? (
+                    <>
+                      <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                        {trialDaysLeft === 1
+                          ? (strings.credit.trialAvailableQuotaSingle || '1 Day Left')
+                          : formatString(strings.credit.trialAvailableQuota || '{days} Days Trial Period', { days: trialDaysLeft })}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        {formatString(strings.credit.trialUnlimitedSubtext || 'Unlimited RFQs (Expires {expiryDate})', {
+                          expiryDate: new Date(trialEndDateStr!).toLocaleDateString(),
+                        })}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                        {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
+                      </p>
+                      <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1726,9 +1757,24 @@ export default function BuyerDossierDrawer({
                 </div>
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.remainingFree}</p>
-                  <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
-                  </p>
+                  {isTrialActive && trialDaysLeft > 0 ? (
+                    <>
+                      <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300 mt-0.5 leading-snug">
+                        {trialDaysLeft === 1
+                          ? (strings.credit.trialPeriodCountdownSingle || '1 Day Left — Unlimited RFQs')
+                          : formatString(strings.credit.trialPeriodCountdown || '{days} Days Trial Period — Unlimited RFQs', { days: trialDaysLeft })}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {formatString(strings.credit.trialExpiresOn || 'Expires: {expiryDate}', {
+                          expiryDate: new Date(trialEndDateStr!).toLocaleDateString(),
+                        })}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                      {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
+                    </p>
+                  )}
                 </div>
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.entitlementMode}</p>
@@ -1777,6 +1823,7 @@ export default function BuyerDossierDrawer({
                     <option value="Free Credits Allocated">Free Credits Allocated</option>
                     <option value="Credits Consumed">Credits Consumed</option>
                     <option value="Admin Credit Addition">Admin Credit Addition</option>
+                    <option value="TRIAL_GRANTED">Trial Granted</option>
                     <option value="Purchased Credits">Purchased Credits</option>
                     <option value="Credit Adjustment">Credit Adjustment</option>
                   </select>

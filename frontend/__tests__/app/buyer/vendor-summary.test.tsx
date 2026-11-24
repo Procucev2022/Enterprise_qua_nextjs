@@ -566,8 +566,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     fireEvent.change(selects[0], { target: { value: 'ALL' } });
 
-    // Status filter: EVALUATED
-    fireEvent.change(selects[1], { target: { value: 'EVALUATED' } });
+    // Status filter: ACTIVE
+    fireEvent.change(selects[1], { target: { value: 'ACTIVE' } });
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
 
     // Status filter: PREFERRED
@@ -733,7 +733,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         onNavigateToWizard={mockOnNavigateToWizard}
       />
     );
-    expect(screen.getByText('PREFERRED ENTERPRISE SUPPLIER')).toBeInTheDocument();
+    expect(screen.getByTestId('status-badge-active-v-1')).toBeInTheDocument();
   });
 
   describe('Vendor CRUD Operations', () => {
@@ -2300,7 +2300,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
     });
 
-    it('shows the requested date on the supplier row once the evaluation request has been sent', () => {
+    it('shows the active status on the supplier row once the evaluation request has been sent', () => {
       (useApp as jest.Mock).mockReturnValue({
         ...(useApp as jest.Mock)(),
         buyerVendors: mockBuyerVendors.map((v) =>
@@ -2314,7 +2314,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      expect(screen.getAllByText(new RegExp(UI_STRINGS.vendorEvaluationRequest.requestedLabel)).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('status-badge-active-v-1')).toBeInTheDocument();
     });
 
     it('closes the rating revision modal via Cancel button', () => {
@@ -2973,7 +2973,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Empty_Upload_Batch.xlsx')).toBeInTheDocument();
 
       // Download CSV on batch with records
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
@@ -3159,7 +3159,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
       // Click Download CSV on batch with sparse record — covers r.field || '' fallbacks (line 265)
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
@@ -3239,11 +3239,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Find status selector — it's the select with 'All Statuses' option
       const statusSelect = screen.getByDisplayValue('All Statuses');
 
-      // Filter by NOT_EVALUATED (Pending Evaluation)
-      fireEvent.change(statusSelect, { target: { value: 'NOT_EVALUATED' } });
-      // v-1 is evaluated, so should not appear; but not all vendors have evaluated=false
-      // The filter should work without errors
-      expect(statusSelect).toHaveValue('NOT_EVALUATED');
+      // Filter by INACTIVE
+      fireEvent.change(statusSelect, { target: { value: 'INACTIVE' } });
+      expect(statusSelect).toHaveValue('INACTIVE');
     });
 
     it('filters by PREFERRED status', () => {
@@ -3909,7 +3907,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
 
       expect(URL.createObjectURL).toHaveBeenCalled();
@@ -4546,8 +4544,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Cables')).toBeInTheDocument();
 
       // Verify Major Category was auto-set to Electrical
-      const majorSelect = screen.getByLabelText(/Division/i) as HTMLSelectElement;
-      expect(majorSelect.value).toBe('Electrical');
+      expect(screen.getByText('Electrical')).toBeInTheDocument();
 
       // Close modal via Cancel
       fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
@@ -5360,9 +5357,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByTestId('view-profile-edit-category-button'));
 
       const catModal = screen.getByTestId('vendor-category-modal');
-      expect(within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.divisionLabel)).toHaveValue(
-        'IT Infrastructure'
-      );
+      expect(within(catModal).getByText('IT Infrastructure')).toBeInTheDocument();
 
       // Empty Add Tag input resets gracefully; removing tag then typing placeholder and submitting is blocked
       const modalInput = within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
@@ -5376,7 +5371,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
       fireEvent.click(within(catModal).getByRole('button', { name: 'Cancel' }));
 
-      // Add Vendor clears selected minor tags when switching Division
+      // Add Vendor handles adding multiple divisions
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
       const addInput = screen.getByPlaceholderText(/search category/i);
       fireEvent.change(addInput, { target: { value: 'Valves' } });
@@ -5386,7 +5381,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         screen.getByRole('combobox', { name: UI_STRINGS.vendorCategorySelect.divisionLabel }),
         { target: { value: 'IT Infrastructure' } }
       );
-      expect(screen.queryByRole('button', { name: 'Remove Valves' })).not.toBeInTheDocument();
+      expect(screen.getByText('IT Infrastructure')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove Valves' })).toBeInTheDocument();
     });
 
     it('renders Total Vendor KPI label and ignores foreign evaluations with conflicting email on same company name', () => {
@@ -5448,15 +5444,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
-      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.activeVendorLabel)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.inactiveVendorLabel)).toBeInTheDocument();
 
-      // Only the email-matched vendor counts toward OCR & 360 Evaluated (1 of 2),
-      // while sameNameNewVendor keeps Not Evaluated instead of inheriting 11% DISQUALIFIED SUPPLIER.
       const totalLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel);
       expect(totalLabel.parentElement).toHaveTextContent('2');
-      const ocrLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel);
-      expect(ocrLabel.parentElement).toHaveTextContent('1');
-      expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
       expect(screen.getByText('84%')).toBeInTheDocument();
     });
 
@@ -5704,28 +5696,23 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // In the table, unevaluated vendor shows NOT EVALUATED
-      expect(screen.getByText('NOT EVALUATED')).toBeInTheDocument();
+      // In the table, unevaluated vendor shows ACTIVE
+      expect(screen.getByTestId('status-badge-active-v-uneval-test')).toBeInTheDocument();
 
       // Open View Profile modal on the unevaluated vendor
       const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
       fireEvent.click(viewButtons[0]);
 
-      // Inside View Profile modal: shows NOT EVALUATED (1 in table, 1 in modal)
+      // Inside View Profile modal: shows ACTIVE status
       expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
-      expect(screen.getByText(UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading)).toBeInTheDocument();
-      expect(screen.getByText(UI_STRINGS.vendorStatusControl.registrationStatusCardHeading)).toBeInTheDocument();
-      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.notEvaluatedStatus).length).toBe(2);
+      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.activeBadge).length).toBeGreaterThanOrEqual(1);
 
       // Close modal
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
       // Open View Profile on the vendor that WAS requested
       fireEvent.click(viewButtons[1]);
-      expect(screen.getAllByText('PENDING EVALUATION').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText(formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-        date: new Date('2026-03-01T10:00:00.000Z').toLocaleDateString(),
-      })).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('status-badge-active-v-requested-test')).toBeInTheDocument();
     });
 
     it('hides edit and deactivate actions in table and modal for network vendors and vendors owned by another buyer', async () => {
