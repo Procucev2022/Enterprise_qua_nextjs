@@ -411,8 +411,34 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
   const loadUploadHistory = useCallback(() => {
-    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
-  }, []);
+    // Load from localStorage (legacy)
+    const localHistory = loadVendorUploadHistoryFromStorage();
+    
+    // If we have buyer vendors, create a synthetic history entry from existing database vendors
+    if (buyerVendors.length > 0 && localHistory.length === 0) {
+      // Group vendors by their creation/upload date if available
+      const syntheticBatch = {
+        id: 'db-vendors-' + Date.now(),
+        timestamp: new Date().toISOString(),
+        fileName: 'Existing Database Vendors',
+        recordCount: buyerVendors.length,
+        records: buyerVendors.map((v: any) => ({
+          vendorCode: v.vendorCode || '',
+          name: v.name || '',
+          contactPerson: v.contactPerson || '',
+          email: v.email || '',
+          phone: v.phone || '',
+          city: v.city || v.location || '',
+          gstin: v.gstin || v.gst || '',
+          category: v.majorCategory || '',
+          rating: v.rating ?? ''
+        }))
+      };
+      setUploadHistoryList([syntheticBatch]);
+    } else {
+      setUploadHistoryList(localHistory);
+    }
+  }, [buyerVendors]);
 
   useEffect(() => {
     loadUploadHistory();
