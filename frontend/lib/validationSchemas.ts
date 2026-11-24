@@ -131,7 +131,7 @@ export function usablePan(pan: unknown): string | null {
   return clean;
 }
 
-const PLACEHOLDER_DERIVED_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F']);
+const PLACEHOLDER_DERIVED_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F', 'AAMCP4349L']);
 const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
 
 /**
