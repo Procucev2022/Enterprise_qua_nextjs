@@ -1732,9 +1732,9 @@ export const UI_STRINGS = {
     categoryOptionsLoadFailed: 'The category list could not be loaded from the server, so the category options may be incomplete. Reload to try again.',
     pasteSummary: '{matched} matched & selected, {notFound} not found',
     pasteSummaryAllMatched: '{matched} matched & selected',
-    successWithAccountsMessage: '{count} vendor(s) invited to {rfqNumber}. {provisioned} new login account(s) created and credentials sent.',
-    onboardingDeliveryWarningTitle: 'Credential Delivery Issue',
-    onboardingDeliveryWarning: 'Some vendor accounts could not receive credentials automatically ({count} failed).',
+    successWithAccountsMessage: '{count} vendor(s) invited to {rfqNumber}. {provisioned} new login account(s) created with credentials delivered.',
+    onboardingDeliveryWarning: '{count} vendor account(s) had issues receiving credentials.',
+    onboardingDeliveryWarningTitle: 'Credential Delivery Warning',
   },
 
   notifications: {

@@ -2,6 +2,7 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import DashboardView from '@/app/category-manager/dashboard/DashboardView';
 import CategoryManagerDashboardPage, { metadata } from '@/app/category-manager/dashboard/page';
+import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
 const mockMetrics = {
@@ -531,5 +532,58 @@ describe('Category Manager Dashboard View & Page Suite', () => {
       expect(screen.getByText('1,245')).toBeInTheDocument();
       expect(screen.getAllByText('Nov').length).toBeGreaterThan(0);
     });
+  });
+
+  test('closes modal on backdrop click and on Escape key press, preserving modal on inner card click', async () => {
+    jest.spyOn(authClient, 'getToken').mockReturnValue('mock-jwt-token');
+
+    render(<DashboardView />);
+    await waitFor(() => expect(screen.getByText('1,245')).toBeInTheDocument());
+
+    // Click to open modal
+    fireEvent.click(screen.getByTestId('kpi-card-total-rfqs'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drilldown-modal')).toBeInTheDocument();
+      expect(screen.getByText('Structural Steel Supply')).toBeInTheDocument();
+    });
+
+    // Clicking inside the modal does not close it (stopPropagation)
+    fireEvent.click(screen.getByText('Structural Steel Supply'));
+    expect(screen.getByTestId('drilldown-modal')).toBeInTheDocument();
+
+    // Clicking the backdrop closes the modal
+    fireEvent.click(screen.getByTestId('drilldown-modal'));
+    await waitFor(() => {
+      expect(screen.queryByTestId('drilldown-modal')).not.toBeInTheDocument();
+    });
+
+    // Reopen and test Escape key closes the modal
+    fireEvent.click(screen.getByTestId('kpi-card-open-rfqs'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drilldown-modal')).toBeInTheDocument();
+    });
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByTestId('drilldown-modal')).not.toBeInTheDocument();
+    });
+  });
+
+  test('passes authorization header when user is logged in', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
+    jest.spyOn(authClient, 'getToken').mockReturnValue('cm-auth-token-123');
+
+    render(<DashboardView />);
+    await waitFor(() => expect(screen.getByText('1,245')).toBeInTheDocument());
+
+    expect(fetchSpy).toHaveBeenCalledWith(
+      expect.stringContaining('/api/category-manager/dashboard/metrics'),
+      expect.objectContaining({
+        headers: expect.objectContaining({
+          Authorization: 'Bearer cm-auth-token-123',
+        }),
+        credentials: 'include',
+      })
+    );
   });
 });
