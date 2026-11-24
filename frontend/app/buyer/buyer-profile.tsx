@@ -20,6 +20,8 @@ import {
   isDummyPincode,
   derivePanFromGstin,
   parsePrimaryPlantLocation,
+  validateGstin,
+  isGstValid,
 } from '@/lib/validationSchemas';
 
 const BUYER_DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F', 'AAMCP4349L']);
@@ -385,8 +387,7 @@ export default function BuyerProfilePage() {
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+  // No longer need local isGstValid - using imported comprehensive validation
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);

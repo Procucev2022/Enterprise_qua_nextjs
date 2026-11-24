@@ -31,7 +31,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan } from '@/lib/validationSchemas';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan, validateGstin, isGstValid } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
   const {
@@ -277,8 +277,7 @@ export default function VendorProfilePage() {
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => Boolean(usablePan(pan));
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+  // No longer need local isGstValid - using imported comprehensive validation
 
   // Toggle Major Category
   const toggleMajorCategory = (majorName: string) => {

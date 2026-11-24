@@ -82,7 +82,8 @@ import {
   usablePan,
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
-  GSTIN_PATTERN,
+  validateGstin,
+  isGstValid,
 } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
@@ -379,30 +380,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
   // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
 
-  // GST validation
+  // GST validation with comprehensive checksum verification
   useEffect(() => {
-    const raw = formGst.trim();
+    const raw = formGst.trim().toUpperCase();
     if (!raw) {
       setFormGstError(null);
       return;
     }
     
-    // Check for placeholder values
-    const PLACEHOLDER_VALUES = new Set(['', 'N/A', 'NA', 'NONE', 'NIL', '-', '—', 'NOTPROVIDED', 'NOTAPPLICABLE', 'AAAAA0000A1Z5', '00AAAAA0000A1Z5']);
-    if (PLACEHOLDER_VALUES.has(raw.toUpperCase())) {
-      setFormGstError('Invalid or placeholder GSTIN. Please enter a valid GSTIN.');
-      return;
-    }
-
-    // Check for dummy/repeated patterns
-    if (/^[0-9]{2}([A-Z])\1{4}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i.test(raw)) {
-      setFormGstError('Invalid GSTIN format. Please enter a valid GSTIN.');
-      return;
-    }
-
-    // Validate GSTIN format
-    if (!GSTIN_PATTERN.test(raw)) {
-      setFormGstError('Invalid GSTIN format. Must be 15 characters (e.g., 29ABCDE1234F1Z5).');
+    // Use comprehensive validation with checksum
+    const validation = validateGstin(raw);
+    if (!validation.isValid) {
+      setFormGstError(validation.error || 'Invalid GSTIN');
       return;
     }
 
