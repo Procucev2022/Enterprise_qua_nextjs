@@ -6,6 +6,79 @@
 
 const pool = require('./pool');
 const storeService = require('../services/storeService');
+const { resolveStandardizedCommunicationCategory } = require('../config/constants');
+
+function getDefaultOutreachAnalytics() {
+  return {
+    totalOutreach: 0,
+    byCategory: {
+      'Credit / Quote (Buyer / Seller)': 0,
+      'Follow-up / New': 0,
+      'Demo Schedule': 0,
+      'Send Proposal': 0,
+      'Send Corporate Email': 0,
+      'Onboarding Process': 0,
+      'Registration Task': 0,
+      'Internal Operations (Others)': 0,
+    },
+    byChannel: {
+      Call: 0,
+      SMS: 0,
+      WhatsApp: 0,
+      Email: 0,
+    },
+  };
+}
+
+async function getCommunicationOutreachAnalyticsFromDB({ accountType = 'all' } = {}) {
+  const analytics = getDefaultOutreachAnalytics();
+  if (!pool.hasStorage()) {
+    return analytics;
+  }
+  const conditions = [];
+  const params = [];
+  if (accountType && accountType !== 'all') {
+    if (accountType === 'buyer') {
+      conditions.push("lower(account_type) = 'buyer'");
+    } else if (accountType === 'seller' || accountType === 'vendor') {
+      conditions.push("lower(account_type) IN ('seller', 'vendor')");
+    }
+  }
+  const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+  const sql = `
+    SELECT channel, metadata
+    FROM payment_dues_communications
+    ${whereClause}
+  `;
+  try {
+    const result = await pool.query(sql, params, { d1: true, d1Text: sql, useCache: true, tag: 'payment_dues_communications', ttlMs: 10000 });
+    const rows = result?.rows || [];
+    for (const r of rows) {
+      let meta = {};
+      try {
+        meta = typeof r.metadata === 'string' ? JSON.parse(r.metadata || '{}') : (r.metadata || {});
+      } catch {
+        meta = {};
+      }
+      const cat = resolveStandardizedCommunicationCategory(meta?.category || meta?.templateType || meta?.scenarioId);
+      analytics.byCategory[cat] = (analytics.byCategory[cat] || 0) + 1;
+
+      const ch = String(r.channel || '').toUpperCase();
+      if (ch === 'CALL') analytics.byChannel.Call++;
+      else if (ch === 'SMS') analytics.byChannel.SMS++;
+      else if (ch === 'WHATSAPP') analytics.byChannel.WhatsApp++;
+      else if (ch === 'EMAIL') analytics.byChannel.Email++;
+      else if (ch === 'BOTH') {
+        analytics.byChannel.Email++;
+        analytics.byChannel.SMS++;
+      }
+    }
+    analytics.totalOutreach = rows.length;
+    return analytics;
+  } catch {
+    return analytics;
+  }
+}
 
 function computeBuyerKPIStatsFromAccounts(buyers = []) {
   const list = Array.isArray(buyers) ? buyers.filter(Boolean) : [];
@@ -20,6 +93,7 @@ function computeBuyerKPIStatsFromAccounts(buyers = []) {
     verifiedBuyers: list.filter((b) => b.status === 'ACTIVE_VERIFIED' || b.status === 'VERIFIED').length,
     subscriptionBuyers: list.filter((b) => b.subscriptionPlan && b.subscriptionPlan !== 'free_trial' && b.subscriptionPlan !== 'none').length,
     modeCounts,
+    outreachAnalytics: getDefaultOutreachAnalytics(),
   };
 }
 
@@ -30,6 +104,7 @@ function computeSellerKPIStatsFromVendors(vendors = []) {
     networkSuppliers: list.filter((v) => v.source === 'procucev_network' || (!v.buyerId && !v.buyerAccountId)).length,
     buyerUploaded: list.filter((v) => v.source === 'buyer_uploaded' || v.buyerId || v.buyerAccountId).length,
     verifiedActive: list.filter((v) => String(v.status || '').toUpperCase().includes('ACTIVE') || String(v.status || '').toUpperCase().includes('VERIFIED')).length,
+    outreachAnalytics: getDefaultOutreachAnalytics(),
   };
 }
 
@@ -62,6 +137,7 @@ async function getBuyerDirectoryKPIStatsFromDB() {
   try {
     const result = await pool.query(pgSql, [], { d1: true, d1Text: d1Sql, useCache: true, tag: 'buyer_accounts', ttlMs: 15000 });
     const row = result.rows?.[0] || {};
+    const outreachAnalytics = await getCommunicationOutreachAnalyticsFromDB({ accountType: 'buyer' });
     return {
       totalBuyers: Number(row.total_buyers) || 0,
       verifiedBuyers: Number(row.verified_buyers) || 0,
@@ -72,6 +148,7 @@ async function getBuyerDirectoryKPIStatsFromDB() {
         Mode_2: Number(row.mode_2) || 0,
         Mode_3: Number(row.mode_3) || 0,
       },
+      outreachAnalytics,
     };
   } catch {
     return computeBuyerKPIStatsFromAccounts(storeService.getBuyerAccounts() || []);
@@ -101,11 +178,13 @@ async function getSellerDirectoryKPIStatsFromDB() {
   try {
     const result = await pool.query(pgSql, [], { d1: true, d1Text: d1Sql, useCache: true, tag: 'vendors', ttlMs: 15000 });
     const row = result.rows?.[0] || {};
+    const outreachAnalytics = await getCommunicationOutreachAnalyticsFromDB({ accountType: 'seller' });
     return {
       totalSuppliers: Number(row.total_suppliers) || 0,
       networkSuppliers: Number(row.network_suppliers) || 0,
       buyerUploaded: Number(row.buyer_uploaded) || 0,
       verifiedActive: Number(row.verified_active) || 0,
+      outreachAnalytics,
     };
   } catch {
     return computeSellerKPIStatsFromVendors(storeService.getVendors() || []);
@@ -115,6 +194,7 @@ async function getSellerDirectoryKPIStatsFromDB() {
 module.exports = {
   computeBuyerKPIStatsFromAccounts,
   computeSellerKPIStatsFromVendors,
+  getCommunicationOutreachAnalyticsFromDB,
   getBuyerDirectoryKPIStatsFromDB,
   getSellerDirectoryKPIStatsFromDB,
 };

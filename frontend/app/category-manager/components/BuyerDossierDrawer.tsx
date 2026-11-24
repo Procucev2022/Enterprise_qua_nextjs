@@ -286,13 +286,25 @@ export default function BuyerDossierDrawer({
     // Each token holds only what the buyer record, the user, or the form supplies.
     // A token without a value renders as an empty string in the template.
     const tokens: Record<string, string | number | undefined> = {
-      contactName: buyer.contactPerson,
-      companyName: buyer.organizationName,
+      contactName: buyer.contactPerson || buyer.organizationName || 'Valued Buyer',
+      companyName: buyer.organizationName || 'Your Organization',
+      accountType: 'Buyer',
+      creditAction: 'Credit Balance Update',
+      creditAmount: String(buyer.remainingFreeRFQs ?? 0),
+      availableCredits: String(buyer.remainingFreeRFQs ?? 0),
+      demoDate: composeNextFollowupDate || new Date().toISOString().split('T')[0],
+      demoTime: '11:00 AM',
+      meetingLink: 'https://meet.google.com/procucev-demo',
+      onboardingLink: `https://qua.procucev.com/buyer/onboarding?id=${encodeURIComponent(buyer.id)}`,
+      activationLink: `https://qua.procucev.com/buyer/activate?id=${encodeURIComponent(buyer.id)}`,
+      referenceId: buyer.id || buyer.organizationName,
+      customMessage: composeMessage || 'Buyer operational account review.',
       entityId: buyer.id,
       followupDate: composeNextFollowupDate,
+      followupTime: '11:00 AM',
       followupNotes: composeFollowupNotes,
-      assigneeName: composeFollowupAssigneeName,
-      senderName: authClient.getSessionUser()?.name,
+      assigneeName: composeFollowupAssigneeName || authClient.getSessionUser()?.name || 'Category Management',
+      senderName: authClient.getSessionUser()?.name || 'Category Management',
       dueDate: composeNextFollowupDate,
       notes: composeMessage,
     };
@@ -325,7 +337,7 @@ export default function BuyerDossierDrawer({
     if (matchedScenario) {
       handleBuyerScenarioChange(matchedScenario.id);
     } else {
-      handleBuyerScenarioChange('buyer_conversion_followup');
+      handleBuyerScenarioChange('followup_new');
     }
   }, [buyer.corporateEmail, handleBuyerScenarioChange]);
 
@@ -333,7 +345,7 @@ export default function BuyerDossierDrawer({
     setComposeChannel('EMAIL');
     setComposeRecipient(buyer.corporateEmail || '');
     setCommSubTab('email');
-    handleBuyerScenarioChange('buyer_conversion_followup');
+    handleBuyerScenarioChange('followup_new');
   }, [buyer.corporateEmail, handleBuyerScenarioChange]);
 
   const [isSendingComm, setIsSendingComm] = useState<boolean>(false);
@@ -4086,28 +4098,28 @@ export default function BuyerDossierDrawer({
                 </div>
               )}
 
-              {composeChannel === 'EMAIL' && (
-                <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 rounded-xl space-y-2.5">
-                  <div>
-                    <label className="block text-xs font-semibold text-indigo-950 dark:text-indigo-300 flex items-center gap-1.5 mb-1">
-                      <Sparkles size={13} className="text-indigo-600" />
-                      <span>Select Conversion Scenario</span>
-                    </label>
-                    <select
-                      value={composeScenarioId}
-                      onChange={(e) => handleBuyerScenarioChange(e.target.value)}
-                      className="w-full px-3 py-1.5 text-xs rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
-                    >
-                      <option value="">-- Choose a sales / conversion scenario --</option>
-                      {getScenariosForEntityType('BUYER').map((sc) => (
-                        <option key={sc.id} value={sc.id}>
-                          {sc.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+              <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/30 border border-indigo-100 dark:border-indigo-900/40 rounded-xl space-y-2.5">
+                <div>
+                  <label className="block text-xs font-semibold text-indigo-950 dark:text-indigo-300 flex items-center gap-1.5 mb-1">
+                    <Sparkles size={13} className="text-indigo-600" />
+                    <span>Select Conversion Scenario</span>
+                  </label>
+                  <select
+                    value={composeScenarioId}
+                    onChange={(e) => handleBuyerScenarioChange(e.target.value)}
+                    className="w-full px-3 py-1.5 text-xs rounded-lg border border-indigo-200 dark:border-indigo-800 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                  >
+                    <option value="">-- Choose a sales / conversion scenario --</option>
+                    {getScenariosForEntityType('BUYER').map((sc) => (
+                      <option key={sc.id} value={sc.id}>
+                        {sc.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-                  {/* Document Vault + Local File Attachments */}
+                {/* Document Vault + Local File Attachments */}
+                {composeChannel === 'EMAIL' && (
                   <div className="pt-2 border-t border-indigo-100 dark:border-indigo-900/40 space-y-1.5">
                     <div className="flex items-center justify-between text-xs font-semibold text-slate-700 dark:text-slate-300">
                       <span className="flex items-center gap-1.5">
@@ -4212,8 +4224,8 @@ export default function BuyerDossierDrawer({
                       </div>
                     )}
                   </div>
-                </div>
-              )}
+                )}
+              </div>
 
               <div>
                 <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">

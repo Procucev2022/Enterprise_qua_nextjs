@@ -508,15 +508,22 @@ describe('SupplierDossierDrawer - Seller Request Management Workflows', () => {
     // Enter amount to enable submit button
     fireEvent.change(amountInput, { target: { value: '5000' } });
 
+    const offlineForm = dateInput.closest('form')!;
+
     // Test empty date
     fireEvent.change(dateInput, { target: { value: '' } });
-    fireEvent.click(submitBtn);
+    fireEvent.submit(offlineForm);
 
     // Test non-cash (NEFT / RTGS) without transaction ID
     fireEvent.change(dateInput, { target: { value: '2026-11-19' } });
     const txInput = document.getElementById('offline-transaction-id') as HTMLInputElement;
     fireEvent.change(txInput, { target: { value: '' } });
-    fireEvent.click(submitBtn);
+    fireEvent.submit(offlineForm);
+
+    // Test empty payment type
+    fireEvent.change(typeSelect, { target: { value: '' } });
+    fireEvent.submit(offlineForm);
+    fireEvent.change(typeSelect, { target: { value: 'NEFT / RTGS' } });
 
     // Test Cash mode submission: transaction ID is not required
     fireEvent.change(typeSelect, { target: { value: 'Cash' } });

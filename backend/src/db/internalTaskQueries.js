@@ -2306,6 +2306,66 @@ async function reconcileStuckApprovalTasks() {
   }
 }
 
+/**
+ * Automatically marks linked open internal tasks as Closed/Completed when
+ * Send Proposal or Send Corporate Email communication is dispatched or recorded.
+ */
+async function autoCompleteTasksForScenario(entityType, entityId, scenarioId, actor = {}) {
+  if (!pool.hasStorage()) return [];
+  const normalizedScenario = String(scenarioId || '').toLowerCase().trim();
+  const isAutoCompleteScenario = normalizedScenario === 'send_proposal' || 
+                                 normalizedScenario === 'send_corporate_email' ||
+                                 normalizedScenario.includes('proposal') ||
+                                 normalizedScenario.includes('corporate_email') ||
+                                 normalizedScenario.includes('corporate email');
+  if (!isAutoCompleteScenario) return [];
+
+  const scenarioLabel = normalizedScenario.includes('proposal') ? 'Commercial Proposal' : 'Corporate Email';
+  const getFn = module.exports?.getInternalTaskById || getInternalTaskById;
+  const updateFn = module.exports?.updateInternalTask || updateInternalTask;
+
+  try {
+    // If entityType is an internal task itself
+    if (String(entityType || '').toLowerCase().includes('task') && entityId) {
+      const task = await getFn(entityId);
+      if (task && task.status !== 'Closed' && task.status !== 'Completed') {
+        const updated = await updateFn(entityId, {
+          status: 'Closed',
+          notes: `Task automatically closed upon sending ${scenarioLabel}.`,
+        }, actor);
+        return updated ? [updated] : [];
+      }
+      return [];
+    }
+
+    // Otherwise find open tasks linked to this entity (buyer or seller/vendor)
+    const normalizedType = String(entityType || '').toUpperCase().trim();
+    const typeVariants = normalizedType === 'BUYER' ? ['BUYER'] : ['SELLER', 'VENDOR'];
+    const sql = `
+      SELECT id, title, status FROM internal_tasks
+      WHERE UPPER(related_entity_type) = ANY($1)
+        AND (related_entity_id = $2 OR raw->>'related_entity_id' = $2)
+        AND status NOT IN ('Closed', 'Completed', 'closed', 'completed')
+      ORDER BY created_at DESC
+      LIMIT 10
+    `;
+    const res = await pool.query(sql, [typeVariants, String(entityId)], { d1: true, d1Text: sql });
+    const tasks = res?.rows || [];
+    const closed = [];
+    for (const t of tasks) {
+      const updated = await updateFn(t.id, {
+        status: 'Closed',
+        notes: `Task automatically closed upon sending ${scenarioLabel}.`,
+      }, actor);
+      if (updated) closed.push(updated);
+    }
+    return closed;
+  } catch (err) {
+    logger.warn('Failed to auto-complete tasks for scenario', { error: err.message, entityType, entityId, scenarioId }, 'INTERNAL_TASK_AUTO_COMPLETE');
+    return [];
+  }
+}
+
 module.exports = {
   getInternalAssignees,
   listAllInternalTasks,
@@ -2327,4 +2387,5 @@ module.exports = {
   parseJsonSafe,
   syncLinkedTasksForApproval,
   reconcileStuckApprovalTasks,
+  autoCompleteTasksForScenario,
 };

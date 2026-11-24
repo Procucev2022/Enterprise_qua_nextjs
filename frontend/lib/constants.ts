@@ -3446,3 +3446,30 @@ export function normalizeVendorRating(rating: unknown, score?: unknown): number 
   return null;
 }
 
+/**
+ * Standardized Communication Categories across Internal Tasks, Buyer Directory, and Seller Directory.
+ */
+export const STANDARDIZED_COMMUNICATION_CATEGORIES = [
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+] as const;
+
+export type StandardizedCommunicationCategory = typeof STANDARDIZED_COMMUNICATION_CATEGORIES[number];
+
+export const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = {
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+} as const;
+
