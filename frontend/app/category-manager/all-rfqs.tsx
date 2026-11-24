@@ -562,6 +562,13 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               type="date"
               value={startDate}
               onChange={(e) => setStartDate(e.target.value)}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
+              }}
               aria-label={S.startDateLabel}
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
             />
@@ -590,6 +597,13 @@ export default function AllRFQsConsole({ onNavigateToMatrix, onViewDetails }: Al
               type="date"
               value={endDate}
               onChange={(e) => setEndDate(e.target.value)}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
+              }}
               aria-label={S.endDateLabel}
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
             />

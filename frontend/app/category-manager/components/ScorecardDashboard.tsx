@@ -380,14 +380,28 @@ export function ScorecardDashboard() {
                 type="date"
                 value={customStartDate}
                 onChange={(e) => setCustomStartDate(e.target.value)}
-                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs cursor-pointer"
               />
               <span className="text-slate-400">to</span>
               <input
                 type="date"
                 value={customEndDate}
                 onChange={(e) => setCustomEndDate(e.target.value)}
-                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs cursor-pointer"
               />
               <button
                 type="button"

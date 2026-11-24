@@ -850,6 +850,13 @@ async function getCreditHistory(req, res, next) {
       if (missingRfqs.length > 0) {
         for (const rfq of missingRfqs) {
           const rfqDate = rfq.createdAt || rfq.created_at || new Date().toISOString();
+          const rfqTime = new Date(rfqDate).getTime();
+          const trialStart = buyer.trialStartDate ? new Date(buyer.trialStartDate).getTime() : 0;
+          const trialEnd = buyer.trialEndDate ? new Date(buyer.trialEndDate).getTime() : 0;
+          const isDuringTrial = trialEnd > 0 && rfqTime >= trialStart && rfqTime <= trialEnd;
+          if (isDuringTrial) {
+            continue;
+          }
           const syntheticTx = {
             id: `ctx-rfq-${rfq.id}`,
             buyer_id: buyer.id,
@@ -954,6 +961,12 @@ async function getCreditHistory(req, res, next) {
       ).catch(() => {});
     }
 
+    const isTrial = Boolean(
+      buyer.trialEndDate &&
+      new Date(buyer.trialEndDate).getTime() > Date.now() &&
+      buyer.trialActive !== false
+    );
+
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,
@@ -962,6 +975,10 @@ async function getCreditHistory(req, res, next) {
       adjustedCredits,
       currentEntitlementMode: sourcingMode,
       currentSubscriptionPlan: subscriptionPlan,
+      trialActive: isTrial,
+      trialDays: buyer.trialDays || null,
+      trialStartDate: buyer.trialStartDate || null,
+      trialEndDate: buyer.trialEndDate || null,
     };
 
     const formattedTransactions = transactions.map((t) => {

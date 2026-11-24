@@ -3439,7 +3439,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Subscription required');
     }
 
+    const isTrialActive = Boolean(
+      activeBuyerAccount?.trialEndDate &&
+      new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+      activeBuyerAccount.trialActive !== false
+    );
+
     if (
+      !isTrialActive &&
       activeSubscription === 'free_trial' &&
       rfqData.sourcingMode !== RFQ_MODES.MODE_0 &&
       remainingFreeRFQs !== null &&
@@ -3449,7 +3456,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Free account quota exhausted');
     }
 
-    if (activeSubscription !== null && activeSubscription !== 'free_trial') {
+    if (!isTrialActive && activeSubscription !== null && activeSubscription !== 'free_trial') {
       if (rfqData.sourcingMode === RFQ_MODES.MODE_2 && activeSubscription === 'version_1') {
         showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network) Plan subscription.`, 'warning');
         throw new Error('Subscription required');

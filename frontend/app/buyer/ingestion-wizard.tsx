@@ -358,11 +358,19 @@ export default function IngestionWizard({
     forceRemainingFreeRFQs !== undefined
       ? forceRemainingFreeRFQs
       : (activeBuyerAccount?.remainingFreeRFQs ?? storeRemaining ?? 5);
-  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan);
+  const isTrialActive = Boolean(
+    activeBuyerAccount?.trialEndDate &&
+    new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+    activeBuyerAccount.trialActive !== false
+  );
+  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan) || isTrialActive || Boolean(activeBuyerAccount?.unlimitedRfqAccess);
 
   let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
   try {
-    entitledModes = entitledSourcingModes(effectivePlan, effectiveRemaining);
+    const hasUnlimited = isTrialActive || Boolean(activeBuyerAccount?.unlimitedRfqAccess);
+    entitledModes = hasUnlimited
+      ? entitledSourcingModes(effectivePlan, effectiveRemaining, true)
+      : entitledSourcingModes(effectivePlan, effectiveRemaining);
   } catch {
     entitledModes = ['mode_0', 'mode_1'];
   }

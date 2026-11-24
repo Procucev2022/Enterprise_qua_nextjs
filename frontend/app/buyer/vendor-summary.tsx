@@ -1796,16 +1796,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorIds([]);
   };
 
-  const getStatusStyle = (status: string) => {
-    if (status === 'PREFERRED ENTERPRISE SUPPLIER') {
-      return 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
-    }
-    if (status === 'CONDITIONAL / UNDER REVIEW' || status === 'PENDING EVALUATION') {
-      return 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-    }
-    return 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border-slate-200 dark:border-gray-700';
-  };
-
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
@@ -1860,7 +1850,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     return (
       <tr
         key={vendor.id}
-        className={`hover:bg-indigo-50/40 dark:hover:bg-indigo-950/20 transition-colors ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
+        className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
         <td className="py-1.5 px-2.5 w-10 min-w-[40px] text-center align-middle">
@@ -2168,7 +2158,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               className="px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60"
             >
               <Power size={10} />
-              {VENDOR_ACTIVE_STATUSES.ACTIVE}
+              {UI_STRINGS.vendorStatusControl.activeBadge}
             </span>
           )}
         </td>
@@ -2300,124 +2290,94 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
       {/* Stats Counter Bar */}
       <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
-        <div className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
-            </span>
-            <div className="p-1.5 rounded-lg text-indigo-600 dark:text-indigo-400 bg-indigo-100 dark:bg-indigo-600/20">
-              <Users size={16} />
-            </div>
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
           </div>
-          <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
+          <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
           </div>
         </div>
-        {/* Evaluation stats card hidden per user request - Issue #12 */}
-        {false && (
-          <div className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-                {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
-              </span>
-              <div className="p-1.5 rounded-lg text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-600/20">
-                <CheckCircle2 size={16} />
-              </div>
-            </div>
-            <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
-              {buyerFilteredVendors.filter((v) => v.evaluated).length}
-            </div>
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
           </div>
-        )}
-        <div className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
-            </span>
-            <div className="p-1.5 rounded-lg text-emerald-600 dark:text-emerald-400 bg-emerald-100 dark:bg-emerald-600/20">
-              <CheckCircle2 size={16} />
-            </div>
-          </div>
-          <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
+          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => isVendorActive(v)).length}
           </div>
         </div>
-        <div className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-          <div className="flex items-center justify-between">
-            <span className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              {UI_STRINGS.vendorSummaryStats.inactiveVendorLabel}
-            </span>
-            <div className="p-1.5 rounded-lg text-rose-600 dark:text-rose-400 bg-rose-100 dark:bg-rose-600/20">
-              <PowerOff size={16} />
-            </div>
+        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+          <div className="text-[10px] uppercase font-bold text-slate-400">
+            {UI_STRINGS.vendorSummaryStats.inactiveVendorLabel}
           </div>
-          <div className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white mt-1 mono">
+          <div className="text-xl sm:text-2xl font-black text-rose-600 dark:text-rose-400 mt-0.5">
             {buyerFilteredVendors.filter((v) => isVendorInactive(v)).length}
           </div>
         </div>
       </div>
 
       {/* Filter and Search Controls */}
-      <div className="glass-panel p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 space-y-2.5">
-        <div className="flex flex-col lg:flex-row lg:items-end gap-2.5">
-          <div className="flex-1 space-y-1">
-            <label htmlFor="vendor-search" className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              Search
-            </label>
-            <div className="relative">
-              <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 pointer-events-none" />
-              <input
-                id="vendor-search"
-                type="text"
-                placeholder="Search vendors by name, contact, category..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                className="has-leading-icon text-xs"
-              />
-            </div>
-          </div>
-
-          {/* Category Selector */}
-          <div className="space-y-1">
-            <label htmlFor="vendor-category-filter" className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              Division
-            </label>
-            <select
-              id="vendor-category-filter"
-              value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value)}
-              className="text-xs font-semibold"
-            >
-              {categories.map((c) => (
-                <option key={c} value={c}>
-                  {c === 'ALL' ? 'All Categories' : c}
-                </option>
-              ))}
-            </select>
-          </div>
-
-          {/* Status Selector */}
-          <div className="space-y-1">
-            <label htmlFor="vendor-status-filter" className="text-[10px] uppercase font-bold text-slate-450 dark:text-gray-450">
-              Status
-            </label>
-            <select
-              id="vendor-status-filter"
-              value={selectedStatus}
-              onChange={(e) => setSelectedStatus(e.target.value)}
-              className="text-xs font-semibold"
-            >
-              <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
-              <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
-              <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
-              <option value="PREFERRED">Preferred Status</option>
-              <option value="CONDITIONAL">Conditional / Review</option>
-            </select>
-          </div>
+      <div className="glass-panel p-2.5 sm:p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-sm flex flex-col md:flex-row gap-2.5">
+        <div className="relative flex-1">
+          <Search size={15} className="absolute left-3 top-2.5 text-slate-400" />
+          <input
+            type="text"
+            placeholder="Search vendors by name, contact, category..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="has-leading-icon text-xs py-1.5"
+          />
         </div>
 
-        <div className="flex items-center justify-between gap-2 text-[11px] text-slate-500 dark:text-gray-400">
-          <span>{buyerFilteredVendors.length} of {buyerUploadedVendorsList.length} suppliers</span>
+        {/* Category Selector */}
+        <div className="w-full md:w-56">
+          <select
+            value={selectedCategory}
+            onChange={(e) => setSelectedCategory(e.target.value)}
+            className="select-field text-xs py-1.5"
+          >
+            {categories.map((c) => (
+              <option key={c} value={c}>
+                {c === 'ALL' ? 'All Categories' : c}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Status Selector */}
+        <div className="w-full md:w-52">
+          <select
+            value={selectedStatus}
+            onChange={(e) => setSelectedStatus(e.target.value)}
+            className="select-field text-xs py-1.5"
+          >
+            <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
+            <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
+            <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
+            <option value="PREFERRED">Preferred Status</option>
+            <option value="CONDITIONAL">Conditional / Review</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Multi-Selection Controls Bar */}
+      <div className="flex items-center justify-between gap-2.5 flex-wrap bg-slate-50 dark:bg-gray-900/60 p-2 sm:p-2.5 rounded-xl border border-slate-200 dark:border-gray-800">
+        <div className="flex items-center gap-2.5">
+          <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 cursor-pointer">
+            <input
+              type="checkbox"
+              data-testid="select-all-vendors-checkbox"
+              checked={buyerFilteredVendors.length > 0 && selectedVendorIds.length === buyerFilteredVendors.length}
+              onChange={handleToggleSelectAll}
+              className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
+            />
+            <span>Select All ({buyerFilteredVendors.length} suppliers)</span>
+          </label>
+          {selectedVendorIds.length > 0 && (
+            <span className="badge badge-purple text-[10px] font-bold">
+              {selectedVendorIds.length} Selected
+            </span>
+          )}
           <button
             type="button"
             onClick={createBooleanSetterHandler(setShowVendorColumnSettings, true)}
@@ -2430,81 +2390,58 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <span>Column Settings</span>
           </button>
         </div>
-      </div>
-
-      {/* Multi-Selection Controls Bar */}
-      <div className="glass-panel p-2.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80">
-        <div className="flex items-center justify-between gap-2.5 flex-wrap">
-          <div className="flex items-center gap-2.5">
-            <label className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-gray-300 cursor-pointer">
-              <input
-                type="checkbox"
-                data-testid="select-all-vendors-checkbox"
-                checked={buyerFilteredVendors.length > 0 && selectedVendorIds.length === buyerFilteredVendors.length}
-                onChange={handleToggleSelectAll}
-                className="h-4 w-4 rounded border-slate-300 dark:border-gray-700 text-indigo-600 focus:ring-indigo-500 cursor-pointer"
-              />
-              <span>Select All ({buyerFilteredVendors.length} suppliers)</span>
-            </label>
-            {selectedVendorIds.length > 0 && (
-              <span className="badge badge-purple text-[10px] font-bold">
-                {selectedVendorIds.length} Selected
-              </span>
-            )}
+        {selectedVendorIds.length > 0 && (
+          <div className="flex items-center gap-2 flex-wrap">
+            <button
+              type="button"
+              onClick={handleClearSelection}
+              className="btn btn-ghost btn-xs text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200"
+            >
+              Clear Selection
+            </button>
+            <button
+              type="button"
+              onClick={handleExportSelectedCsv}
+              className="btn btn-secondary btn-xs font-semibold"
+            >
+              Export Selected ({selectedVendorIds.length})
+            </button>
+            {(() => {
+              const selectedSet = new Set(selectedVendorIds);
+              const selectedRecords = buyerUploadedVendorsList.filter((v) => selectedSet.has(v.id));
+              const inactiveSelectedCount = selectedRecords.filter((v) => isVendorInactive(v)).length;
+              const activeSelectedCount = Math.max(0, selectedVendorIds.length - inactiveSelectedCount);
+              return (
+                <>
+                  {activeSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-disable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(false)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markInactiveTitle}
+                    >
+                      <PowerOff size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkDisableButton, { count: activeSelectedCount })}
+                    </button>
+                  )}
+                  {inactiveSelectedCount > 0 && (
+                    <button
+                      type="button"
+                      data-testid="bulk-enable-vendors-button"
+                      onClick={() => handleOpenBulkStatusModal(true)}
+                      className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
+                      title={UI_STRINGS.vendorStatusControl.markActiveTitle}
+                    >
+                      <Power size={12} />
+                      {formatString(UI_STRINGS.vendorStatusControl.bulkEnableButton, { count: inactiveSelectedCount })}
+                    </button>
+                  )}
+                </>
+              );
+            })()}
           </div>
-          {selectedVendorIds.length > 0 && (
-            <div className="flex items-center gap-2 flex-wrap">
-              <button
-                type="button"
-                onClick={handleClearSelection}
-                className="btn btn-ghost btn-xs text-slate-500 hover:text-slate-700 dark:text-gray-400 dark:hover:text-gray-200"
-              >
-                Clear Selection
-              </button>
-              <button
-                type="button"
-                onClick={handleExportSelectedCsv}
-                className="btn btn-secondary btn-xs font-semibold"
-              >
-                Export Selected ({selectedVendorIds.length})
-              </button>
-              {(() => {
-                const selectedSet = new Set(selectedVendorIds);
-                const selectedRecords = buyerUploadedVendorsList.filter((v) => selectedSet.has(v.id));
-                const inactiveSelectedCount = selectedRecords.filter((v) => isVendorInactive(v)).length;
-                const activeSelectedCount = Math.max(0, selectedVendorIds.length - inactiveSelectedCount);
-                return (
-                  <>
-                    {activeSelectedCount > 0 && (
-                      <button
-                        type="button"
-                        data-testid="bulk-disable-vendors-button"
-                        onClick={() => handleOpenBulkStatusModal(false)}
-                        className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-amber-600 hover:bg-amber-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-                        title={UI_STRINGS.vendorStatusControl.markInactiveTitle}
-                      >
-                        <PowerOff size={12} />
-                        {formatString(UI_STRINGS.vendorStatusControl.bulkDisableButton, { count: activeSelectedCount })}
-                      </button>
-                    )}
-                    {inactiveSelectedCount > 0 && (
-                      <button
-                        type="button"
-                        data-testid="bulk-enable-vendors-button"
-                        onClick={() => handleOpenBulkStatusModal(true)}
-                        className="btn btn-xs font-bold flex items-center gap-1.5 shadow-xs bg-emerald-600 hover:bg-emerald-700 text-white px-2.5 py-1 rounded-lg transition-colors cursor-pointer"
-                        title={UI_STRINGS.vendorStatusControl.markActiveTitle}
-                      >
-                        <Power size={12} />
-                        {formatString(UI_STRINGS.vendorStatusControl.bulkEnableButton, { count: inactiveSelectedCount })}
-                      </button>
-                    )}
-                  </>
-                );
-              })()}
-            </div>
-          )}
-        </div>
+        )}
       </div>
 
       <ColumnSettingsPopup
@@ -2519,7 +2456,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
-          <div className="glass-panel rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 overflow-hidden">
+          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
             <div
               data-testid="vendor-directory-table-container"
               className="w-full max-w-full overflow-x-auto vendor-directory-table-scroll focus:outline-none"
@@ -2528,113 +2465,113 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               aria-label="Vendor Directory Table"
             >
               <table className="w-full text-left text-xs border-collapse min-w-[2260px]">
-                <thead className="sticky top-0 z-10 bg-slate-100 dark:bg-gray-950 text-slate-700 dark:text-gray-300 text-[10px] uppercase tracking-wider font-bold border-b border-slate-200 dark:border-gray-800">
-                  <tr>
-                    <th className="py-2 px-2.5 w-10 min-w-[40px] text-center hover:bg-slate-200/60 dark:hover:bg-gray-800">
+                <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-gray-800 shadow-xs">
+                  <tr className="bg-slate-50 dark:bg-gray-800/90 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2 px-2.5 w-10 min-w-[40px] text-center">
                       <span className="sr-only">Select</span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('name', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'name')}
-                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[260px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[260px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
-                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('majorCategory', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'majorCategory')}
-                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'majorCategory')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
-                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('source', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'source')}
-                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
-                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
-                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
-                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('email', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'email')}
-                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
-                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('location', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'location')}
-                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('score', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'score')}
-                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
-                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('status', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'status')}
-                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 min-w-[140px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 min-w-[140px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
                     </th>
-                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap hover:bg-slate-200/60 dark:hover:bg-gray-800')}>Actions</th>
+                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap')}>Actions</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-200 dark:divide-gray-800">
+                <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
                   {buyerFilteredVendors.map(renderVendorCard)}
                 </tbody>
               </table>
@@ -2642,7 +2579,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         )}
         {isLoadingVendors && buyerFilteredVendors.length === 0 && (
-          <div className="glass-panel p-12 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 text-center space-y-3">
+          <div className="p-12 text-center text-slate-500 border border-slate-200 dark:border-gray-800 rounded-2xl bg-white dark:bg-gray-900/60 shadow-xs space-y-3">
             <Loader2 size={24} className="animate-spin text-indigo-600 dark:text-indigo-400 mx-auto" />
             <p className="text-xs font-semibold text-slate-700 dark:text-slate-300">
               Loading vendor directory...
@@ -2650,7 +2587,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         )}
         {!isLoadingVendors && buyerFilteredVendors.length === 0 && (
-          <div className="glass-panel p-8 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 text-center space-y-3">
+          <div className="p-8 text-center text-slate-500 border border-dashed border-slate-200 dark:border-gray-800 rounded-2xl bg-slate-50/50 dark:bg-gray-950/40 space-y-3">
             <div className="p-3 bg-indigo-50 dark:bg-indigo-950/60 rounded-full w-fit mx-auto text-indigo-600 dark:text-indigo-400">
               <Building2 size={24} />
             </div>
@@ -3308,43 +3245,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   >
                     {isVendorInactive(selectedVendorForCrud)
                       ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                      : VENDOR_ACTIVE_STATUSES.ACTIVE}
+                      : UI_STRINGS.vendorStatusControl.activeBadge}
                   </div>
                 </div>
-
-                {/* Evaluation status card hidden per user request - Issue #12 */}
-                {false && (
-                  <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                    <span className="text-[10px] text-slate-400 uppercase font-bold block">
-                      {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
-                    </span>
-                    <div
-                      className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
-                        ? 'text-rose-600 dark:text-rose-400'
-                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                        ? 'text-amber-600 dark:text-amber-400'
-                        : 'text-emerald-600 dark:text-emerald-400'
-                        }`}
-                    >
-                      {isVendorInactive(selectedVendorForCrud)
-                        ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                        ? 'PENDING EVALUATION'
-                        : (selectedVendorForCrud.status === 'PENDING EVALUATION' || selectedVendorForCrud.status === 'REGISTERED / NOT EVALUATED' || selectedVendorForCrud.status === 'NOT EVALUATED' || !selectedVendorForCrud.status
-                          ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
-                          : selectedVendorForCrud.status)}
-                    </div>
-                    {(selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt) && (
-                      <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
-                        {selectedVendorForCrud.evaluationRequestedAt
-                          ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                            date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
-                          })
-                          : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
-                      </span>
-                    )}
-                  </div>
-                )}
               </div>
 
               {/* Taxonomy Details */}

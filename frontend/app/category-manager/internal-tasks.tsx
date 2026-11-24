@@ -1082,9 +1082,20 @@ export default function InternalTasksDashboard() {
   };
 
   const handleApplyFilters = () => {
-    setActiveFilters({ ...draftFilters });
+    const nextFilters = { ...draftFilters };
+    setActiveFilters(nextFilters);
     setCurrentPage(1);
     setIsFilterDrawerOpen(false);
+    void fetchInternalTasks({
+      search: searchQuery,
+      ...nextFilters,
+      limit: pageSize,
+      offset: 0,
+    }).then((res) => {
+      setTasks(res.tasks);
+      setTotalTasks(res.total);
+    });
+    void loadSummary(nextFilters.assignedTo, nextFilters.taskCategory);
   };
 
   const handleResetFilters = () => {
@@ -1104,6 +1115,16 @@ export default function InternalTasksDashboard() {
     setActiveFilters(cleared);
     setCurrentPage(1);
     setIsFilterDrawerOpen(false);
+    void fetchInternalTasks({
+      search: searchQuery,
+      ...cleared,
+      limit: pageSize,
+      offset: 0,
+    }).then((res) => {
+      setTasks(res.tasks);
+      setTotalTasks(res.total);
+    });
+    void loadSummary('', 'all');
   };
 
   // Open Create Modal with clean blank values
@@ -2108,23 +2129,23 @@ export default function InternalTasksDashboard() {
           {/* RIGHT-SIDE FILTER DRAWER                                       */}
           {/* ============================================================== */}
           {isFilterDrawerOpen && (
-            <div className="fixed inset-0 z-50 overflow-hidden">
+            <div className="fixed inset-0 z-[70] overflow-hidden">
               <div
                 onClick={() => setIsFilterDrawerOpen(false)}
                 className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
                 data-testid="filter-drawer-backdrop"
               />
 
-              <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-                <div className="w-screen max-w-sm bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
-                  <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="fixed top-3 sm:top-4 right-3 sm:right-4 bottom-20 sm:bottom-22 max-w-sm w-[calc(100vw-1.5rem)] flex flex-col pointer-events-none z-[70]">
+                <div className="pointer-events-auto w-full h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 overflow-hidden">
+                  <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <Filter className="w-4 h-4 text-blue-600" />
                       <h3 className="font-bold text-sm text-slate-900 dark:text-white">Filter Tasks</h3>
                     </div>
                     <button
                       onClick={() => setIsFilterDrawerOpen(false)}
-                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg"
+                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -2137,7 +2158,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.taskCategory || 'all'}
                         onChange={(e) => setDraftFilters({ ...draftFilters, taskCategory: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-category"
                       >
                         <option value="all">All Categories</option>
@@ -2155,7 +2176,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.status}
                         onChange={(e) => setDraftFilters({ ...draftFilters, status: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-status"
                       >
                         <option value="all">All Statuses</option>
@@ -2171,7 +2192,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.priority}
                         onChange={(e) => setDraftFilters({ ...draftFilters, priority: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-priority"
                       >
                         <option value="all">All Priorities</option>
@@ -2206,8 +2227,15 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={draftFilters.dueFrom}
                             onChange={(e) => setDraftFilters({ ...draftFilters, dueFrom: e.target.value })}
-                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                             data-testid="drawer-filter-due-from"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
                           />
                         </div>
                         <div>
@@ -2216,19 +2244,26 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={draftFilters.dueTo}
                             onChange={(e) => setDraftFilters({ ...draftFilters, dueTo: e.target.value })}
-                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                             data-testid="drawer-filter-due-to"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
                           />
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/50">
+                  <div className="p-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 sticky bottom-0">
                     <button
                       type="button"
                       onClick={handleResetFilters}
-                      className="px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      className="px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                       data-testid="drawer-reset-filters-btn"
                     >
                       Reset
@@ -2236,7 +2271,7 @@ export default function InternalTasksDashboard() {
                     <button
                       type="button"
                       onClick={handleApplyFilters}
-                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors text-center"
+                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors text-center cursor-pointer"
                       data-testid="drawer-apply-filters-btn"
                     >
                       Apply Filters
@@ -2430,7 +2465,14 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={newDemoDate}
                             onChange={(e) => setNewDemoDate(e.target.value)}
-                            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs cursor-pointer"
                             data-testid="create-demo-date-input"
                           />
                         </div>
@@ -2556,7 +2598,14 @@ export default function InternalTasksDashboard() {
                         type="date"
                         value={newDueDate}
                         onChange={(e) => setNewDueDate(e.target.value)}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        onClick={(e) => {
+                          try {
+                            e.currentTarget.showPicker?.();
+                          } catch {
+                            e.currentTarget.focus();
+                          }
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                       />
                     </div>
                   </div>
@@ -3051,7 +3100,14 @@ export default function InternalTasksDashboard() {
                               type="date"
                               value={rescheduleDate}
                               onChange={(e) => setRescheduleDate(e.target.value)}
-                              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                              onClick={(e) => {
+                                try {
+                                  e.currentTarget.showPicker?.();
+                                } catch {
+                                  e.currentTarget.focus();
+                                }
+                              }}
+                              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                               data-testid="drawer-reschedule-date-input"
                             />
                             <input

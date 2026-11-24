@@ -258,6 +258,28 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
 };
 
 /**
+ * Check if a buyer has an active trial period based on canonical trialEndDate.
+ */
+export function isBuyerTrialActive(account?: { trialActive?: boolean; trialEndDate?: string } | null): boolean {
+  if (!account || account.trialActive === false || !account.trialEndDate) return false;
+  const end = new Date(account.trialEndDate).getTime();
+  return Number.isFinite(end) && end > Date.now();
+}
+
+/**
+ * Calculates remaining trial days dynamically from trialEndDate.
+ * Returns 0 if expired or invalid.
+ */
+export function getRemainingTrialDays(trialEndDate?: string | null): number {
+  if (!trialEndDate) return 0;
+  const end = new Date(trialEndDate).getTime();
+  if (!Number.isFinite(end)) return 0;
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+/**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
  * For free_trial:
@@ -564,7 +586,27 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.operationalKanban.description,
       icon: 'Kanban',
       group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/kanban-board',
+      route: '/category-manager/dashboard',
+    },
+    {
+      id: 'whatsapp_analytics',
+      screenTag: 'Screen 2.11',
+      shortTag: '2.11',
+      label: NAV_ITEMS.whatsappAnalytics.label,
+      description: NAV_ITEMS.whatsappAnalytics.description,
+      icon: 'MessageSquare',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/whatsapp-analytics',
+    },
+    {
+      id: 'internal_tasks',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
+      label: NAV_ITEMS.internalTasks.label,
+      description: NAV_ITEMS.internalTasks.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/internal-tasks',
     },
     {
       id: 'spend_dashboard',
@@ -645,16 +687,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'FileSpreadsheet',
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/daily-reports',
-    },
-    {
-      id: 'internal_tasks',
-      screenTag: 'Screen 2.10',
-      shortTag: '2.10',
-      label: NAV_ITEMS.internalTasks.label,
-      description: NAV_ITEMS.internalTasks.description,
-      icon: 'ClipboardList',
-      group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/internal-tasks',
     },
   ],
   vendor: [
@@ -766,7 +798,7 @@ export const SIDEBAR_LAYOUT = {
 /** Route the sign-in flow redirects to, chosen by the role on the user record. */
 export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
   buyer: '/buyer/dashboard',
-  category_manager: '/category-manager/kanban-board',
+  category_manager: '/category-manager/dashboard',
   vendor: '/vendor/opportunity-feed',
   admin: '/admin/infra-control',
 };
@@ -782,6 +814,10 @@ export const LOGIN_ROUTE = '/login';
 
 /** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
 export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
+
+/** Embedded URL for the WhatsApp conversational telemetry dashboard. */
+export const WHATSAPP_ANALYTICS_EMBED_URL =
+  'https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard';
 
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back

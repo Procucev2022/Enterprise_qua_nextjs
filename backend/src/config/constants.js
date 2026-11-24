@@ -2173,9 +2173,26 @@ function unwrapAccountData(obj) {
   return obj;
 }
 
+const BUYER_TRIAL_TRANSACTION_TYPE = 'TRIAL_GRANTED';
+const BUYER_TRIAL_GRANTED_DESCRIPTION = 'TRIAL_GRANTED: {days} Days Unlimited Trial';
+
+/**
+ * Check if an account has an active trial period based on canonical trialEndDate.
+ */
+function isTrialActive(account) {
+  const data = unwrapAccountData(account);
+  if (!data || typeof data !== 'object') return false;
+  if (data.trialActive === false) return false;
+  const trialEnd = data.trialEndDate || data.trial_end_date;
+  if (!trialEnd) return false;
+  const endTime = new Date(trialEnd).getTime();
+  return Number.isFinite(endTime) && endTime > Date.now();
+}
+
 /**
  * Check if a buyer account has database-configured unlimited RFQ creation access.
  * Reads database-level flags without hardcoding any identity credentials.
+ * Automatically grants time-based unlimited RFQ access while a trial period is active.
  */
 function hasUnlimitedRfqAccess(account) {
   const data = unwrapAccountData(account);
@@ -2184,7 +2201,8 @@ function hasUnlimitedRfqAccess(account) {
     data.unlimitedRfqAccess === true ||
     data.unlimitedAccess === true ||
     data.isUnlimited === true ||
-    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited'
+    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited' ||
+    isTrialActive(data)
   );
 }
 
@@ -4597,6 +4615,9 @@ module.exports = {
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   SUBSCRIPTION_MODE_ENTITLEMENTS,
+  isTrialActive,
+  BUYER_TRIAL_TRANSACTION_TYPE,
+  BUYER_TRIAL_GRANTED_DESCRIPTION,
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,

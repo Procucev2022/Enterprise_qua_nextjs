@@ -74,6 +74,8 @@ import {
   calculateTrialDaysFromDates,
   CREDIT_APPROVAL_APPROVERS,
   INTERNAL_TASK_USERS,
+  isBuyerTrialActive,
+  getRemainingTrialDays,
 } from '@/lib/constants';
 import {
   fetchApprovalApprovers,
@@ -487,6 +489,17 @@ export default function BuyerDossierDrawer({
   const [creditSortOrder, setCreditSortOrder] = useState<'asc' | 'desc'>('desc');
   const [creditPage, setCreditPage] = useState<number>(1);
   const creditPageSize = 10;
+
+  const isTrialActive = Boolean(
+    ((creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate) &&
+    new Date((creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate).getTime() > Date.now() &&
+    (creditSummary as any)?.trialActive !== false &&
+    (buyer as any)?.trialActive !== false
+  );
+  const trialEndDateStr = (creditSummary as any)?.trialEndDate || (buyer as any)?.trialEndDate;
+  const trialDaysLeft = isTrialActive && trialEndDateStr
+    ? getRemainingTrialDays(trialEndDateStr)
+    : 0;
 
   // Add Credit / Request Type modal states
   const [isAddCreditModalOpen, setIsAddCreditModalOpen] = useState<boolean>(false);
@@ -1505,10 +1518,27 @@ export default function BuyerDossierDrawer({
                 </div>
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500 dark:text-slate-400">Available Quota</p>
-                  <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
-                  </p>
-                  <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
+                  {isTrialActive && trialDaysLeft > 0 ? (
+                    <>
+                      <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                        {trialDaysLeft === 1
+                          ? (strings.credit.trialAvailableQuotaSingle || '1 Day Left')
+                          : formatString(strings.credit.trialAvailableQuota || '{days} Days Trial Period', { days: trialDaysLeft })}
+                      </p>
+                      <p className="text-[10px] text-slate-400">
+                        {formatString(strings.credit.trialUnlimitedSubtext || 'Unlimited RFQs (Expires {expiryDate})', {
+                          expiryDate: new Date(trialEndDateStr!).toLocaleDateString(),
+                        })}
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                        {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
+                      </p>
+                      <p className="text-[10px] text-slate-400">Free RFQ credits remaining</p>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -1726,9 +1756,24 @@ export default function BuyerDossierDrawer({
                 </div>
                 <div className="bg-emerald-50/50 dark:bg-emerald-950/30 p-3.5 rounded-xl border border-emerald-100 dark:border-emerald-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.remainingFree}</p>
-                  <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
-                    {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
-                  </p>
+                  {isTrialActive && trialDaysLeft > 0 ? (
+                    <>
+                      <p className="text-sm font-bold text-emerald-700 dark:text-emerald-300 mt-0.5 leading-snug">
+                        {trialDaysLeft === 1
+                          ? (strings.credit.trialPeriodCountdownSingle || '1 Day Left — Unlimited RFQs')
+                          : formatString(strings.credit.trialPeriodCountdown || '{days} Days Trial Period — Unlimited RFQs', { days: trialDaysLeft })}
+                      </p>
+                      <p className="text-[10px] text-slate-400 mt-0.5">
+                        {formatString(strings.credit.trialExpiresOn || 'Expires: {expiryDate}', {
+                          expiryDate: new Date(trialEndDateStr!).toLocaleDateString(),
+                        })}
+                      </p>
+                    </>
+                  ) : (
+                    <p className="text-xl font-bold text-emerald-700 dark:text-emerald-300 mt-0.5">
+                      {creditSummary?.remainingFreeCredits ?? (buyer as any)?.creditBalance ?? (buyer as any)?.available_credits ?? buyer.remainingFreeRFQs ?? UI_STRINGS.dataLoad.emptyCell}
+                    </p>
+                  )}
                 </div>
                 <div className="bg-indigo-50/50 dark:bg-indigo-950/30 p-3.5 rounded-xl border border-indigo-100 dark:border-indigo-900/50">
                   <p className="text-[11px] font-medium text-slate-500">{strings.credit.entitlementMode}</p>
@@ -1767,6 +1812,7 @@ export default function BuyerDossierDrawer({
                   </div>
                   <select
                     value={creditTypeFilter}
+                    aria-label="All transaction types"
                     onChange={(e) => {
                       setCreditTypeFilter(e.target.value);
                       setCreditPage(1);
@@ -1777,6 +1823,7 @@ export default function BuyerDossierDrawer({
                     <option value="Free Credits Allocated">Free Credits Allocated</option>
                     <option value="Credits Consumed">Credits Consumed</option>
                     <option value="Admin Credit Addition">Admin Credit Addition</option>
+                    <option value="TRIAL_GRANTED">Trial Granted</option>
                     <option value="Purchased Credits">Purchased Credits</option>
                     <option value="Credit Adjustment">Credit Adjustment</option>
                   </select>
@@ -1953,7 +2000,14 @@ export default function BuyerDossierDrawer({
                   type="date"
                   value={commDateFilter}
                   onChange={(e) => setCommDateFilter(e.target.value)}
-                  className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300"
+                  onClick={(e) => {
+                    try {
+                      e.currentTarget.showPicker?.();
+                    } catch {
+                      e.currentTarget.focus();
+                    }
+                  }}
+                  className="h-8 px-2.5 text-xs bg-slate-50 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-700 dark:text-slate-300 cursor-pointer"
                 />
               </div>
 
@@ -2967,7 +3021,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={trialStartDate}
                             onChange={(e) => handleTrialDateChange(e.target.value, trialEndDate)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                           />
                         </div>
 
@@ -2980,7 +3041,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={trialEndDate}
                             onChange={(e) => handleTrialDateChange(trialStartDate, e.target.value)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                           />
                         </div>
                       </div>
@@ -3152,7 +3220,14 @@ export default function BuyerDossierDrawer({
                             type="date"
                             value={offlinePaymentDate}
                             onChange={(e) => setOfflinePaymentDate(e.target.value)}
-                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full px-3 py-1.5 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-slate-900 dark:text-white font-medium focus:outline-none focus:ring-2 focus:ring-emerald-500/20 focus:border-emerald-500 text-xs cursor-pointer"
                             required
                           />
                         </div>
@@ -4277,7 +4352,14 @@ export default function BuyerDossierDrawer({
                       type="datetime-local"
                       value={composeNextFollowupDate}
                       onChange={(e) => setComposeNextFollowupDate(e.target.value)}
-                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200"
+                      onClick={(e) => {
+                        try {
+                          e.currentTarget.showPicker?.();
+                        } catch {
+                          e.currentTarget.focus();
+                        }
+                      }}
+                      className="w-full px-2.5 py-1.5 text-xs rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-800 dark:text-slate-200 cursor-pointer"
                     />
                   </div>
                   <div>

@@ -874,11 +874,18 @@ describe('AllRFQsConsole', () => {
   });
 
   describe('Pagination', () => {
-    it('renders pagination bar, handles page navigation, and resets page on filter change', async () => {
-      // Mock window scrollTo and Element scrollTo
-      const originalScrollTo = Element.prototype.scrollTo;
-      Element.prototype.scrollTo = jest.fn();
+    let originalScrollTo: any;
 
+    beforeEach(() => {
+      originalScrollTo = Element.prototype.scrollTo;
+      Element.prototype.scrollTo = jest.fn();
+    });
+
+    afterEach(() => {
+      Element.prototype.scrollTo = originalScrollTo;
+    });
+
+    it('renders pagination bar and handles page navigation', async () => {
       const manyRfqs = Array.from({ length: 250 }, (_, i) =>
         makeRfq({
           id: `page-${i + 1}`,
@@ -927,6 +934,23 @@ describe('AllRFQsConsole', () => {
       // Click Previous -> back to page 2
       fireEvent.click(prevBtn);
       expect(screen.getByText('Showing 101–200 of 250 RFQs')).toBeInTheDocument();
+    });
+
+    it('resets page on filter change and restores on clear', async () => {
+      const manyRfqs = Array.from({ length: 250 }, (_, i) =>
+        makeRfq({
+          id: `page-${i + 1}`,
+          title: `RFQ Item ${i + 1}`,
+          category: 'Cables',
+          status: 'Quotes Pending',
+          budget: 10000,
+          buyerAccountName: 'Alpha Buyer Co',
+        })
+      );
+      mockFetch.mockResolvedValueOnce({ success: true, rfqs: manyRfqs });
+
+      render(<AllRFQsConsole />);
+      await waitFor(() => expect(screen.getByText('RFQ Item 1')).toBeInTheDocument());
 
       // Filter change resets to page 1
       const searchInput = screen.getByPlaceholderText(S.searchPlaceholder);
@@ -938,14 +962,9 @@ describe('AllRFQsConsole', () => {
       const clearSearchBtn = screen.getByRole('button', { name: S.clearSearch });
       fireEvent.click(clearSearchBtn);
       await waitFor(() => expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument());
-
-      Element.prototype.scrollTo = originalScrollTo;
     });
 
     it('handles server-side pagination when more than 100 RFQs exist in DB (250 RFQs)', async () => {
-      const originalScrollTo = Element.prototype.scrollTo;
-      Element.prototype.scrollTo = jest.fn();
-
       const page1Rows = Array.from({ length: 100 }, (_, i) =>
         makeRfq({
           id: `srv-${i + 1}`,
@@ -1034,14 +1053,9 @@ describe('AllRFQsConsole', () => {
       fireEvent.click(clearSearchBtn);
       await waitFor(() => expect(screen.getByText('Server RFQ 1')).toBeInTheDocument());
       expect(screen.getByText('Showing 1–100 of 250 RFQs')).toBeInTheDocument();
-
-      Element.prototype.scrollTo = originalScrollTo;
     });
 
     it('renders ellipsis pagination for large number of pages (>7 pages)', async () => {
-      const originalScrollTo = Element.prototype.scrollTo;
-      Element.prototype.scrollTo = jest.fn();
-
       const manyPagesRfqs = Array.from({ length: 950 }, (_, i) =>
         makeRfq({
           id: `big-${i + 1}`,
@@ -1068,8 +1082,6 @@ describe('AllRFQsConsole', () => {
       const page10Btn = screen.getByRole('button', { name: 'Page 10' });
       fireEvent.click(page10Btn);
       expect(screen.getByText('Showing 901–950 of 950 RFQs')).toBeInTheDocument();
-
-      Element.prototype.scrollTo = originalScrollTo;
     });
   });
 });

@@ -832,7 +832,14 @@ export default function ActionCenterComposeModal({
                       required={scheduleFollowup}
                       value={followupDueDate}
                       onChange={(e) => setFollowupDueDate(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      onClick={(e) => {
+                        try {
+                          e.currentTarget.showPicker?.();
+                        } catch {
+                          e.currentTarget.focus();
+                        }
+                      }}
+                      className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
                     />
                   </div>
                   <div>

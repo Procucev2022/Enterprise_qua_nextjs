@@ -214,7 +214,8 @@ function d1ChargeExpression(sourcingModeParameter, rawExpression = 'raw') {
     WHEN lower(COALESCE(json_extract(${rawExpression}, '$.subscriptionPlan'), 'free_trial')) IN ('version_1', 'version_2', 'version_3', 'unlimited') THEN 0
     WHEN COALESCE(json_extract(${rawExpression}, '$.unlimitedRfqAccess'), 0) = 1
       OR COALESCE(json_extract(${rawExpression}, '$.unlimitedAccess'), 0) = 1
-      OR COALESCE(json_extract(${rawExpression}, '$.isUnlimited'), 0) = 1 THEN 0
+      OR COALESCE(json_extract(${rawExpression}, '$.isUnlimited'), 0) = 1
+      OR (json_extract(${rawExpression}, '$.trialEndDate') IS NOT NULL AND json_extract(${rawExpression}, '$.trialEndDate') > CURRENT_TIMESTAMP AND COALESCE(json_extract(${rawExpression}, '$.trialActive'), 1) = 1) THEN 0
     ELSE 1 END)`;
 }
 
