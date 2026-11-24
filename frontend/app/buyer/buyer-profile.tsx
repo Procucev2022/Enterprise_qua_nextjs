@@ -1024,7 +1024,7 @@ export default function BuyerProfilePage() {
                   <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3">
                     <div 
                       className="flex items-center gap-2.5 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
-                      onClick={() => toggleMajorCategory(cat.majorCategory)}
+                      onClick={() => setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))}
                     >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
