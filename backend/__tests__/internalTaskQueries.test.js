@@ -1144,6 +1144,182 @@ describe('internalTaskQueries', () => {
       }
     });
 
+    test('approves a buyer credit addition when accountId is an alias and survives approval sync error', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      const recordSpy = jest.spyOn(domainQueries, 'recordBuyerCreditTransactionInDB').mockResolvedValue({ id: 'tx-alias-1' });
+      const client = {
+        query: jest.fn(async (sql) => {
+          if (sql.includes('FROM internal_tasks WHERE id = $1 FOR UPDATE')) {
+            return { rows: [{ id: 'tsk_c_alias', status: 'Pending Approval', approval_status: 'PENDING' }] };
+          }
+          if (sql.includes('FROM buyer_accounts WHERE id = $1 FOR UPDATE')) {
+            return { rows: [{ id: 'buy_real_id', raw: JSON.stringify({ creditBalance: 50 }) }] };
+          }
+          if (sql.includes('UPDATE approvals SET')) {
+            throw new Error('Approval sync error');
+          }
+          return { rowCount: 1, rows: [] };
+        }),
+        release: jest.fn(),
+      };
+      const originalPool = pool.pool;
+      pool.pool = { connect: jest.fn().mockResolvedValue(client) };
+      jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [creditTaskRow({ id: 'tsk_c_alias', credit_account_id: 'buy_alias_id', approval_status: 'APPROVED' })],
+      });
+
+      try {
+        const res = await queries.approveCreditTask('tsk_c_alias', { id: 'admin-1', name: 'Admin Approver' }, 'Approved 20 credits');
+        expect(res).toBeDefined();
+        expect(recordSpy).toHaveBeenCalledWith(expect.objectContaining({ buyerId: 'buy_real_id', updatedBalance: 70, creditsAdded: 20 }));
+        expect(updateBuyerSpy).toHaveBeenCalledWith('buy_real_id', { creditBalance: 70, available_credits: 70 }, { persist: false });
+        expect(updateBuyerSpy).toHaveBeenCalledWith('buy_alias_id', { creditBalance: 70, available_credits: 70 }, { persist: false });
+        expect(logger.warn).toHaveBeenCalledWith(
+          'Internal task approved but approvals sync failed',
+          expect.any(Object),
+          'INTERNAL_TASK_APPROVAL'
+        );
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
+    test('approves a buyer discount, trial period, and offline payment on postgres path', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const updateBuyerSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+      const originalPool = pool.pool;
+
+      try {
+        // 1. Discount
+        const taskRowDisc = creditTaskRow({
+          id: 'tsk_b_disc',
+          task_type: 'Discounts',
+          credit_account_type: 'BUYER',
+          credit_account_id: 'buy_disc',
+          raw: JSON.stringify({ request_type: 'Discounts', discount_percentage: 25 }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientDisc = creditClient({
+          lockedRow: [taskRowDisc],
+          buyerRow: [{ id: 'buy_disc', raw: JSON.stringify({ creditBalance: 10 }) }],
+        });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientDisc) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowDisc] });
+        await queries.approveCreditTask('tsk_b_disc', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateBuyerSpy).toHaveBeenCalledWith('buy_disc', expect.objectContaining({
+          discountPercentage: 25,
+          subscriptionDiscount: '25%',
+        }), { persist: false });
+
+        // 2. Trial Period
+        const taskRowTrial = creditTaskRow({
+          id: 'tsk_b_trial',
+          task_type: 'Trial Periods',
+          credit_account_type: 'BUYER',
+          credit_account_id: 'buy_trial',
+          raw: JSON.stringify({ request_type: 'Trial Periods', duration_days: 60 }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientTrial = creditClient({
+          lockedRow: [taskRowTrial],
+          buyerRow: [{ id: 'buy_trial', raw: JSON.stringify({ creditBalance: 10 }) }],
+        });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientTrial) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowTrial] });
+        await queries.approveCreditTask('tsk_b_trial', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateBuyerSpy).toHaveBeenCalledWith('buy_trial', expect.objectContaining({
+          subscriptionTier: 'Free_trial',
+          trialPeriodDays: 60,
+        }), { persist: false });
+
+        // 3. Offline Payment
+        const taskRowOffline = creditTaskRow({
+          id: 'tsk_b_offline',
+          task_type: 'Offline Payments',
+          credit_account_type: 'BUYER',
+          credit_account_id: 'buy_offline',
+          raw: JSON.stringify({ request_type: 'Offline Payments' }),
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+        });
+        const clientOffline = creditClient({
+          lockedRow: [taskRowOffline],
+          buyerRow: [{ id: 'buy_offline', raw: JSON.stringify({ creditBalance: 10 }) }],
+        });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientOffline) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowOffline] });
+        await queries.approveCreditTask('tsk_b_offline', { id: 'admin-1', name: 'Admin Approver' });
+        expect(updateBuyerSpy).toHaveBeenCalledWith('buy_offline', expect.objectContaining({
+          offlinePaymentStatus: 'VERIFIED',
+          lastPaymentStatus: 'VERIFIED',
+        }), { persist: false });
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
+    test('updates vendor rfqDownloadsUsed based on subscriptionPlan quota for addition and deduction', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const originalPool = pool.pool;
+
+      try {
+        // Deduction with subscription plan quota
+        const taskRowDeduct = creditTaskRow({
+          id: 'tsk_v_quota_ded',
+          task_type: 'Delete Credits',
+          credit_account_type: 'SELLER',
+          credit_account_id: 'ven_quota',
+          credit_quantity: 5,
+          approval_status: 'APPROVED',
+        });
+        const clientDeduct = creditClient({
+          lockedRow: [{ id: 'tsk_v_quota_ded', status: 'Pending Approval', approval_status: 'PENDING' }],
+          vendorRow: [{
+            id: 'ven_quota',
+            raw: { subscriptionPlan: 'connect', rfqDownloadsUsed: 10, freeQuotationCredits: 20 },
+          }],
+        });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientDeduct) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowDeduct] });
+
+        await queries.approveCreditTask('tsk_v_quota_ded', { id: 'admin-1', name: 'Admin Approver' }, 'Deducted 5 credits');
+        expect(clientDeduct.query).toHaveBeenCalledWith(
+          expect.stringContaining('UPDATE vendors SET'),
+          [35, 'ven_quota', 15]
+        );
+
+        // Addition with subscription plan quota
+        const taskRowAdd = creditTaskRow({
+          id: 'tsk_v_quota_add',
+          task_type: 'Add Credits',
+          credit_account_type: 'SELLER',
+          credit_account_id: 'ven_quota',
+          credit_quantity: 4,
+          approval_status: 'APPROVED',
+        });
+        const clientAdd = creditClient({
+          lockedRow: [{ id: 'tsk_v_quota_add', status: 'Pending Approval', approval_status: 'PENDING' }],
+          vendorRow: [{
+            id: 'ven_quota',
+            raw: { subscriptionPlan: 'connect', rfqDownloadsUsed: 10, freeQuotationCredits: 20 },
+          }],
+        });
+        pool.pool = { connect: jest.fn().mockResolvedValue(clientAdd) };
+        jest.spyOn(pool, 'query').mockResolvedValue({ rows: [taskRowAdd] });
+
+        await queries.approveCreditTask('tsk_v_quota_add', { id: 'admin-1', name: 'Admin Approver' }, 'Added 4 credits');
+        expect(clientAdd.query).toHaveBeenCalledWith(
+          expect.stringContaining('UPDATE vendors SET'),
+          [44, 'ven_quota', 6]
+        );
+      } finally {
+        pool.pool = originalPool;
+      }
+    });
+
     test('returns the task unchanged when the locked row is already approved', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const client = creditClient({ lockedRow: [{ id: 'tsk_done', status: 'Completed', approval_status: 'APPROVED' }] });
@@ -1282,15 +1458,15 @@ describe('internalTaskQueries', () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       const querySpy = jest.spyOn(pool, 'query').mockImplementation((sql) => {
         if (sql.includes('FROM internal_tasks t')) {
-          return Promise.resolve({ rows: [creditTaskRow({ id: 'tsk_cred_rej', status: 'Rejected', approval_status: 'REJECTED' })] });
+          return Promise.resolve({ rows: [creditTaskRow({ id: 'tsk_cred_rej', status: 'Closed', approval_status: 'REJECTED' })] });
         }
         return Promise.resolve({ rowCount: 1, rows: [] });
       });
 
       const res = await queries.rejectCreditTask('tsk_cred_rej', { id: 'admin-1', name: 'Admin Approver' }, 'Duplicate');
 
-      expect(res.status).toBe('Rejected');
-      expect(querySpy.mock.calls.some(([sql]) => sql.includes("status = 'Rejected'"))).toBe(true);
+      expect(res.status).toBe('Closed');
+      expect(querySpy.mock.calls.some(([sql]) => sql.includes("status = 'Closed'"))).toBe(true);
       expect(querySpy.mock.calls.some(([sql]) => sql.includes('UPDATE buyer_accounts') || sql.includes('UPDATE vendors'))).toBe(false);
     });
 
@@ -1367,6 +1543,203 @@ describe('internalTaskQueries', () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
 
       await expect(queries.getOverdueAndUpcomingTasks()).rejects.toMatchObject(UNAVAILABLE);
+    });
+  });
+
+  describe('syncLinkedTasksForApproval and reconcileStuckApprovalTasks', () => {
+    test('transitions linked credit tasks to Closed on Approve', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const approveSpy = jest.spyOn(queries, 'approveCreditTask').mockResolvedValue({
+        id: 'tsk_link_1',
+        status: 'Closed',
+        approval_status: 'APPROVED',
+      });
+      jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [{
+          id: 'tsk_link_1',
+          title: 'Credit Allocation Request: 5 Credits for Veera',
+          task_category: 'CREDIT_MANAGEMENT',
+          task_type: 'Add Credits',
+          status: 'Pending Approval',
+          approval_status: 'PENDING',
+          raw: '{}',
+        }],
+      });
+
+      const updated = await queries.syncLinkedTasksForApproval(
+        { id: 'appr_link_1', request_number: 'REQ-860DAC704BE2', internal_task_id: 'tsk_link_1' },
+        'Approved',
+        { uuid: 'approver-1', name: 'Sudheer Sir' },
+        'Looks good'
+      );
+
+      expect(approveSpy).toHaveBeenCalledWith('tsk_link_1', expect.objectContaining({ name: 'Sudheer Sir' }), 'Looks good');
+      expect(updated).toHaveLength(1);
+      expect(updated[0].status).toBe('Closed');
+    });
+
+    test('transitions linked credit tasks to Closed on Reject', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const rejectSpy = jest.spyOn(queries, 'rejectCreditTask').mockResolvedValue({
+        id: 'tsk_link_2',
+        status: 'Closed',
+        approval_status: 'REJECTED',
+      });
+      jest.spyOn(pool, 'query').mockResolvedValue({
+        rows: [{
+          id: 'tsk_link_2',
+          title: 'Credit Allocation Request: 5 Credits for Veera',
+          task_category: 'CREDIT_MANAGEMENT',
+          task_type: 'Add Credits',
+          status: 'Open',
+          approval_status: 'PENDING',
+          raw: '{}',
+        }],
+      });
+
+      const updated = await queries.syncLinkedTasksForApproval(
+        { id: 'appr_link_2', request_number: 'REQ-860DAC704BE2', internal_task_id: 'tsk_link_2' },
+        'Rejected',
+        { uuid: 'approver-1', name: 'Sudheer Sir' },
+        'Denied'
+      );
+
+      expect(rejectSpy).toHaveBeenCalledWith('tsk_link_2', expect.objectContaining({ name: 'Sudheer Sir' }), 'Denied');
+      expect(updated).toHaveLength(1);
+      expect(updated[0].status).toBe('Closed');
+    });
+
+    test('transitions communication email tasks and general tasks linked by request number to Closed', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const querySpy = jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('SELECT * FROM internal_tasks')) {
+          return {
+            rows: [{
+              id: 'tsk_email_1',
+              title: '[EMAIL Sent] [Approval Update] Request REQ-860DAC704BE2 has been Approved',
+              task_category: 'COMMUNICATION',
+              task_type: 'Email',
+              status: 'Open',
+              approval_status: null,
+              raw: '{}',
+            }],
+          };
+        }
+        if (sql.includes('UPDATE internal_tasks SET')) {
+          return {
+            rows: [{
+              id: 'tsk_email_1',
+              title: '[EMAIL Sent] [Approval Update] Request REQ-860DAC704BE2 has been Approved',
+              status: 'Closed',
+              approval_status: 'APPROVED',
+              completed_at: new Date().toISOString(),
+              raw: '{}',
+            }],
+          };
+        }
+        return { rowCount: 1, rows: [] };
+      });
+
+      const updated = await queries.syncLinkedTasksForApproval(
+        { id: 'appr_email_1', request_number: 'REQ-860DAC704BE2' },
+        'Approved',
+        { uuid: 'approver-1', name: 'Sudheer Sir' },
+        'Done'
+      );
+
+      expect(updated).toHaveLength(1);
+      expect(updated[0].status).toBe('Closed');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE internal_tasks SET'),
+        expect.arrayContaining(['APPROVED', 'approver-1', 'Sudheer Sir', 'Done', 'tsk_email_1']),
+        expect.any(Object)
+      );
+    });
+
+    test('returns empty array when no storage or no conditions match', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const res = await queries.syncLinkedTasksForApproval({}, 'Approved', {});
+      expect(res).toEqual([]);
+
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const res2 = await queries.syncLinkedTasksForApproval({}, 'Approved', {});
+      expect(res2).toEqual([]);
+    });
+
+    test('reconciles stuck approval tasks and invalidates cache when tasks are closed', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const invalidateSpy = jest.spyOn(pool.queryCache, 'invalidate').mockImplementation(() => {});
+      const querySpy = jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 2 });
+
+      const count = await queries.reconcileStuckApprovalTasks();
+      expect(count).toBe(2);
+      expect(invalidateSpy).toHaveBeenCalledWith('internal_tasks');
+      expect(querySpy).toHaveBeenCalledWith(
+        expect.stringContaining('UPDATE internal_tasks'),
+        [],
+        expect.objectContaining({ d1: true })
+      );
+    });
+
+    test('hydrateTaskRow resolves stuck tasks with REQ-060DAC704BE2 or decided status to Closed', () => {
+      const row = queries.hydrateTaskRow({
+        id: 'tsk_stuck_1',
+        title: '[EMAIL Sent] [Approval Update] Request REQ-060DAC704BE2 has been Approved',
+        status: 'Open',
+        raw: '{}',
+      });
+      expect(row.status).toBe('Closed');
+      expect(row.completed_at).toBeDefined();
+
+      const creditRow = queries.hydrateTaskRow({
+        id: 'tsk_stuck_2',
+        title: 'Credit Allocation Request: 5 Credits for Veera solutions pvt ltd',
+        status: 'Open',
+        approval_status: 'APPROVED',
+        raw: '{}',
+      });
+      expect(creditRow.status).toBe('Closed');
+      expect(creditRow.completed_at).toBeDefined();
+    });
+
+    test('handles error in syncLinkedTasksForApproval gracefully and returns empty array', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('Query failed'));
+
+      const result = await queries.syncLinkedTasksForApproval(
+        { id: 'appr-err', request_number: 'REQ-ERR', internal_task_id: 'task-err' },
+        'Approved',
+        { uuid: 'u1', name: 'User' }
+      );
+      expect(result).toEqual([]);
+      expect(logger.error).toHaveBeenCalledWith(
+        'Failed to sync linked internal tasks for approval',
+        expect.any(Object),
+        'INTERNAL_TASK_APPROVAL_SYNC'
+      );
+    });
+
+    test('handles error in reconcileStuckApprovalTasks gracefully and returns 0', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('Reconcile DB error'));
+
+      const count = await queries.reconcileStuckApprovalTasks();
+      expect(count).toBe(0);
+      expect(logger.warn).toHaveBeenCalledWith(
+        'Reconciliation of stuck approval tasks failed or bypassed',
+        expect.any(Object),
+        'INTERNAL_TASK_RECONCILE'
+      );
+    });
+
+    test('reconciles 0 when no rows are modified and does not invalidate cache', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const invalidateSpy = jest.spyOn(pool.queryCache, 'invalidate').mockImplementation(() => {});
+      jest.spyOn(pool, 'query').mockResolvedValue({ rowCount: 0 });
+
+      const count = await queries.reconcileStuckApprovalTasks();
+      expect(count).toBe(0);
+      expect(invalidateSpy).not.toHaveBeenCalled();
     });
   });
 });

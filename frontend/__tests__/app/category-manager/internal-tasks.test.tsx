@@ -13,7 +13,29 @@ jest.mock('@/app/category-manager/components/TicketsDashboard', () => ({
   TicketsDashboard: () => <div data-testid="tickets-dashboard">Tickets Dashboard Mock</div>,
 }));
 jest.mock('@/app/category-manager/components/ApprovalsDashboard', () => {
-  const Mock = () => <div data-testid="approvals-dashboard">Approvals Dashboard Mock</div>;
+  const Mock = ({ onApprovalDecision }: { onApprovalDecision?: (id: string, action: 'APPROVE' | 'REJECT', requestNumber?: string) => void }) => (
+    <div data-testid="approvals-dashboard">
+      Approvals Dashboard Mock
+      <button
+        data-testid="mock-approval-decision-btn"
+        onClick={() => onApprovalDecision?.('appr_1', 'APPROVE', 'REQ-860DAC704BE2')}
+      >
+        Trigger Decision
+      </button>
+      <button
+        data-testid="mock-approval-decision-reject-btn"
+        onClick={() => onApprovalDecision?.('appr_2', 'REJECT', 'REQ-REJECT-999')}
+      >
+        Trigger Reject
+      </button>
+      <button
+        data-testid="mock-approval-decision-no-req-btn"
+        onClick={() => onApprovalDecision?.('appr_3', 'APPROVE', undefined)}
+      >
+        Trigger No Req
+      </button>
+    </div>
+  );
   return {
     __esModule: true,
     default: Mock,
@@ -3696,6 +3718,80 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed to update task in database.')).toBeInTheDocument();
+    });
+  });
+
+  test('refreshes internal tasks and updates linked task status when onApprovalDecision fires', async () => {
+    const linkedTask1: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_1',
+      title: 'Credit Allocation Request: 5 Credits for Veera [REQ-860DAC704BE2]',
+      raw: { approval_request_number: 'REQ-860DAC704BE2' },
+      status: 'Open',
+    };
+    const linkedTask2: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_2',
+      title: 'Email communication task',
+      raw: { approvalRequestNumber: 'REQ-REJECT-999' },
+      completed_at: '2026-11-20T10:00:00Z',
+      status: 'Open',
+    };
+    const linkedTask3: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_3',
+      title: 'Entity linked task',
+      related_entity_id: 'REQ-REJECT-999',
+      status: 'Open',
+    };
+    const linkedTask4: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_4',
+      title: 'Label linked task',
+      related_entity_label: 'REQ-REJECT-999',
+      status: 'Open',
+    };
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [linkedTask1, linkedTask2, linkedTask3, linkedTask4],
+      total: 4,
+    });
+    (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
+      summary: { total: 4, newTasks: 0, completed: 4, inProgress: 0, pendingApproval: 0, overdue: 0 },
+      error: undefined,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/REQ-860DAC704BE2/)).toBeInTheDocument();
+    });
+
+    // Switch to Approvals tab
+    const approvalsTab = screen.getByText('Approvals');
+    fireEvent.click(approvalsTab);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('approvals-dashboard')).toBeInTheDocument();
+    });
+
+    // Trigger mock approval decisions: APPROVE, REJECT, and no requestNumber
+    const triggerBtn = screen.getByTestId('mock-approval-decision-btn');
+    const rejectBtn = screen.getByTestId('mock-approval-decision-reject-btn');
+    const noReqBtn = screen.getByTestId('mock-approval-decision-no-req-btn');
+
+    await act(async () => {
+      fireEvent.click(triggerBtn);
+      fireEvent.click(rejectBtn);
+      fireEvent.click(noReqBtn);
+    });
+
+    expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalled();
+    expect(internalTaskClient.fetchTaskSummary).toHaveBeenCalled();
+
+    // Switch back to Internal tasks tab to trigger prevTabRef reload
+    const tasksTab = screen.getByText('Internal tasks');
+    await act(async () => {
+      fireEvent.click(tasksTab);
     });
   });
 });

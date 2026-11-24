@@ -50,7 +50,11 @@ const getUserStorageKey = (user: { id?: string; email?: string } | null | undefi
   return `${STORAGE_PREFS_KEY_PREFIX}${user?.id || user?.email || 'default'}`;
 };
 
-export function ApprovalsDashboard() {
+export interface ApprovalsDashboardProps {
+  onApprovalDecision?: (approvalId: string, action: 'APPROVE' | 'REJECT', requestNumber?: string) => void;
+}
+
+export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardProps = {}) {
   const strings = UI_STRINGS.actionCenter.approvals;
 
   // Primary Data State
@@ -383,6 +387,11 @@ export function ApprovalsDashboard() {
       showToast(
         `Request ${selectedRequest.request_number} marked as ${finalStatus}.`
       );
+      try {
+        onApprovalDecision?.(selectedRequest.id, pendingAction, selectedRequest.request_number);
+      } catch {
+        // Prevent callback exceptions from disrupting local modal flow
+      }
       // Immediately reflect database confirmed status in local state
       setApprovals((prev) =>
         prev.map((item) =>

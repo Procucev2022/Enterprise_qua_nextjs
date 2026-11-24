@@ -602,6 +602,43 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
       pool.queryCache.invalidate('management_approvals');
       pool.queryCache.invalidate('management_approval_events');
       pool.queryCache.invalidate('approvals');
+
+      try {
+        const internalTaskQueries = require('./internalTaskQueries');
+        if (internalTaskQueries.syncLinkedTasksForApproval) {
+          await internalTaskQueries.syncLinkedTasksForApproval(managementApproval, normalizedAction, actor, normalizedRemarks);
+        }
+      } catch (syncError) {
+        logger.error('Management approval decision saved but internal tasks synchronization failed', {
+          approvalId: managementApproval.id,
+          requestNumber: managementApproval.request_number,
+          error: syncError,
+        }, 'APPROVAL_QUERIES');
+      }
+
+      if (managementApproval.applicant_email) {
+        try {
+          const actionCenterNotificationService = require('../services/actionCenterNotificationService');
+          if (actionCenterNotificationService?.dispatchActionCenterCommunication) {
+            await actionCenterNotificationService.dispatchActionCenterCommunication({
+              entityType: 'approval',
+              entityId: managementApproval.id,
+              channel: 'EMAIL',
+              recipientEmail: managementApproval.applicant_email,
+              recipientName: managementApproval.maker_name || managementApproval.applicant_name || managementApproval.applicant_email,
+              subject: `[Approval Update] Request ${managementApproval.request_number} has been ${normalizedAction}`,
+              message: `Your approval request ${managementApproval.request_number} (${managementApproval.value_impact}) has been ${normalizedAction.toLowerCase()} by ${actorName}. Remarks: ${normalizedRemarks || 'None'}.`,
+            }, actor);
+          }
+        } catch (error) {
+          logger.error('Management approval decision saved but requester notification failed', {
+            approvalId: managementApproval.id,
+            requestNumber: managementApproval.request_number,
+            error,
+          }, 'APPROVAL_QUERIES');
+        }
+      }
+
       logger.audit(`Management approval ${normalizedAction.toLowerCase()}`, actorEmail || actorId || actorName, {
         approvalId: managementApproval.id,
         requestNumber: managementApproval.request_number,
@@ -668,6 +705,19 @@ async function processApprovalAction(id, { action, remarks = '', password = '', 
           error,
         }, 'APPROVAL_QUERIES');
       }
+    }
+
+    try {
+      const internalTaskQueries = require('./internalTaskQueries');
+      if (internalTaskQueries.syncLinkedTasksForApproval) {
+        await internalTaskQueries.syncLinkedTasksForApproval(updatedApproval, normalizedAction, actor, normalizedRemarks);
+      }
+    } catch (syncError) {
+      logger.error('Approval decision saved but linked internal tasks synchronization failed', {
+        approvalId: updatedApproval.id,
+        requestNumber: updatedApproval.request_number,
+        error: syncError,
+      }, 'APPROVAL_QUERIES');
     }
 
     // The requester is notified only when the record holds a requester address.

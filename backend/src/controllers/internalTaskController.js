@@ -57,6 +57,9 @@ function configuredApproverEmail() {
  */
 async function getTasks(req, res) {
   try {
+    if (internalTaskQueries.reconcileStuckApprovalTasks) {
+      await internalTaskQueries.reconcileStuckApprovalTasks();
+    }
     const {
       search = '',
       status = '',
@@ -107,6 +110,9 @@ async function getTasks(req, res) {
  */
 async function getSummary(req, res) {
   try {
+    if (internalTaskQueries.reconcileStuckApprovalTasks) {
+      await internalTaskQueries.reconcileStuckApprovalTasks();
+    }
     const { assignedTo = '', taskCategory } = req.query;
     const filter = {};
     if (assignedTo) filter.assignedTo = assignedTo;
