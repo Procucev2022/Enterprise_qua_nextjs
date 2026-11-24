@@ -4587,9 +4587,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           type="button"
                           onClick={() => handleDownloadBatchCsv(batch)}
                           className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1"
-                          title="Download uploaded vendor template CSV"
+                          title="Download vendor batch data"
                         >
-                          <Download size={12} /> Download CSV
+                          <Download size={12} /> Download
                         </button>
                       </div>
                     </div>
@@ -4628,7 +4628,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Footer */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0 text-xs">
               <span className="text-[11px] text-slate-400">
-                This history is stored in this browser only.
+                {/* Message removed - history now shows database vendors */}
               </span>
               <button
                 type="button"
