@@ -8905,3 +8905,12 @@ Can't see any change, is the issue fixed & commited
 ```text
 resume
 ```
+---
+### Prompt 405
+**Timestamp**: 2026-11-24T12:37:20+05:30
+```text
+1. ignore old or earlier RFQ's. 
+2. No need to re-send failed emails. 
+3. I think, the  own vendor limit is already 25 per minor, we don't need to change. 
+4. No need to send duplicate email, keep it from queue.
+```

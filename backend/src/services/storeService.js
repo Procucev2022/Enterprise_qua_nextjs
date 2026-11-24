@@ -76,7 +76,6 @@ const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = requi
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
 const mailerService = require('./mailerService');
-const mailTransport = require('./mailTransport');
 // Real multi-channel outreach services — both are fire-and-forget and
 // no-op under test (NODE_ENV === 'test') or when credentials are not
 // configured, matching the same pattern mailerService uses above.
@@ -8761,7 +8760,9 @@ class StoreService {
         }
       }
 
-      const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+      // With a database, the queue (rfq_vendor_invite_email) sends every invitation e-mail, so each vendor gets
+      // one. The request path sends it only when there is no database, because then there is no queue.
+      const sendEmailViaOutboxOnly = pool.hasStorage();
       if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
@@ -9130,7 +9131,8 @@ class StoreService {
             }
           }
 
-          const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+          // The queue is the only sender when a database is configured (see augmentV0AssignmentsFromDB).
+          const sendEmailViaOutboxOnly = pool.hasStorage();
           if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
