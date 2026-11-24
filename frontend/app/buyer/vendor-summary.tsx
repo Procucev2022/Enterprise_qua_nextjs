@@ -87,9 +87,24 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
+/**
+ * Feature flag: Controls visibility of "Revise Rating" button in Vendor Directory
+ * @default false - Intentionally disabled to hide vendor rating revision functionality
+ * @see Issue #8 - User requested to hide "Revise Rating" button from production UI
+ * Test suites control this flag via setEnableVendorRating() for coverage
+ */
 export let ENABLE_VENDOR_RATING = false; // Changed from FEATURE_FLAGS.ENABLE_VENDOR_RATING
+
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+
+/**
+ * Feature flag: Controls visibility of "Edit Profile" button in Vendor Directory  
+ * @default false - Intentionally disabled to hide vendor profile editing functionality
+ * @see Issue #8 - User requested to hide "Edit Profile" button from production UI
+ * Test suites control this flag via setEnableEditVendorProfile() for coverage
+ */
 export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
+
 export let ENABLE_VENDOR_EVALUATION = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION;
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
