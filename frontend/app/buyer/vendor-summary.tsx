@@ -90,6 +90,7 @@ import { logger } from '@/lib/logger';
 export let ENABLE_VENDOR_RATING = false; // Changed from FEATURE_FLAGS.ENABLE_VENDOR_RATING
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
 export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
+export let ENABLE_VENDOR_EVALUATION = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION;
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
 };
@@ -98,6 +99,9 @@ export const setEnableVendorEvaluationRequest = (val: boolean) => {
 };
 export const setEnableEditVendorProfile = (val: boolean) => {
   ENABLE_EDIT_VENDOR_PROFILE = val;
+};
+export const setEnableVendorEvaluation = (val: boolean) => {
+  ENABLE_VENDOR_EVALUATION = val;
 };
 
 interface VendorSummaryProps {
@@ -1794,7 +1798,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
-        <td className="py-1.5 px-2.5 w-10 text-center align-middle">
+        <td className="py-1.5 px-2.5 w-10 min-w-[40px] text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
@@ -1902,7 +1906,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 4. Category (Minor Categories) */}
-        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[150px] align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[160px] align-middle')}>
           {(() => {
             const normalizedRowMinors = normalizeVendorCategoryList(vendor.minorCategories);
             return (
@@ -1954,7 +1958,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 5. Primary Source Badge */}
-        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle')}>
           {isUploaded ? (
             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
               <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
@@ -1969,14 +1973,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 6. Secondary Origin Tag */}
-        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
             {originDetails.origin}
           </span>
         </td>
 
         {/* 7. RFQ Engagement */}
-        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <div className="flex items-center gap-1 flex-wrap">
             {engagement.isEngaged ? (
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
@@ -1999,7 +2003,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 8. Contact Person */}
-        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 max-w-[160px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
+        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 min-w-[150px] max-w-[180px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
           <div
             className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
             title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
@@ -2009,7 +2013,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 9. Email */}
-        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 max-w-[190px] align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 min-w-[190px] max-w-[220px] align-middle text-[11px]')}>
           <div
             className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
             title={vendor.email}
@@ -2019,7 +2023,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 10. Phone */}
-        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 whitespace-nowrap align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle text-[11px]')}>
           <div
             className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
             title={vendor.phone}
@@ -2029,7 +2033,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 11. Location */}
-        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 max-w-[180px] align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 min-w-[160px] max-w-[200px] align-middle text-[11px]')}>
           {(() => {
             const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
             return (
@@ -2045,7 +2049,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 12. AI Score */}
-        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 min-w-[120px] whitespace-nowrap text-center align-middle')}>
           {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
             <div className="space-y-0.5">
               <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
@@ -2070,7 +2074,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 13. Rating */}
-        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 min-w-[120px] whitespace-nowrap text-center align-middle')}>
           {(() => {
             const displayRating = normalizeVendorRating(vendor.rating, vendor.score);
             return displayRating !== null ? (
@@ -2082,7 +2086,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 14. Status */}
-        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 min-w-[140px] whitespace-nowrap text-center align-middle')}>
           {vendorInactive ? (
             <span
               data-testid={`status-badge-inactive-${vendor.id}`}
@@ -2432,12 +2436,18 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
-          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse min-w-[1380px]">
-                <thead>
-                  <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="py-2 px-2.5 w-10 text-center">
+          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+            <div
+              data-testid="vendor-directory-table-container"
+              className="w-full max-w-full overflow-x-auto vendor-directory-table-scroll focus:outline-none"
+              tabIndex={0}
+              role="region"
+              aria-label="Vendor Directory Table"
+            >
+              <table className="w-full text-left text-xs border-collapse min-w-[2260px]">
+                <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-gray-800 shadow-xs">
+                  <tr className="bg-slate-50 dark:bg-gray-800/90 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2 px-2.5 w-10 min-w-[40px] text-center">
                       <span className="sr-only">Select</span>
                     </th>
                     <th
@@ -2464,77 +2474,77 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <th
                       onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
-                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('source', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'source')}
-                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
-                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
-                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
-                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('email', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'email')}
-                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
-                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('location', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'location')}
-                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('score', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'score')}
-                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
-                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('status', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'status')}
-                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 min-w-[140px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
                     </th>
@@ -3441,24 +3451,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       : UI_STRINGS.vendorStatusControl.markInactiveButton}
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
-                  disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
-                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={
-                    isVendorInactive(selectedVendorForCrud)
-                      ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
-                      : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
-                  }
-                >
-                  {isRequestingEvaluation ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Send size={13} />
-                  )}
-                  {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
-                </button>
+                {ENABLE_VENDOR_EVALUATION && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
+                    disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
+                    className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={
+                      isVendorInactive(selectedVendorForCrud)
+                        ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                        : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                    }
+                  >
+                    {isRequestingEvaluation ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Send size={13} />
+                    )}
+                    {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                  </button>
+                )}
               </div>
 
               <button

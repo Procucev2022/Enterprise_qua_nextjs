@@ -802,6 +802,11 @@ export default function IngestionWizard({
 
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Supporting Documents State
+  const [isUploadingSupportingDocs, setIsUploadingSupportingDocs] = useState(false);
+  const [supportingDocsError, setSupportingDocsError] = useState<string | null>(null);
+  const supportingDocsInputRef = useRef<HTMLInputElement>(null);
+
   const [pincodeError, setPincodeError] = useState<string | null>(null);
   const [pincodeValidating, setPincodeValidating] = useState(false);
   const [pincodePostOffices, setPincodePostOffices] = useState<PostOfficeDetail[]>([]);
@@ -1173,6 +1178,68 @@ export default function IngestionWizard({
     return attachments;
   };
 
+  /** Handles user selecting supporting documents via the file input or drag-and-drop */
+  const handleSupportingDocsSelected = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    setIsUploadingSupportingDocs(true);
+    setSupportingDocsError(null);
+
+    const newAttachments: RFQAttachment[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
+        errors.push(`"${file.name}" exceeds the 15 MB file size limit (${formatFileSize(file.size)}).`);
+        continue;
+      }
+      try {
+        const res = await uploadRFQAttachment(file);
+        if (res.success && res.data) {
+          newAttachments.push(res.data);
+        } else {
+          errors.push(`${file.name}: ${res.error || 'Upload failed'}`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Upload failed';
+        errors.push(`${file.name}: ${msg}`);
+      }
+    }
+
+    if (newAttachments.length > 0) {
+      setForm((prev) => {
+        const existing = prev.attachments || [];
+        const existingIds = new Set(existing.map((a) => a.id));
+        const toAdd = newAttachments.filter((a) => !existingIds.has(a.id));
+        return {
+          ...prev,
+          attachments: [...existing, ...toAdd],
+        };
+      });
+      showToast(
+        'Documents Attached',
+        `${newAttachments.length} supporting document(s) uploaded successfully.`,
+        'success'
+      );
+    }
+
+    if (errors.length > 0) {
+      setSupportingDocsError(errors.join(' | '));
+      showToast('Attachment Error', errors[0], 'warning');
+    }
+
+    setIsUploadingSupportingDocs(false);
+  };
+
+  /** Removes a supporting document from the form */
+  const handleRemoveSupportingDoc = (attachmentId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      attachments: (prev.attachments || []).filter((a) => a.id !== attachmentId),
+    }));
+  };
+
   /** Form Submission / RFQ Dispatch */
   const handleSubmit = async () => {
     setSubmitAttempted(true);
@@ -1213,9 +1280,17 @@ export default function IngestionWizard({
 
       // Upload any staged files as attachments
       const storedAttachments = await uploadAttachments();
+      const allAttachments = [...form.attachments, ...storedAttachments];
+      const seenAttachmentIds = new Set<string>();
+      const deduplicatedAttachments = allAttachments.filter((att) => {
+        if (!att?.id) return true;
+        if (seenAttachmentIds.has(att.id)) return false;
+        seenAttachmentIds.add(att.id);
+        return true;
+      });
       const updatedForm: ManualRFQForm = {
         ...form,
-        attachments: [...form.attachments, ...storedAttachments],
+        attachments: deduplicatedAttachments,
       };
 
       type AssignedVendorEntry = {
@@ -1401,7 +1476,9 @@ export default function IngestionWizard({
     setExtractionDetail(null);
     setSubmitAttempted(false);
     setSubmitError(null);
+    setSupportingDocsError(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (supportingDocsInputRef.current) supportingDocsInputRef.current.value = '';
     showToast('Form Cleared', 'All fields, line items, and uploaded files have been reset.', 'info');
   };
 
@@ -1776,6 +1853,88 @@ export default function IngestionWizard({
               className="date-input-whole-field w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.targetDeliveryDate} />
+          </div>
+
+          {/* Supporting Documents */}
+          <div className="col-span-1 md:col-span-2 xl:col-span-3 pt-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-1.5">
+              <div>
+                <label htmlFor="rfq-supporting-docs" className="block font-semibold text-slate-700 dark:text-gray-300">
+                  Supporting Documents <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">({MODAL.optionalTag})</span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                  Attach drawings, specifications, technical sheets, or BOQs ({RFQ_DOCUMENT_LIMITS.SUPPORTED_EXTENSIONS.replace(/,/g, ', ')} up to {RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_MB} MB each).
+                </p>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => supportingDocsInputRef.current?.click()}
+                  disabled={isUploadingSupportingDocs}
+                  className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                >
+                  {isUploadingSupportingDocs ? (
+                    <Loader2 size={13} className="animate-spin text-indigo-600 dark:text-indigo-400" />
+                  ) : (
+                    <Paperclip size={13} />
+                  )}
+                  <span>{isUploadingSupportingDocs ? 'Uploading...' : 'Upload Supporting Documents'}</span>
+                </button>
+                <input
+                  ref={supportingDocsInputRef}
+                  id="rfq-supporting-docs"
+                  type="file"
+                  multiple
+                  accept={RFQ_DOCUMENT_LIMITS.SUPPORTED_EXTENSIONS}
+                  className="hidden"
+                  data-testid="rfq-supporting-docs-input"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      void handleSupportingDocsSelected(e.target.files);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            </div>
+
+            {supportingDocsError && (
+              <div role="alert" className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 flex items-center gap-2 mb-2">
+                <AlertCircle size={14} className="shrink-0 text-rose-600 dark:text-rose-400" />
+                <span>{supportingDocsError}</span>
+              </div>
+            )}
+
+            {form.attachments.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-2">
+                {form.attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <FileText size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-semibold text-slate-800 dark:text-gray-200 truncate" title={file.fileName}>
+                          {file.fileName}
+                        </span>
+                        <span className="block text-[10px] text-slate-400 dark:text-gray-500 mono">
+                          {formatFileSize(file.size)}
+                        </span>
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSupportingDoc(file.id)}
+                      aria-label={`Remove ${file.fileName}`}
+                      className="p-1 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 shrink-0"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 

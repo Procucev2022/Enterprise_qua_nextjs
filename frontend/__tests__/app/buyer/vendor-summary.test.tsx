@@ -6,6 +6,7 @@ import VendorSummary, {
   setEnableVendorRating,
   setEnableVendorEvaluationRequest,
   setEnableEditVendorProfile,
+  setEnableVendorEvaluation,
 } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
@@ -102,11 +103,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
     setEnableVendorRating(true);
     setEnableVendorEvaluationRequest(true);
     setEnableEditVendorProfile(true);
+    setEnableVendorEvaluation(true);
   });
 
   afterAll(() => {
     setEnableVendorRating(false);
     setEnableVendorEvaluationRequest(false);
+    setEnableEditVendorProfile(false);
+    setEnableVendorEvaluation(false);
     logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
     logger.clearLogs();
   });
@@ -314,11 +318,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
     beforeEach(() => {
       setEnableVendorRating(false);
       setEnableVendorEvaluationRequest(false);
+      setEnableVendorEvaluation(false);
     });
 
     afterEach(() => {
       setEnableVendorRating(true);
       setEnableVendorEvaluationRequest(true);
+      setEnableVendorEvaluation(true);
     });
 
     it('hides Revise Rating button from Actions column in table when ENABLE_VENDOR_RATING is false', async () => {
@@ -351,6 +357,49 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
       expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
       expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+    });
+
+    it('hides Request Vendor Evaluation button inside View Profile modal footer when ENABLE_VENDOR_EVALUATION is false, while keeping Edit Profile, Mark Inactive and Close visible', async () => {
+      setEnableVendorEvaluation(false);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      // View Profile modal is open
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      // Request Vendor Evaluation button should NOT be in the document
+      expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+
+      // Edit Profile, Close should be present and visible
+      expect(screen.getAllByRole('button', { name: /Edit Profile/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('button', { name: /Close/i }).length).toBeGreaterThan(0);
+    });
+
+    it('shows Request Vendor Evaluation button in View Profile modal footer when ENABLE_VENDOR_EVALUATION is true', async () => {
+      setEnableVendorEvaluation(true);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      expect(screen.getAllByRole('button', { name: /Request Vendor Evaluation/i }).length).toBeGreaterThan(0);
     });
   });
 
@@ -5772,8 +5821,75 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByRole('button', { name: /Edit Profile/i })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     });
+
+    it('renders horizontal scrolling container with custom scrollbar, min-width, and sticky header', () => {
+      const vendorMock = {
+        id: 'v-scroll-test',
+        name: 'Horizontal Scroll Vendor',
+        vendorCode: 'VND-SCROLL-01',
+        majorCategory: 'IT',
+        minorCategories: ['Laptops'],
+        source: 'buyer',
+        origin: 'Buyer Manual Empanelment',
+        contactPerson: 'Scroll Tester',
+        email: 'scroll@tester.test',
+        phone: '+91 9999999999',
+        location: 'Bengaluru, Karnataka',
+        score: 92,
+        rating: 4.6,
+        status: 'ACTIVE',
+        buyerId: 'buyer-current',
+        buyerEmail: 'current@corp.com',
+        active: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorMock],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: {
+          id: 'buyer-current',
+          corporateEmail: 'current@corp.com',
+          organizationName: 'Current Corp',
+        },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const tableContainer = screen.getByTestId('vendor-directory-table-container');
+      expect(tableContainer).toBeInTheDocument();
+      expect(tableContainer).toHaveClass('overflow-x-auto');
+      expect(tableContainer).toHaveClass('vendor-directory-table-scroll');
+      expect(tableContainer).toHaveAttribute('role', 'region');
+      expect(tableContainer).toHaveAttribute('aria-label', 'Vendor Directory Table');
+
+      const table = tableContainer.querySelector('table');
+      expect(table).toBeInTheDocument();
+      expect(table?.className).toContain('min-w-[2260px]');
+
+      const thead = table?.querySelector('thead');
+      expect(thead).toBeInTheDocument();
+      expect(thead?.className).toContain('sticky');
+      expect(thead?.className).toContain('top-0');
+    });
   });
 });
+
 
 
 
