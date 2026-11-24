@@ -94,7 +94,7 @@ import { logger } from '@/lib/logger';
  * @see Issue #8 - User requested to hide "Revise Rating" button from production UI
  * Test suites control this flag via setEnableVendorRating() for coverage
  */
-export let ENABLE_VENDOR_RATING = false; // Changed from FEATURE_FLAGS.ENABLE_VENDOR_RATING
+export let ENABLE_VENDOR_RATING = true; // Re-enabled: Show Revise Rating button
 
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
 
@@ -284,6 +284,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formName, setFormName] = useState('');
   const [formBrandName, setFormBrandName] = useState('');
   const [formMajorCategory, setFormMajorCategory] = useState('');
+  const [formMajorCategories, setFormMajorCategories] = useState<string[]>([]); // Multi-select divisions
   const [formMinorCategories, setFormMinorCategories] = useState<string[]>([]);
   const [formMinorInput, setFormMinorInput] = useState('');
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
@@ -411,34 +412,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
   const loadUploadHistory = useCallback(() => {
-    // Load from localStorage (legacy)
+    // Load from localStorage - only real CSV uploads by this buyer
     const localHistory = loadVendorUploadHistoryFromStorage();
     
-    // If we have buyer vendors, create a synthetic history entry from existing database vendors
-    if (buyerVendors.length > 0 && localHistory.length === 0) {
-      // Group vendors by their creation/upload date if available
-      const syntheticBatch = {
-        id: 'db-vendors-' + Date.now(),
-        timestamp: new Date().toISOString(),
-        fileName: 'Existing Database Vendors',
-        recordCount: buyerVendors.length,
-        records: buyerVendors.map((v: any) => ({
-          vendorCode: v.vendorCode || '',
-          name: v.name || '',
-          contactPerson: v.contactPerson || '',
-          email: v.email || '',
-          phone: v.phone || '',
-          city: v.city || v.location || '',
-          gstin: v.gstin || v.gst || '',
-          category: v.majorCategory || '',
-          rating: v.rating ?? ''
-        }))
-      };
-      setUploadHistoryList([syntheticBatch]);
-    } else {
-      setUploadHistoryList(localHistory);
-    }
-  }, [buyerVendors]);
+    // Filter localStorage history to only show uploads by current buyer
+    const currentBuyerId = activeBuyerAccount?.id;
+    const filteredHistory = currentBuyerId 
+      ? localHistory.filter((batch: any) => !batch.buyerId || batch.buyerId === currentBuyerId)
+      : localHistory;
+    
+    setUploadHistoryList(filteredHistory);
+  }, [activeBuyerAccount?.id]);
 
   useEffect(() => {
     loadUploadHistory();
@@ -517,7 +501,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const allAvailableMinorCategories = useMemo(() => {
     const list: string[] = [];
+    // If divisions are selected, only show categories from those divisions
+    const divisionsToFilter = formMajorCategories.length > 0 ? formMajorCategories : null;
+    
     (categoryTaxonomy || []).forEach((c) => {
+      // If divisions selected, only include categories from those divisions
+      if (divisionsToFilter && !divisionsToFilter.includes(c.majorCategory)) {
+        return;
+      }
       (c.minorCategories || []).forEach((m) => {
         if (m && !list.includes(m)) {
           list.push(m);
@@ -525,7 +516,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       });
     });
     return list.sort((a, b) => a.localeCompare(b));
-  }, [categoryTaxonomy]);
+  }, [categoryTaxonomy, formMajorCategories]);
 
   const filteredCategorySuggestions = useMemo(() => {
     const q = formMinorInput.trim().toLowerCase();
@@ -626,26 +617,65 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       <label htmlFor={id} className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
         {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
       </label>
+      
+      {/* Display selected divisions as tags */}
+      {formMajorCategories.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {formMajorCategories.map((division) => (
+            <span
+              key={division}
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold border border-indigo-200/50 dark:border-indigo-800"
+            >
+              {division}
+              <button
+                type="button"
+                aria-label={`Remove ${division}`}
+                onClick={() => {
+                  const updated = formMajorCategories.filter((d) => d !== division);
+                  setFormMajorCategories(updated);
+                  if (clearMinorsOnChange && updated.length === 0) {
+                    setFormMinorCategories([]);
+                  }
+                }}
+                className="hover:text-rose-500 ml-0.5"
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      
+      {/* Dropdown to add divisions */}
       <select
         id={id}
         aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
-        required
-        value={formMajorCategory}
+        value=""
         onChange={(e) => {
-          setFormMajorCategory(e.target.value);
-          setFormValidationError(null);
-          if (clearMinorsOnChange) {
-            setFormMinorCategories([]);
+          const selectedDivision = e.target.value;
+          if (selectedDivision && !formMajorCategories.includes(selectedDivision)) {
+            setFormMajorCategories([...formMajorCategories, selectedDivision]);
+            // Keep backward compatibility: set single major category to first selected
+            if (formMajorCategories.length === 0) {
+              setFormMajorCategory(selectedDivision);
+            }
           }
+          setFormValidationError(null);
         }}
         className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
       >
-        <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
-        {availableMajorCategories.map((cat) => (
-          <option key={cat} value={cat}>
-            {cat}
-          </option>
-        ))}
+        <option value="">
+          {formMajorCategories.length > 0 
+            ? 'Add another division...' 
+            : UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}
+        </option>
+        {availableMajorCategories
+          .filter((cat) => !formMajorCategories.includes(cat))
+          .map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
       </select>
     </div>
   );
@@ -772,6 +802,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormName('');
     setFormBrandName('');
     setFormMajorCategory('');
+    setFormMajorCategories([]); // Reset multi-select divisions
     setFormMinorCategories([]);
     setFormMinorInput('');
     setShowCategorySuggestions(false);
@@ -793,7 +824,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setAddModalOpen(true);
   };
 
-  const resolveSubmittedCategoryValues = (): { majorCategory: string; minorCategories: string[] } | null => {
+  const resolveSubmittedCategoryValues = (): { majorCategory: string; minorCategories: string[]; majorCategories?: string[] } | null => {
     const pendingTag = formMinorInput.trim();
     if (pendingTag && isPlaceholderVendorCategory(pendingTag) && formMinorCategories.length === 0) {
       reportVendorModalError(
@@ -808,8 +839,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       : formMinorCategories;
     const minorCategories = normalizeVendorCategoryList(combinedMinors);
 
-    const rawMajor = formMajorCategory.trim();
-    if (rawMajor && isPlaceholderVendorCategory(rawMajor)) {
+    // Validate divisions: Use multi-select if available, fallback to single
+    const selectedDivisions = formMajorCategories.length > 0 ? formMajorCategories : [formMajorCategory.trim()];
+    const validDivisions = selectedDivisions.filter((d) => d && !isPlaceholderVendorCategory(d));
+    
+    if (selectedDivisions.some((d) => d && isPlaceholderVendorCategory(d))) {
       reportVendorModalError(
         UI_STRINGS.addVendorModal.categoryRequiredTitle,
         UI_STRINGS.addVendorModal.invalidDivisionError
@@ -817,7 +851,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return null;
     }
 
-    let majorCategory = rawMajor;
+    let majorCategory = validDivisions[0] || '';
     if (!majorCategory && minorCategories.length > 0) {
       majorCategory = getMajorForCategory(minorCategories[0]) || '';
     }
@@ -830,7 +864,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return null;
     }
 
-    return { majorCategory, minorCategories };
+    // Return first division for backward compatibility, store all divisions in majorCategories
+    return { majorCategory, minorCategories, majorCategories: validDivisions };
   };
 
   // Form Submission: Add Vendor — persists through the real POST /api/vendors
@@ -2289,7 +2324,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Stats Counter Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
             {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
@@ -2298,14 +2333,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {buyerFilteredVendors.length}
           </div>
         </div>
-        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">
-            {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
+        {/* Evaluation stats card hidden per user request - Issue #12 */}
+        {false && (
+          <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
+            <div className="text-[10px] uppercase font-bold text-slate-400">
+              {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
+            </div>
+            <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
+              {buyerFilteredVendors.filter((v) => v.evaluated).length}
+            </div>
           </div>
-          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-            {buyerFilteredVendors.filter((v) => v.evaluated).length}
-          </div>
-        </div>
+        )}
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
             {UI_STRINGS.vendorSummaryStats.activeVendorLabel}
@@ -2362,8 +2400,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
             <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
             <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
-            <option value="EVALUATED">Evaluated Only</option>
-            <option value="NOT_EVALUATED">Pending Evaluation</option>
             <option value="PREFERRED">Preferred Status</option>
             <option value="CONDITIONAL">Conditional / Review</option>
           </select>
@@ -3243,36 +3279,39 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   </div>
                 </div>
 
-                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
-                    {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
-                  </span>
-                  <div
-                    className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                      ? 'text-amber-600 dark:text-amber-400'
-                      : 'text-emerald-600 dark:text-emerald-400'
-                      }`}
-                  >
-                    {isVendorInactive(selectedVendorForCrud)
-                      ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                      : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
-                      ? 'PENDING EVALUATION'
-                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' || selectedVendorForCrud.status === 'REGISTERED / NOT EVALUATED' || selectedVendorForCrud.status === 'NOT EVALUATED' || !selectedVendorForCrud.status
-                        ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
-                        : selectedVendorForCrud.status)}
-                  </div>
-                  {(selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt) && (
-                    <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
-                      {selectedVendorForCrud.evaluationRequestedAt
-                        ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                          date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
-                        })
-                        : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+                {/* Evaluation status card hidden per user request - Issue #12 */}
+                {false && (
+                  <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">
+                      {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
                     </span>
-                  )}
-                </div>
+                    <div
+                      className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
+                        ? 'text-amber-600 dark:text-amber-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                        }`}
+                    >
+                      {isVendorInactive(selectedVendorForCrud)
+                        ? UI_STRINGS.vendorStatusControl.inactiveBadge
+                        : (selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt)
+                        ? 'PENDING EVALUATION'
+                        : (selectedVendorForCrud.status === 'PENDING EVALUATION' || selectedVendorForCrud.status === 'REGISTERED / NOT EVALUATED' || selectedVendorForCrud.status === 'NOT EVALUATED' || !selectedVendorForCrud.status
+                          ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
+                          : selectedVendorForCrud.status)}
+                    </div>
+                    {(selectedVendorForCrud.evaluationRequested || selectedVendorForCrud.evaluationRequestedAt) && (
+                      <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
+                        {selectedVendorForCrud.evaluationRequestedAt
+                          ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
+                            date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
+                          })
+                          : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+                      </span>
+                    )}
+                  </div>
+                )}
 
                 {/* Registration Status (Separately added field) */}
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
