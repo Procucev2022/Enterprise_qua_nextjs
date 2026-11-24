@@ -4348,6 +4348,62 @@ function normalizeVendorRating(rating, score) {
   return null;
 }
 
+const STANDARDIZED_COMMUNICATION_CATEGORIES = Object.freeze([
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+]);
+
+const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = Object.freeze({
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+});
+
+const SCENARIO_TO_STANDARDIZED_CATEGORY = Object.freeze({
+  credit_quote: 'Credit / Quote (Buyer / Seller)',
+  followup_new: 'Follow-up / New',
+  demo_schedule: 'Demo Schedule',
+  send_proposal: 'Send Proposal',
+  send_corporate_email: 'Send Corporate Email',
+  onboarding_process: 'Onboarding Process',
+  registration_task: 'Registration Task',
+  internal_operations: 'Internal Operations (Others)',
+  'Credit / Quote (Buyer / Seller)': 'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New': 'Follow-up / New',
+  'Demo Schedule': 'Demo Schedule',
+  'Send Proposal': 'Send Proposal',
+  'Send Corporate Email': 'Send Corporate Email',
+  'Onboarding Process': 'Onboarding Process',
+  'Registration Task': 'Registration Task',
+  'Internal Operations (Others)': 'Internal Operations (Others)',
+});
+
+function resolveStandardizedCommunicationCategory(scenarioIdOrCategory) {
+  if (!scenarioIdOrCategory) return 'Follow-up / New';
+  const raw = String(scenarioIdOrCategory).trim();
+  if (SCENARIO_TO_STANDARDIZED_CATEGORY[raw]) return SCENARIO_TO_STANDARDIZED_CATEGORY[raw];
+  const lower = raw.toLowerCase();
+  if (lower.includes('credit') || lower.includes('quote')) return 'Credit / Quote (Buyer / Seller)';
+  if (lower.includes('demo')) return 'Demo Schedule';
+  if (lower.includes('proposal')) return 'Send Proposal';
+  if (lower.includes('corporate') || lower.includes('partnership')) return 'Send Corporate Email';
+  if (lower.includes('onboard')) return 'Onboarding Process';
+  if (lower.includes('regist') || lower.includes('activate')) return 'Registration Task';
+  if (lower.includes('internal') || lower.includes('operation')) return 'Internal Operations (Others)';
+  return 'Follow-up / New';
+}
+
 module.exports = {
   normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
@@ -4643,5 +4699,9 @@ module.exports = {
   VENDOR_STATUS_MESSAGES,
   isVendorInactive,
   isVendorActive,
+  STANDARDIZED_COMMUNICATION_CATEGORIES,
+  STANDARDIZED_COMMUNICATION_SCENARIO_IDS,
+  SCENARIO_TO_STANDARDIZED_CATEGORY,
+  resolveStandardizedCommunicationCategory,
 };
 

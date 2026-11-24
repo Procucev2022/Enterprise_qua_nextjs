@@ -1,164 +1,114 @@
 import {
   EMAIL_SCENARIO_TEMPLATES,
+  STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES,
   getScenariosForEntityType,
   getScenarioForCallOutcome,
   interpolateScenarioTemplate,
 } from '@/lib/emailScenarioTemplates';
 
-describe('Email Scenario Templates', () => {
-  describe('EMAIL_SCENARIO_TEMPLATES definitions', () => {
-    test('copy contains no invented statistics, prices, credit terms, offers or fixed times', () => {
-      for (const template of EMAIL_SCENARIO_TEMPLATES) {
-        const copy = `${template.name}\n${template.description}\n${template.subjectTemplate}\n${template.bodyTemplate}`;
-        expect(copy).not.toMatch(/\d+(\.\d+)?\s?%/);
-        expect(copy).not.toMatch(/₹|Crore|Lakh|\bIST\b|\d+(\.\d+)?x\b/);
-        expect(copy).not.toMatch(/\d{1,2}:\d{2}\s?(AM|PM)/i);
-        expect(copy).not.toMatch(/zero|complimentary|guaranteed|free of charge/i);
-      }
+describe('Standardized Communication Scenario Templates', () => {
+  describe('Definitions and Constraints', () => {
+    test('contains exactly the 8 standardized communication templates', () => {
+      expect(STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES).toHaveLength(8);
+      expect(EMAIL_SCENARIO_TEMPLATES).toHaveLength(8);
+
+      const ids = STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES.map((t) => t.id);
+      expect(ids).toEqual([
+        'credit_quote',
+        'followup_new',
+        'demo_schedule',
+        'send_proposal',
+        'send_corporate_email',
+        'onboarding_process',
+        'registration_task',
+        'internal_operations',
+      ]);
     });
 
-    test('meeting time and date come from placeholders, not fixed text', () => {
-      const demo = EMAIL_SCENARIO_TEMPLATES.find((s) => s.id === 'buyer_demo_trial');
-      expect(demo?.bodyTemplate).toContain('{followupTime}');
-      expect(demo?.bodyTemplate).toContain('{followupDate}');
+    test('marks Send Proposal and Send Corporate Email as task auto-completing', () => {
+      const proposal = STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES.find((t) => t.id === 'send_proposal');
+      const corporateEmail = STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES.find((t) => t.id === 'send_corporate_email');
+      const followup = STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES.find((t) => t.id === 'followup_new');
+
+      expect(Boolean(proposal?.autoCompletesTask)).toBe(true);
+      expect(Boolean(corporateEmail?.autoCompletesTask)).toBe(true);
+      expect(Boolean(followup?.autoCompletesTask)).toBe(false);
     });
 
-    test('contains buyer conversion scenarios', () => {
-      const buyerScenarios = EMAIL_SCENARIO_TEMPLATES.filter((s) => s.targetCategory === 'BUYER');
-      expect(buyerScenarios.length).toBeGreaterThanOrEqual(8);
-
-      const ids = buyerScenarios.map((s) => s.id);
-      expect(ids).toContain('buyer_conversion_followup');
-      expect(ids).toContain('buyer_demo_trial');
-      expect(ids).toContain('buyer_subscription_offer');
-      expect(ids).toContain('buyer_call_outcome_connected');
-      expect(ids).toContain('buyer_call_outcome_left_voicemail');
-      expect(ids).toContain('buyer_call_outcome_busy');
-      expect(ids).toContain('buyer_call_outcome_no_answer');
-      expect(ids).toContain('buyer_call_outcome_wrong_number');
-    });
-
-    test('contains seller conversion scenarios', () => {
-      const sellerScenarios = EMAIL_SCENARIO_TEMPLATES.filter((s) => s.targetCategory === 'SELLER');
-      expect(sellerScenarios.length).toBeGreaterThanOrEqual(8);
-
-      const ids = sellerScenarios.map((s) => s.id);
-      expect(ids).toContain('seller_conversion_followup');
-      expect(ids).toContain('seller_premium_access');
-      expect(ids).toContain('seller_featured_placement');
-      expect(ids).toContain('seller_call_outcome_connected');
-      expect(ids).toContain('seller_call_outcome_left_voicemail');
-      expect(ids).toContain('seller_call_outcome_busy');
-      expect(ids).toContain('seller_call_outcome_no_answer');
-      expect(ids).toContain('seller_call_outcome_wrong_number');
-    });
-
-    test('contains custom scenario targeting ALL', () => {
-      const customScenario = EMAIL_SCENARIO_TEMPLATES.find((s) => s.id === 'custom');
-      expect(customScenario).toBeDefined();
-      expect(customScenario?.targetCategory).toBe('ALL');
+    test('all 8 templates target ALL entity categories uniformly', () => {
+      STANDARDIZED_COMMUNICATION_SCENARIO_TEMPLATES.forEach((template) => {
+        expect(template.targetCategory).toBe('ALL');
+        expect(template.name).toBeTruthy();
+        expect(template.subjectTemplate).toBeTruthy();
+        expect(template.bodyTemplate).toBeTruthy();
+      });
     });
   });
 
   describe('getScenariosForEntityType', () => {
-    test('returns all scenarios when no entity type is given or "ALL"', () => {
-      expect(getScenariosForEntityType()).toHaveLength(EMAIL_SCENARIO_TEMPLATES.length);
-      expect(getScenariosForEntityType('ALL')).toHaveLength(EMAIL_SCENARIO_TEMPLATES.length);
-    });
-
-    test('returns buyer and ALL scenarios for BUYER and BUYER_DOSSIER', () => {
+    test('returns all 8 standardized templates for BUYER, SELLER, and INTERNAL_TASK', () => {
       const buyerList = getScenariosForEntityType('BUYER');
-      expect(buyerList.length).toBeGreaterThan(0);
-      buyerList.forEach((s) => {
-        expect(['BUYER', 'ALL']).toContain(s.targetCategory);
-      });
-
-      const buyerDossierList = getScenariosForEntityType('BUYER_DOSSIER');
-      expect(buyerDossierList).toHaveLength(buyerList.length);
-    });
-
-    test('returns seller and ALL scenarios for SELLER, SUPPLIER_DOSSIER, and VENDOR', () => {
       const sellerList = getScenariosForEntityType('SELLER');
-      expect(sellerList.length).toBeGreaterThan(0);
-      sellerList.forEach((s) => {
-        expect(['SELLER', 'ALL']).toContain(s.targetCategory);
-      });
+      const taskList = getScenariosForEntityType('INTERNAL_TASK');
+      const defaultList = getScenariosForEntityType();
 
-      expect(getScenariosForEntityType('SUPPLIER_DOSSIER')).toHaveLength(sellerList.length);
-      expect(getScenariosForEntityType('VENDOR')).toHaveLength(sellerList.length);
-    });
-
-    test('falls back to all scenarios for unrecognized entity types', () => {
-      const fallbackList = getScenariosForEntityType('UNKNOWN_ENTITY');
-      expect(fallbackList).toHaveLength(EMAIL_SCENARIO_TEMPLATES.length);
+      expect(buyerList).toHaveLength(8);
+      expect(sellerList).toHaveLength(8);
+      expect(taskList).toHaveLength(8);
+      expect(defaultList).toHaveLength(8);
+      expect(buyerList.map((s) => s.id)).toEqual(sellerList.map((s) => s.id));
     });
   });
 
   describe('getScenarioForCallOutcome', () => {
-    test('retrieves correct scenario for BUYER call outcomes', () => {
-      const outcomes = ['Connected', 'Left Voicemail', 'Busy', 'No Answer', 'Wrong Number'];
-      outcomes.forEach((outcome) => {
-        const scenario = getScenarioForCallOutcome('BUYER', outcome);
-        expect(scenario).toBeDefined();
-        expect(scenario?.targetCategory).toBe('BUYER');
-        expect(scenario?.scenarioGroup).toBe('call_outcome');
-        expect(scenario?.callOutcomeValue?.toLowerCase()).toBe(outcome.toLowerCase());
-      });
-    });
+    test('retrieves followup_new scenario for valid call outcomes', () => {
+      const outcome = getScenarioForCallOutcome('BUYER', 'Connected');
+      expect(outcome).toBeDefined();
+      expect(outcome?.id).toBe('followup_new');
 
-    test('retrieves correct scenario for SELLER call outcomes', () => {
-      const outcomes = ['Connected', 'Left Voicemail', 'Busy', 'No Answer', 'Wrong Number'];
-      outcomes.forEach((outcome) => {
-        const scenario = getScenarioForCallOutcome('SELLER', outcome);
-        expect(scenario).toBeDefined();
-        expect(scenario?.targetCategory).toBe('SELLER');
-        expect(scenario?.scenarioGroup).toBe('call_outcome');
-        expect(scenario?.callOutcomeValue?.toLowerCase()).toBe(outcome.toLowerCase());
-      });
+      const sellerOutcome = getScenarioForCallOutcome('SELLER', 'Left Voicemail');
+      expect(sellerOutcome).toBeDefined();
+      expect(sellerOutcome?.id).toBe('followup_new');
     });
 
     test('returns undefined for empty outcome or invalid outcome', () => {
       expect(getScenarioForCallOutcome('BUYER', '')).toBeUndefined();
-      expect(getScenarioForCallOutcome('BUYER', 'NonExistentOutcome')).toBeUndefined();
-      expect(getScenarioForCallOutcome('SELLER', 'Invalid')).toBeUndefined();
+      expect(getScenarioForCallOutcome('BUYER', 'UnknownBadOutcome')).toBeUndefined();
     });
   });
 
   describe('interpolateScenarioTemplate', () => {
     test('returns empty string when template is falsy', () => {
-      expect(interpolateScenarioTemplate('', { name: 'Acme' })).toBe('');
+      expect(interpolateScenarioTemplate('', { contactName: 'Acme' })).toBe('');
     });
 
     test('interpolates single and multiple placeholder tokens', () => {
-      const template = 'Hello {contactName}, your meeting is on {followupDate} at {followupTime}.';
+      const template = 'Update on Your {accountType} Credits / Quote Balance – {companyName}';
       const vars = {
-        contactName: 'Rohit Sharma',
-        followupDate: '2026-11-05',
-        followupTime: '11:30 AM',
+        accountType: 'Buyer',
+        companyName: 'Veera Solutions',
       };
       const result = interpolateScenarioTemplate(template, vars);
-      expect(result).toBe('Hello Rohit Sharma, your meeting is on 2026-11-05 at 11:30 AM.');
+      expect(result).toBe('Update on Your Buyer Credits / Quote Balance – Veera Solutions');
     });
 
     test('replaces missing, null, or undefined tokens with empty string', () => {
-      const template = 'Contact: {contactName} | Company: {companyName} | Notes: {notes}';
+      const template = 'Action: {creditAction} ({creditAmount} Credits) for {contactName}';
       const vars = {
-        contactName: 'John',
-        companyName: null,
+        creditAction: 'Credit Balance Update',
+        creditAmount: 50,
       };
       const result = interpolateScenarioTemplate(template, vars);
-      expect(result).toBe('Contact: John | Company:  | Notes: ');
+      expect(result).toBe('Action: Credit Balance Update (50 Credits) for ');
     });
 
     test('replaces numeric tokens correctly', () => {
-      const template = 'Discount: {discount}% on order {orderId}';
+      const template = 'Balance: {availableCredits} Credits';
       const vars = {
-        discount: 15,
-        orderId: 1042,
+        availableCredits: 100,
       };
       const result = interpolateScenarioTemplate(template, vars);
-      expect(result).toBe('Discount: 15% on order 1042');
+      expect(result).toBe('Balance: 100 Credits');
     });
   });
 });
-

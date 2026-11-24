@@ -1725,28 +1725,24 @@ test('Payments tab renders exactly 4 summary cards and removes refund summary ca
     const emailModalBtn = modalBtns.find(b => b.textContent?.trim() === 'Email');
     if (emailModalBtn) fireEvent.click(emailModalBtn);
 
-    // Change Scenario to Subscription Offer
+    // Change Scenario to Credit / Quote
     const scenarioSelect = within(composeDialog).getByText(/Select Conversion Scenario/i).closest('div')?.querySelector('select') as HTMLSelectElement;
-    fireEvent.change(scenarioSelect, { target: { value: 'buyer_subscription_offer' } });
+    fireEvent.change(scenarioSelect, { target: { value: 'credit_quote' } });
 
     // Verify subject and message were interpolated
     const subjectInput = within(composeDialog).getByPlaceholderText(/Price negotiation|Brief summary/i) as HTMLInputElement;
-    expect(subjectInput.value).toContain('Enterprise Sourcing Plan Overview - Veera Babu Buyer Org');
+    expect(subjectInput.value).toContain('Credits / Quote Balance');
 
-    // Change to Conversion Followup
-    fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
-    expect(subjectInput.value).toContain('Procurement Optimization');
+    // Change to Followup New
+    fireEvent.change(scenarioSelect, { target: { value: 'followup_new' } });
+    expect(subjectInput.value).toContain('Following Up: Sourcing & Procurement Opportunities');
 
     // Test empty scenario selection
     fireEvent.change(scenarioSelect, { target: { value: '' } });
 
-    // Test custom scenario selection
-    fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-    expect(scenarioSelect.value).toBe('custom');
-
-    // Test custom scenario selection
-    fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-    expect(scenarioSelect.value).toBe('custom');
+    // Test Send Proposal selection
+    fireEvent.change(scenarioSelect, { target: { value: 'send_proposal' } });
+    expect(scenarioSelect.value).toBe('send_proposal');
   });
 
   test('handles quick action email drafting for various call outcomes', async () => {

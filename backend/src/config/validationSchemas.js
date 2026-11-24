@@ -1663,6 +1663,24 @@ const VALIDATION_SCHEMAS = {
       required: false,
       maxLength: 128,
     },
+    scenarioId: {
+      type: 'string',
+      required: false,
+      maxLength: 128,
+    },
+    category: {
+      type: 'string',
+      required: false,
+      maxLength: 128,
+    },
+    metadata: {
+      type: 'object',
+      required: false,
+    },
+    attachments: {
+      type: 'array',
+      required: false,
+    },
     linkUrl: {
       type: 'string',
       required: false,

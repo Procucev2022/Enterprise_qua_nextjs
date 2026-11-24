@@ -705,10 +705,10 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task).toBeDefined();
       expect(res.body.task.status).toBe('Pending Approval');
       expect(res.body.task.approval_status).toBe('PENDING');
-      expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
       expect(res.body.task.credit_quantity).toBe(15);
       const [taskData, actor] = createSpy.mock.calls[0];
-      expect(taskData).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Sudheer Sir', creditQuantity: 15 });
+      expect(taskData).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Category Manager', creditQuantity: 15 });
       expect(actor).toMatchObject({ name: 'Category Manager' });
     });
   });
@@ -761,9 +761,9 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task).toBeDefined();
       expect(res.body.task.status).toBe('Pending Approval');
       expect(res.body.task.approval_status).toBe('PENDING');
-      expect(res.body.task.assigned_to_name).toBe('Srinu Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
       expect(res.body.task.credit_quantity).toBe(5);
-      expect(createSpy.mock.calls[0][0]).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Srinu Sir', creditQuantity: 5 });
+      expect(createSpy.mock.calls[0][0]).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Category Manager', creditQuantity: 5 });
     });
 
     it('rejects non-category-manager/admin roles with 403', async () => {
@@ -806,7 +806,7 @@ describe('Account Documents & Credit Workflows API', () => {
         });
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
     });
 
     it('handles Seller Credit Deletion with balance validation and approval task', async () => {

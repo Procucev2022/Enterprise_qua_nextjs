@@ -327,6 +327,10 @@ async function recordVendorCommunication(req, res, next) {
     const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(smsTo);
     const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
 
+    const scenarioId = req.body?.scenarioId || req.body?.metadata?.scenarioId || req.body?.metadata?.templateType;
+    const { resolveStandardizedCommunicationCategory } = require('../config/constants');
+    const canonicalCategory = resolveStandardizedCommunicationCategory(scenarioId || req.body?.category || req.body?.metadata?.category);
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: vendor.id,
       accountType: 'vendor',
@@ -340,6 +344,9 @@ async function recordVendorCommunication(req, res, next) {
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
+        category: canonicalCategory,
+        templateType: scenarioId || canonicalCategory,
+        scenarioId: scenarioId || 'followup_new',
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
@@ -493,6 +500,14 @@ async function recordVendorCommunication(req, res, next) {
         }, actor);
       } catch (followupErr) {
         logger.warn('Failed to create pending follow-up internal task for vendor communication', { error: followupErr.message }, 'VENDOR_CONTROLLER');
+      }
+    }
+
+    if (scenarioId) {
+      try {
+        await internalTaskQueries.autoCompleteTasksForScenario('VENDOR', vendor.id, scenarioId, req.user);
+      } catch (autoErr) {
+        logger.warn('Failed to auto-complete tasks for vendor scenario', { error: autoErr.message }, 'VENDOR_CONTROLLER');
       }
     }
 
@@ -866,6 +881,15 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
+    const isCreditRequest = ['ADD_CREDIT', 'DELETE_CREDIT'].includes(taskType) ||
+      ['Add Credits', 'Delete Credits', 'Seller Credit Addition', 'Seller Credit Deletion'].includes(taskCategory) ||
+      ['Seller Credit Addition', 'Seller Credit Deletion'].includes(requestType) ||
+      String(requestType || '').toLowerCase().includes('credit');
+
+    const taskAssignedUserId = isCreditRequest ? (makerId || null) : (approverId || null);
+    const taskAssignedName = isCreditRequest ? (makerName || 'Requester') : approverName;
+    const taskAssignedTeam = isCreditRequest ? 'Requester Tracking' : 'Management Approvers';
+
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory,
@@ -875,9 +899,9 @@ async function requestCreditApproval(req, res, next) {
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
-        assignedToUserId: approverId || null,
-        assignedToName: approverName,
-        assignedTeam: 'Management Approvers',
+        assignedToUserId: taskAssignedUserId,
+        assignedToName: taskAssignedName,
+        assignedTeam: taskAssignedTeam,
         createdByName: makerName,
         createdByUserId: makerId,
         creditAccountType: 'seller',
@@ -885,7 +909,9 @@ async function requestCreditApproval(req, res, next) {
         creditAccountName: vendorLabel,
         creditQuantity: effectiveAmount,
         creditReason: reason,
-        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
+        notes: isCreditRequest
+          ? `Initiated By: ${makerName}. Routed to Admin (${approverName}) for review and approval.`
+          : `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'SELLER',
         relatedEntityId: vendor.id,
         relatedEntityLabel: vendorLabel,

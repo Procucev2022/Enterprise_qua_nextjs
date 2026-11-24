@@ -8701,3 +8701,195 @@ Identify the root cause and fix the sync bug where linked tasks in **Action Cent
 ```text
 contineu finish that?
 ```
+
+---
+
+### Prompt 400
+
+**Timestamp**: 2026-11-23T23:22:52+05:30
+
+```text
+Replace ALL existing email/communication templates across **Internal Tasks** (`Action Center Communication` modal), **Buyer Directory** (`Record Communication & Activity` modal), and **Seller Directory** (`Record Communication` modal), wire up the standardized communication categories, task auto-completion rules, Add/Delete Credit routing, and Category Manager Analytics tracking.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Remove ALL current templates completely**: Delete every existing template/conversion scenario currently in the dropdowns (including `Post-Call Follow-up & Commercial Proposal`, `Platform Demo Invitation`, `Enterprise Sourcing Plan Overview`, all `Call Outcome: ...` entries, `Post-Call Follow-up & Paid Roster Invitation`, `Supplier Membership Plan Invitation`, `Featured Supplier Sponsorship`, `Custom Sales Pitch / Bespoke Proposal`, etc.).
+- **Single Shared Source of Truth**: Define the 8 new templates and categories in **one shared constant/config file** and import it into all 3 modals (Internal Tasks, Buyer Directory, Seller Directory) so they never drift out of sync.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing modals, channel selectors (`Call`, `SMS`, `WhatsApp`, `Email`, `Both`), placeholder interpolation logic (using the codebase's existing token format), send/log API handlers, internal task update methods, approval handlers, and analytics queries.
+- **Do NOT break any existing UI or functionality**: Keep all modal layouts, recipient auto-fill, attachments, click-outside dismissal, and communication history logging 100% intact.
+
+---
+
+### 1. Standardized Communication Categories & Email Templates (Replace All Existing Options With ONLY These 8)
+Update the template dropdown in **Internal Tasks**, **Buyer Directory**, and **Seller Directory** to show ONLY these 8 options. Selecting any option must auto-fill `Subject` and `Message` with live entity values while keeping both fields editable before sending:
+
+#### 1. `Credit / Quote (Buyer / Seller)`
+- **Subject:** `Update on Your {accountType} Credits / Quote Balance – {companyName}`
+- **Body:**
+
+Hi {contactName},
+
+Your {accountType} account for {companyName} has been updated on Procucev QUA AI.
+
+Action: {creditAction} ({creditAmount} Credits)
+
+Updated Available Balance: {availableCredits} Credits
+
+You can log in to your dashboard to continue raising RFQs / submitting quotes. Please reach out if you need any assistance.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 2. `Follow-up / New` *(Supports Call, SMS, WhatsApp, Email)*
+- **Subject:** `Following Up: Sourcing & Procurement Opportunities for {companyName}`
+- **Body:**
+Hi {contactName},
+
+Reaching out from Procucev regarding your account for {companyName}. We wanted to follow up on your current sourcing requirements / active RFQs and check if you need any help getting started or reviewing quotes.
+
+Let us know a convenient time for a quick call, or reply directly to this email.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 3. `Demo Schedule`
+- **Subject:** `Procucev QUA AI Platform Demo Scheduled – {companyName}`
+- **Body:**
+Hi {contactName},
+
+Your walkthrough of the Procucev QUA AI platform for {companyName} is scheduled as follows:
+
+Date & Time: {demoDate} at {demoTime} IST
+
+Meeting Link: {meetingLink}
+
+We will cover automated RFQ workflows, vendor quote comparison, and dashboard setup. Let us know if you need to reschedule.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 4. `Send Proposal` *(Auto-completes Task)*
+- **Subject:** `Commercial Proposal for {companyName} – Procucev Enterprise`
+- **Body:**
+Hi {contactName},
+
+Please find attached our commercial proposal tailored for {companyName}, outlining subscription tiers, credit allocations, and sourcing support on Procucev QUA AI.
+
+Please review the details and let us know if you have any questions or would like to proceed with activation.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 5. `Send Corporate Email` *(Auto-completes Task)*
+- **Subject:** `Procucev Enterprise Partnership – {companyName}`
+- **Body:**
+Dear {contactName},
+
+On behalf of Procucev Enterprise Solutions, we are pleased to connect with {companyName}. Our AI-driven B2B procurement platform streamlines multi-vendor RFQs, bid evaluation, and supplier onboarding.
+
+We would welcome the opportunity to align with your procurement team on upcoming requirements.
+
+Warm regards,
+{senderName} | Category Management, Procucev
+
+
+#### 6. `Onboarding Process`
+- **Subject:** `Welcome to Procucev – Complete Your Onboarding for {companyName}`
+- **Body:**
+Hi {contactName},
+
+Welcome to Procucev! To complete onboarding for {companyName}, please finish these quick steps:
+
+Verify your registered mobile number and corporate email.
+
+Upload your company GSTIN / statutory documents in the portal.
+
+Confirm your primary product categories.
+
+Complete onboarding here: {onboardingLink}
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 7. `Registration Task`
+- **Subject:** `Action Required: Verify & Activate Your Procucev Account – {companyName}`
+- **Body:**
+Hi {contactName},
+
+Your account for {companyName} has been created on Procucev QUA AI. To activate full access and receive real-time RFQ/quote updates, please verify your contact details and set your password:
+
+Activate Account: {activationLink}
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 8. `Internal Operations (Others)`
+- **Subject:** `[Internal Operations] Update Regarding {companyName} – {referenceId}`
+- **Body:**
+Hi {contactName},
+
+This is an operational update regarding {companyName} ({referenceId}):
+
+{customMessage}
+
+Please reply if any further action is required from our side.
+
+Regards,
+{senderName} | Procucev Operations
+
+
+---
+
+### 2. Task Auto-Completion Rules
+- When **`Send Proposal`** or **`Send Corporate Email`** is sent/recorded, automatically mark the corresponding linked Internal Task as `Closed` / `Completed` (reusing the existing internal task update handler).
+
+---
+
+### 3. Add / Delete Credit Two-Track Routing (Approvals vs. Task)
+Enforce the two-track workflow whenever an **Add / Delete Credit** request is created (for either Buyer or Seller):
+- **Approvals -> Admin**: Route the credit addition/deletion approval request to the **Admin / Approver** in the **Approvals** tab.
+- **Task -> Requester**: Assign the linked **Internal Task** to the **Requester** (`Initiated By`) so they can track it, and automatically transition that task to `Closed` once the Admin approves or rejects the request.
+
+---
+
+### 4. Category Manager Analytics Linkage
+- Persist the selected communication category/template type on every logged communication record in the DB.
+- Wire **Category Manager Analytics** (for Buyer Directory & Seller Directory communications) directly to these live DB records so outreach counts accurately break down by category (`Credit / Quote`, `Follow-up / New`, `Demo Schedule`, `Send Proposal`, `Send Corporate Email`, `Onboarding Process`, `Registration Task`, `Internal Operations`) and channel (`Call`, `SMS`, `WhatsApp`, `Email`).
+
+---
+
+### 5. Verification & Regression Tests
+- Update any existing tests referencing the old removed templates.
+- Add tests confirming:
+1. Only the 8 new templates appear in Internal Tasks, Buyer Directory, and Seller Directory communication modals.
+2. Sending `Send Proposal` or `Send Corporate Email` auto-completes the linked Internal Task.
+3. `Add / Delete Credit` routes the Approval to Admin and the linked Task to Requester.
+4. Logged communication categories persist to DB and reflect accurately in Category Manager Analytics.
+```
+
+
+---
+
+### Prompt 401
+
+**Timestamp**: 2026-11-24T01:08:29+05:30
+
+```text
+contineu finish that?
+```
+
+---
+
+### Prompt 402
+
+**Timestamp**: 2026-11-24T07:49:39+05:30
+
+```text
+continue
+```
+

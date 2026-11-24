@@ -1338,21 +1338,21 @@ describe('SupplierDossierDrawer', () => {
 
     const dialog = await screen.findByRole('dialog');
 
-    // Change Scenario to seller_premium_access
+    // Change Scenario to credit_quote
     const scenarioSelect = dialog.querySelectorAll('select')[1];
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
+    fireEvent.change(scenarioSelect, { target: { value: 'credit_quote' } });
 
     // Verify subject and message were interpolated
     const subjectInput = within(dialog).getByPlaceholderText(UI_STRINGS.sellerDirectory.dossier.compose.subjectPlaceholder) as HTMLInputElement;
     expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Change to seller_featured_placement scenario
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_featured_placement' } });
+    // Change to followup_new scenario
+    fireEvent.change(scenarioSelect, { target: { value: 'followup_new' } });
     expect(subjectInput.value).toContain('Sudheer Solutions pvt LTD');
 
-    // Test custom scenario selection
-    fireEvent.change(scenarioSelect, { target: { value: 'custom' } });
-    expect(scenarioSelect.value).toBe('custom');
+    // Test send_proposal scenario selection
+    fireEvent.change(scenarioSelect, { target: { value: 'send_proposal' } });
+    expect(scenarioSelect.value).toBe('send_proposal');
   });
 
   test('handles quick action email drafting for various seller call outcomes', async () => {
@@ -1549,9 +1549,9 @@ describe('SupplierDossierDrawer', () => {
     fireEvent.change(channelSelect, { target: { value: 'SMS' } });
     fireEvent.change(channelSelect, { target: { value: 'EMAIL' } });
 
-    // Select seller_premium_access to trigger suggestedVaultTags: ['rate_cards'] matching vault docs (lines 433-435)
+    // Select send_proposal to trigger suggestedVaultTags: ['commercial_pitch', 'rate_cards'] matching vault docs (lines 433-435)
     const scenarioSelect = dialog.querySelectorAll('select')[1];
-    fireEvent.change(scenarioSelect, { target: { value: 'seller_premium_access' } });
+    fireEvent.change(scenarioSelect, { target: { value: 'send_proposal' } });
 
     // Upload file with empty MIME type to hit mimeType fallback (line 480)
     const fileNoType = new File(['mock content'], 'test_specs.doc', { type: '' });

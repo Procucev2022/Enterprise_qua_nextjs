@@ -507,7 +507,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: /Draft for Connected/i }));
 
       expect(recipientFieldOf(dialog).value).toBe('');
-      expect(subjectFieldOf(dialog).value).toContain('Discussion Recap & Commercial Proposal');
+      expect(subjectFieldOf(dialog).value).toContain('Following Up: Sourcing & Procurement Opportunities for Test Buyer Organization');
     });
 
     it('uses the buyer follow-up scenario when no call outcome scenario matches', async () => {
@@ -519,7 +519,7 @@ describe('BuyerDossierDrawer branch coverage', () => {
       fireEvent.click(within(dialog).getByRole('button', { name: /Draft for Busy/i }));
 
       expect(subjectFieldOf(dialog).value).toContain(
-        'Procurement Optimization & Commercial Plan for Test Buyer Organization'
+        'Following Up: Sourcing & Procurement Opportunities for Test Buyer Organization'
       );
     });
 
