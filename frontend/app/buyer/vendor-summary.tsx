@@ -106,7 +106,7 @@ export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUA
  */
 export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
 
-export let ENABLE_VENDOR_EVALUATION = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION;
+export let ENABLE_VENDOR_EVALUATION = false; // Disabled: Hide "Request Vendor Evaluation" button
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
 };
@@ -3264,20 +3264,23 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <div className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Score & Key Highlights Bar */}
               <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-1 sm:grid-cols-3 gap-2.5 text-center">
-                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
-                  <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
-                    <Star size={13} className="fill-amber-500 text-amber-500" />
-                    {(() => {
-                      const displayRating =
-                        normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) ??
-                        normalizeVendorRating(selectedVendorForCrud.latestRatingRevision?.newRating) ??
-                        normalizeVendorRating(selectedVendorForCrud.storeRecord?.rating, selectedVendorForCrud.storeRecord?.overallScore) ??
-                        (typeof (selectedVendorForCrud as any).actualRating === 'number' ? (selectedVendorForCrud as any).actualRating : null);
-                      return displayRating !== null ? `${displayRating.toFixed(1)} / 5.0` : '—';
-                    })()}
+                {/* Rating card hidden per user request - Issue #12 */}
+                {false && (
+                  <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
+                    <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
+                    <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
+                      <Star size={13} className="fill-amber-500 text-amber-500" />
+                      {(() => {
+                        const displayRating =
+                          normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) ??
+                          normalizeVendorRating(selectedVendorForCrud.latestRatingRevision?.newRating) ??
+                          normalizeVendorRating(selectedVendorForCrud.storeRecord?.rating, selectedVendorForCrud.storeRecord?.overallScore) ??
+                          (typeof (selectedVendorForCrud as any).actualRating === 'number' ? (selectedVendorForCrud as any).actualRating : null);
+                        return displayRating !== null ? `${displayRating.toFixed(1)} / 5.0` : '—';
+                      })()}
+                    </div>
                   </div>
-                </div>
+                )}
 
                 {/* Evaluation status card hidden per user request - Issue #12 */}
                 {false && (
