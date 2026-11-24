@@ -833,7 +833,9 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     clickExtract();
     await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
 
-    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune Depot');
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune Depot');
+    });
     expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
     expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-11-20');
   });

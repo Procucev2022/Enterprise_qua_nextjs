@@ -76,7 +76,6 @@ import {
   INTERNAL_TASK_USERS,
   isBuyerTrialActive,
   getRemainingTrialDays,
-  formatString,
 } from '@/lib/constants';
 import {
   fetchApprovalApprovers,
@@ -1813,6 +1812,7 @@ export default function BuyerDossierDrawer({
                   </div>
                   <select
                     value={creditTypeFilter}
+                    aria-label="All transaction types"
                     onChange={(e) => {
                       setCreditTypeFilter(e.target.value);
                       setCreditPage(1);

@@ -3901,3 +3901,79 @@ export interface SupplierCategoryFilterResult<T> {
   effectiveMinor: string;
   filteredSuppliers: T[];
 }
+
+/** Category Manager Dashboard KPI counters */
+export interface CategoryManagerDashboardKPI {
+  totalRfqs: number;
+  openRfqs: number;
+  rfqsWithoutQuotes: number;
+  buyerSubscriptions: number;
+  vendorSubscriptions: number;
+  totalBuyers: number;
+  totalVendors: number;
+  buyerRegistration: number;
+  vendorRegistration: number;
+  totalLogins: number;
+}
+
+/** Trend data point for 3 monthly line graphs */
+export interface CategoryManagerDashboardCharts {
+  months: string[];
+  totalRfqsAndSubs: { month: string; rfqs: number; buyerSubs: number; vendorSubs: number }[];
+  newRegistrations: { month: string; newBuyers: number; newVendors: number }[];
+  activityRfqsVsQuotes: { month: string; rfqsRaised: number; vendorQuotes: number }[];
+}
+
+/** API response payload for Category Manager Dashboard metrics */
+export interface CategoryManagerDashboardMetricsResponse {
+  success: boolean;
+  kpi: CategoryManagerDashboardKPI;
+  charts: CategoryManagerDashboardCharts;
+  error?: string;
+}
+
+export type CategoryManagerDashboardRecordType =
+  | 'total_rfqs'
+  | 'open_rfqs'
+  | 'rfqs_without_quotes'
+  | 'buyer_subscriptions'
+  | 'vendor_subscriptions'
+  | 'total_buyers'
+  | 'total_vendors'
+  | 'buyer_registration'
+  | 'vendor_registration'
+  | 'total_logins';
+
+export interface CategoryManagerDashboardPopupRecord {
+  id: string;
+  title?: string;
+  name?: string;
+  email?: string;
+  userName?: string;
+  organizationName?: string;
+  companyName?: string;
+  rfqNumber?: string;
+  category?: string;
+  majorCategory?: string;
+  status?: string;
+  targetBudget?: number;
+  quotesCount?: number;
+  subscriptionPlan?: string;
+  contactPerson?: string;
+  loginAt?: string;
+  logoutAt?: string;
+  durationSeconds?: number;
+  ipAddress?: string;
+  deviceInfo?: string;
+  location?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface CategoryManagerDashboardRecordsResponse {
+  success: boolean;
+  type: CategoryManagerDashboardRecordType;
+  total: number;
+  records: CategoryManagerDashboardPopupRecord[];
+  error?: string;
+}

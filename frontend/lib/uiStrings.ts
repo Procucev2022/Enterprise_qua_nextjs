@@ -879,8 +879,16 @@ export const UI_STRINGS = {
         description: 'Vendor master, PO history & AI categorisation',
       },
       operationalKanban: {
-        label: 'Operational Kanban',
-        description: 'Pipeline stages & chasing control board',
+        label: 'Dashboard',
+        description: 'Pipeline metrics, live KPIs & executive trends',
+      },
+      dashboard: {
+        label: 'Dashboard',
+        description: 'Pipeline metrics, live KPIs & executive trends',
+      },
+      whatsappAnalytics: {
+        label: 'WhatsApp Analytics',
+        description: 'Real-time conversational telemetry and bot analytics',
       },
       spendAnalytics: {
         label: 'Spend Analytics',
@@ -4023,6 +4031,54 @@ export const UI_STRINGS = {
     showingEmptyPagination: 'Showing 0 of 0 Buyers',
     prevPage: 'Previous',
     nextPage: 'Next',
+  },
+
+  categoryManagerDashboard: {
+    filters: {
+      today: 'Today',
+      thisWeek: 'This Week',
+      thisMonth: 'This Month',
+      startDate: 'Start Date',
+      endDate: 'End Date',
+      clearDates: 'Clear',
+    },
+    kpi: {
+      totalRfqs: 'TOTAL RFQS',
+      openRfqs: 'OPEN RFQS',
+      rfqsWithoutQuotes: 'RFQS WITHOUT QUOTES',
+      buyerSubscriptions: 'BUYER SUBSCRIPTIONS',
+      vendorSubscriptions: 'VENDOR SUBSCRIPTIONS',
+      totalBuyers: 'TOTAL BUYERS',
+      totalVendors: 'TOTAL VENDORS',
+      buyerRegistration: 'BUYER REGISTRATION',
+      vendorRegistration: 'VENDOR REGISTRATION',
+      totalLogins: 'TOTAL LOGINS',
+    },
+    charts: {
+      totalRfqsAndSubs: 'Total RFQs & Subscriptions (Monthly)',
+      newRegistrations: 'New Registrations (Monthly)',
+      activityRfqsVsQuotes: 'Activity: RFQs Raised vs. Quotes (Monthly)',
+      rfqs: 'RFQs',
+      buyerSubs: 'Buyer Subs',
+      vendorSubs: 'Vendor Subs',
+      newBuyers: 'New Buyers',
+      newVendors: 'New Vendors',
+      rfqsRaisedByClients: 'RFQs Raised by Clients',
+      noOfVendorQuotes: 'No. of Vendor Quotes',
+    },
+    modal: {
+      close: 'Close',
+      searchPlaceholder: 'Search records...',
+      noRecords: 'No matching records found',
+      totalRecords: '{count} Records',
+      recordsFound: 'Records Found',
+    },
+    whatsapp: {
+      title: 'WhatsApp Analytics',
+      openNewTab: 'Open in new tab',
+      loading: 'Loading WhatsApp Analytics...',
+      fallbackNotice: 'If the external dashboard does not render inside the frame, click Open in new tab.',
+    },
   },
 
 };

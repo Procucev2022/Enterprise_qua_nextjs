@@ -4,9 +4,9 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose, isBuyerTrialActive, getRemainingTrialDays, formatString } from '@/lib/constants';
+import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose, isBuyerTrialActive, getRemainingTrialDays } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { deriveInitials, resolveSessionOrgName } from '@/lib/accountIdentity';
@@ -348,6 +348,7 @@ export default function Header() {
                     : formatString(UI_STRINGS.headerNav.trialPeriodBadge, { days: trialDaysLeft });
                   return (
                     <div
+                      data-testid="header-trial-period-badge"
                       className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
                       title={`Active Plan: ${badgeText}`}
                     >
@@ -362,6 +363,7 @@ export default function Header() {
                 if (!activeSubscription || activeSubscription === 'free_trial') {
                   return (
                     <div
+                      data-testid="header-free-credits-badge"
                       className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
                       title={
                         remainingFreeRFQs == null

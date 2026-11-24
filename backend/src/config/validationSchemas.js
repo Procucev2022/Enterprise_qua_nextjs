@@ -309,6 +309,20 @@ const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
 ]);
 
 const VALIDATION_SCHEMAS = {
+  categoryManagerDashboardMetrics: {
+    startDate: { type: 'string', required: false, maxLength: 64 },
+    endDate: { type: 'string', required: false, maxLength: 64 },
+    preset: { type: 'string', required: false, maxLength: 32 },
+  },
+  categoryManagerDashboardRecords: {
+    type: { type: 'string', required: true, maxLength: 64 },
+    startDate: { type: 'string', required: false, maxLength: 64 },
+    endDate: { type: 'string', required: false, maxLength: 64 },
+    preset: { type: 'string', required: false, maxLength: 32 },
+    search: { type: 'string', required: false, maxLength: 255 },
+    limit: { type: 'number', required: false },
+    page: { type: 'number', required: false },
+  },
   requestVendorEvaluation: {
     notes: { type: 'string', required: false, maxLength: 1000 },
     vendorEmail: { type: 'string', required: false, maxLength: 320 },
