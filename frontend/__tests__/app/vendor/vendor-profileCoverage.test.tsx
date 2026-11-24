@@ -228,10 +228,11 @@ function saveButton(): HTMLElement {
   return screen.getByRole('button', { name: SAVE_BUTTON_NAME });
 }
 
-/** The icon-only chevron of the first category row (every row has a select toggle, then the chevron). */
+/** The icon-only chevron of the first category row. */
 function firstRowChevron(): HTMLElement {
-  const [, chevron] = screen.getAllByRole('button', { name: '' });
-  return chevron;
+  // Find the first expand/collapse button by its aria-label pattern
+  const chevrons = screen.getAllByRole('button', { name: /Expand|Collapse/ });
+  return chevrons[0];
 }
 
 async function renderPage(): Promise<void> {

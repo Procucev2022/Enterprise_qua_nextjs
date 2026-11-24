@@ -5,6 +5,7 @@ import VendorSummary, {
   isProcucevVendor,
   setEnableVendorRating,
   setEnableVendorEvaluationRequest,
+  setEnableEditVendorProfile,
   setEnableVendorEvaluation,
 } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
@@ -101,12 +102,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
   beforeAll(() => {
     setEnableVendorRating(true);
     setEnableVendorEvaluationRequest(true);
+    setEnableEditVendorProfile(true);
     setEnableVendorEvaluation(true);
   });
 
   afterAll(() => {
     setEnableVendorRating(false);
     setEnableVendorEvaluationRequest(false);
+    setEnableEditVendorProfile(false);
     setEnableVendorEvaluation(false);
     logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
     logger.clearLogs();
@@ -790,7 +793,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
@@ -859,7 +862,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
@@ -1050,7 +1053,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
@@ -1973,7 +1976,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 

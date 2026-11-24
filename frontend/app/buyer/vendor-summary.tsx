@@ -82,18 +82,38 @@ import {
   usablePan,
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
+  GSTIN_PATTERN,
 } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
 
-export let ENABLE_VENDOR_RATING = FEATURE_FLAGS.ENABLE_VENDOR_RATING;
+/**
+ * Feature flag: Controls visibility of "Revise Rating" button in Vendor Directory
+ * @default false - Intentionally disabled to hide vendor rating revision functionality
+ * @see Issue #8 - User requested to hide "Revise Rating" button from production UI
+ * Test suites control this flag via setEnableVendorRating() for coverage
+ */
+export let ENABLE_VENDOR_RATING = false; // Changed from FEATURE_FLAGS.ENABLE_VENDOR_RATING
+
 export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+
+/**
+ * Feature flag: Controls visibility of "Edit Profile" button in Vendor Directory  
+ * @default false - Intentionally disabled to hide vendor profile editing functionality
+ * @see Issue #8 - User requested to hide "Edit Profile" button from production UI
+ * Test suites control this flag via setEnableEditVendorProfile() for coverage
+ */
+export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
+
 export let ENABLE_VENDOR_EVALUATION = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION;
 export const setEnableVendorRating = (val: boolean) => {
   ENABLE_VENDOR_RATING = val;
 };
 export const setEnableVendorEvaluationRequest = (val: boolean) => {
   ENABLE_VENDOR_EVALUATION_REQUEST = val;
+};
+export const setEnableEditVendorProfile = (val: boolean) => {
+  ENABLE_EDIT_VENDOR_PROFILE = val;
 };
 export const setEnableVendorEvaluation = (val: boolean) => {
   ENABLE_VENDOR_EVALUATION = val;
@@ -353,10 +373,41 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormPincodePostOffices([]);
   }, [formPincode]);
   const [formGst, setFormGst] = useState('');
+  const [formGstError, setFormGstError] = useState<string | null>(null);
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
   // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
+
+  // GST validation
+  useEffect(() => {
+    const raw = formGst.trim();
+    if (!raw) {
+      setFormGstError(null);
+      return;
+    }
+    
+    // Check for placeholder values
+    const PLACEHOLDER_VALUES = new Set(['', 'N/A', 'NA', 'NONE', 'NIL', '-', '—', 'NOTPROVIDED', 'NOTAPPLICABLE', 'AAAAA0000A1Z5', '00AAAAA0000A1Z5']);
+    if (PLACEHOLDER_VALUES.has(raw.toUpperCase())) {
+      setFormGstError('Invalid or placeholder GSTIN. Please enter a valid GSTIN.');
+      return;
+    }
+
+    // Check for dummy/repeated patterns
+    if (/^[0-9]{2}([A-Z])\1{4}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i.test(raw)) {
+      setFormGstError('Invalid GSTIN format. Please enter a valid GSTIN.');
+      return;
+    }
+
+    // Validate GSTIN format
+    if (!GSTIN_PATTERN.test(raw)) {
+      setFormGstError('Invalid GSTIN format. Must be 15 characters (e.g., 29ABCDE1234F1Z5).');
+      return;
+    }
+
+    setFormGstError(null);
+  }, [formGst]);
   const [formRating, setFormRating] = useState<number | null>(null);
 
   // Vendor Upload History State & Handlers
@@ -470,6 +521,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const clearVendorModalErrors = () => {
     setFormValidationError(null);
     setPhoneFieldError(null);
+    setFormGstError(null);
   };
 
   const reportVendorModalError = (title: string, message: string) => {
@@ -806,6 +858,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     if (formPincodeError) {
       reportVendorModalError(UI_STRINGS.addVendorModal.invalidPincodeTitle, formPincodeError);
+      return;
+    }
+
+    if (formGstError) {
+      reportVendorModalError('Invalid GSTIN', formGstError);
       return;
     }
 
@@ -2745,12 +2802,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-gstin"
                   type="text"
                   required
-                  placeholder="15-character GSTIN"
+                  placeholder="15-character GSTIN (e.g., 29ABCDE1234F1Z5)"
                   maxLength={15}
                   value={formGst}
                   onChange={(e) => setFormGst(e.target.value.toUpperCase())}
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 uppercase font-mono"
+                  className={`w-full text-xs p-2 rounded-lg border uppercase font-mono ${formGstError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900`}
                 />
+                {formGstError && formGst.trim().length > 0 && (
+                  <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formGstError}</p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
@@ -3372,7 +3433,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
+                {ENABLE_EDIT_VENDOR_PROFILE && canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     onClick={() => {
