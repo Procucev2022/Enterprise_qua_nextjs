@@ -911,6 +911,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return;
     }
 
+    // Synchronous GST validation on form submit
+    const gstValidation = validateGstin(formGst.trim());
+    if (!gstValidation.isValid) {
+      reportVendorModalError('Invalid GSTIN', gstValidation.error || 'Please enter a valid GSTIN');
+      return;
+    }
+
+    // Also check the state that may have been set by the useEffect
     if (formGstError) {
       reportVendorModalError('Invalid GSTIN', formGstError);
       return;
