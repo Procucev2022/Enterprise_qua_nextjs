@@ -228,7 +228,7 @@ describe('QuoteMatrix Component Tests', () => {
     expect(screen.getByText('Centrifugal Pump 500 GPM')).toBeInTheDocument();
     expect(screen.getByText('Mounting Bracket')).toBeInTheDocument();
     expect(screen.getByText(formatCurrency(12000))).toBeInTheDocument();
-    expect(screen.getAllByText(/not itemized/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/not itemized/i)).not.toBeInTheDocument();
 
     const downloadBtn = screen.getByText(/Download Excel/i);
     expect(downloadBtn).toBeInTheDocument();

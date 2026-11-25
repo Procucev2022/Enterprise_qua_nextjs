@@ -870,7 +870,7 @@ export const BUYER_PROFILE_LIMITS: {
   MAX_MINOR_CATEGORIES: number | null;
 } = {
   MAX_MAJOR_CATEGORIES: null,
-  MAX_MINOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: 10,
 };
 
 /**

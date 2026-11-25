@@ -632,6 +632,78 @@ export default function BuyerProfilePage() {
     );
   };
 
+  /**
+   * Save only the selected categories without updating other profile fields.
+   *
+   * This handler is called from the category section's dedicated "Save Category" button,
+   * allowing users to save category selections independently from the full profile update.
+   */
+  const handleSaveCategoryOnly = async (e: React.MouseEvent) => {
+    e.preventDefault();
+    if (isSaving) return;
+
+    if (!isLoaded) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, UI_STRINGS.buyerProfile.loadUnreachable, 'warning');
+      return;
+    }
+
+    const categories = flattenCategorySelection(selectedMajor, selectedMinor);
+    if (categories.length === 0) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        UI_STRINGS.buyerProfile.categoriesRequired,
+        'warning'
+      );
+      return;
+    }
+
+    // Build payload with only categories field
+    const payload: Partial<BuyerProfileUpdatePayload> = {
+      categories,
+    };
+
+    setIsSaving(true);
+    logger.info('Saving buyer profile categories only', { categoryCount: categories.length }, 'BUYER_PROFILE');
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload as BuyerProfileUpdatePayload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer profile categories', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          UI_STRINGS.buyerProfile.saveFailedTitle,
+          err instanceof Error ? err.message : UI_STRINGS.buyerProfile.saveUnreachable,
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
+
+    if (!result.success) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
+      return;
+    }
+
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
+    }
+
+    addAuditLog(`Updated Buyer Categories for ${companyName}`);
+    showToast(
+      UI_STRINGS.buyerProfile.savedTitle,
+      formatString(UI_STRINGS.buyerProfile.savedMessage, {
+        categoryCount: result.categoryCount ?? categories.length,
+      }),
+      'success'
+    );
+  };
+
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
@@ -961,10 +1033,21 @@ export default function BuyerProfilePage() {
               </p>
             </div>
 
-            <div className="flex items-center gap-2">
-              <span className="badge badge-purple font-mono text-[11px]">
-                {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
-              </span>
+            <div className="flex flex-col items-end gap-2">
+              <div className="flex items-center gap-2">
+                <span className="badge badge-purple font-mono text-[11px]">
+                  {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
+                </span>
+              </div>
+              <button
+                type="button"
+                onClick={handleSaveCategoryOnly}
+                disabled={isLoading || isSaving}
+                aria-busy={isSaving}
+                className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
+              >
+                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {UI_STRINGS.buyerProfile.saveCategoryButton}
+              </button>
             </div>
           </div>
 

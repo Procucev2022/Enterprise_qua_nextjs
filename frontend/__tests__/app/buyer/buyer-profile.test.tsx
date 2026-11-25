@@ -1622,7 +1622,176 @@ describe('app/buyer/buyer-profile.tsx', () => {
       expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
     });
   });
+
+  // ── Category-Only Save Handler ───────────────────────────────────────────
+  it('renders the "Save Category" button in the category section header', async () => {
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+    expect(saveCategoryBtn).toBeInTheDocument();
+    expect(saveCategoryBtn).toHaveClass('btn', 'btn-primary');
+  });
+
+  it('invokes handleSaveCategoryOnly when the "Save Category" button is clicked', async () => {
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(saveBuyerProfile).toHaveBeenCalledTimes(1);
+    const payload = (saveBuyerProfile as jest.Mock).mock.calls[0][0];
+    expect(payload).toHaveProperty('categories');
+  });
+
+  it('sends only the categories field when saving with "Save Category" button', async () => {
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+
+    // Modify some profile fields to ensure they are NOT sent
+    fireEvent.change(screen.getByDisplayValue('Navin Chaudhary Enterprises'), {
+      target: { value: 'Modified Company Name' },
+    });
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(saveBuyerProfile).toHaveBeenCalledTimes(1);
+    const payload = (saveBuyerProfile as jest.Mock).mock.calls[0][0];
+
+    // Verify only categories is in the payload (from the original profile)
+    expect(payload).toEqual({
+      categories: expect.any(Array),
+    });
+    expect(payload).not.toHaveProperty('companyName');
+    expect(payload).not.toHaveProperty('panNumber');
+    expect(payload).not.toHaveProperty('gstNumber');
+  });
+
+  it('shows success toast and audit log for category-only save', async () => {
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.savedTitle,
+      expect.any(String),
+      'success'
+    );
+    expect(mockAddAuditLog).toHaveBeenCalledWith(
+      expect.stringContaining('Updated Buyer Categories')
+    );
+  });
+
+  it('disables "Save Category" button during save and re-enables after', async () => {
+    let resolveSave: (v: unknown) => void = () => undefined;
+    (saveBuyerProfile as jest.Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      })
+    );
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(saveCategoryBtn.closest('button')).toBeDisabled();
+
+    await act(async () => {
+      resolveSave({ success: true, data: PROFILE, categoryCount: 2 });
+    });
+
+    expect(saveCategoryBtn.closest('button')).not.toBeDisabled();
+  });
+
+  it('blocks category-only save with no categories selected', async () => {
+    mockLoad({ ...PROFILE, categories: [] });
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(saveBuyerProfile).not.toHaveBeenCalled();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.validationErrorTitle,
+      UI_STRINGS.buyerProfile.categoriesRequired,
+      'warning'
+    );
+  });
+
+  it('reports category-only save errors without affecting other profile fields', async () => {
+    (saveBuyerProfile as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'Category save failed: duplicate selection.',
+    });
+    await renderLoaded();
+
+    // Modify a profile field to track that it stays on screen
+    fireEvent.change(screen.getByDisplayValue('Navin Chaudhary Enterprises'), {
+      target: { value: 'Edited Company' },
+    });
+
+    const saveCategoryBtn = screen.getByText(UI_STRINGS.buyerProfile.saveCategoryButton);
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Category save failed: duplicate selection.',
+      'warning'
+    );
+    expect(screen.getByDisplayValue('Edited Company')).toBeInTheDocument();
+    expect(mockAddAuditLog).not.toHaveBeenCalled();
+  });
+
+  it('enforces max 10 minor categories and blocks 11th selection', async () => {
+    const origMinor = BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES;
+    (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = 10;
+    try {
+      const minors = Array.from({ length: 15 }, (_, i) => `Category ${i + 1}`);
+      const bigTaxonomy = [{ majorCategory: 'All Categories', minorCategories: minors }];
+      const initialCategories = minors.slice(0, 9).map((m) => ({
+        major: 'All Categories',
+        minor: m,
+      }));
+
+      mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
+      await renderLoaded();
+
+      expect(selectionSummary()).toBe('1 Division • 9 Categories Selected');
+
+      // 10th should succeed
+      const cat10Label = screen.getByText('Category 10').closest('label')!;
+      const cat10Input = cat10Label.querySelector('input')!;
+      fireEvent.click(cat10Input);
+      expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
+
+      // 11th should be rejected
+      const cat11Label = screen.getByText('Category 11').closest('label')!;
+      const cat11Input = cat11Label.querySelector('input')!;
+      fireEvent.click(cat11Input);
+      expect(cat11Input).not.toBeChecked();
+      expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        expect.stringContaining('10'),
+        'warning'
+      );
+    } finally {
+      (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = origMinor;
+    }
+  });
 });
+
 
 
 

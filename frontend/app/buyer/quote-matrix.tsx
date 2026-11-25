@@ -636,7 +636,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
         </div>
       )}
 
-      {/* Line-Item-Wise Bid Comparison (DPS Template) */}
+      {/* Line-Item-Wise Bid Comparison */}
       {quotes.length > 0 && !quotesSealed && (currentRFQ.extractedEntities || []).length > 0 && (
         <div className="glass-panel rounded-xl overflow-hidden border border-slate-200 dark:border-gray-800 shadow-xl bg-white dark:bg-gray-900/80">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 px-4 py-3.5 border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-900/50">
@@ -645,9 +645,6 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                 <Layers size={15} className="text-indigo-600 dark:text-indigo-400" />
                 Line-Item-Wise Bid Comparison
               </h3>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                Detailed Price Schedule (DPS) breakdown — Unit rate, line total, taxes & delivery terms side-by-side.
-              </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
               <button
@@ -702,9 +699,6 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             </span>
                           );
                         })()}
-                      </div>
-                      <div className="text-[9px] font-normal text-slate-400 dark:text-gray-500 normal-case mt-0.5">
-                        DPS Breakdown (Rate | Total | Tax | Terms)
                       </div>
                     </th>
                   ))}
@@ -797,7 +791,6 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                                     <span className={`mono text-xs ${isL1 ? 'font-bold text-emerald-600 dark:text-emerald-400' : 'text-slate-400 dark:text-gray-500'}`}>
                                       {formatCurrency(quote.unitPrice)}
                                     </span>
-                                    <span className="text-[9px] text-amber-600 dark:text-amber-400 font-medium">(not itemized)</span>
                                   </div>
                                   {isL1 && (
                                     <span className="px-1.5 py-0.2 rounded bg-emerald-100 dark:bg-emerald-950 text-emerald-800 dark:text-emerald-300 text-[9px] font-bold border border-emerald-300 dark:border-emerald-800 flex items-center gap-0.5">
