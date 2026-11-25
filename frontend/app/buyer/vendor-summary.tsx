@@ -1796,6 +1796,45 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorIds([]);
   };
 
+  // Horizontal Scroller synchronization for in-slot navigation
+  const topScrollRef = useRef<HTMLDivElement>(null);
+  const tableContainerRef = useRef<HTMLDivElement>(null);
+  const isSyncingScroll = useRef(false);
+  const [tableScrollWidth, setTableScrollWidth] = useState(2260);
+
+  const handleTopScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (tableContainerRef.current && topScrollRef.current) {
+      tableContainerRef.current.scrollLeft = topScrollRef.current.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      isSyncingScroll.current = false;
+    });
+  };
+
+  const handleTableScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (topScrollRef.current && tableContainerRef.current) {
+      topScrollRef.current.scrollLeft = tableContainerRef.current.scrollLeft;
+    }
+    requestAnimationFrame(() => {
+      isSyncingScroll.current = false;
+    });
+  };
+
+  useEffect(() => {
+    const updateWidth = () => {
+      if (tableContainerRef.current) {
+        setTableScrollWidth(tableContainerRef.current.scrollWidth);
+      }
+    };
+    updateWidth();
+    window.addEventListener('resize', updateWidth);
+    return () => window.removeEventListener('resize', updateWidth);
+  }, [vendorColumns, buyerFilteredVendors]);
+
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
@@ -1934,33 +1973,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           </div>
         </td>
 
-        {/* 2. Vendor Code */}
-        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 min-w-[110px] whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
-          <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
-            {vendor.vendorCode}
-          </span>
-        </td>
-
-        {/* 3. Division (Major Category) */}
-        <td className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-1.5 px-2.5 min-w-[140px] max-w-[180px] align-middle')}>
-          <span
-            className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
-              ? 'text-amber-600 dark:text-amber-400 italic'
-              : 'text-slate-600 dark:text-gray-300'
-              }`}
-            title={
-              isPlaceholderVendorCategory(vendor.majorCategory)
-                ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-                : vendor.majorCategory
-            }
-          >
-            {isPlaceholderVendorCategory(vendor.majorCategory)
-              ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
-              : vendor.majorCategory}
-          </span>
-        </td>
-
-        {/* 4. Category (Minor Categories) */}
+        {/* 2. Category (Minor Categories) */}
         <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[160px] align-middle')}>
           {(() => {
             const normalizedRowMinors = normalizeVendorCategoryList(vendor.minorCategories);
@@ -2012,7 +2025,37 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })()}
         </td>
 
-        {/* 5. Primary Source Badge */}
+        {/* 3. Contact Person */}
+        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 min-w-[150px] max-w-[180px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
+          <div
+            className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
+            title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
+          >
+            👤 Contact: {vendor.contactPerson}
+          </div>
+        </td>
+
+        {/* 4. Phone */}
+        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
+            title={vendor.phone}
+          >
+            📞 {vendor.phone}
+          </div>
+        </td>
+
+        {/* 5. Email */}
+        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 min-w-[190px] max-w-[220px] align-middle text-[11px]')}>
+          <div
+            className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
+            title={vendor.email}
+          >
+            ✉️ {vendor.email}
+          </div>
+        </td>
+
+        {/* 6. Primary Source Badge */}
         <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle')}>
           {isUploaded ? (
             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
@@ -2027,14 +2070,40 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           )}
         </td>
 
-        {/* 6. Secondary Origin Tag */}
+        {/* 7. Vendor Code */}
+        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 min-w-[110px] whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
+          <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
+            {vendor.vendorCode}
+          </span>
+        </td>
+
+        {/* 8. Division (Major Category) */}
+        <td className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-1.5 px-2.5 min-w-[140px] max-w-[180px] align-middle')}>
+          <span
+            className={`text-[11px] font-semibold truncate max-w-[160px] inline-block align-middle ${isPlaceholderVendorCategory(vendor.majorCategory)
+              ? 'text-amber-600 dark:text-amber-400 italic'
+              : 'text-slate-600 dark:text-gray-300'
+              }`}
+            title={
+              isPlaceholderVendorCategory(vendor.majorCategory)
+                ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+                : vendor.majorCategory
+            }
+          >
+            {isPlaceholderVendorCategory(vendor.majorCategory)
+              ? UI_STRINGS.vendorCategoryEditor.unassignedDivision
+              : vendor.majorCategory}
+          </span>
+        </td>
+
+        {/* 9. Secondary Origin Tag */}
         <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
             {originDetails.origin}
           </span>
         </td>
 
-        {/* 7. RFQ Engagement */}
+        {/* 10. RFQ Engagement */}
         <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <div className="flex items-center gap-1 flex-wrap">
             {engagement.isEngaged ? (
@@ -2054,36 +2123,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 <Lock size={9} /> Quote Submission Pending
               </span>
             )}
-          </div>
-        </td>
-
-        {/* 8. Contact Person */}
-        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 min-w-[150px] max-w-[180px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
-          <div
-            className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
-            title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
-          >
-            👤 Contact: {vendor.contactPerson}
-          </div>
-        </td>
-
-        {/* 9. Email */}
-        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 min-w-[190px] max-w-[220px] align-middle text-[11px]')}>
-          <div
-            className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
-            title={vendor.email}
-          >
-            ✉️ {vendor.email}
-          </div>
-        </td>
-
-        {/* 10. Phone */}
-        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle text-[11px]')}>
-          <div
-            className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
-            title={vendor.phone}
-          >
-            📞 {vendor.phone}
           </div>
         </td>
 
@@ -2457,9 +2496,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
           <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+            {/* Top horizontal scroller for immediate horizontal scroll without scrolling down */}
             <div
+              ref={topScrollRef}
+              data-testid="vendor-directory-top-scroller"
+              onScroll={handleTopScroll}
+              className="w-full overflow-x-auto overflow-y-hidden border-b border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-800/50 vendor-directory-table-scroll focus:outline-none"
+              style={{ height: '14px' }}
+              tabIndex={-1}
+              aria-hidden="true"
+            >
+              <div style={{ width: `${Math.max(tableScrollWidth, 2260)}px`, height: '1px' }} />
+            </div>
+
+            <div
+              ref={tableContainerRef}
+              onScroll={handleTableScroll}
               data-testid="vendor-directory-table-container"
-              className="w-full max-w-full overflow-x-auto vendor-directory-table-scroll focus:outline-none"
+              className="w-full max-w-full overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto vendor-directory-table-scroll focus:outline-none"
               tabIndex={0}
               role="region"
               aria-label="Vendor Directory Table"
@@ -2470,6 +2524,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <th className="py-2 px-2.5 w-10 min-w-[40px] text-center">
                       <span className="sr-only">Select</span>
                     </th>
+                    {/* 1. Supplier Name */}
                     <th
                       onClick={createColumnSortClickHandler('name', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'name')}
@@ -2477,20 +2532,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
                     </th>
-                    <th
-                      onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
-                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
-                    </th>
-                    <th
-                      onClick={createColumnSortClickHandler('majorCategory', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'majorCategory')}
-                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'majorCategory')}</span></span>
-                    </th>
+                    {/* 2. Category */}
                     <th
                       onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
@@ -2498,41 +2540,15 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
                     </th>
-                    <th
-                      onClick={createColumnSortClickHandler('source', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'source')}
-                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
-                    </th>
-                    <th
-                      onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
-                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
-                    </th>
-                    <th
-                      onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
-                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
-                    </th>
+                    {/* 3. Contact Person Name */}
                     <th
                       onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
                       className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
-                      <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
+                      <span className="inline-flex items-center gap-1">Contact Person Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
                     </th>
-                    <th
-                      onClick={createColumnSortClickHandler('email', setVendorTableSort)}
-                      aria-sort={getTableAriaSort(vendorTableSort, 'email')}
-                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
-                    >
-                      <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
-                    </th>
+                    {/* 4. Phone */}
                     <th
                       onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
@@ -2540,6 +2556,55 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
                     </th>
+                    {/* 5. Email */}
+                    <th
+                      onClick={createColumnSortClickHandler('email', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'email')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
+                    </th>
+                    {/* 6. Source */}
+                    <th
+                      onClick={createColumnSortClickHandler('source', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'source')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
+                    </th>
+                    {/* 7. Vendor Code */}
+                    <th
+                      onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
+                    </th>
+                    {/* 8. Division */}
+                    <th
+                      onClick={createColumnSortClickHandler('majorCategory', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'majorCategory')}
+                      className={getTableColumnClass(vendorColumns, 'majorCategory', 'py-2 px-2.5 min-w-[140px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Division <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'majorCategory')}</span></span>
+                    </th>
+                    {/* 9. Origin */}
+                    <th
+                      onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
+                    </th>
+                    {/* 10. RFQ Engagement */}
+                    <th
+                      onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
+                      aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                    >
+                      <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
+                    </th>
+                    {/* 11. Location */}
                     <th
                       onClick={createColumnSortClickHandler('location', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'location')}
@@ -2547,6 +2612,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
                     </th>
+                    {/* 12. AI Score */}
                     <th
                       onClick={createColumnSortClickHandler('score', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'score')}
@@ -2554,6 +2620,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
                     </th>
+                    {/* 13. Rating */}
                     <th
                       onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
@@ -2561,6 +2628,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
                     </th>
+                    {/* 14. Status */}
                     <th
                       onClick={createColumnSortClickHandler('status', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'status')}
@@ -2568,7 +2636,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     >
                       <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
                     </th>
-                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap')}>Actions</th>
+                    {/* 15. Action */}
+                    <th className={getTableColumnClass(vendorColumns, 'actions', 'py-2 px-2.5 min-w-[200px] text-right whitespace-nowrap')}>Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 dark:divide-gray-800/60">
@@ -3561,7 +3630,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       }}
                       className="btn btn-xs btn-outline btn-primary text-[10px] font-bold shrink-0"
                     >
-                      Apply PO Suggestion
+                      Reset Categories
                     </button>
                   </div>
                 )}
