@@ -1622,6 +1622,131 @@ describe('app/buyer/buyer-profile.tsx', () => {
       expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
     });
   });
+
+  it('saves categories only when clicking Save Category without validating organization profile fields', async () => {
+    await renderLoaded();
+    const saveCategoryBtn = screen.getByRole('button', { name: /^Save Category$/i });
+    expect(saveCategoryBtn).toBeInTheDocument();
+
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn);
+    });
+
+    expect(saveBuyerProfile).toHaveBeenCalledWith(
+      expect.objectContaining({
+        categories: expect.any(Array),
+      })
+    );
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Categories Saved',
+      expect.stringContaining('procurement categories updated successfully'),
+      'success'
+    );
+  });
+
+  it('covers handleSaveCategories validation, error, and failure branches', async () => {
+    // 1. Unloaded save attempt
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: TAXONOMY });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValue({ success: false, error: 'unreachable' });
+    const { unmount } = await renderLoaded();
+    const saveCategoryBtn1 = screen.getByRole('button', { name: /^Save Category$/i });
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn1);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      UI_STRINGS.buyerProfile.loadUnreachable,
+      'warning'
+    );
+    unmount();
+
+    // 2. Empty categories validation
+    (fetchBuyerProfile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { ...PROFILE, categories: [] },
+    });
+    const loadedRender = await renderLoaded();
+    const saveCategoryBtn2 = screen.getByRole('button', { name: /^Save Category$/i });
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn2);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.validationErrorTitle,
+      UI_STRINGS.buyerProfile.categoriesRequired,
+      'warning'
+    );
+    loadedRender.unmount();
+
+    // 3. Save failure with error message and without error message
+    (fetchBuyerProfile as jest.Mock).mockResolvedValue({ success: true, data: PROFILE });
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: 'Categories could not be saved',
+    });
+    await renderLoaded();
+    const saveCategoryBtn3 = screen.getByRole('button', { name: /^Save Category$/i });
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn3);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Categories could not be saved',
+      'warning'
+    );
+
+    // Save failure with empty error string fallback
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: false,
+      error: '',
+    });
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn3);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      '',
+      'warning'
+    );
+
+    // 4. Save throwing an Error and non-Error
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Network error'));
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn3);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      'Network error',
+      'warning'
+    );
+
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce('string error');
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn3);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      UI_STRINGS.buyerProfile.saveUnreachable,
+      'warning'
+    );
+
+    // 5. Successful save with result.data.categories updating category selection
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      categoryCount: 1,
+      data: {
+        ...PROFILE,
+        categories: ['Raw Materials > Steel Plates'],
+      },
+    });
+    await act(async () => {
+      fireEvent.click(saveCategoryBtn3);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Categories Saved',
+      expect.stringContaining('1 procurement categories updated successfully'),
+      'success'
+    );
+  });
 });
 
 

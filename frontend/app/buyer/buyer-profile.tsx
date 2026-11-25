@@ -193,6 +193,7 @@ export default function BuyerProfilePage() {
   // filled in.
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingCategories, setIsSavingCategories] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
   /**
@@ -632,6 +633,95 @@ export default function BuyerProfilePage() {
     );
   };
 
+  /**
+   * Save ONLY procurement categories without validating organization profile fields.
+   */
+  const handleSaveCategories = async (e: React.FormEvent | React.MouseEvent) => {
+    e.preventDefault();
+    if (isSaving || isSavingCategories) return;
+
+    if (!isLoaded) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, UI_STRINGS.buyerProfile.loadUnreachable, 'warning');
+      return;
+    }
+
+    const categories = flattenCategorySelection(selectedMajor, selectedMinor);
+    if (categories.length === 0) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        UI_STRINGS.buyerProfile.categoriesRequired,
+        'warning'
+      );
+      return;
+    }
+
+    const payload: BuyerProfileUpdatePayload = {
+      companyName,
+      brandName,
+      organizationType: orgType,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      website,
+      annualTurnover,
+      street,
+      city,
+      state,
+      pincode,
+      country,
+      contactName,
+      contactDesignation,
+      categories,
+    };
+
+    setIsSavingCategories(true);
+    logger.info('Saving buyer procurement categories only', { categoryCount: categories.length }, 'BUYER_PROFILE');
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer procurement categories', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          UI_STRINGS.buyerProfile.saveFailedTitle,
+          err instanceof Error ? err.message : UI_STRINGS.buyerProfile.saveUnreachable,
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSavingCategories(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
+
+    if (!result.success) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
+      return;
+    }
+
+    if (Array.isArray(result.data?.categories)) {
+      const expanded = expandCategorySelection(result.data.categories);
+      setSelectedMajor(expanded.selectedMajor);
+      setSelectedMinor(expanded.selectedMinor);
+    }
+
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
+    }
+
+    addAuditLog(`Updated Procurement Categories (${categories.length} categories)`);
+    showToast(
+      'Categories Saved',
+      formatString('{categoryCount} procurement categories updated successfully.', {
+        categoryCount: result.categoryCount ?? categories.length,
+      }),
+      'success'
+    );
+  };
+
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
@@ -639,7 +729,7 @@ export default function BuyerProfilePage() {
         <button
           type="button"
           onClick={handleSaveProfile}
-          disabled={isLoading || isSaving}
+          disabled={isLoading || isSaving || isSavingCategories}
           aria-busy={isSaving}
           className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
         >
@@ -935,17 +1025,18 @@ export default function BuyerProfilePage() {
           </div>
         </div>
 
-        {/* Save Profile Button - positioned after profile sections, before category selection */}
+        {/* Save Category Button - positioned after profile sections */}
         <div className="flex justify-end">
           <button
             type="button"
-            onClick={handleSaveProfile}
-            disabled={isLoading || isSaving}
-            aria-busy={isSaving}
+            data-testid="save-category-button"
+            onClick={handleSaveCategories}
+            disabled={isLoading || isSaving || isSavingCategories}
+            aria-busy={isSavingCategories}
             className="btn btn-primary btn-md shadow-md font-bold flex items-center gap-2"
           >
-            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
-            Save Organization Profile
+            {isSavingCategories ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
+            Save Category
           </button>
         </div>
 
