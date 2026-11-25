@@ -2322,7 +2322,7 @@ async function generateEmailPreview(req, res, next) {
     const { id } = req.params;
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    const rfq = await storeService.getRFQByIdAsync(id);
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
