@@ -13,16 +13,18 @@ import {
   FileText,
   Clock,
   ShieldCheck,
+  AlertTriangle,
 } from 'lucide-react';
-import { authClient } from '@/lib/authClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import {
+  fetchDashboardMetrics,
+  fetchDashboardRecords,
+} from '@/lib/categoryManagerDashboardClient';
 import type {
   CategoryManagerDashboardKPI,
   CategoryManagerDashboardCharts,
   CategoryManagerDashboardRecordType,
   CategoryManagerDashboardPopupRecord,
-  CategoryManagerDashboardMetricsResponse,
-  CategoryManagerDashboardRecordsResponse,
 } from '@/lib/types';
 
 type PresetType = 'today' | 'this_week' | 'this_month' | 'custom' | 'all';
@@ -66,12 +68,14 @@ export default function DashboardView() {
   });
 
   const [isLoadingMetrics, setIsLoadingMetrics] = useState<boolean>(true);
+  const [metricsError, setMetricsError] = useState<string | null>(null);
 
   // Modal drilldown state
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [activeMetricType, setActiveMetricType] = useState<CategoryManagerDashboardRecordType | null>(null);
   const [modalRecords, setModalRecords] = useState<CategoryManagerDashboardPopupRecord[]>([]);
   const [isLoadingRecords, setIsLoadingRecords] = useState<boolean>(false);
+  const [recordsError, setRecordsError] = useState<string | null>(null);
   const [modalSearch, setModalSearch] = useState<string>('');
   const [sortConfig, setSortConfig] = useState<SortConfig>({ key: 'createdAt', direction: 'desc' });
 
@@ -92,37 +96,30 @@ export default function DashboardView() {
   // Fetch KPI & Charts metrics from backend
   const fetchMetrics = useCallback(async () => {
     setIsLoadingMetrics(true);
+    setMetricsError(null);
     try {
-      const params = new URLSearchParams();
-      if (preset !== 'custom' && preset !== 'all') {
-        params.set('preset', preset);
-      }
-      if (startDate) params.set('startDate', startDate);
-      if (endDate) params.set('endDate', endDate);
-
-      const token = authClient.getToken();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-
-      const res = await fetch(`/api/category-manager/dashboard/metrics?${params.toString()}`, {
-        headers,
-        credentials: 'include',
+      const res = await fetchDashboardMetrics({
+        preset: preset !== 'custom' && preset !== 'all' ? preset : undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
       });
-      if (res.ok) {
-        const data: CategoryManagerDashboardMetricsResponse = await res.json();
-        if (data.success && data.kpi && data.charts) {
-          setKpi(data.kpi);
-          setCharts(data.charts);
-        }
+
+      if (res.success && res.kpi && res.charts) {
+        setKpi(res.kpi);
+        setCharts(res.charts);
+      } else {
+        const errText = res.error || strings.errors.metricsLoadFailed;
+        console.error('[DashboardView] Metrics fetch error:', res.status, errText);
+        setMetricsError(errText);
       }
-    } catch {
-      // Non-fatal API error
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[DashboardView] Metrics network exception:', msg);
+      setMetricsError(msg);
     } finally {
       setIsLoadingMetrics(false);
     }
-  }, [preset, startDate, endDate]);
+  }, [preset, startDate, endDate, strings.errors.metricsLoadFailed]);
 
   useEffect(() => {
     fetchMetrics();
@@ -133,33 +130,29 @@ export default function DashboardView() {
     setActiveMetricType(type);
     setIsModalOpen(true);
     setIsLoadingRecords(true);
+    setRecordsError(null);
     setModalSearch('');
 
     try {
-      const params = new URLSearchParams({ type });
-      if (preset !== 'custom' && preset !== 'all') {
-        params.set('preset', preset);
-      }
-      if (startDate) params.set('startDate', startDate);
-      if (endDate) params.set('endDate', endDate);
-
-      const token = authClient.getToken();
-      const headers: Record<string, string> = {
-        'Content-Type': 'application/json',
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      };
-
-      const res = await fetch(`/api/category-manager/dashboard/records?${params.toString()}`, {
-        headers,
-        credentials: 'include',
+      const res = await fetchDashboardRecords({
+        type,
+        preset: preset !== 'custom' && preset !== 'all' ? preset : undefined,
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
       });
-      if (res.ok) {
-        const data: CategoryManagerDashboardRecordsResponse = await res.json();
-        if (data.success && Array.isArray(data.records)) {
-          setModalRecords(data.records);
-        }
+
+      if (res.success && Array.isArray(res.records)) {
+        setModalRecords(res.records);
+      } else {
+        const errText = res.error || strings.errors.recordsLoadFailed;
+        console.error('[DashboardView] Records fetch error:', res.status, errText);
+        setRecordsError(errText);
+        setModalRecords([]);
       }
-    } catch {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      console.error('[DashboardView] Records network exception:', msg);
+      setRecordsError(msg);
       setModalRecords([]);
     } finally {
       setIsLoadingRecords(false);
@@ -170,6 +163,7 @@ export default function DashboardView() {
     setIsModalOpen(false);
     setActiveMetricType(null);
     setModalRecords([]);
+    setRecordsError(null);
   };
 
   // Close modal on Escape key press
@@ -551,6 +545,30 @@ export default function DashboardView() {
         </div>
       </div>
 
+      {/* Metrics Error Banner */}
+      {metricsError && (
+        <div
+          className="flex items-center justify-between p-3.5 bg-rose-50 border border-rose-200 text-rose-800 rounded-xl text-xs"
+          data-testid="metrics-error-banner"
+        >
+          <div className="flex items-center gap-2">
+            <AlertTriangle className="w-4 h-4 text-rose-600 flex-shrink-0" />
+            <span>
+              <strong>{strings.errors.errorPrefix}</strong> {metricsError}
+            </span>
+          </div>
+          <button
+            type="button"
+            onClick={() => fetchMetrics()}
+            className="inline-flex items-center gap-1 px-2.5 py-1 bg-white border border-rose-300 rounded-lg text-rose-700 hover:bg-rose-100 font-medium transition-colors"
+            data-testid="retry-metrics-btn"
+          >
+            <RefreshCw className="w-3 h-3" />
+            {strings.errors.retry}
+          </button>
+        </div>
+      )}
+
       {/* KPI Cards: Row 1 (5 Cards) */}
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3.5">
         {row1Cards.map(renderKpiCard)}
@@ -683,6 +701,11 @@ export default function DashboardView() {
                 <div className="flex flex-col items-center justify-center py-16 space-y-3">
                   <RefreshCw className="w-6 h-6 text-slate-400 animate-spin" />
                   <span className="text-xs text-slate-500 font-medium">Loading records...</span>
+                </div>
+              ) : recordsError ? (
+                <div className="flex flex-col items-center justify-center py-16 text-rose-500 space-y-2" data-testid="records-error-message">
+                  <AlertTriangle className="w-8 h-8 text-rose-500 stroke-[1.5]" />
+                  <span className="text-sm font-semibold">{recordsError}</span>
                 </div>
               ) : filteredAndSortedRecords.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-16 text-slate-400 space-y-2">

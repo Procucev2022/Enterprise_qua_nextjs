@@ -257,23 +257,23 @@ async function getMetrics(req, res) {
       cmLogins = [];
     }
 
-    // Filter collections by date bounds
-    const boundedRfqs = rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate));
-    const openRfqsList = (fromDate || toDate ? boundedRfqs : rfqs).filter(isRfqOpen);
-    const rfqsWithoutQuotesList = openRfqsList.filter((r) => getQuoteCount(r) === 0);
+    // Platform-wide cumulative totals (not constrained by date presets)
+    const allOpenRfqs = rfqs.filter(isRfqOpen);
+    const allRfqsWithoutQuotes = allOpenRfqs.filter((r) => getQuoteCount(r) === 0);
 
     const buyerSubsCount = buyers.filter(isBuyerSubscribed).length;
     const vendorSubsCount = vendors.filter(isVendorSubscribed).length;
 
+    // Period-filtered registration & login metrics
     const newBuyersList = buyers.filter((b) => isWithinBounds(getItemDate(b), fromDate, toDate));
     const newVendorsList = vendors.filter((v) => isWithinBounds(getItemDate(v), fromDate, toDate));
 
     const boundedCmLogins = cmLogins.filter((l) => isWithinBounds(getItemDate(l), fromDate, toDate));
 
     const kpi = {
-      totalRfqs: fromDate || toDate ? boundedRfqs.length : rfqs.length,
-      openRfqs: openRfqsList.length,
-      rfqsWithoutQuotes: rfqsWithoutQuotesList.length,
+      totalRfqs: rfqs.length,
+      openRfqs: allOpenRfqs.length,
+      rfqsWithoutQuotes: allRfqsWithoutQuotes.length,
       buyerSubscriptions: buyerSubsCount,
       vendorSubscriptions: vendorSubsCount,
       totalBuyers: buyers.length,
@@ -433,19 +433,11 @@ async function getRecords(req, res) {
     let rawList = [];
 
     if (type === 'total_rfqs') {
-      rawList = fromDate || toDate
-        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
-        : rfqs;
+      rawList = rfqs;
     } else if (type === 'open_rfqs') {
-      const base = fromDate || toDate
-        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
-        : rfqs;
-      rawList = base.filter(isRfqOpen);
+      rawList = rfqs.filter(isRfqOpen);
     } else if (type === 'rfqs_without_quotes') {
-      const base = fromDate || toDate
-        ? rfqs.filter((r) => isWithinBounds(getItemDate(r), fromDate, toDate))
-        : rfqs;
-      rawList = base.filter((r) => isRfqOpen(r) && getQuoteCount(r) === 0);
+      rawList = rfqs.filter((r) => isRfqOpen(r) && getQuoteCount(r) === 0);
     } else if (type === 'buyer_subscriptions') {
       rawList = buyers.filter(isBuyerSubscribed);
     } else if (type === 'total_buyers') {

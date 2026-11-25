@@ -182,6 +182,27 @@ describe('Category Manager Dashboard Backend Suite', () => {
       expect(collections.vendors.length).toBe(1);
       expect(collections.totalVendorsCount).toBe(1);
 
+      // Branch where DB returns buyer array directly and vendor object with rows & total
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValue([
+        { id: 'b-array-1', corporate_email: 'buyer-arr@test.local' },
+      ]);
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [{ id: 'v-row-1', email: 'vrow@test.local' }],
+        total: 50,
+      });
+
+      const collections2 = await controller.loadCollections();
+      expect(collections2.buyers.length).toBe(1);
+      expect(collections2.vendors.length).toBe(1);
+      expect(collections2.totalVendorsCount).toBe(50);
+
+      // Branch where vendor object has rows without total property
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValue({
+        rows: [{ id: 'v-row-2', email: 'vrow2@test.local' }],
+      });
+      const collections3 = await controller.loadCollections();
+      expect(collections3.totalVendorsCount).toBe(1);
+
       // Branch where DB throws
       jest.spyOn(storeService, 'syncRFQsFromDB').mockRejectedValue(new Error('Sync failed'));
       jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockRejectedValue(new Error('Buyer DB error'));

@@ -1,5 +1,5 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import DashboardView from '@/app/category-manager/dashboard/DashboardView';
 import CategoryManagerDashboardPage, { metadata } from '@/app/category-manager/dashboard/page';
 import { authClient } from '@/lib/authClient';
@@ -493,15 +493,51 @@ describe('Category Manager Dashboard View & Page Suite', () => {
     expect(screen.getByTestId('kpi-card-total-rfqs')).toBeInTheDocument();
   });
 
-  test('handles failed fetch calls gracefully', async () => {
+  test('handles failed fetch calls gracefully and renders error banner with retry', async () => {
     global.fetch = jest.fn(() => Promise.reject(new Error('Network error')));
     render(<DashboardView />);
 
-    // Clicking card when network fails
+    await waitFor(() => {
+      expect(screen.getByTestId('metrics-error-banner')).toBeInTheDocument();
+      expect(screen.getByText(/Network error/i)).toBeInTheDocument();
+    });
+
+    // Retry button calls fetch again
+    fireEvent.click(screen.getByTestId('retry-metrics-btn'));
+    expect(global.fetch).toHaveBeenCalled();
+
+    // Clicking card when network fails shows records error message in modal
     fireEvent.click(screen.getByTestId('kpi-card-total-rfqs'));
     await waitFor(() => {
       expect(screen.getByTestId('drilldown-modal')).toBeInTheDocument();
-      expect(screen.getByText(strings.modal.noRecords)).toBeInTheDocument();
+      expect(screen.getByTestId('records-error-message')).toBeInTheDocument();
+    });
+  });
+
+  test('handles non-200 HTTP response and renders status code in error banner', async () => {
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: false,
+        status: 500,
+        statusText: 'Internal Server Error',
+        text: () => Promise.resolve('Database connection failure'),
+      })
+    ) as jest.Mock;
+
+    render(<DashboardView />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('metrics-error-banner')).toBeInTheDocument();
+      expect(screen.getByText(/HTTP 500/i)).toBeInTheDocument();
+    });
+
+    // Opening card also displays records error
+    fireEvent.click(screen.getByTestId('kpi-card-total-rfqs'));
+    await waitFor(() => {
+      expect(screen.getByTestId('drilldown-modal')).toBeInTheDocument();
+      const recordsMsg = screen.getByTestId('records-error-message');
+      expect(recordsMsg).toBeInTheDocument();
+      expect(within(recordsMsg).getByText(/HTTP 500/i)).toBeInTheDocument();
     });
   });
 
@@ -582,7 +618,6 @@ describe('Category Manager Dashboard View & Page Suite', () => {
         headers: expect.objectContaining({
           Authorization: 'Bearer cm-auth-token-123',
         }),
-        credentials: 'include',
       })
     );
   });

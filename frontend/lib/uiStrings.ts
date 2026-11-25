@@ -488,7 +488,7 @@ export const UI_STRINGS = {
   },
 
   sellerDirectory: {
-    title: 'Sellers Directory',
+    title: 'Vendors Directory',
     searchPlaceholder: 'Search company, contact, email, category, city...',
     allSources: 'All Sources',
     buyerUploaded: 'Buyer Uploaded',
@@ -497,6 +497,7 @@ export const UI_STRINGS = {
     allRatings: 'All Ratings',
     exportDirectory: 'Export Directory',
     totalSuppliers: 'Total Suppliers',
+    subscriptionVendors: 'Subscription Vendors',
     networkSuppliers: 'Network Suppliers',
     buyerUploadedCard: 'Buyer Uploaded',
     avgScore: 'Average 360° Score',
@@ -506,10 +507,11 @@ export const UI_STRINGS = {
     aiEvaluationBenchmark: 'AI evaluation benchmark',
     totalBidsDelivered: 'Total bids delivered',
     verifiedActiveSubtext: '{count} Verified active',
+    freeTierSubtext: '{count} Free Tier',
     columnSettingsTitle: 'Column Settings',
     columnSettingsSubtitle: 'Show, hide, and drag handles to reorder columns',
     resetDefault: 'Reset to Default',
-    noSellersFound: 'No suppliers found matching your query.',
+    noSellersFound: 'No vendors found matching your query.',
     dossierAction: '360° Dossier',
     dossier: {
       profileTab: 'Profile',
@@ -923,7 +925,7 @@ export const UI_STRINGS = {
         description: 'Complete profiles, RFQ history, credits & transaction governance',
       },
       sellersDirectory: {
-        label: 'Sellers Directory',
+        label: 'Vendors Directory',
         description: 'Verified supplier profiles, quotes, catalog & communication logs',
       },
       dailyReports: {
@@ -2892,7 +2894,7 @@ export const UI_STRINGS = {
       approvals: 'Approvals',
       scorecard: 'Scorecard',
       buyersDirectory: 'Buyers Directory',
-      sellersDirectory: 'Sellers Directory',
+      sellersDirectory: 'Vendors Directory',
       registrations: 'Registrations',
       paymentDues: 'Payment Dues',
       documentVault: 'Document Vault',
@@ -4077,6 +4079,12 @@ export const UI_STRINGS = {
       noRecords: 'No matching records found',
       totalRecords: '{count} Records',
       recordsFound: 'Records Found',
+    },
+    errors: {
+      metricsLoadFailed: 'Failed to load dashboard metrics',
+      recordsLoadFailed: 'Failed to load records',
+      retry: 'Retry',
+      errorPrefix: 'Dashboard Data Error:',
     },
     whatsapp: {
       title: 'WhatsApp Analytics',
