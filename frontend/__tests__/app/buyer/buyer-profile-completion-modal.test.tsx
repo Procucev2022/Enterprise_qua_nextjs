@@ -20,11 +20,13 @@ let mockAppState: {
   currentRole: string;
   activeBuyerAccount: any;
   currentUserSession: any;
+  initialSetupModalOpen?: boolean;
 } = {
   isLoggedIn: true,
   currentRole: 'buyer',
   activeBuyerAccount: null,
   currentUserSession: { email: 'buyer@procucev.com' },
+  initialSetupModalOpen: false,
 };
 
 jest.mock('@/lib/store', () => ({
@@ -354,5 +356,22 @@ describe('BuyerProfileCompletionModal', () => {
       sessionStorage.getItem = originalGetItem;
       sessionStorage.setItem = originalSetItem;
     }
+  });
+
+  it('does not open when initialSetupModalOpen is true to prevent simultaneous popups', async () => {
+    mockAppState.initialSetupModalOpen = true;
+    try {
+      const { container } = render(<BuyerProfileCompletionModal initialProfile={incompleteProfile} />);
+      expect(container.firstChild).toBeNull();
+      expect(screen.queryByText('Complete Your Buyer Profile')).not.toBeInTheDocument();
+    } finally {
+      mockAppState.initialSetupModalOpen = false;
+    }
+  });
+
+  it('renders heading with text-white class for clear contrast', async () => {
+    render(<BuyerProfileCompletionModal forceOpen={true} initialProfile={incompleteProfile} />);
+    const heading = screen.getByText('Complete Your Buyer Profile');
+    expect(heading).toHaveClass('text-white');
   });
 });

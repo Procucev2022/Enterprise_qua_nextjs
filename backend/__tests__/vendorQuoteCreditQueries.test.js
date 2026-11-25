@@ -155,6 +155,8 @@ describe('atomic vendor quote credit persistence', () => {
     const batchStatements = quoteCreditQueries.makeD1VendorQuoteCreditStatements(options).statements;
     expect(batchStatements).toHaveLength(6);
     expect(batchStatements[2].text).toContain("'$.quotedRfqIds'");
+    expect(batchStatements[2].text).not.toContain('vendors.raw');
+    expect(batchStatements[2].text).toContain("json_extract(raw, '$.quotedRfqIds')");
     expect(batchStatements[2].text).toContain('NOT EXISTS (SELECT 1 FROM vendor_credit_transactions');
     expect(batchStatements[3].text).toContain("'RFQ_QUOTE'");
   });

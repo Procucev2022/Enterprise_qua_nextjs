@@ -74,41 +74,17 @@ function makeD1VendorQuoteSubmissionStatements(options) {
     rfqNumber: options.rfqNumber,
     charged: creditCharged,
   });
-  const unlimited = `(
-    COALESCE(json_extract(v.raw, '$.unlimitedQuoteSubmissions'), 0) = 1 OR
-    COALESCE(json_extract(v.raw, '$.unlimitedQuotes'), 0) = 1 OR
-    COALESCE(json_extract(v.raw, '$.unlimitedAccess'), 0) = 1 OR
-    COALESCE(json_extract(v.raw, '$.isUnlimited'), 0) = 1
-  )`;
-  const subscribed = `(
-    lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) IN ('connect', 'select') OR
-    COALESCE(json_extract(v.raw, '$.isSubscribed'), 0) = 1 OR
-    lower(COALESCE(json_extract(v.raw, '$.subscriptionStatus'), '')) = 'active' OR
-    ${unlimited}
-  )`;
-  const balance = `CASE
-    WHEN lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) = 'select' THEN MAX(0, 100 - CAST(COALESCE(json_extract(v.raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
-    WHEN lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) = 'connect' THEN MAX(0, 50 - CAST(COALESCE(json_extract(v.raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
-    ELSE MAX(0, CAST(COALESCE(
-      json_extract(v.raw, '$.freeQuotationCredits'),
-      json_extract(v.raw, '$.freeRfqDownloadCredits'),
-      ${VENDOR_FREE_CREDITS_LIMIT}
-    ) AS INTEGER))
-  END`;
-  const vendorSubscribed = `(
-    lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) IN ('connect', 'select') OR
-    COALESCE(json_extract(raw, '$.isSubscribed'), 0) = 1 OR
-    lower(COALESCE(json_extract(raw, '$.subscriptionStatus'), '')) = 'active' OR
+  const vendorUnlimited = `(
     COALESCE(json_extract(raw, '$.unlimitedQuoteSubmissions'), 0) = 1 OR
     COALESCE(json_extract(raw, '$.unlimitedQuotes'), 0) = 1 OR
     COALESCE(json_extract(raw, '$.unlimitedAccess'), 0) = 1 OR
     COALESCE(json_extract(raw, '$.isUnlimited'), 0) = 1
   )`;
-  const existingQuote = `EXISTS (
-    SELECT 1 FROM json_each(CASE
-      WHEN json_type(v.raw, '$.quotedRfqIds') = 'array' THEN json_extract(v.raw, '$.quotedRfqIds')
-      ELSE '[]'
-    END) quoted WHERE CAST(quoted.value AS TEXT) = CAST($1 AS TEXT)
+  const vendorGenericSubscribed = `(
+    lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) NOT IN ('connect', 'select') AND (
+      COALESCE(json_extract(raw, '$.isSubscribed'), 0) = 1 OR
+      lower(COALESCE(json_extract(raw, '$.subscriptionStatus'), '')) = 'active'
+    )
   )`;
   const currentBalance = `MAX(0, CAST(COALESCE(
     json_extract(raw, '$.freeQuotationCredits'),
@@ -127,7 +103,7 @@ function makeD1VendorQuoteSubmissionStatements(options) {
       ELSE '[]'
     END) unlocked WHERE CAST(unlocked.value AS TEXT) = CAST($3 AS TEXT) OR ($4 IS NOT NULL AND CAST(unlocked.value AS TEXT) = CAST($4 AS TEXT))
   )`;
-  const chargeOnVendorUpdate = `(CASE WHEN $6 = 1 OR $7 = 1 OR ${unlimited} OR ${vendorAlreadyQuoted} OR ${vendorAlreadyUnlocked} OR
+  const chargeOnVendorUpdate = `(CASE WHEN $6 = 1 OR $7 = 1 OR ${vendorUnlimited} OR ${vendorGenericSubscribed} OR ${vendorAlreadyQuoted} OR ${vendorAlreadyUnlocked} OR
     EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $5)
     THEN 0 ELSE 1 END)`;
   const quotedIdsJson = `json(CASE

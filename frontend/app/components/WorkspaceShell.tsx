@@ -44,6 +44,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     setCurrentUserSession,
     showToast,
     ensureRouteData,
+    initialSetupModalOpen,
   } = useApp();
 
   const mustChangeVendorPassword =
@@ -137,7 +138,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
       </main>
 
       {role === 'buyer' && <InitialSetupModal />}
-      {role === 'buyer' && <BuyerProfileCompletionModal />}
+      {role === 'buyer' && !initialSetupModalOpen && <BuyerProfileCompletionModal />}
       <SupportChatWidget />
     </div>
   );

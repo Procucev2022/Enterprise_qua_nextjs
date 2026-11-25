@@ -3604,6 +3604,75 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
   });
 
+  it('validates GSTIN in Vendor Master: detects invalid GSTIN characters/format, blocks navigation to PO dump, and shows inline errors', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    // Upload spreadsheet with an invalid GSTIN (like DFFD)
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '1',
+        'Company Name': 'Test Vendor',
+        'Contact Person': 'John Doe',
+        'Email ID': 'vendor@test.com',
+        Phone: '+91 9823784838',
+        Address: 'Hyderabad',
+        GSTIN: 'DFFD',
+      },
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Valid Vendor',
+        'Contact Person': 'Jane Smith',
+        'Email ID': 'valid@test.com',
+        Phone: '+91 9823784839',
+        Address: 'Mumbai',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_master_gstin.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+    }
+
+    // Read-only table displays invalid GSTIN badge for DFFD
+    expect(screen.getByText(/Invalid GSTIN \(DFFD\)/i)).toBeInTheDocument();
+    expect(screen.getByText('27AAACK3921P1Z9')).toBeInTheDocument();
+
+    // Proceed to File 2: PO Dump is blocked
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error in Vendor Master',
+      expect.stringContaining('Cannot proceed: 1 vendor record(s) contain missing or invalid required fields'),
+      'warning'
+    );
+
+    // Switch to Edit Data mode and verify inline error message
+    fireEvent.click(screen.getByText('Edit Data'));
+    expect(screen.getByText(/GSTIN must contain exactly 15 characters/i)).toBeInTheDocument();
+
+    // Fix the GSTIN in editable mode
+    const gstinInputs = screen.getAllByPlaceholderText('GSTIN');
+    const dffdInput = gstinInputs.find((input: any) => input.value === 'DFFD');
+    expect(dffdInput).toBeTruthy();
+    if (dffdInput) {
+      fireEvent.change(dffdInput, { target: { value: '29ABCDE1234F1Z5' } });
+      expect(dffdInput).toHaveValue('29ABCDE1234F1Z5');
+    }
+  });
+
   it('handles vendor codes during Vendor Master upload: retains provided codes, generates sequential 1, 2, 3 codes when absent, and prevents collisions', async () => {
     const { container } = render(<InitialSetupModal />);
 
