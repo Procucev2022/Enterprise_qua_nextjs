@@ -1155,16 +1155,16 @@ export default function BuyerProfilePage() {
             })}
           </div>
 
-          {/* Save Category Button - Bottom of Category Section */}
-          <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-gray-800 mt-3">
+          {/* Save Category Button Footer */}
+          <div className="pt-3 border-t border-slate-200 dark:border-gray-800 flex justify-end">
             <button
               type="button"
               onClick={handleSaveCategoryOnly}
               disabled={isLoading || isSaving}
               aria-busy={isSaving}
-              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
+              className="btn btn-primary shadow-sm font-bold flex items-center gap-1.5"
             >
-              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Category
+              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {UI_STRINGS.buyerProfile.saveCategoryButton}
             </button>
           </div>
         </div>

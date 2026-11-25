@@ -193,6 +193,28 @@ describe('vendorUploadClient', () => {
       );
     });
 
+    test('rejects a row with invalid special character GSTIN like EF#FD', async () => {
+      const file = xlsxFile([
+        {
+          'Company Name': 'Invalid GSTIN Co',
+          'Email Id': 'valid@example.com',
+          'Mobile No': '9876543210',
+          GSTIN: 'EF#FD',
+          'Pin Code': '560047',
+        },
+      ]);
+      const result = await parseVendorUploadFile(file);
+      expect(result.success).toBe(true);
+      if (!result.success) return;
+      const row = result.data.rows[0];
+      expect(row.isValid).toBe(false);
+      expect(row.errors).toEqual(
+        expect.arrayContaining([
+          expect.stringContaining('GSTIN'),
+        ])
+      );
+    });
+
     test('counts a fully blank row separately from parsed rows and does not report it as an error', async () => {
       const file = xlsxFile([
         { 'Company Name': 'Real Co', 'Email Id': 'real@example.com', 'Mobile No': '9876543210' },
