@@ -44,7 +44,7 @@ import {
 export type { IngestionJobState };
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
-import { findMissingPoDumpFields, findMissingPoDumpHeaders } from '@/lib/validationSchemas';
+import { findMissingPoDumpFields, findMissingPoDumpHeaders, validateGstin } from '@/lib/validationSchemas';
 import {
   UploadCloud,
   FileSpreadsheet,
@@ -528,6 +528,12 @@ export default function InitialSetupModal() {
     }
     if (v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone)) {
       errs.push('Mobile number must be a 10-digit numeric value');
+    }
+    if (v.gstNumber && v.gstNumber.trim() !== '') {
+      const gstinVal = validateGstin(v.gstNumber.trim().toUpperCase());
+      if (!gstinVal.isValid) {
+        errs.push(gstinVal.error || 'Invalid GSTIN');
+      }
     }
     return errs;
   };
@@ -1138,7 +1144,7 @@ export default function InitialSetupModal() {
           const city = resolvedLoc.city;
           const state = resolvedLoc.state;
           const pincode = resolvedLoc.pincode;
-          const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']);
+          const gstNumber = getVal(['gstnumber', 'gstin', 'gst', 'gst number', 'tax id', 'gst no', 'taxid', 'tax number', 'gstin number']).toUpperCase().trim();
           const ratingRaw = getVal(['vendorratingscore', 'rating', 'score', 'vendor rating', 'rating 0 100', 'performance score', 'vendor rating score', 'rating optional', 'rating 0-100', 'rating0100']);
           let vendorRatingScore: number | undefined = undefined;
           if (ratingRaw && !isNaN(Number(ratingRaw))) {
@@ -2452,8 +2458,8 @@ export default function InitialSetupModal() {
                     {invalidVendors.length} Supplier Record{invalidVendors.length > 1 ? 's' : ''} Missing Required Fields
                   </p>
                   <p className="mt-0.5 text-[11px] text-amber-800 dark:text-amber-300 leading-relaxed">
-                    Required field: <strong>Company Name</strong> (and mobile numbers must be 10-digit numeric values).
-                    Please click &apos;Edit Data&apos; to fix records missing company names or with invalid mobile numbers before continuing.
+                    Required field: <strong>Company Name</strong> (mobile numbers must be 10-digit numeric values, and GSTIN must be a valid 15-character format if provided).
+                    Please click &apos;Edit Data&apos; to fix records with missing or invalid details before continuing.
                   </p>
                   {!isEditingVendorTable && (
                     <button
@@ -2757,6 +2763,10 @@ export default function InitialSetupModal() {
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
                           const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
+                          const isGstinInvalid = Boolean(v.gstNumber && v.gstNumber.trim() !== '' && !validateGstin(v.gstNumber.trim().toUpperCase()).isValid);
+                          const gstinValidationError = v.gstNumber && v.gstNumber.trim() !== ''
+                            ? validateGstin(v.gstNumber.trim().toUpperCase()).error
+                            : null;
 
                           return (
                             <tr
@@ -2843,8 +2853,16 @@ export default function InitialSetupModal() {
                                   value={v.gstNumber || ''}
                                   onChange={(e) => handleUpdateVendorField(v.id, 'gstNumber', e.target.value.toUpperCase())}
                                   placeholder="GSTIN"
-                                  className="w-full font-mono text-[10px] font-bold px-1.5 py-1 rounded bg-slate-50 dark:bg-gray-800/80 border border-slate-200 dark:border-gray-700 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900 focus:outline-none transition-all"
+                                  className={`w-full font-mono text-[10px] font-bold px-1.5 py-1 rounded focus:outline-none transition-all uppercase ${isGstinInvalid
+                                    ? 'border border-rose-400 bg-rose-50/70 dark:bg-rose-950/40 text-rose-900 dark:text-rose-100 focus:border-rose-500'
+                                    : 'border border-slate-200 dark:border-gray-700 bg-slate-50 dark:bg-gray-800/80 text-slate-700 dark:text-gray-200 focus:border-indigo-500 focus:bg-white dark:focus:bg-gray-900'
+                                    }`}
                                 />
+                                {isGstinInvalid && (
+                                  <span className="text-[9px] text-rose-600 dark:text-rose-400 font-bold block mt-0.5">
+                                    {gstinValidationError || 'Invalid GSTIN'}
+                                  </span>
+                                )}
                               </td>
                               <td className="p-1.5 align-top">
                                 <input
@@ -2915,6 +2933,10 @@ export default function InitialSetupModal() {
                           const isNameInvalid = !v.companyName || v.companyName.trim() === '';
                           const isEmailInvalid = Boolean(v.email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v.email.trim()));
                           const isPhoneInvalid = Boolean(v.phone && v.phone.trim() !== '' && !isValidVendorMobile(v.phone));
+                          const isGstinInvalid = Boolean(v.gstNumber && v.gstNumber.trim() !== '' && !validateGstin(v.gstNumber.trim().toUpperCase()).isValid);
+                          const gstinValidationError = v.gstNumber && v.gstNumber.trim() !== ''
+                            ? validateGstin(v.gstNumber.trim().toUpperCase()).error
+                            : null;
 
                           return (
                             <tr
@@ -2966,9 +2988,15 @@ export default function InitialSetupModal() {
                                 )}
                               </td>
                               <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-200 font-bold max-w-[130px]">
-                                <span className="truncate block" title={v.gstNumber || undefined}>
-                                  {v.gstNumber || '—'}
-                                </span>
+                                {isGstinInvalid ? (
+                                  <span className="text-rose-600 dark:text-rose-400 font-bold inline-flex items-center gap-1" title={gstinValidationError || 'Invalid GSTIN'}>
+                                    <AlertCircle size={11} /> Invalid GSTIN ({v.gstNumber})
+                                  </span>
+                                ) : (
+                                  <span className="truncate block" title={v.gstNumber || undefined}>
+                                    {v.gstNumber || '—'}
+                                  </span>
+                                )}
                               </td>
                               <td className="p-2.5 text-slate-600 dark:text-gray-400 text-[11px] max-w-[200px]">
                                 <span className="truncate block" title={v.address || undefined}>
