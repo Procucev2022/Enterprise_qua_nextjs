@@ -632,6 +632,91 @@ export default function BuyerProfilePage() {
     );
   };
 
+  /**
+   * Save only procurement categories (not organization details).
+   * Called by the "Save Categories" button in the category section.
+   */
+  const handleSaveCategories = async (e: React.FormEvent | React.MouseEvent) => {
+    e.preventDefault();
+    if (isSaving) return;
+
+    if (!isLoaded) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, UI_STRINGS.buyerProfile.loadUnreachable, 'warning');
+      return;
+    }
+
+    const categories = flattenCategorySelection(selectedMajor, selectedMinor);
+    if (categories.length === 0) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        UI_STRINGS.buyerProfile.categoriesRequired,
+        'warning'
+      );
+      return;
+    }
+
+    // Build payload with current profile data + updated categories
+    const payload: BuyerProfileUpdatePayload = {
+      companyName,
+      brandName,
+      organizationType: orgType,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      website,
+      annualTurnover,
+      street,
+      city,
+      state,
+      pincode,
+      country,
+      contactName,
+      contactDesignation,
+      categories,
+    };
+
+    setIsSaving(true);
+    logger.info('Saving buyer procurement categories only', { categoryCount: categories.length }, 'BUYER_PROFILE');
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer procurement categories', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          'Categories Not Saved',
+          err instanceof Error ? err.message : 'The categories could not be saved. Please try again.',
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
+
+    if (!result.success) {
+      showToast('Categories Not Saved', result.error || '', 'warning');
+      return;
+    }
+
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
+    }
+
+    addAuditLog(`Updated Procurement Categories for ${companyName}`);
+    showToast(
+      'Categories Saved',
+      formatString('Successfully updated {categoryCount} procurement categories.', {
+        categoryCount: result.categoryCount ?? categories.length,
+      }),
+      'success'
+    );
+  };
+
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
@@ -1096,6 +1181,20 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
+          </div>
+
+          {/* Save Categories Button */}
+          <div className="flex justify-end border-t border-slate-100 dark:border-gray-800 pt-2.5 mt-3">
+            <button
+              type="button"
+              onClick={handleSaveCategories}
+              disabled={isLoading || isSaving}
+              aria-busy={isSaving}
+              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
+            >
+              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
+              Save Categories
+            </button>
           </div>
         </div>
       </form>

@@ -2786,12 +2786,10 @@ const IDENTITY_OTP_CONFIG = {
 // GMTServiceImpl.getOrgByUserId in the Java p2pservices app, which own the
 // `organization` and `org_division_category` rows this feature reads and writes.
 const BUYER_PROFILE_CONFIG = {
-  // Cardinality caps the old Angular screen enforced for a ClientInitiator: at
-  // most 5 divisions, at most 10 minor categories in total. They exist because
-  // the RFQ distribution engine fans out per selected category, so an unbounded
-  // selection would broadcast every RFQ to the entire vendor base.
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+  // Unlimited major and minor procurement category selections supported.
+  // Frontend may enforce display limits, but backend accepts any count.
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 
   // The rupee sign is rewritten before storage, exactly as updateBuyer does.
   // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹
