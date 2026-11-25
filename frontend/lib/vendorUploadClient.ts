@@ -192,7 +192,8 @@ export function parseVendorUploadFile(
           if (gstin) {
             const gstinValidation = validateGstin(gstin);
             if (!gstinValidation.isValid) {
-              errors.push(gstinValidation.error || 'GSTIN format is invalid.');
+              const errorMsg = gstinValidation.error || 'GSTIN format is invalid.';
+              errors.push(`Row ${rowNumber}: ${errorMsg}`);
             }
           }
           if (pincode && !INDIAN_PINCODE_PATTERN.test(pincode)) errors.push('PIN code must be 6 digits and not start with 0.');

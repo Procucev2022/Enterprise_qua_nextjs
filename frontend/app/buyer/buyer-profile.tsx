@@ -1153,9 +1153,9 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
-          </div>
-
+          
           {/* Save Category Button Footer */}
+          </div>
           <div className="pt-3 border-t border-slate-200 dark:border-gray-800 flex justify-end">
             <button
               type="button"
