@@ -564,6 +564,79 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   ))}
                 </tr>
 
+                {/* GST / Taxes */}
+                <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
+                  <td className="p-4 font-bold text-slate-800 dark:text-gray-200">GST / Taxes (₹)</td>
+                  {quotes.map((q) => {
+                    // Calculate GST amount and rate
+                    const gstAmount: number | null = q.taxes && q.taxes > 0 ? q.taxes : null;
+                    const gstRate: number | null =
+                      gstAmount !== null && q.totalPrice !== null && q.totalPrice > 0
+                        ? Math.round((gstAmount / q.totalPrice) * 100)
+                        : typeof q.taxRate === 'number'
+                        ? q.taxRate
+                        : null;
+                    const displayGstAmount =
+                      gstAmount !== null ? gstAmount : typeof q.taxRate === 'number' && q.totalPrice ? Math.round((q.totalPrice * q.taxRate) / 100) : null;
+
+                    return (
+                      <td
+                        key={q.vendorId}
+                        className={`p-4 ${q.isPreferred ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-x-2 border-indigo-600 dark:border-indigo-500' : ''}`}
+                      >
+                        <div className="flex items-baseline gap-2">
+                          <span className="text-lg font-black text-slate-900 dark:text-white mono">
+                            {displayGstAmount !== null ? formatCurrency(displayGstAmount) : UI_STRINGS.rfqDetails.unsetValue}
+                          </span>
+                        </div>
+                        <span className="text-[10px] text-slate-400 dark:text-gray-500">
+                          Rate: {gstRate !== null ? `${gstRate}%` : UI_STRINGS.rfqDetails.unsetValue}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+
+                {/* Delivery Charges */}
+                <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
+                  <td className="p-4 font-bold text-slate-800 dark:text-gray-200">Delivery Charges (₹)</td>
+                  {quotes.map((q) => (
+                    <td
+                      key={q.vendorId}
+                      className={`p-4 ${q.isPreferred ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-x-2 border-indigo-600 dark:border-indigo-500' : ''}`}
+                    >
+                      <span className="text-lg font-black text-slate-900 dark:text-white mono">
+                        {q.deliveryCharges != null && q.deliveryCharges > 0 ? formatCurrency(q.deliveryCharges) : '₹0'}
+                      </span>
+                      <span className="text-[10px] text-slate-400 dark:text-gray-500 block">Included in total</span>
+                    </td>
+                  ))}
+                </tr>
+
+                {/* Grand Total */}
+                <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20 font-bold">
+                  <td className="p-4 font-bold text-slate-800 dark:text-gray-200">Grand Total (₹)</td>
+                  {quotes.map((q) => {
+                    // Calculate grand total: totalPrice + taxes + deliveryCharges
+                    const baseTotal = Number(q.totalPrice) || 0;
+                    const taxAmount = q.taxes && q.taxes > 0 ? q.taxes : (typeof q.taxRate === 'number' ? Math.round((baseTotal * q.taxRate) / 100) : 0);
+                    const delivery = Number(q.deliveryCharges) || 0;
+                    const grandTotal = baseTotal + taxAmount + delivery;
+
+                    return (
+                      <td
+                        key={q.vendorId}
+                        className={`p-4 ${q.isPreferred ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-x-2 border-indigo-600 dark:border-indigo-500' : ''}`}
+                      >
+                        <span className="text-lg font-black text-slate-900 dark:text-white mono">{formatCurrency(grandTotal)}</span>
+                        <span className="text-[10px] text-slate-400 dark:text-gray-500 block">
+                          Subtotal: {formatCurrency(baseTotal)} + Tax: {formatCurrency(taxAmount)} + Delivery: {formatCurrency(delivery)}
+                        </span>
+                      </td>
+                    );
+                  })}
+                </tr>
+
                 {/* Selection Action Band */}
                 <tr className="bg-slate-100/70 dark:bg-gray-900/60">
                   <td className="p-4 font-bold text-slate-500 dark:text-gray-400 text-[11px] uppercase">

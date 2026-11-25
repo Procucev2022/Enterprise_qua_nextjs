@@ -87,6 +87,9 @@ describe('QuoteMatrix Component Tests', () => {
           paymentTerms: 'Net 45 Days',
           remarks: 'OEM certified warranty with plant dispatch.',
           attachments: [],
+          taxes: 13500,
+          taxRate: 18,
+          deliveryCharges: 2000,
         },
         {
           vendorId: 'v-2',
@@ -103,6 +106,9 @@ describe('QuoteMatrix Component Tests', () => {
           paymentTerms: 'Net 30 Days',
           remarks: 'Standard mechanical specifications.',
           attachments: [],
+          taxes: 14256,
+          taxRate: 18,
+          deliveryCharges: 2500,
         },
       ],
       lineItems: [
@@ -610,7 +616,9 @@ describe('QuoteMatrix Component Tests', () => {
     });
 
     render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
-    expect(screen.getByText(UI_STRINGS.rfqDetails.unsetValue)).toBeInTheDocument();
+    // Now "Not provided" appears multiple times in the matrix table (GST rate, delivery charges, grand total breakdown)
+    const unsetValues = screen.getAllByText(UI_STRINGS.rfqDetails.unsetValue);
+    expect(unsetValues.length).toBeGreaterThan(0);
   });
 
   test('handles deadline date fallback when targetDeliveryDate and target_delivery_date are missing', () => {
@@ -1595,6 +1603,156 @@ describe('QuoteMatrix Component Tests', () => {
       // GST label should be rendered multiple times (once per item in that vendor's column)
       const gstLabels = screen.getAllByText(/GST/i);
       expect(gstLabels.length).toBeGreaterThanOrEqual(2);
+    });
+
+    test('displays GST and Grand Total rows in the main evaluation matrix when taxes are present', () => {
+      const rfqWithMainMatrixGST = {
+        ...mockRFQs[0],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithMainMatrixGST],
+        selectedRFQForMatrix: rfqWithMainMatrixGST,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify the main evaluation matrix is shown
+      expect(screen.getByText('Unit Price (₹)')).toBeInTheDocument();
+      
+      // Verify GST/Taxes row appears
+      expect(screen.getByText('GST / Taxes (₹)')).toBeInTheDocument();
+      
+      // Verify Delivery Charges row appears
+      expect(screen.getByText('Delivery Charges (₹)')).toBeInTheDocument();
+      
+      // Verify Grand Total row appears
+      expect(screen.getByText('Grand Total (₹)')).toBeInTheDocument();
+      
+      // Should display tax amounts (from mockRFQs[0] which has taxes: 13500)
+      expect(screen.getByText(formatCurrency(13500))).toBeInTheDocument();
+      // Should display delivery charges (from mockRFQs[0] which has deliveryCharges: 2000)
+      expect(screen.getByText(formatCurrency(2000))).toBeInTheDocument();
+    });
+
+    test('displays "Not provided" for GST rate when only direct taxes amount is available (no taxRate)', () => {
+      const rfqNoTaxRate = {
+        ...mockRFQs[0],
+        extractedEntities: mockRFQs[0].lineItems || [],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            vendorId: 'v-no-rate',
+            vendorName: 'Tax Amount Only Vendor',
+            totalPrice: 50000,
+            taxes: 9000,
+            taxRate: undefined,
+            deliveryCharges: 0,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqNoTaxRate],
+        selectedRFQForMatrix: rfqNoTaxRate,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify GST/Taxes row appears
+      expect(screen.getByText('GST / Taxes (₹)')).toBeInTheDocument();
+      // Rate should calculate to 18% (9000 / 50000 * 100)
+      expect(screen.getByText(/Rate: 18%/)).toBeInTheDocument();
+      // Verify Grand Total row is shown
+      expect(screen.getByText('Grand Total (₹)')).toBeInTheDocument();
+    });
+
+    test('displays zero delivery charges when deliveryCharges is not set', () => {
+      const rfqNoDelivery = {
+        ...mockRFQs[0],
+        extractedEntities: mockRFQs[0].lineItems || [],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            vendorId: 'v-no-delivery',
+            vendorName: 'Free Delivery Vendor',
+            deliveryCharges: undefined,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqNoDelivery],
+        selectedRFQForMatrix: rfqNoDelivery,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify Grand Total row is rendered
+      expect(screen.getByText('Grand Total (₹)')).toBeInTheDocument();
+      // Should show at least one ₹0 for delivery charges when undefined
+      const deliveryChargeText = screen.getByText('Delivery Charges (₹)');
+      expect(deliveryChargeText).toBeInTheDocument();
+    });
+
+    test('calculates GST from taxRate when quote.taxes is not available but rate is set', () => {
+      const rfqTaxRateOnly = {
+        ...mockRFQs[0],
+        extractedEntities: mockRFQs[0].lineItems || [],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            vendorId: 'v-rate-only',
+            vendorName: 'Rate Only Vendor',
+            totalPrice: 100000,
+            taxes: undefined,
+            taxRate: 5,
+            deliveryCharges: 1000,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqTaxRateOnly],
+        selectedRFQForMatrix: rfqTaxRateOnly,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify GST/Taxes row is shown
+      expect(screen.getByText('GST / Taxes (₹)')).toBeInTheDocument();
+      // Should show the calculated GST (100000 * 5 / 100 = 5000)
+      expect(screen.getByText(formatCurrency(5000))).toBeInTheDocument();
+      // Verify Grand Total row is shown
+      expect(screen.getByText('Grand Total (₹)')).toBeInTheDocument();
     });
   });
 });

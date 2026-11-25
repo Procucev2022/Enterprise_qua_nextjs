@@ -391,6 +391,7 @@ export default function BuyerProfilePage() {
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
+  const { MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
 
   // Fetched taxonomy first, then the store copy. Empty when neither has rows.
   const activeTaxonomy = taxonomy.length > 0 ? taxonomy : (categoryTaxonomy ?? []);
@@ -1007,47 +1008,20 @@ export default function BuyerProfilePage() {
           </div>
         </div>
 
-        {/* Save Profile Button - positioned after profile sections, before category selection */}
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={handleSaveProfile}
-            disabled={isLoading || isSaving}
-            aria-busy={isSaving}
-            className="btn btn-primary btn-md shadow-md font-bold flex items-center gap-2"
-          >
-            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
-            Save Organization Profile
-          </button>
-        </div>
 
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
         <div id="section-categories" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <div>
               <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Divisions &amp; 120+ Categories)
+                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories
               </h2>
-              <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
-                Select your organization&apos;s active procurement scopes. This governs automated AI vendor matching &amp; RFQ distribution.
-              </p>
             </div>
 
-            <div className="flex flex-col items-end gap-2">
-              <div className="flex items-center gap-2">
-                <span className="badge badge-purple font-mono text-[11px]">
-                  {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
-                </span>
-              </div>
-              <button
-                type="button"
-                onClick={handleSaveCategoryOnly}
-                disabled={isLoading || isSaving}
-                aria-busy={isSaving}
-                className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
-              >
-                {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} {UI_STRINGS.buyerProfile.saveCategoryButton}
-              </button>
+            <div className="flex items-center gap-2">
+              <span className="badge badge-purple font-mono text-[11px]">
+                {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
+              </span>
             </div>
           </div>
 
@@ -1179,6 +1153,19 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
+          </div>
+
+          {/* Save Category Button - Bottom of Category Section */}
+          <div className="flex items-center justify-end pt-2 border-t border-slate-100 dark:border-gray-800 mt-3">
+            <button
+              type="button"
+              onClick={handleSaveCategoryOnly}
+              disabled={isLoading || isSaving}
+              aria-busy={isSaving}
+              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
+            >
+              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Category
+            </button>
           </div>
         </div>
       </form>
