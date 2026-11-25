@@ -1772,9 +1772,24 @@ export default function IngestionWizard({
             <input
               id="rfq-budget"
               type="number"
+              step="any"
               min={0}
+              inputMode="numeric"
               value={form.estimatedBudget ?? ''}
               onChange={(e) => patchForm('estimatedBudget', e.target.value === '' ? null : Number(e.target.value))}
+              onPaste={(e) => {
+                const paste = e.clipboardData?.getData('text') || '';
+                const cleaned = paste.replace(/[^0-9.]/g, '');
+                if (cleaned !== '') {
+                  e.preventDefault();
+                  patchForm('estimatedBudget', Number(cleaned));
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                  e.preventDefault();
+                }
+              }}
               placeholder="e.g. 500000"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
             />

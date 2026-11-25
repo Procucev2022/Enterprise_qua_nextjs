@@ -866,6 +866,33 @@ describe('ManualRFQModal: extraction from an attached document', () => {
     expect(screen.getByLabelText(/Estimated Budget/i)).toHaveValue(null);
   });
 
+  it('supports multi-digit budget, comma-formatted paste, and handles currency key intercept', () => {
+    renderModal();
+
+    const budgetInput = screen.getByLabelText(/Estimated Budget/i);
+    // Multi-digit entry
+    fireEvent.change(budgetInput, { target: { value: '5000000' } });
+    expect(budgetInput).toHaveValue(5000000);
+
+    // Paste with formatted Indian currency
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => '₹ 25,00,000' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Paste with non-numeric text
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => 'abc' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Keydown for comma, rupee, and dollar
+    expect(fireEvent.keyDown(budgetInput, { key: ',' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '₹' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '$' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '9' })).toBe(true);
+  });
+
   it('shows the in-progress label while the document is being read', async () => {
     let release: (value: unknown) => void = () => {};
     rfqClient.extractLineItemsFromDocument.mockReturnValue(

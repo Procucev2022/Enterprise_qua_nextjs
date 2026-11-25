@@ -599,6 +599,33 @@ describe('RFQEditModal: commercial and delivery', () => {
     fireEvent.change(budget, { target: { value: '' } });
     expect(budget).toHaveValue(null);
   });
+
+  it('supports multi-digit budget, comma-formatted paste, and handles currency key intercept', () => {
+    renderEdit();
+
+    const budgetInput = screen.getByLabelText(/Estimated Budget/i);
+    // Multi-digit entry
+    fireEvent.change(budgetInput, { target: { value: '5000000' } });
+    expect(budgetInput).toHaveValue(5000000);
+
+    // Paste with formatted Indian currency
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => '₹ 25,00,000' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Paste with non-numeric text
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => 'xyz' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Keydown for comma, rupee, and dollar
+    expect(fireEvent.keyDown(budgetInput, { key: ',' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '₹' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '$' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '1' })).toBe(true);
+  });
 });
 
 describe('RFQEditModal: line items', () => {
