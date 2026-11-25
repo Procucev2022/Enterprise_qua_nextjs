@@ -1878,7 +1878,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await waitFor(() => expect(fetchCategoryTaxonomy).toHaveBeenCalled());
 
     expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.taxonomyUnavailableTitle,
+      UI_STRINGS.buyerProfile.loadFailedTitle,
       expect.any(String),
       'warning'
     );
