@@ -1317,4 +1317,285 @@ describe('QuoteMatrix Component Tests', () => {
       expect(parseRfqTimestamp('not-a-date')).toBeNull();
     });
   });
+
+  describe('GST Amount Display and Calculation', () => {
+    test('displays GST amount from quote.taxes when available (backend-calculated)', () => {
+      const rfqWithTaxes = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Centrifugal Pump', quantity: 6, unit: 'Units' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Centrifugal Pump', quantity: 6, unitPrice: 10000, totalPrice: 60000, taxes: 10800 },
+            ],
+            taxes: 10800, // Backend-calculated GST
+            taxRate: undefined, // No rate provided
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithTaxes],
+        selectedRFQForMatrix: rfqWithTaxes,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify line-item table is shown
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // Verify "GST" label is in the document
+      const gstElements = screen.getAllByText(/GST/i);
+      expect(gstElements.length).toBeGreaterThan(0);
+    });
+
+    test('calculates GST from taxRate when quote.taxes is not available', () => {
+      const rfqWithTaxRate = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Electrical Equipment', quantity: 4, unit: 'Units' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Electrical Equipment', quantity: 4, unitPrice: 5000, totalPrice: 20000 },
+            ],
+            taxes: undefined, // No direct tax amount
+            taxRate: 18, // 18% GST rate
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithTaxRate],
+        selectedRFQForMatrix: rfqWithTaxRate,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Verify line-item table is shown
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // Verify GST text with rate is rendered
+      const gstRateElements = screen.getAllByText(/GST \(18%\)/i);
+      expect(gstRateElements.length).toBeGreaterThan(0);
+    });
+
+    test('prefers direct taxes amount over calculated taxRate when both are present', () => {
+      const rfqWithBoth = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Mechanical Part', quantity: 10, unit: 'Pieces' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Mechanical Part', quantity: 10, unitPrice: 1500, totalPrice: 15000 },
+            ],
+            taxes: 2700, // Direct tax amount (18%)
+            taxRate: 12, // Different rate (should be ignored)
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithBoth],
+        selectedRFQForMatrix: rfqWithBoth,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Should show line-item table
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // Should use the direct tax amount (2700), which is 18% of 15000
+      // The rate should be calculated as 18%, not 12%
+      const gstRateElements = screen.getAllByText(/GST \(18%\)/i);
+      expect(gstRateElements.length).toBeGreaterThan(0);
+    });
+
+    test('shows "Not available" when neither taxes nor taxRate is present', () => {
+      const rfqWithoutTaxData = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Item', quantity: 2, unit: 'Units' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Item', quantity: 2, unitPrice: 5000, totalPrice: 10000 },
+            ],
+            taxes: undefined,
+            taxRate: undefined,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithoutTaxData],
+        selectedRFQForMatrix: rfqWithoutTaxData,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Should show line-item table
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // Should show "Not available" for GST
+      const unsetElements = screen.getAllByText(UI_STRINGS.rfqDetails.unsetValue);
+      expect(unsetElements.length).toBeGreaterThan(0);
+    });
+
+    test('shows zero taxes (0) when quote.taxes is explicitly 0', () => {
+      const rfqWithZeroTax = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Tax Exempt Item', quantity: 5, unit: 'Units' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Tax Exempt Item', quantity: 5, unitPrice: 1000, totalPrice: 5000 },
+            ],
+            taxes: 0, // Explicitly zero (tax exempt)
+            taxRate: 18,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqWithZeroTax],
+        selectedRFQForMatrix: rfqWithZeroTax,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Should show line-item table
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // When taxRate is present and taxes is 0, it should fall back to taxRate
+      // 5000 * 18 / 100 = 900
+      const gstRateElements = screen.getAllByText(/GST \(18%\)/i);
+      expect(gstRateElements.length).toBeGreaterThan(0);
+    });
+
+    test('calculates and displays GST rate as percentage when derived from taxes amount', () => {
+      const rfqForRateDisplay = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Service Item', quantity: 1, unit: 'Service' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Service Item', quantity: 1, unitPrice: 50000, totalPrice: 50000 },
+            ],
+            taxes: 9000, // This is 18% of 50000
+            taxRate: undefined,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqForRateDisplay],
+        selectedRFQForMatrix: rfqForRateDisplay,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Should show line-item table
+      expect(screen.getByText(/Line-Item-Wise Bid Comparison/i)).toBeInTheDocument();
+      // Should calculate and display 18% rate from the tax amount
+      const gstRateElements = screen.getAllByText(/GST \(18%\)/i);
+      expect(gstRateElements.length).toBeGreaterThan(0);
+    });
+
+    test('displays GST correctly in line-item-wise comparison when multiple line items have taxes', () => {
+      const rfqMultiLineItems = {
+        ...mockRFQs[0],
+        extractedEntities: [
+          { id: 'li-1', itemName: 'Item A', quantity: 2, unit: 'Units' },
+          { id: 'li-2', itemName: 'Item B', quantity: 3, unit: 'Units' },
+        ],
+        quotes: [
+          {
+            ...mockRFQs[0].quotes[0],
+            lineItemQuotes: [
+              { lineItemId: 'li-1', itemName: 'Item A', quantity: 2, unitPrice: 5000, totalPrice: 10000, taxes: 1800 },
+              { lineItemId: 'li-2', itemName: 'Item B', quantity: 3, unitPrice: 3000, totalPrice: 9000, taxes: 1620 },
+            ],
+            taxes: 3420,
+            taxRate: 18,
+          },
+        ],
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        currentRole: 'buyer',
+        rfqs: [rfqMultiLineItems],
+        selectedRFQForMatrix: rfqMultiLineItems,
+        setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+        showToast: mockShowToast,
+        openRFQDeepDive: mockOpenRFQDeepDive,
+        deepDiveModalOpen: false,
+        setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+        selectedRFQForDeepDive: null,
+      });
+
+      render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+      
+      // Both items should appear in line-item table
+      expect(screen.getByText('Item A')).toBeInTheDocument();
+      expect(screen.getByText('Item B')).toBeInTheDocument();
+      // GST label should be rendered multiple times (once per item in that vendor's column)
+      const gstLabels = screen.getAllByText(/GST/i);
+      expect(gstLabels.length).toBeGreaterThanOrEqual(2);
+    });
+  });
 });
+

@@ -742,8 +742,29 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       {prices.map(({ quote, matched, effectivePrice }) => {
                         const isL1 = effectivePrice !== null && lowestPrice !== null && effectivePrice === lowestPrice;
                         const lineTotal = matched ? matched.totalPrice || matched.unitPrice * (item.quantity || 1) : null;
-                        const taxRate = typeof quote.taxRate === 'number' ? quote.taxRate : null;
-                        const estTax = lineTotal !== null && taxRate !== null ? Math.round((lineTotal * taxRate) / 100) : null;
+                        
+                        // GST calculation: prefer direct taxes amount if available, otherwise fall back to taxRate
+                        const estTax: number | null = (() => {
+                          if (lineTotal === null) return null;
+                          // First check if quote has direct taxes amount
+                          if (quote.taxes && quote.taxes > 0) return quote.taxes;
+                          // Otherwise try to calculate from taxRate
+                          const taxRate = typeof quote.taxRate === 'number' ? quote.taxRate : null;
+                          if (taxRate !== null) return Math.round((lineTotal * taxRate) / 100);
+                          return null;
+                        })();
+                        
+                        // Calculate effective tax rate for display (from either source)
+                        const displayTaxRate: number | null = (() => {
+                          if (lineTotal === null || estTax === null) return null;
+                          if (quote.taxes && quote.taxes > 0) {
+                            // Calculate rate from actual tax amount
+                            return Math.round((quote.taxes / lineTotal) * 100);
+                          }
+                          if (typeof quote.taxRate === 'number') return quote.taxRate;
+                          return null;
+                        })();
+                        
                         const leadTime = matched?.leadTimeDays ?? quote.leadTimeDays;
 
                         return (
@@ -776,7 +797,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                                   </span>
                                 </div>
                                 <div className="text-[9px] text-slate-400 dark:text-gray-500 flex items-center justify-between border-t border-slate-100 dark:border-gray-800/60 pt-0.5">
-                                  <span>{taxRate !== null ? `GST (${taxRate}%):` : 'GST:'}</span>
+                                  <span>{displayTaxRate !== null ? `GST (${displayTaxRate}%):` : 'GST:'}</span>
                                   <span className="mono">{estTax !== null ? `+${formatCurrency(estTax)}` : UI_STRINGS.rfqDetails.unsetValue}</span>
                                 </div>
                                 <div className="text-[9px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
