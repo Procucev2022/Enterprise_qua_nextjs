@@ -42,7 +42,6 @@ import {
   Calendar,
   RotateCcw,
   Download,
-  MoreHorizontal,
   MapPin,
   LayoutGrid,
 } from 'lucide-react';
@@ -1170,15 +1169,23 @@ export default function OpportunityFeed({
 
         <td className="py-3 px-3.5 text-right whitespace-nowrap">
           <div className="flex items-center justify-end gap-1.5">
-            <button
-              onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-              className="btn btn-secondary btn-xs font-semibold inline-flex items-center gap-1 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 px-2 py-1 rounded-lg shadow-2xs cursor-pointer"
-              title="View RFQ Details"
-              aria-label="View Details"
-            >
-              <Eye size={12} />
-              <span>{isDirect ? 'View' : 'View Details'}</span>
-            </button>
+            {opp.status === 'Closed' || opp.status === 'Expired' ? null : isLocked ? (
+              <button
+                onClick={openUpgradeModal}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px] rounded-lg shadow-2xs cursor-pointer"
+              >
+                <span>🔒 Upgrade</span>
+              </button>
+            ) : (
+              <button
+                onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+                className="btn btn-primary btn-xs font-bold inline-flex items-center justify-center px-2.5 py-1 text-[11px] rounded-lg shadow-2xs cursor-pointer"
+                title="Submit Detailed Quotation"
+                aria-label="Submit Quote"
+              >
+                <span>Submit Quote</span>
+              </button>
+            )}
             <button
               onClick={() => handleDownloadRfq(opp)}
               className="btn btn-secondary btn-xs font-semibold inline-flex items-center justify-center p-1.5 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 rounded-lg shadow-2xs cursor-pointer"
@@ -1187,24 +1194,15 @@ export default function OpportunityFeed({
             >
               <Download size={13} />
             </button>
-            {opp.status === 'Closed' || opp.status === 'Expired' ? null : isLocked ? (
-              <button
-                onClick={openUpgradeModal}
-                className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px]"
-              >
-                <span>🔒 Upgrade</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => router.push(`/vendor/quotation-form?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
-                className="btn btn-secondary btn-xs font-semibold inline-flex items-center justify-center p-1.5 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 rounded-lg shadow-2xs cursor-pointer"
-                title="Submit Detailed Quotation"
-                aria-label="Submit Quote"
-              >
-                <MoreHorizontal size={13} />
-                <span className="sr-only">Submit Quote</span>
-              </button>
-            )}
+            <button
+              onClick={() => router.push(`/vendor/rfq-details?rfq=${encodeURIComponent(opp.rfqNumber)}`)}
+              className="btn btn-secondary btn-xs font-semibold inline-flex items-center justify-center p-1.5 border border-slate-200 text-slate-700 dark:text-gray-300 hover:bg-slate-100 rounded-lg shadow-2xs cursor-pointer"
+              title="View RFQ Details"
+              aria-label="View Details"
+            >
+              <Eye size={13} />
+              <span className="sr-only">View Details</span>
+            </button>
           </div>
         </td>
       </tr>

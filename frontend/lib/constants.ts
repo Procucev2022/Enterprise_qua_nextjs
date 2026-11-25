@@ -3255,20 +3255,20 @@ export interface TableColumnOption {
 
 export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = [
   { key: 'name', label: 'Supplier Name', visible: true, required: true },
-  { key: 'vendorCode', label: 'Vendor Code', visible: true },
-  { key: 'majorCategory', label: 'Division', visible: true },
   { key: 'minorCategories', label: 'Category', visible: true },
-  { key: 'source', label: 'Source', visible: true },
-  { key: 'origin', label: 'Origin', visible: true },
-  { key: 'engagement', label: 'RFQ Engagement', visible: true },
-  { key: 'contactPerson', label: 'Contact Person', visible: true },
-  { key: 'email', label: 'Email', visible: true },
+  { key: 'contactPerson', label: 'Contact Person Name', visible: true },
   { key: 'phone', label: 'Phone', visible: true },
-  { key: 'location', label: 'Location', visible: true },
+  { key: 'email', label: 'Email', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'vendorCode', label: 'Vendor Code', visible: false },
+  { key: 'majorCategory', label: 'Division', visible: false },
+  { key: 'origin', label: 'Origin', visible: false },
+  { key: 'engagement', label: 'RFQ Engagement', visible: false },
+  { key: 'location', label: 'Location', visible: false },
   { key: 'score', label: 'AI Score', visible: false }, // Hidden: Evaluation-related
-  { key: 'rating', label: 'Rating', visible: true }, // Re-enabled: Show vendor ratings
-  { key: 'status', label: 'Status', visible: true },
-  { key: 'actions', label: 'Actions', visible: true, required: true },
+  { key: 'rating', label: 'Rating', visible: false },
+  { key: 'status', label: 'Status', visible: false },
+  { key: 'actions', label: 'Action', visible: true, required: true },
 ];
 
 export const BUYER_RFQ_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
