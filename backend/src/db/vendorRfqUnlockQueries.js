@@ -231,7 +231,7 @@ function makeD1UnlockStatements(options) {
             '$.unlockedRfqIds', json(CASE
               WHEN json_type(raw, '$.unlockedRfqIds') = 'array' THEN (
                 SELECT json_group_array(value) FROM (
-                  SELECT value FROM json_each(json_extract(vendors.raw, '$.unlockedRfqIds'))
+                  SELECT value FROM json_each(json_extract(raw, '$.unlockedRfqIds'))
                   UNION SELECT $2
                   UNION SELECT $3 WHERE $3 IS NOT NULL
                 )
