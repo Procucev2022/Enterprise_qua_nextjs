@@ -66,9 +66,34 @@ describe('atomic vendor quote submission queries', () => {
     expect(built.statements[3].text).toContain('raw = $9');
     expect(built.statements[3].text).toContain('freeQuotationCredits');
     expect(built.statements[4].text).toContain('changes() > 0');
+    expect(built.statements[4].text).toContain('UPDATE vendors SET raw = json_set');
+    expect(built.statements[4].text).not.toContain('v.raw');
+    expect(built.statements[4].text).not.toMatch(/\bv\.\w+/);
     expect(built.statements[5].text).toContain('ON CONFLICT (idempotency_key) DO NOTHING');
     expect(built.creditCharged).toBe(1);
     expect(built.updatedVendor.freeQuotationCredits).toBe(1);
+  });
+
+  test('does not reference unaliased table prefix v.raw in D1 vendor quote updates', () => {
+    const built = queries.makeD1VendorQuoteSubmissionStatements(baseOptions());
+    const vendorUpdate = built.statements[4];
+    expect(vendorUpdate.text).not.toMatch(/\bv\.raw\b/);
+    expect(vendorUpdate.text).not.toMatch(/\bv\.\w+/);
+    expect(vendorUpdate.text).toContain("json_extract(raw, '$.unlimitedQuoteSubmissions')");
+  });
+
+  test('correctly exempts unlimited and subscribed vendors in D1 vendor quote updates without alias errors', () => {
+    const unlimitedVendor = vendor({ isUnlimited: true, unlimitedQuoteSubmissions: true });
+    const builtUnlimited = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({ expectedVendor: unlimitedVendor }));
+    expect(builtUnlimited.creditCharged).toBe(0);
+    expect(builtUnlimited.statements[4].text).not.toMatch(/\bv\.raw\b/);
+    expect(builtUnlimited.statements[4].text).not.toMatch(/\bv\.\w+/);
+
+    const subscribedVendor = vendor({ subscriptionPlan: 'enterprise', isSubscribed: true });
+    const builtSubscribed = queries.makeD1VendorQuoteSubmissionStatements(baseOptions({ expectedVendor: subscribedVendor }));
+    expect(builtSubscribed.creditCharged).toBe(0);
+    expect(builtSubscribed.statements[4].text).not.toMatch(/\bv\.raw\b/);
+    expect(builtSubscribed.statements[4].text).not.toMatch(/\bv\.\w+/);
   });
 
   test('adds a quote email intent to the same D1 batch as the quote and credit writes', () => {
