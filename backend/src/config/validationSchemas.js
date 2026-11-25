@@ -1480,6 +1480,18 @@ const VALIDATION_SCHEMAS = {
       enum: ['true', 'false', '1', '0'],
       message: 'activeOnly must be true, false, 1, or 0.',
     },
+    subscription: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'subscription must be true, false, 1, or 0.',
+    },
+    subscriptionOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'subscriptionOnly must be true, false, 1, or 0.',
+    },
   },
 
   transactionalEmailPreview: {

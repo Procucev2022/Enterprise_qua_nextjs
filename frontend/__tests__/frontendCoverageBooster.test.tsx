@@ -478,7 +478,7 @@ describe('Frontend Master Coverage Booster Suite', () => {
     fireEvent.change(contactNameInput, { target: { value: 'Rajesh S' } });
 
     // Save profile
-    const saveBtn = screen.getByRole('button', { name: /Save Organization Profile/i });
+    const saveBtn = screen.getAllByRole('button', { name: /Save Organization Profile/i })[0];
     await act(async () => {
       fireEvent.click(saveBtn);
     });

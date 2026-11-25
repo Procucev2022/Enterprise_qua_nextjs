@@ -428,6 +428,9 @@ export interface FetchAllVendorsOptions {
   pincode?: string;
   /** Soft proximity pincode (3–6 digits) used to prioritize local public suppliers before fallback. */
   preferredPincode?: string;
+  /** Filter to only subscription (paid/tier) vendors. */
+  subscription?: boolean;
+  subscriptionOnly?: boolean;
 }
 
 /** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */

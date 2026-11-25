@@ -503,6 +503,11 @@ function validateVendorDirectoryQuery(rawQuery) {
   if (q.activeOnly !== undefined && String(q.activeOnly).trim() !== '') {
     normalized.activeOnly = String(q.activeOnly).trim().toLowerCase();
   }
+  for (const subKey of ['subscription', 'subscriptionOnly']) {
+    if (q[subKey] !== undefined && String(q[subKey]).trim() !== '') {
+      normalized[subKey] = String(q[subKey]).trim().toLowerCase();
+    }
+  }
   return validatePayload(VALIDATION_SCHEMAS.vendorDirectoryQuery, normalized);
 }
 
@@ -648,6 +653,7 @@ async function getVendors(req, res, next) {
     const cleanQuery = queryValidation.sanitizedData;
     const publicOnly = ['true', '1'].includes(String(cleanQuery.publicOnly || '').trim().toLowerCase());
     const activeOnly = ['true', '1'].includes(String(cleanQuery.activeOnly || '').trim().toLowerCase());
+    const subscriptionOnly = ['true', '1'].includes(String(cleanQuery.subscription || cleanQuery.subscriptionOnly || '').trim().toLowerCase());
     const minors = dedupeCategoryStrings([
       ...parseCategoryFilterList(cleanQuery.minors),
       ...parseCategoryFilterList(cleanQuery.minor),
@@ -736,6 +742,7 @@ async function getVendors(req, res, next) {
           ...(pincode ? { pincode } : {}),
           ...(publicOnly ? { publicOnly: true } : {}),
           ...(activeOnly ? { activeOnly: true } : {}),
+          ...(subscriptionOnly ? { subscriptionOnly: true } : {}),
           scopedBuyerId: !publicOnly && buyerId && buyerId !== 'all' ? buyerId : '',
         });
         const filteredRows = (publicOnly || activeOnly) ? rows.filter((v) => !isVendorInactive(v)) : rows;
@@ -768,7 +775,7 @@ async function getVendors(req, res, next) {
       }
     }
 
-    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly || activeOnly);
+    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly || activeOnly || subscriptionOnly);
     const limitQuery = (!hasFilters && rawQuery.limit)
       ? Math.min(Number(rawQuery.limit), 500)
       : null;
@@ -777,6 +784,16 @@ async function getVendors(req, res, next) {
       vendors = vendors.filter((v) => !isVendorInactive(v) && storeService.isProcucevVendor(v));
     } else if (activeOnly) {
       vendors = vendors.filter((v) => !isVendorInactive(v));
+    }
+    if (subscriptionOnly) {
+      vendors = vendors.filter((v) => {
+        const raw = v.raw && typeof v.raw === 'object' ? v.raw : {};
+        const plan = String(
+          v.subscriptionPlan || v.subscribedPlan || v.plan || raw.subscriptionPlan || raw.subscribedPlan || raw.plan || ''
+        ).toLowerCase().trim();
+        const isSub = v.isSubscribed === true || v.isSubscribed === 'true' || raw.isSubscribed === true || raw.isSubscribed === 'true' || raw.isSubscribed === 1;
+        return Boolean((plan && !['none', 'free', 'free_tier', 'free_trial', 'premium'].includes(plan)) || isSub);
+      });
     }
     if (search) {
       const tokens = parseSearchTokens(search);

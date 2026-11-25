@@ -767,6 +767,7 @@ export async function fetchAllVendors(
   if (/^\d{3,6}$/.test(cleanPincode)) params.set('pincode', cleanPincode);
   const cleanPreferredPincode = String(preferredPincode || '').replace(/\s+/g, '');
   if (/^\d{3,6}$/.test(cleanPreferredPincode)) params.set('preferredPincode', cleanPreferredPincode);
+  if (options.subscription || options.subscriptionOnly) params.set('subscription', 'true');
 
   let res: Response;
   try {
