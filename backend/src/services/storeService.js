@@ -3220,7 +3220,7 @@ class StoreService {
       coversRfq ||
       isDirect ||
       isInvited ||
-      (isNetworkMode && categoryMatches);
+      (isNetworkMode && coversRfq);
 
     if (!hasAccess) {
       return {

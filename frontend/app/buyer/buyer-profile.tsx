@@ -1182,20 +1182,6 @@ export default function BuyerProfilePage() {
               );
             })}
           </div>
-
-          {/* Save Categories Button */}
-          <div className="flex justify-end border-t border-slate-100 dark:border-gray-800 pt-2.5 mt-3">
-            <button
-              type="button"
-              onClick={handleSaveCategories}
-              disabled={isLoading || isSaving}
-              aria-busy={isSaving}
-              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
-            >
-              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
-              Save Category
-            </button>
-          </div>
         </div>
       </form>
 
