@@ -2,7 +2,7 @@ import * as XLSX from 'xlsx';
 import { authClient } from './authClient';
 import { isPlaceholderVendorCategory, normalizePoDate, normalizeVendorCategoryList } from './constants';
 import { formatString, UI_STRINGS } from './uiStrings';
-import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN } from './validationSchemas';
+import { EMAIL_PATTERN, GSTIN_PATTERN, INDIAN_MOBILE_PATTERN, INDIAN_PINCODE_PATTERN, validateGstin } from './validationSchemas';
 import type {
   ExistingPoDedupeCandidate,
   ExistingVendorDedupeCandidate,
@@ -189,7 +189,12 @@ export function parseVendorUploadFile(
           if (email && !EMAIL_PATTERN.test(email)) errors.push('Email is not a valid email address.');
           if (!phone) errors.push('Mobile number is required.');
           else if (!INDIAN_MOBILE_PATTERN.test(phone)) errors.push('Mobile number must be a valid 10-digit Indian number.');
-          if (gstin && !GSTIN_PATTERN.test(gstin)) errors.push('GSTIN format is invalid.');
+          if (gstin) {
+            const gstinValidation = validateGstin(gstin);
+            if (!gstinValidation.isValid) {
+              errors.push(gstinValidation.error || 'GSTIN format is invalid.');
+            }
+          }
           if (pincode && !INDIAN_PINCODE_PATTERN.test(pincode)) errors.push('PIN code must be 6 digits and not start with 0.');
 
           const duplicateMatch = dedupeChecker.checkAndRegister({
