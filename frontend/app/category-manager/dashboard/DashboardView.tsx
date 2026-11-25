@@ -37,8 +37,8 @@ interface SortConfig {
 export default function DashboardView() {
   const strings = UI_STRINGS.categoryManagerDashboard;
 
-  // Filter state
-  const [preset, setPreset] = useState<PresetType>('this_month');
+  // Filter state (default to 'all' for all-time DB totals)
+  const [preset, setPreset] = useState<PresetType>('all');
   const [startDate, setStartDate] = useState<string>('');
   const [endDate, setEndDate] = useState<string>('');
 
@@ -74,6 +74,7 @@ export default function DashboardView() {
   const [isModalOpen, setIsModalOpen] = useState<boolean>(false);
   const [activeMetricType, setActiveMetricType] = useState<CategoryManagerDashboardRecordType | null>(null);
   const [modalRecords, setModalRecords] = useState<CategoryManagerDashboardPopupRecord[]>([]);
+  const [modalTotalCount, setModalTotalCount] = useState<number | null>(null);
   const [isLoadingRecords, setIsLoadingRecords] = useState<boolean>(false);
   const [recordsError, setRecordsError] = useState<string | null>(null);
   const [modalSearch, setModalSearch] = useState<string>('');
@@ -143,17 +144,20 @@ export default function DashboardView() {
 
       if (res.success && Array.isArray(res.records)) {
         setModalRecords(res.records);
+        setModalTotalCount(typeof res.total === 'number' ? res.total : res.records.length);
       } else {
         const errText = res.error || strings.errors.recordsLoadFailed;
         console.error('[DashboardView] Records fetch error:', res.status, errText);
         setRecordsError(errText);
         setModalRecords([]);
+        setModalTotalCount(0);
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
       console.error('[DashboardView] Records network exception:', msg);
       setRecordsError(msg);
       setModalRecords([]);
+      setModalTotalCount(0);
     } finally {
       setIsLoadingRecords(false);
     }
@@ -163,6 +167,7 @@ export default function DashboardView() {
     setIsModalOpen(false);
     setActiveMetricType(null);
     setModalRecords([]);
+    setModalTotalCount(null);
     setRecordsError(null);
   };
 
@@ -178,9 +183,9 @@ export default function DashboardView() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isModalOpen]);
 
-  // Preset button actions
+  // Preset button actions (clicking an already-active preset clears back to All Time)
   const handleSelectPreset = (newPreset: PresetType) => {
-    setPreset(newPreset);
+    setPreset((prev) => (prev === newPreset ? 'all' : newPreset));
     setStartDate('');
     setEndDate('');
   };
@@ -207,13 +212,27 @@ export default function DashboardView() {
   };
 
   const handleStartDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setStartDate(e.target.value);
-    setPreset('custom');
+    const val = e.target.value;
+    setStartDate(val);
+    setPreset(val || endDate ? 'custom' : 'all');
   };
 
   const handleEndDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    setEndDate(e.target.value);
-    setPreset('custom');
+    const val = e.target.value;
+    setEndDate(val);
+    setPreset(startDate || val ? 'custom' : 'all');
+  };
+
+  const handleClearStartDate = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setStartDate('');
+    setPreset(endDate ? 'custom' : 'all');
+  };
+
+  const handleClearEndDate = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEndDate('');
+    setPreset(startDate ? 'custom' : 'all');
   };
 
   // Filtered & sorted modal records
@@ -505,6 +524,17 @@ export default function DashboardView() {
             <Calendar className="w-3.5 h-3.5 text-slate-400" />
             <span className="text-xs font-medium">{startDate || strings.filters.startDate}</span>
           </div>
+          {startDate && (
+            <button
+              type="button"
+              onClick={handleClearStartDate}
+              aria-label={strings.filters.clearDates}
+              className="p-0.5 text-slate-400 hover:text-slate-700 rounded z-10"
+              data-testid="clear-start-date-btn"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
           <input
             ref={startInputRef}
             type="date"
@@ -533,6 +563,17 @@ export default function DashboardView() {
             <Calendar className="w-3.5 h-3.5 text-slate-400" />
             <span className="text-xs font-medium">{endDate || strings.filters.endDate}</span>
           </div>
+          {endDate && (
+            <button
+              type="button"
+              onClick={handleClearEndDate}
+              aria-label={strings.filters.clearDates}
+              className="p-0.5 text-slate-400 hover:text-slate-700 rounded z-10"
+              data-testid="clear-end-date-btn"
+            >
+              <X className="w-3 h-3" />
+            </button>
+          )}
           <input
             ref={endInputRef}
             type="date"
@@ -667,7 +708,10 @@ export default function DashboardView() {
                   {getModalTitle(activeMetricType)}
                 </h3>
                 <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-slate-200 text-slate-700">
-                  {filteredAndSortedRecords.length} {strings.modal.recordsFound}
+                  {(!modalSearch.trim() && modalTotalCount !== null
+                    ? modalTotalCount
+                    : filteredAndSortedRecords.length
+                  ).toLocaleString()} {strings.modal.recordsFound}
                 </span>
               </div>
               <button

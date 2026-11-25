@@ -89,14 +89,16 @@ describe('directoryKPIQueries KPI Stats functions', () => {
       expect(statsNonArray.totalSuppliers).toBe(0);
 
       const list = [
-        { source: 'procucev_network', status: 'ACTIVE' },
-        { source: 'buyer_uploaded', status: 'VERIFIED' },
-        { buyerId: 'b-1', status: 'PENDING' },
-        { buyerAccountId: 'ba-2', status: null },
+        { source: 'procucev_network', status: 'ACTIVE', subscriptionPlan: 'connect' },
+        { source: 'buyer_uploaded', status: 'VERIFIED', isSubscribed: true },
+        { buyerId: 'b-1', status: 'PENDING', subscriptionPlan: 'free_tier' },
+        { buyerAccountId: 'ba-2', status: null, subscriptionPlan: 'premium' },
         { status: 'UNKNOWN' },
       ];
       const statsList = directoryKPIQueries.computeSellerKPIStatsFromVendors(list);
       expect(statsList.totalSuppliers).toBe(5);
+      expect(statsList.subscriptionVendors).toBe(2);
+      expect(statsList.subscriptionVendorsCount).toBe(2);
       expect(statsList.networkSuppliers).toBe(3);
       expect(statsList.buyerUploaded).toBe(3);
       expect(statsList.verifiedActive).toBe(2);
@@ -196,6 +198,7 @@ describe('directoryKPIQueries KPI Stats functions', () => {
       jest.spyOn(pool, 'query').mockResolvedValueOnce({
         rows: [{
           total_suppliers: 30,
+          subscription_vendors: 12,
           network_suppliers: 20,
           buyer_uploaded: 10,
           verified_active: 28,
@@ -204,6 +207,8 @@ describe('directoryKPIQueries KPI Stats functions', () => {
 
       const stats = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats.totalSuppliers).toBe(30);
+      expect(stats.subscriptionVendors).toBe(12);
+      expect(stats.subscriptionVendorsCount).toBe(12);
       expect(stats.networkSuppliers).toBe(20);
       expect(stats.buyerUploaded).toBe(10);
       expect(stats.verifiedActive).toBe(28);
@@ -215,6 +220,8 @@ describe('directoryKPIQueries KPI Stats functions', () => {
 
       const stats = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats.totalSuppliers).toBe(0);
+      expect(stats.subscriptionVendors).toBe(0);
+      expect(stats.subscriptionVendorsCount).toBe(0);
       expect(stats.networkSuppliers).toBe(0);
       expect(stats.buyerUploaded).toBe(0);
       expect(stats.verifiedActive).toBe(0);
@@ -224,13 +231,15 @@ describe('directoryKPIQueries KPI Stats functions', () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('DB failure'));
       jest.spyOn(storeService, 'getVendors').mockReturnValueOnce([
-        { id: 'v1', source: 'procucev_network', status: 'ACTIVE' },
-        { id: 'v2', buyerId: 'b1', status: 'VERIFIED' },
+        { id: 'v1', source: 'procucev_network', status: 'ACTIVE', subscriptionPlan: 'select' },
+        { id: 'v2', buyerId: 'b1', status: 'VERIFIED', subscriptionPlan: 'premium' },
         { id: 'v3', status: 'PENDING' },
       ]);
 
       const stats = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats.totalSuppliers).toBe(3);
+      expect(stats.subscriptionVendors).toBe(1);
+      expect(stats.subscriptionVendorsCount).toBe(1);
       expect(stats.networkSuppliers).toBe(2);
       expect(stats.buyerUploaded).toBe(1);
       expect(stats.verifiedActive).toBe(2);
@@ -243,19 +252,23 @@ describe('directoryKPIQueries KPI Stats functions', () => {
 
       const stats = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats.totalSuppliers).toBe(0);
+      expect(stats.subscriptionVendors).toBe(0);
+      expect(stats.subscriptionVendorsCount).toBe(0);
     });
 
     it('calculates stats in-memory when storage is not configured (with populated list and null)', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
       jest.spyOn(storeService, 'getVendors').mockReturnValueOnce([
-        { id: 'v1', source: 'procucev_network', status: 'ACTIVE' },
-        { id: 'v2', buyerAccountId: 'ba-1', status: 'ACTIVE_VERIFIED' },
+        { id: 'v1', source: 'procucev_network', status: 'ACTIVE', isSubscribed: true },
+        { id: 'v2', buyerAccountId: 'ba-1', status: 'ACTIVE_VERIFIED', subscriptionPlan: 'free_tier' },
         { id: 'v3', status: 'REJECTED' },
         null,
       ]);
 
       const stats1 = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats1.totalSuppliers).toBe(3);
+      expect(stats1.subscriptionVendors).toBe(1);
+      expect(stats1.subscriptionVendorsCount).toBe(1);
       expect(stats1.networkSuppliers).toBe(2);
       expect(stats1.buyerUploaded).toBe(1);
       expect(stats1.verifiedActive).toBe(2);
@@ -263,7 +276,75 @@ describe('directoryKPIQueries KPI Stats functions', () => {
       jest.spyOn(storeService, 'getVendors').mockReturnValueOnce(null);
       const stats2 = await directoryKPIQueries.getSellerDirectoryKPIStatsFromDB();
       expect(stats2.totalSuppliers).toBe(0);
+      expect(stats2.subscriptionVendors).toBe(0);
+      expect(stats2.subscriptionVendorsCount).toBe(0);
       expect(stats2.networkSuppliers).toBe(0);
+    });
+  });
+
+  describe('getCommunicationOutreachAnalyticsFromDB', () => {
+    it('returns default analytics when storage is not configured', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      const res = await directoryKPIQueries.getCommunicationOutreachAnalyticsFromDB();
+      expect(res.totalOutreach).toBe(0);
+      expect(res.byChannel.Call).toBe(0);
+    });
+
+    it('queries DB and tallies channels and categories accurately', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValueOnce({
+        rows: [
+          { channel: 'CALL', metadata: JSON.stringify({ category: 'Demo Schedule' }) },
+          { channel: 'SMS', metadata: { category: 'Follow-up / New' } },
+          { channel: 'WHATSAPP', metadata: 'invalid-json' },
+          { channel: 'EMAIL', metadata: JSON.stringify({ templateType: 'Send Proposal' }) },
+          { channel: 'BOTH', metadata: JSON.stringify({ scenarioId: 'Send Corporate Email' }) },
+          { channel: 'OTHER', metadata: null },
+        ],
+      });
+
+      const res = await directoryKPIQueries.getCommunicationOutreachAnalyticsFromDB({ accountType: 'buyer' });
+      expect(res.totalOutreach).toBe(6);
+      expect(res.byChannel.Call).toBe(1);
+      expect(res.byChannel.SMS).toBe(2);
+      expect(res.byChannel.WhatsApp).toBe(1);
+      expect(res.byChannel.Email).toBe(2);
+      expect(res.byCategory['Demo Schedule']).toBe(1);
+      expect(res.byCategory['Follow-up / New']).toBe(3);
+      expect(res.byCategory['Send Proposal']).toBe(1);
+      expect(res.byCategory['Send Corporate Email']).toBe(1);
+    });
+
+    it('handles query error gracefully and supports seller/vendor filtering', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValueOnce(new Error('Query error'));
+
+      const res = await directoryKPIQueries.getCommunicationOutreachAnalyticsFromDB({ accountType: 'vendor' });
+      expect(res.totalOutreach).toBe(0);
+    });
+  });
+
+  describe('subscription vendor calculation edge cases in computeSellerKPIStatsFromVendors', () => {
+    it('handles varied subscription signals including raw objects and string booleans', () => {
+      const vendors = [
+        { id: 'v1', subscriptionPlan: 'connect' },
+        { id: 'v2', subscribedPlan: 'select' },
+        { id: 'v3', plan: 'enterprise' },
+        { id: 'v4', raw: { subscriptionPlan: 'growth' } },
+        { id: 'v5', raw: { subscribedPlan: 'custom' } },
+        { id: 'v6', raw: { plan: 'pro' } },
+        { id: 'v7', isSubscribed: true },
+        { id: 'v8', isSubscribed: 'true' },
+        { id: 'v9', raw: { isSubscribed: 1 } },
+        { id: 'v10', subscriptionPlan: 'none' },
+        { id: 'v11', subscriptionPlan: 'free_tier' },
+        { id: 'v12', isSubscribed: false },
+      ];
+
+      const stats = directoryKPIQueries.computeSellerKPIStatsFromVendors(vendors);
+      expect(stats.totalSuppliers).toBe(12);
+      expect(stats.subscriptionVendors).toBe(9);
+      expect(stats.subscriptionVendorsCount).toBe(9);
     });
   });
 });

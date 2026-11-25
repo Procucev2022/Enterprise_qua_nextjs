@@ -9949,3 +9949,53 @@ Update the **Action Center** (`Vendors Directory` tab) to rename "Seller" termin
 - Confirm no regressions in **Buyers Directory**, **Export Directory**, search, dropdown filters, column sorting, or `360° Dossier` actions.
 - Run typecheck (`tsc --noEmit`), lint, tests, and production build.
 ```
+
+---
+
+### Prompt 429
+
+**Timestamp**: 2026-11-25T10:15:58+05:30
+
+```text
+Fix the Category Manager Dashboard (`/category-manager/dashboard`) data mismatch permanently. The dashboard is currently showing truncated and incorrect counts because it is using `limit: 1000` / `200`, wrong subscription predicates, and defaulting to a single-day/month filter instead of **All Time**.
+
+### Exact Ground-Truth Mismatches to Fix (Verified Against Live Pages)
+Compare `categoryManagerDashboardController.js` directly against the live working controllers for **All RFQs**, **Buyers Directory**, **Vendors Directory**, and **Login Logs**:
+
+1. **Default Filter Must Be `All` (No Date Filter), NOT `Today` or `This Month`:**
+   - On initial load, do NOT activate `Today`, `This Week`, or `This Month` by default. Show **all-time DB totals** by default.
+   - Only apply date filtering when the user explicitly clicks `Today`, `This Week`, `This Month`, or selects `Start Date` / `End Date` (and allow clicking an active filter again to clear it back to All Time).
+
+2. **Remove ALL Row-Limit Truncations (`1000`, `200`, etc.):**
+   - `TOTAL RFQS` is showing `200` instead of the real `240` shown in **All RFQs** and **Buyers Directory**. Reuse the exact same DB count/query used by **All RFQs** (no `limit: 200` cap).
+   - `TOTAL BUYERS` is showing `1,000` instead of the real `1,925` shown in **Buyers Directory** because `getBuyerAccountsFromDB(1000)` caps the result at 1,000. Use a real DB `COUNT(*)` / full-table aggregate query—the exact same source of truth as **Buyers Directory**.
+   - `TOTAL VENDORS` must match **Vendors Directory** (`633,851`) using the exact same `total` query.
+
+3. **Fix `BUYER SUBSCRIPTIONS` & `VENDOR SUBSCRIPTIONS` Logic:**
+   - `BUYER SUBSCRIPTIONS` is wrongly showing `997` instead of **`5`** (as shown in **Buyers Directory** where `5` are Subscription Buyers and `1,920` are `Free_trial`).
+   - `VENDOR SUBSCRIPTIONS` is wrongly showing `967` for the same reason.
+   - Inspect the exact predicate used by **Buyers Directory** (`SUBSCRIPTION BUYERS`) and **Vendors Directory** (`SUBSCRIPTION VENDORS`) to distinguish paid/subscribed accounts from `Free_trial` / free-tier accounts, and reuse that **exact** DB query/predicate in `categoryManagerDashboardController.js`.
+
+4. **Fix `BUYER REGISTRATION`, `VENDOR REGISTRATION`, and `TOTAL LOGINS` Showing `0`:**
+   - With default **All Time** selected, these must return the real non-zero DB counts (not `0`), and dynamically filter when a date button is clicked.
+   - For `TOTAL LOGINS`, inspect the exact `userType` / `role` column values actually stored in the `Login Logs` table for Category Manager Portal users (check **Action Center → Login Logs** to see how it queries them) and count only internal Category Manager Portal logins.
+
+5. **Sync Popup Modal & Monthly Charts to the Same Source of Truth:**
+   - Every KPI card count, its click-to-open popup table, and the 3 bottom monthly line charts must query the exact same DB tables and predicates—zero hardcoded fallbacks, zero `limit: 1000` truncation on counts.
+   - Preserve all existing backend routes, services, and UI handlers across all other tabs.
+
+### Mandatory Verification Before Finishing
+- Verify that with no date filter selected, the Dashboard numbers match **All RFQs** (`240`), **Buyers Directory** (`1,925` buyers, `5` subscription buyers), and **Vendors Directory** (`633,851` vendors) 1-to-1.
+- Verify that clicking `Today`, `This Week`, `This Month`, `Start Date`, and `End Date` dynamically recalculates all 10 cards and popup records from the DB.
+- Run typecheck, lint, tests, and production build.
+```
+
+---
+
+### Prompt 430
+
+**Timestamp**: 2026-11-25T11:29:37+05:30
+
+```text
+create pr and check all the covergaes and merge directly in test-v3
+```
