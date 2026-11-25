@@ -564,39 +564,6 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                   ))}
                 </tr>
 
-                {/* GST / Taxes */}
-                <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
-                  <td className="p-4 font-bold text-slate-800 dark:text-gray-200">GST / Taxes (₹)</td>
-                  {quotes.map((q) => {
-                    // Calculate GST amount and rate
-                    const gstAmount: number | null = q.taxes && q.taxes > 0 ? q.taxes : null;
-                    const gstRate: number | null =
-                      gstAmount !== null && q.totalPrice !== null && q.totalPrice > 0
-                        ? Math.round((gstAmount / q.totalPrice) * 100)
-                        : typeof q.taxRate === 'number'
-                        ? q.taxRate
-                        : null;
-                    const displayGstAmount =
-                      gstAmount !== null ? gstAmount : typeof q.taxRate === 'number' && q.totalPrice ? Math.round((q.totalPrice * q.taxRate) / 100) : null;
-
-                    return (
-                      <td
-                        key={q.vendorId}
-                        className={`p-4 ${q.isPreferred ? 'bg-indigo-50/40 dark:bg-indigo-950/20 border-x-2 border-indigo-600 dark:border-indigo-500' : ''}`}
-                      >
-                        <div className="flex items-baseline gap-2">
-                          <span className="text-lg font-black text-slate-900 dark:text-white mono">
-                            {displayGstAmount !== null ? formatCurrency(displayGstAmount) : UI_STRINGS.rfqDetails.unsetValue}
-                          </span>
-                        </div>
-                        <span className="text-[10px] text-slate-400 dark:text-gray-500">
-                          Rate: {gstRate !== null ? `${gstRate}%` : UI_STRINGS.rfqDetails.unsetValue}
-                        </span>
-                      </td>
-                    );
-                  })}
-                </tr>
-
                 {/* Delivery Charges */}
                 <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20">
                   <td className="p-4 font-bold text-slate-800 dark:text-gray-200">Delivery Charges (₹)</td>
@@ -617,9 +584,11 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                 <tr className="hover:bg-slate-50/80 dark:hover:bg-gray-800/20 font-bold">
                   <td className="p-4 font-bold text-slate-800 dark:text-gray-200">Grand Total (₹)</td>
                   {quotes.map((q) => {
-                    // Calculate grand total: totalPrice + taxes + deliveryCharges
+                    // Calculate grand total: totalPrice + taxes (default 18%) + deliveryCharges
                     const baseTotal = Number(q.totalPrice) || 0;
-                    const taxAmount = q.taxes && q.taxes > 0 ? q.taxes : (typeof q.taxRate === 'number' ? Math.round((baseTotal * q.taxRate) / 100) : 0);
+                    // Default to 18% GST if no tax info provided
+                    const DEFAULT_GST_RATE = 0.18;
+                    const taxAmount = q.taxes && q.taxes > 0 ? q.taxes : (typeof q.taxRate === 'number' ? Math.round((baseTotal * q.taxRate) / 100) : Math.round(baseTotal * DEFAULT_GST_RATE));
                     const delivery = Number(q.deliveryCharges) || 0;
                     const grandTotal = baseTotal + taxAmount + delivery;
 
@@ -630,7 +599,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       >
                         <span className="text-lg font-black text-slate-900 dark:text-white mono">{formatCurrency(grandTotal)}</span>
                         <span className="text-[10px] text-slate-400 dark:text-gray-500 block">
-                          Subtotal: {formatCurrency(baseTotal)} + Tax: {formatCurrency(taxAmount)} + Delivery: {formatCurrency(delivery)}
+                          Subtotal: {formatCurrency(baseTotal)} + Tax (18%): {formatCurrency(taxAmount)} + Delivery: {formatCurrency(delivery)}
                         </span>
                       </td>
                     );
@@ -816,7 +785,7 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                         const isL1 = effectivePrice !== null && lowestPrice !== null && effectivePrice === lowestPrice;
                         const lineTotal = matched ? matched.totalPrice || matched.unitPrice * (item.quantity || 1) : null;
                         
-                        // GST calculation: prefer direct taxes amount if available, otherwise fall back to taxRate
+                        // GST calculation: prefer direct taxes amount if available, otherwise fall back to taxRate, then default to 18%
                         const estTax: number | null = (() => {
                           if (lineTotal === null) return null;
                           // First check if quote has direct taxes amount
@@ -824,10 +793,11 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                           // Otherwise try to calculate from taxRate
                           const taxRate = typeof quote.taxRate === 'number' ? quote.taxRate : null;
                           if (taxRate !== null) return Math.round((lineTotal * taxRate) / 100);
-                          return null;
+                          // Default to 18% GST
+                          return Math.round(lineTotal * 0.18);
                         })();
                         
-                        // Calculate effective tax rate for display (from either source)
+                        // Calculate effective tax rate for display (from either source or default 18%)
                         const displayTaxRate: number | null = (() => {
                           if (lineTotal === null || estTax === null) return null;
                           if (quote.taxes && quote.taxes > 0) {
@@ -835,7 +805,8 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                             return Math.round((quote.taxes / lineTotal) * 100);
                           }
                           if (typeof quote.taxRate === 'number') return quote.taxRate;
-                          return null;
+                          // Default rate is 18%
+                          return 18;
                         })();
                         
                         const leadTime = matched?.leadTimeDays ?? quote.leadTimeDays;

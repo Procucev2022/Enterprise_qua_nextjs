@@ -319,10 +319,10 @@ export function PurchaseOrderModal({
     .map((item) => item.totalPrice)
     .filter((total): total is number => total !== null);
   const subTotal: number | null = totalAmount || (knownLineTotals.length > 0 ? knownLineTotals.reduce((sum, total) => sum + total, 0) : null);
-  // GST is shown only when the quote records a tax amount. No rate is assumed, so the
-  // rate, the grand total and its wording stay null when no tax was recorded.
-  const gstAmount: number | null = quote?.taxes && quote.taxes > 0 ? quote.taxes : null;
-  const gstRate: number | null = gstAmount !== null && subTotal !== null && subTotal > 0 ? Math.round((gstAmount / subTotal) * 100) : null;
+  // GST defaults to 18% when not explicitly recorded in the quote
+  const DEFAULT_GST_RATE = 0.18;
+  const gstAmount: number | null = subTotal === null ? null : (quote?.taxes && quote.taxes > 0 ? quote.taxes : Math.round(subTotal * DEFAULT_GST_RATE));
+  const gstRate: number | null = quote?.taxes && quote.taxes > 0 && subTotal !== null && subTotal > 0 ? Math.round((quote.taxes / subTotal) * 100) : 18;
   const grandTotal: number | null = gstAmount === null || subTotal === null ? null : subTotal + gstAmount;
   const grandTotalInWords = grandTotal === null ? '' : numberToIndianWords(grandTotal);
 
