@@ -221,8 +221,26 @@ function makeD1VendorQuoteSubmissionStatements(options) {
             SELECT 1 FROM vendors v
             WHERE v.id = $2 AND (v.raw = $10 OR json(v.raw) = json($10) OR json_extract(v.raw, '$.freeQuotationCredits') IS json_extract($10, '$.freeQuotationCredits'))
               AND (
-                $12 = 1 OR $13 = 1 OR ${subscribed} OR ${existingQuote} OR
-                EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $11) OR ${balance} > 0
+                $12 = 1 OR $13 = 1 OR 
+                (
+                  lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) IN ('connect', 'select') OR
+                  COALESCE(json_extract(v.raw, '$.isSubscribed'), 0) = 1 OR
+                  lower(COALESCE(json_extract(v.raw, '$.subscriptionStatus'), '')) = 'active' OR
+                  COALESCE(json_extract(v.raw, '$.unlimitedQuoteSubmissions'), 0) = 1 OR
+                  COALESCE(json_extract(v.raw, '$.unlimitedQuotes'), 0) = 1 OR
+                  COALESCE(json_extract(v.raw, '$.unlimitedAccess'), 0) = 1 OR
+                  COALESCE(json_extract(v.raw, '$.isUnlimited'), 0) = 1
+                ) OR ${existingQuote} OR
+                EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $11) OR 
+                CASE
+                  WHEN lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) = 'select' THEN MAX(0, 100 - CAST(COALESCE(json_extract(v.raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+                  WHEN lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) = 'connect' THEN MAX(0, 50 - CAST(COALESCE(json_extract(v.raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+                  ELSE MAX(0, CAST(COALESCE(
+                    json_extract(v.raw, '$.freeQuotationCredits'),
+                    json_extract(v.raw, '$.freeRfqDownloadCredits'),
+                    ${VENDOR_FREE_CREDITS_LIMIT}
+                  ) AS INTEGER))
+                END > 0
               )
           )
         RETURNING raw`,
