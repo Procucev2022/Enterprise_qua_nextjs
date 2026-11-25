@@ -123,19 +123,22 @@ describe('Category Manager Dashboard Backend Suite', () => {
       expect(controller.getQuoteCount({})).toBe(0);
 
       expect(controller.isBuyerSubscribed(null)).toBe(false);
-      expect(controller.isBuyerSubscribed({ subscriptionPlan: 'Enterprise Pro' })).toBe(true);
-      expect(controller.isBuyerSubscribed({ trialActive: true })).toBe(true);
+      expect(controller.isBuyerSubscribed({ subscriptionPlan: 'version_3' })).toBe(true);
+      expect(controller.isBuyerSubscribed({ subscriptionPlan: 'free_trial' })).toBe(false);
+      expect(controller.isBuyerSubscribed({ trialActive: true })).toBe(false);
       expect(controller.isBuyerSubscribed({ isSubscribed: true })).toBe(true);
-      expect(controller.isBuyerSubscribed({ raw: '{"subscriptionPlan":"Basic"}' })).toBe(true);
-      expect(controller.isBuyerSubscribed({ raw: { trialActive: true } })).toBe(true);
+      expect(controller.isBuyerSubscribed({ raw: '{"subscriptionPlan":"version_1"}' })).toBe(true);
+      expect(controller.isBuyerSubscribed({ raw: { trialActive: true } })).toBe(false);
       expect(controller.isBuyerSubscribed({})).toBe(false);
 
       expect(controller.isVendorSubscribed(null)).toBe(false);
-      expect(controller.isVendorSubscribed({ subscriptionPlan: 'Vendor Gold' })).toBe(true);
-      expect(controller.isVendorSubscribed({ subscribedPlan: 'Vendor Pro' })).toBe(true);
+      expect(controller.isVendorSubscribed({ subscriptionPlan: 'connect' })).toBe(true);
+      expect(controller.isVendorSubscribed({ subscriptionPlan: 'premium' })).toBe(false);
+      expect(controller.isVendorSubscribed({ subscriptionPlan: 'free_tier' })).toBe(false);
+      expect(controller.isVendorSubscribed({ subscribedPlan: 'select' })).toBe(true);
       expect(controller.isVendorSubscribed({ isSubscribed: true })).toBe(true);
-      expect(controller.isVendorSubscribed({ raw: '{"subscribedPlan":"Enterprise"}' })).toBe(true);
-      expect(controller.isVendorSubscribed({ raw: { subscriptionPlan: 'Standard' } })).toBe(true);
+      expect(controller.isVendorSubscribed({ raw: '{"subscribedPlan":"unlimited"}' })).toBe(true);
+      expect(controller.isVendorSubscribed({ raw: { subscriptionPlan: 'connect' } })).toBe(true);
       expect(controller.isVendorSubscribed({})).toBe(false);
     });
 
@@ -556,6 +559,175 @@ describe('Category Manager Dashboard Backend Suite', () => {
       expect(res.status).toBe(200);
       expect(res.body.success).toBe(true);
       expect(res.body.total).toBe(0);
+    });
+  });
+
+  describe('SQL-First DB Paths (pool.hasStorage() === true)', () => {
+    test('loadDashboardMetricsFromDB queries aggregate metrics and monthly charts without truncation', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const now = new Date();
+      const ym = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('AS open_rfqs')) {
+          return { rows: [{ total_rfqs: 240, open_rfqs: 10, rfqs_without_quotes: 6 }] };
+        }
+        if (sql.includes('AS buyer_subscriptions')) {
+          return { rows: [{ total_buyers: 1925, buyer_subscriptions: 5 }] };
+        }
+        if (sql.includes('FROM rfqs GROUP BY ym')) {
+          return { rows: [{ ym, rfqs: 160, quotes: 22 }] };
+        }
+        if (sql.includes('FROM buyer_accounts GROUP BY ym')) {
+          return { rows: [{ ym, cnt: 43, subs: 4 }] };
+        }
+        if (sql.includes('FROM vendors GROUP BY ym')) {
+          return { rows: [{ ym, cnt: 633851 }] };
+        }
+        if (sql.includes('SELECT id, created_at, raw FROM vendors')) {
+          return {
+            rows: [
+              {
+                id: 'v-paid-1',
+                created_at: now.toISOString(),
+                raw: JSON.stringify({ subscriptionPlan: 'select' }),
+              },
+            ],
+          };
+        }
+        if (sql.includes('AS total_vendors FROM vendors')) {
+          return { rows: [{ total_vendors: 23526 }] };
+        }
+        return { rows: [] };
+      });
+
+      // All-Time default request
+      const resAll = await request(app)
+        .get('/api/category-manager/dashboard/metrics')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(resAll.status).toBe(200);
+      expect(resAll.body.kpi.totalRfqs).toBe(240);
+      expect(resAll.body.kpi.totalBuyers).toBe(1925);
+      expect(resAll.body.kpi.buyerSubscriptions).toBe(5);
+      expect(resAll.body.kpi.totalVendors).toBe(633851);
+      expect(resAll.body.kpi.vendorSubscriptions).toBe(1);
+      expect(resAll.body.charts.months).toHaveLength(6);
+
+      // Date-filtered request triggers bounded vendor count branch
+      const resMonth = await request(app)
+        .get('/api/category-manager/dashboard/metrics?preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(resMonth.status).toBe(200);
+      expect(resMonth.body.kpi.totalVendors).toBe(23526);
+    });
+
+    test('loadDashboardRecordsFromDB serves SQL-backed drilldown records across all 10 types', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const now = new Date();
+
+      jest.spyOn(pool, 'query').mockImplementation(async (sql) => {
+        if (sql.includes('FROM rfqs')) {
+          return {
+            rows: [{
+              id: 'r1',
+              rfq_number: 'RFQ-DB-1',
+              status: 'OPEN',
+              category: 'Metals',
+              created_at: now.toISOString(),
+              raw: JSON.stringify({ title: 'DB Steel RFQ', quotes: [] }),
+            }],
+          };
+        }
+        if (sql.includes('FROM buyer_accounts')) {
+          return {
+            rows: [{
+              id: 'b1',
+              corporate_email: 'paidbuyer@test.local',
+              status: 'ACTIVE_VERIFIED',
+              created_at: now.toISOString(),
+              raw: JSON.stringify({ companyName: 'Paid Corp', subscriptionPlan: 'version_3' }),
+            }],
+          };
+        }
+        if (sql.includes('SELECT COUNT(*)::int AS total FROM vendors')) {
+          return { rows: [{ total: 633851 }] };
+        }
+        if (sql.includes('FROM vendors')) {
+          return {
+            rows: [{
+              id: 'v1',
+              email: 'paidvendor@test.local',
+              major_category: 'Metals',
+              status: 'ACTIVE',
+              created_at: now.toISOString(),
+              raw: JSON.stringify({ name: 'Paid Vendor Co', subscriptionPlan: 'select' }),
+            }],
+          };
+        }
+        return { rows: [] };
+      });
+
+      const types = [
+        'total_rfqs',
+        'open_rfqs',
+        'rfqs_without_quotes',
+        'buyer_subscriptions',
+        'total_buyers',
+        'buyer_registration',
+        'vendor_subscriptions',
+        'total_vendors',
+        'vendor_registration',
+        'total_logins',
+      ];
+
+      for (const type of types) {
+        const res = await request(app)
+          .get(`/api/category-manager/dashboard/records?type=${type}`)
+          .set('Authorization', `Bearer ${cmToken}`);
+        expect(res.status).toBe(200);
+        expect(res.body.success).toBe(true);
+      }
+
+      // Vendor SQL search pushdown branch
+      const vSearch = await request(app)
+        .get('/api/category-manager/dashboard/records?type=total_vendors&search=Paid&preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+      expect(vSearch.status).toBe(200);
+      expect(vSearch.body.total).toBe(633851);
+      expect(vSearch.body.records[0].email).toBe('paidvendor@test.local');
+
+      // Date-bounded branches across RFQ/Buyer/Vendor SQL record queries
+      for (const boundedType of ['open_rfqs', 'buyer_subscriptions', 'vendor_subscriptions']) {
+        const resB = await request(app)
+          .get(`/api/category-manager/dashboard/records?type=${boundedType}&startDate=2026-10-01&endDate=2026-11-30`)
+          .set('Authorization', `Bearer ${cmToken}`);
+        expect(resB.status).toBe(200);
+      }
+    });
+
+    test('handles empty or null DB query responses and listLoginLogs null gracefully', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockResolvedValue(null);
+      jest.spyOn(loginLogsQueries, 'listLoginLogs').mockResolvedValueOnce(null);
+
+      const resEmpty = await request(app)
+        .get('/api/category-manager/dashboard/metrics?preset=today')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(resEmpty.status).toBe(200);
+      expect(resEmpty.body.kpi.totalRfqs).toBe(0);
+      expect(resEmpty.body.kpi.totalVendors).toBe(0);
+      expect(resEmpty.body.kpi.totalLogins).toBe(0);
+
+      for (const emptyType of ['total_rfqs', 'total_buyers', 'vendor_subscriptions', 'total_vendors']) {
+        const resR = await request(app)
+          .get(`/api/category-manager/dashboard/records?type=${emptyType}`)
+          .set('Authorization', `Bearer ${cmToken}`);
+        expect(resR.status).toBe(200);
+        expect(resR.body.total).toBe(0);
+      }
     });
   });
 });

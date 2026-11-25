@@ -256,13 +256,30 @@ describe('Category Manager Dashboard View & Page Suite', () => {
     expect(screen.getByText(strings.charts.activityRfqsVsQuotes)).toBeInTheDocument();
   });
 
-  test('handles date filter preset changes and custom date input triggers', async () => {
+  test('defaults to All Time filter without activating presets and supports toggle-to-clear & custom date clearing', async () => {
+    const fetchSpy = jest.spyOn(global, 'fetch');
     render(<DashboardView />);
 
-    // Presets
-    fireEvent.click(screen.getByTestId('filter-preset-today'));
-    fireEvent.click(screen.getByTestId('filter-preset-this-week'));
-    fireEvent.click(screen.getByTestId('filter-preset-this-month'));
+    await waitFor(() => {
+      expect(fetchSpy).toHaveBeenCalledWith('/api/category-manager/dashboard/metrics', expect.anything());
+    });
+
+    // Presets are not active by default; clicking toggles on and clicking again toggles back to All Time
+    const todayBtn = screen.getByTestId('filter-preset-today');
+    const weekBtn = screen.getByTestId('filter-preset-this-week');
+    const monthBtn = screen.getByTestId('filter-preset-this-month');
+    expect(todayBtn).not.toHaveClass('bg-slate-900');
+    expect(weekBtn).not.toHaveClass('bg-slate-900');
+    expect(monthBtn).not.toHaveClass('bg-slate-900');
+
+    fireEvent.click(todayBtn);
+    expect(todayBtn).toHaveClass('bg-slate-900');
+    fireEvent.click(todayBtn);
+    expect(todayBtn).not.toHaveClass('bg-slate-900');
+
+    fireEvent.click(weekBtn);
+    fireEvent.click(monthBtn);
+    expect(monthBtn).toHaveClass('bg-slate-900');
 
     // Custom start date click with showPicker
     const startContainer = screen.getByTestId('start-date-container');
@@ -301,7 +318,7 @@ describe('Category Manager Dashboard View & Page Suite', () => {
     fireEvent.keyDown(startContainer, { key: 'Escape' });
     fireEvent.keyDown(endContainer, { key: 'Escape' });
 
-    // Change dates
+    // Change dates and clear via clear buttons
     fireEvent.change(startInput, { target: { value: '2026-06-01' } });
     fireEvent.change(endInput, { target: { value: '2026-06-30' } });
 
@@ -309,6 +326,19 @@ describe('Category Manager Dashboard View & Page Suite', () => {
       expect(screen.getByText('2026-06-01')).toBeInTheDocument();
       expect(screen.getByText('2026-06-30')).toBeInTheDocument();
     });
+
+    fireEvent.click(screen.getByTestId('clear-start-date-btn'));
+    fireEvent.click(screen.getByTestId('clear-end-date-btn'));
+    await waitFor(() => {
+      expect(screen.queryByText('2026-06-01')).not.toBeInTheDocument();
+      expect(screen.queryByText('2026-06-30')).not.toBeInTheDocument();
+    });
+
+    // Clearing via empty input value directly
+    fireEvent.change(startInput, { target: { value: '2026-07-01' } });
+    fireEvent.change(startInput, { target: { value: '' } });
+    fireEvent.change(endInput, { target: { value: '2026-07-15' } });
+    fireEvent.change(endInput, { target: { value: '' } });
   });
 
   test('opens drilldown modal for RFQ card, sorts columns, searches, and closes modal', async () => {
