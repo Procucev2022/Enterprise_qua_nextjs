@@ -3216,11 +3216,10 @@ class StoreService {
     const hasAccess =
       hasUnlimitedDownloads ||
       isAlreadyUnlocked ||
-      isV0 ||
-      coversRfq ||
       isDirect ||
       isInvited ||
-      (isNetworkMode && coversRfq);
+      isNetworkMode ||
+      coversRfq;
 
     if (!hasAccess) {
       return {
