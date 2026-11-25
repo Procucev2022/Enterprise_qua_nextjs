@@ -53,7 +53,13 @@ export default function BuyerProfileCompletionModal({
 }: BuyerProfileCompletionModalProps = {}) {
   const router = useRouter();
   const pathname = usePathname();
-  const { isLoggedIn, currentRole, activeBuyerAccount, currentUserSession } = useApp();
+  const {
+    isLoggedIn,
+    currentRole,
+    activeBuyerAccount,
+    currentUserSession,
+    initialSetupModalOpen,
+  } = useApp();
 
   const [isOpen, setIsOpen] = useState<boolean>(false);
   const [profileData, setProfileData] = useState<Partial<BuyerProfile> | null>(
@@ -138,6 +144,12 @@ export default function BuyerProfileCompletionModal({
       return;
     }
 
+    // Do not open simultaneously with Initial Setup modal
+    if (initialSetupModalOpen) {
+      setIsOpen(false);
+      return;
+    }
+
     // Do not show while on the profile editing page itself to avoid modal blocking the form
     if (pathname === '/buyer/profile') {
       setIsOpen(false);
@@ -163,7 +175,7 @@ export default function BuyerProfileCompletionModal({
     if (!isEvaluating && !completion.isComplete) {
       setIsOpen(true);
     }
-  }, [forceOpen, isLoggedIn, currentRole, pathname, completion.isComplete, hasDismissed, isEvaluating]);
+  }, [forceOpen, isLoggedIn, currentRole, pathname, completion.isComplete, hasDismissed, isEvaluating, initialSetupModalOpen]);
 
   const handleDismiss = useCallback(() => {
     setIsOpen(false);
@@ -230,13 +242,13 @@ export default function BuyerProfileCompletionModal({
                 </div>
                 <h2
                   id="buyer-profile-reminder-title"
-                  className="text-base sm:text-lg font-black tracking-tight"
+                  className="text-base sm:text-lg font-black tracking-tight text-white"
                 >
                   Complete Your Buyer Profile
                 </h2>
                 <p
                   id="buyer-profile-reminder-desc"
-                  className="text-xs text-indigo-100/90 mt-1 leading-relaxed max-w-md"
+                  className="text-xs text-white/90 mt-1 leading-relaxed max-w-md"
                 >
                   Complete your profile and product categories to receive more relevant, faster, and better competitive quotations from verified suppliers.
                 </p>
@@ -255,9 +267,9 @@ export default function BuyerProfileCompletionModal({
 
           {/* Progress Bar Container */}
           <div className="mt-4 pt-3 border-t border-white/20">
-            <div className="flex items-center justify-between text-[11px] font-bold mb-1.5">
+            <div className="flex items-center justify-between text-[11px] font-bold mb-1.5 text-white">
               <span>Profile Completion</span>
-              <span className="mono font-black">{completionPercentage}% Completed</span>
+              <span className="mono font-black text-white">{completionPercentage}% Completed</span>
             </div>
             <div className="w-full h-2 rounded-full bg-black/20 overflow-hidden">
               <div
@@ -271,7 +283,7 @@ export default function BuyerProfileCompletionModal({
                 style={{ width: `${Math.max(5, completionPercentage)}%` }}
               />
             </div>
-            <div className="flex items-center justify-between text-[10px] text-indigo-100/80 mt-1">
+            <div className="flex items-center justify-between text-[10px] text-white/80 mt-1">
               <span>
                 {completedCount} of {totalCount} mandatory fields completed
               </span>
