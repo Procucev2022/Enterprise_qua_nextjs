@@ -59,6 +59,7 @@ import { usablePan } from '@/lib/validationSchemas';
 import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchSellerDirectoryKPIStats } from '@/lib/accountDocumentsClient';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
@@ -164,36 +165,29 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   // Active Dossier Seller
   const [activeSeller, setActiveSeller] = useState<any | null>(null);
 
-  // Load column preferences from localStorage
+  // Load column preferences from backend user preferences API
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(SELLER_DIRECTORY_COLUMN_PREF_KEY);
-      if (saved) {
-        const parsed: SellerDirectoryColumnConfig[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const validKeys = new Set(DEFAULT_SELLER_DIRECTORY_COLUMNS.map((c) => c.key));
-          const validated = parsed.filter((c) => validKeys.has(c.key));
-          const presentKeys = new Set(validated.map((c) => c.key));
-          DEFAULT_SELLER_DIRECTORY_COLUMNS.forEach((defCol) => {
-            if (!presentKeys.has(defCol.key)) {
-              validated.push(defCol);
-            }
-          });
-          setColumns(validated);
+    let cancelled = false;
+    void getUserPreference<SellerDirectoryColumnConfig[]>(SELLER_DIRECTORY_COLUMN_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const validKeys = new Set(DEFAULT_SELLER_DIRECTORY_COLUMNS.map((c) => c.key));
+      const validated = saved.filter((c) => validKeys.has(c.key));
+      const presentKeys = new Set(validated.map((c) => c.key));
+      DEFAULT_SELLER_DIRECTORY_COLUMNS.forEach((defCol) => {
+        if (!presentKeys.has(defCol.key)) {
+          validated.push(defCol);
         }
-      }
-    } catch {
-      // use defaults on parse error
-    }
+      });
+      setColumns(validated);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const saveColumns = useCallback((newCols: SellerDirectoryColumnConfig[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(SELLER_DIRECTORY_COLUMN_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(SELLER_DIRECTORY_COLUMN_PREF_KEY, newCols);
   }, []);
 
   const handleToggleColumn = useCallback(

@@ -26,6 +26,8 @@ import {
 import { fetchScorecardData } from '@/lib/scorecardClient';
 import type { ScorecardData, TeamScorecardRow } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 
 type PeriodType = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_quarter' | 'financial_year' | 'custom';
@@ -64,7 +66,7 @@ const SCORECARD_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'performanceStatus', label: 'Performance Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const SCORECARD_COL_PREF_KEY = 'qua_scorecard_col_prefs';
+const SCORECARD_COL_PREF_KEY = USER_PREFERENCE_KEYS.SCORECARD_COLUMNS;
 
 export function ScorecardDashboard() {
   const strings = UI_STRINGS.actionCenter.scorecard;
@@ -91,18 +93,17 @@ export function ScorecardDashboard() {
   const [scorecardSortField, setScorecardSortField] = useState<string>('rank');
   const [scorecardSortOrder, setScorecardSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Hydrate scorecard column preferences safely after mount to prevent SSR mismatch
+  // Hydrate scorecard column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setScorecardColumns(parsed);
-        }
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(SCORECARD_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setScorecardColumns(saved);
       }
-    } catch {}
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Close drilldown modal on Escape key
@@ -1110,15 +1111,11 @@ export function ScorecardDashboard() {
         columns={scorecardColumns}
         onSave={(newCols) => {
           setScorecardColumns(newCols);
-          try {
-            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(newCols));
-          } catch {}
+          void saveUserPreference(SCORECARD_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setScorecardColumns(SCORECARD_DEFAULT_COLUMNS);
-          try {
-            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(SCORECARD_DEFAULT_COLUMNS));
-          } catch {}
+          void deleteUserPreference(SCORECARD_COL_PREF_KEY);
         }}
       />
     </div>

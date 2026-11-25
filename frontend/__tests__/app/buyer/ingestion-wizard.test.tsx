@@ -3699,32 +3699,61 @@ describe('IngestionWizard: mandatory fields', () => {
   });
 });
 
-describe('IngestionWizard: upload history vendor reconciliation', () => {
-  it('shows uploaded vendors from upload history across Mode 1, Mode 2, and Mode 3 when store buyerVendors is empty', async () => {
-    const uploadBatches = [
+describe('IngestionWizard: backend vendor hydration and localStorage isolation', () => {
+  it('shows backend-hydrated buyer vendors across Mode 1, Mode 2, and Mode 3 and ignores stale localStorage upload history', async () => {
+    const backendVendors = [
       {
-        id: 'batch-wizard-1',
-        records: [
-          {
-            vendorName: 'Govardhan Solutions pvt LTD',
-            email: 'govardhan.kilari@procucev.com',
-            contactPerson: 'Govardhan',
-            phone: '9876543210',
-            city: 'Bengaluru - 560037',
-            majorCategory: FIXTURE_MAJOR,
-            minorCategories: [FIXTURE_MINOR],
-          },
-          {
-            vendorName: 'Veera Industrial Corp',
-            email: 'veera@industrial.test',
-            majorCategory: 'Vendor Master',
-            minorCategories: [],
-          },
-        ],
+        id: 'v-wiz-backend-1',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        contactPerson: 'Govardhan',
+        phone: '9876543210',
+        city: 'Bengaluru - 560037',
+        majorCategory: FIXTURE_MAJOR,
+        minorCategories: [FIXTURE_MINOR],
+        source: 'buyer_uploaded',
+      },
+      {
+        id: 'v-wiz-backend-2',
+        name: 'Veera Industrial Corp',
+        email: 'veera@industrial.test',
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+        source: 'buyer_uploaded',
       },
     ];
-    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(uploadBatches));
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-stale-wizard',
+          records: [{ vendorName: 'Stale Browser Only Vendor', email: 'stale@wizard.test', majorCategory: FIXTURE_MAJOR }],
+        },
+      ])
+    );
 
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.includes('/api/bootstrap')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: { vendors: backendVendors, buyerAccounts: [], evaluations: [], auditLogs: [], aiFeed: [], systemConfig: {} },
+          }),
+        }) as any;
+      }
+      if (urlStr.includes('/api/vendors')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: backendVendors }),
+        }) as any;
+      }
+      return (origFetch as any)(url, init);
+    });
     setEnableMode3(true);
     try {
       renderWizard();
@@ -3733,6 +3762,7 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
       expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
       expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+      expect(screen.queryByText('Stale Browser Only Vendor')).not.toBeInTheDocument();
 
       chooseSourcingMode('mode_2');
       expect(await screen.findByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
@@ -3742,20 +3772,8 @@ describe('IngestionWizard: upload history vendor reconciliation', () => {
       expect(await screen.findByText(/2 Private Suppliers/i)).toBeInTheDocument();
       expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
       expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
-
-      localStorage.setItem(
-        VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
-        JSON.stringify([
-          ...uploadBatches,
-          {
-            id: 'batch-wizard-2',
-            records: [{ vendorName: 'Live Storage Vendor', email: 'live@storage.test', majorCategory: FIXTURE_MAJOR }],
-          },
-        ])
-      );
-      fireEvent(window, new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
-      expect(await screen.findByText('Live Storage Vendor')).toBeInTheDocument();
     } finally {
+      global.fetch = origFetch;
       setEnableMode3(false);
       localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     }

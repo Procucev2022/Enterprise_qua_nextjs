@@ -10049,3 +10049,28 @@ Push the current changes, & check the below issue.
 
 A lot of values in the application are getting fetched from localstorage, Can you review the entire application & fix it. The application is behaving differently in different different browsers, different PC's. Can you please review the complete application & fix it. The data should be fetched from backend API's
 ```
+
+
+---
+
+### Prompt 435
+
+**Timestamp**: 2026-11-25T21:16:31+05:30
+
+```text
+Please check the current branch for syncing with origin. Please sync the current branch with main then please fix the below issue.
+
+A lot of data inconsistency issues in the complete application, 
+
+application is differently in different different browsers or different different PC's. The data is changing in different different browsers / PC's. Seems a lot of values are getting saved in localstorage, all data should  come from backend API's so that application is consistent everywhere.
+```
+
+---
+
+### Prompt 436
+
+**Timestamp**: 2026-11-26T00:53:28+05:30
+
+```text
+Keep commiting & pushing the changes
+```

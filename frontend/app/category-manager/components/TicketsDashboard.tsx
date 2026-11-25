@@ -28,6 +28,8 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import {
   fetchTicketSummary,
   fetchTickets,
@@ -87,7 +89,7 @@ const TICKET_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'slaDeadline', label: 'SLA Deadline', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const TICKET_COL_PREF_KEY = 'qua_tickets_col_prefs';
+const TICKET_COL_PREF_KEY = USER_PREFERENCE_KEYS.TICKETS_COLUMNS;
 // Shown wherever a value is missing from the record. Never a substitute value.
 const EMPTY_VALUE = UI_STRINGS.dataLoad.emptyCell;
 
@@ -164,18 +166,17 @@ export default function TicketsDashboard() {
   const [ticketSortField, setTicketSortField] = useState<string>('createdAt');
   const [ticketSortOrder, setTicketSortOrder] = useState<'asc' | 'desc'>('desc');
 
-  // Hydrate ticket column preferences safely after mount to prevent SSR mismatch
+  // Hydrate ticket column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(TICKET_COL_PREF_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setTicketColumns(parsed);
-        }
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(TICKET_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setTicketColumns(saved);
       }
-    } catch { /* ignore */ }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const showToast = useCallback((msg: string) => {
@@ -503,11 +504,10 @@ export default function TicketsDashboard() {
           <button
             type="button"
             onClick={() => setIsFilterOpen(!isFilterOpen)}
-            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${
-              isFilterOpen
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border transition-all ${isFilterOpen
                 ? 'bg-indigo-50 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-300'
                 : 'bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
-            }`}
+              }`}
           >
             <Filter size={13} />
             <span>Filter</span>
@@ -766,15 +766,15 @@ export default function TicketsDashboard() {
                     )}
 
                     {isColVisible('ticket') && (
-                    <td className="py-3 px-3.5 min-w-[220px]">
-                      <div className="font-semibold text-slate-900 dark:text-white line-clamp-1">{ticket.subject}</div>
-                      <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5 font-mono">
-                        <span>{ticket.ticket_number}</span>
-                        {ticket.escalation_level ? (
-                          <span className="text-rose-500 font-bold">L{ticket.escalation_level} Escalated</span>
-                        ) : null}
-                      </div>
-                    </td>
+                      <td className="py-3 px-3.5 min-w-[220px]">
+                        <div className="font-semibold text-slate-900 dark:text-white line-clamp-1">{ticket.subject}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5 flex items-center gap-1.5 font-mono">
+                          <span>{ticket.ticket_number}</span>
+                          {ticket.escalation_level ? (
+                            <span className="text-rose-500 font-bold">L{ticket.escalation_level} Escalated</span>
+                          ) : null}
+                        </div>
+                      </td>
                     )}
 
                     {isColVisible('project') && (
@@ -824,43 +824,43 @@ export default function TicketsDashboard() {
                     )}
 
                     {isColVisible('actions') && (
-                    <td className="py-3 px-3.5 whitespace-nowrap text-right">
-                      <div className="flex items-center justify-end gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => handleOpenDetails(ticket.id)}
-                          title="View Details"
-                          className="p-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
-                        >
-                          <ExternalLink size={14} />
-                        </button>
+                      <td className="py-3 px-3.5 whitespace-nowrap text-right">
+                        <div className="flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => handleOpenDetails(ticket.id)}
+                            title="View Details"
+                            className="p-1.5 text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-md hover:bg-slate-100 dark:hover:bg-slate-800"
+                          >
+                            <ExternalLink size={14} />
+                          </button>
 
-                        {ticket.status !== 'Completed' && (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setEscalatingTicket(ticket);
-                                setIsEscalateOpen(true);
-                              }}
-                              title="Escalate Ticket"
-                              className="p-1.5 text-slate-500 hover:text-orange-600 rounded-md hover:bg-orange-50 dark:hover:bg-orange-950/40"
-                            >
-                              <Flame size={14} />
-                            </button>
+                          {ticket.status !== 'Completed' && (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEscalatingTicket(ticket);
+                                  setIsEscalateOpen(true);
+                                }}
+                                title="Escalate Ticket"
+                                className="p-1.5 text-slate-500 hover:text-orange-600 rounded-md hover:bg-orange-50 dark:hover:bg-orange-950/40"
+                              >
+                                <Flame size={14} />
+                              </button>
 
-                            <button
-                              type="button"
-                              onClick={() => handleStatusChange(ticket, 'Completed')}
-                              title="Mark as Completed"
-                              className="p-1.5 text-slate-500 hover:text-emerald-600 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
-                            >
-                              <CheckCircle2 size={14} />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
+                              <button
+                                type="button"
+                                onClick={() => handleStatusChange(ticket, 'Completed')}
+                                title="Mark as Completed"
+                                className="p-1.5 text-slate-500 hover:text-emerald-600 rounded-md hover:bg-emerald-50 dark:hover:bg-emerald-950/40"
+                              >
+                                <CheckCircle2 size={14} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </td>
                     )}
                   </tr>
                 ))
@@ -1268,15 +1268,11 @@ export default function TicketsDashboard() {
         columns={ticketColumns}
         onSave={(newCols) => {
           setTicketColumns(newCols);
-          try {
-            localStorage.setItem(TICKET_COL_PREF_KEY, JSON.stringify(newCols));
-          } catch {}
+          void saveUserPreference(TICKET_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setTicketColumns(TICKET_DEFAULT_COLUMNS);
-          try {
-            localStorage.setItem(TICKET_COL_PREF_KEY, JSON.stringify(TICKET_DEFAULT_COLUMNS));
-          } catch {}
+          void deleteUserPreference(TICKET_COL_PREF_KEY);
         }}
         title="Column Settings"
       />

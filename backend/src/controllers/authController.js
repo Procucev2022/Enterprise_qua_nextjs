@@ -5,6 +5,8 @@ const { extractToken } = require('../middleware/auth');
 const vendorPresenceService = require('../services/vendorPresenceService');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const loginLogsQueries = require('../db/loginLogsQueries');
+const identityQueries = require('../db/identityQueries');
+const pool = require('../db/pool');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || null;
@@ -251,9 +253,36 @@ async function getSession(req, res, next) {
       return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
     }
 
+    let sessionUser = verification.user;
+    const subjectId = sessionUser && (sessionUser.sub || sessionUser.id);
+    if (pool.hasStorage() && subjectId && typeof identityQueries.findUserByUuid === 'function') {
+      try {
+        const freshUser = await identityQueries.findUserByUuid(subjectId);
+        if (freshUser) {
+          sessionUser = {
+            ...sessionUser,
+            id: freshUser.id || sessionUser.id || subjectId,
+            email: freshUser.email || sessionUser.email,
+            name: freshUser.name || sessionUser.name,
+            role: freshUser.role || sessionUser.role,
+            orgId: freshUser.orgId ?? sessionUser.orgId,
+            orgName: freshUser.orgName || sessionUser.orgName,
+            mobile: freshUser.mobile || sessionUser.mobile,
+            passwordChangeRequired: freshUser.resetPasswordRequired === true,
+            vendorMasterUploaded: freshUser.vendorMasterUploaded === true || sessionUser.vendorMasterUploaded === true,
+          };
+        }
+      } catch (refreshErr) {
+        logger.warn('Could not refresh live user attributes during session check', {
+          error: refreshErr.message,
+          userId: subjectId,
+        }, 'AUTH_CONTROLLER');
+      }
+    }
+
     res.json({
       success: true,
-      user: verification.user,
+      user: sessionUser,
     });
   } catch (err) {
     logger.error('Error fetching session', err, 'AUTH_CONTROLLER');

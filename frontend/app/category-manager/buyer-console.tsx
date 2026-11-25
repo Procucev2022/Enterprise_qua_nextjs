@@ -3,10 +3,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { useApp } from '@/lib/store';
 import type { RFQItem, BuyerAccount } from '@/lib/types';
-import { SOURCING_MODES, formatCurrency, formatIndianDateTime, formatIndianDate, parseRfqTimestamp } from '@/lib/constants';
+import { SOURCING_MODES, USER_PREFERENCE_KEYS, formatCurrency, formatIndianDateTime, formatIndianDate, parseRfqTimestamp } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { fetchBuyerDirectoryKPIStats } from '@/lib/buyerProfileClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettingsPopup';
 import CompanyHoverTooltip from '@/app/components/CompanyHoverTooltip';
 import {
@@ -46,7 +47,7 @@ export const DEFAULT_BUYER_CONSOLE_COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-const STORAGE_KEY_COLUMNS = 'buyer_console_table_columns_v1';
+const STORAGE_KEY_COLUMNS = USER_PREFERENCE_KEYS.BUYER_CONSOLE_COLUMNS;
 const PAGE_SIZE = 100;
 
 type SortField =
@@ -99,32 +100,27 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
   const [dbKPIStats, setDbKPIStats] = useState<{ totalBuyers: number } | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Column visibility and order state
+  // Column visibility and order state (hydrated from backend user preferences API)
   const [showColumnSettings, setShowColumnSettings] = useState(false);
-  const [columns, setColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(STORAGE_KEY_COLUMNS);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            const validKeys = new Set(DEFAULT_BUYER_CONSOLE_COLUMNS.map((c) => c.key));
-            const reordered = parsed.filter((c: ColumnDef) => validKeys.has(c.key));
-            // Add any missing default columns
-            for (const def of DEFAULT_BUYER_CONSOLE_COLUMNS) {
-              if (!reordered.some((c: ColumnDef) => c.key === def.key)) {
-                reordered.push({ ...def });
-              }
-            }
-            return reordered;
-          }
+  const [columns, setColumns] = useState<ColumnDef[]>(DEFAULT_BUYER_CONSOLE_COLUMNS);
+
+  useEffect(() => {
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(STORAGE_KEY_COLUMNS).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const validKeys = new Set(DEFAULT_BUYER_CONSOLE_COLUMNS.map((c) => c.key));
+      const reordered = saved.filter((c) => validKeys.has(c.key));
+      for (const def of DEFAULT_BUYER_CONSOLE_COLUMNS) {
+        if (!reordered.some((c) => c.key === def.key)) {
+          reordered.push({ ...def });
         }
-      } catch {
-        // Fallback to defaults
       }
-    }
-    return DEFAULT_BUYER_CONSOLE_COLUMNS;
-  });
+      if (reordered.length > 0) setColumns(reordered);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [draggedColIdx, setDraggedColIdx] = useState<number | null>(null);
 
@@ -145,24 +141,16 @@ export default function BuyerConsole({ onNavigateToMatrix, onNavigateToEvaluatio
     };
   }, []);
 
-  // Save column configuration
+  // Save column configuration via backend user preferences API
   const handleSaveColumns = useCallback((newCols: ColumnDef[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(STORAGE_KEY_COLUMNS, JSON.stringify(newCols));
-    } catch {
-      // Ignore storage errors
-    }
+    void saveUserPreference(STORAGE_KEY_COLUMNS, newCols);
   }, []);
 
-  // Reset columns to default
+  // Reset columns to default via backend user preferences API
   const handleResetColumns = useCallback(() => {
     setColumns(DEFAULT_BUYER_CONSOLE_COLUMNS);
-    try {
-      localStorage.removeItem(STORAGE_KEY_COLUMNS);
-    } catch {
-      // Ignore storage errors
-    }
+    void deleteUserPreference(STORAGE_KEY_COLUMNS);
   }, []);
 
   // Header drag reordering

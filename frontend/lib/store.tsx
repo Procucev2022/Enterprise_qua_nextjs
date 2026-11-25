@@ -53,6 +53,12 @@ import {
   downloadAndUnlockRFQ,
 } from './rfqClient';
 import {
+  clearUserPreferencesCache,
+  getUserPreference,
+  purgeLegacyClientStorage,
+  saveUserPreference,
+} from './userPreferencesClient';
+import {
   SOURCING_MODES,
   RFQ_MODES,
   RFQ_MODE_LABELS,
@@ -60,14 +66,9 @@ import {
   STORE_MESSAGES,
   AI_FEED_VIEWER_ROLES,
   REQUEST_ID_HEADER,
+  USER_PREFERENCE_KEYS,
   isPlaceholderVendorCategory,
-  isBuyerUploadedVendor,
   normalizeVendorCategoryList,
-  loadVendorUploadHistoryFromStorage,
-  reconcileBuyerVendorsWithUploadHistory,
-  updateVendorInUploadHistoryStorage,
-  removeVendorsFromUploadHistoryInStorage,
-  setVendorsActiveStateInStorage,
   isVendorActive,
   resolveVendorDisplayName,
   VENDOR_ACTIVE_STATUSES,
@@ -449,24 +450,18 @@ export function dedupeRequest<T>(key: string, fn: () => Promise<T>): Promise<T> 
   return promise;
 }
 
-export function getSessionCache<T>(key: string): T | null {
-  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return null;
-  try {
-    const item = sessionStorage.getItem(`procucev_cache_${key}`);
-    return item ? (JSON.parse(item) as T) : null;
-  } catch {
-    return null;
-  }
+// Domain data is never cached in browser sessionStorage/localStorage so every
+// browser, tab, and PC renders consistent live data from backend APIs.
+export function getSessionCache<T>(_key: string): T | null {
+  return null;
 }
 
-export function setSessionCache<T>(key: string, data: T): void {
-  if (typeof window === 'undefined' || process.env.NODE_ENV === 'test') return;
-  try {
-    sessionStorage.setItem(`procucev_cache_${key}`, JSON.stringify(data));
-  } catch { }
+export function setSessionCache<T>(_key: string, _data: T): void {
+  // Intentionally a no-op: all domain data is loaded fresh from backend APIs.
 }
 
 export function clearSessionCache(): void {
+  clearUserPreferencesCache();
   if (typeof window === 'undefined') return;
   try {
     const keys = ['vendors', 'evaluations', 'rfqs', 'activeBuyerAccount', 'aiFeed', 'taxonomy'];
@@ -475,24 +470,14 @@ export function clearSessionCache(): void {
 }
 
 export function AppProvider({ children }: { children: React.ReactNode }) {
-  const initialVendors = getSessionCache<VendorEntry[]>('vendors') || [];
-  const initialEvaluations = getSessionCache<VendorEvaluationRecord[]>('evaluations') || [];
-  const initialRfqs = getSessionCache<RFQItem[]>('rfqs') || [];
-  const initialActiveBuyer = getSessionCache<BuyerAccount>('activeBuyerAccount') || null;
-  const initialAiFeed = getSessionCache<AIBotFeedItem[]>('aiFeed') || [];
-  // Not restored from the session. A build before the fallback removal could have cached the
-  // bundled seed under this key, and the master is re-read from the API on demand.
+  const initialVendors: VendorEntry[] = [];
+  const initialEvaluations: VendorEvaluationRecord[] = [];
+  const initialRfqs: RFQItem[] = [];
+  const initialActiveBuyer: BuyerAccount | null = null;
+  const initialAiFeed: AIBotFeedItem[] = [];
   const initialTaxonomy: MajorMinorCategory[] = [];
 
-  const loadedEntitiesRef = useRef<Record<string, boolean>>({
-    vendors: initialVendors.length > 0,
-    evaluations: initialEvaluations.length > 0,
-    rfqs: initialRfqs.length > 0,
-    activeBuyerAccount: !!initialActiveBuyer,
-    aiFeed: initialAiFeed.length > 0,
-    taxonomy: initialTaxonomy.length > 0,
-    bootstrap: initialVendors.length > 0 && initialEvaluations.length > 0,
-  });
+  const loadedEntitiesRef = useRef<Record<string, boolean>>({});
   const activeBuyerAccountRequestGenerationRef = useRef(0);
   // Session bootstrap. The only source of truth is the token + session that
   // authClient persisted after a verified sign-in, so a page refresh on a deep
@@ -629,27 +614,70 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     return getBuyerPaymentLinkStatus(activeBuyerAccount.id, linkId);
   };
 
+  const applyTheme = useCallback((next: 'light' | 'dark') => {
+    setTheme(next);
+    if (authClient.getToken()) {
+      void saveUserPreference(USER_PREFERENCE_KEYS.THEME, next);
+    }
+  }, []);
+
   const toggleTheme = () => {
     setTheme((prev) => {
       const next = prev === 'light' ? 'dark' : 'light';
-      if (typeof window !== 'undefined') {
-        localStorage.setItem('procucev_theme', next);
+      if (authClient.getToken()) {
+        void saveUserPreference(USER_PREFERENCE_KEYS.THEME, next);
       }
       return next;
     });
   };
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      const saved = localStorage.getItem('procucev_theme') as 'light' | 'dark' | null;
-      if (saved && (saved === 'light' || saved === 'dark')) {
-        setTheme(saved);
-      } else {
-        setTheme('light');
-        localStorage.setItem('procucev_theme', 'light');
-      }
+    if (process.env.NODE_ENV !== 'test') {
+      purgeLegacyClientStorage();
     }
   }, []);
+
+  // Re-validate session against the live backend identity database on startup so
+  // user profile, role, orgName, and onboarding flags never drift across browsers/PCs.
+  useEffect(() => {
+    if (process.env.NODE_ENV === 'test' || !hasValidToken) return;
+    let cancelled = false;
+    void authClient.getSession().then((liveSession) => {
+      if (cancelled) return;
+      if (liveSession) {
+        setCurrentUserSession(liveSession);
+        setCurrentRole(liveSession.role);
+        setIsLoggedIn(true);
+      } else {
+        clearUserPreferencesCache();
+        setIsLoggedIn(false);
+        setCurrentUserSession(null);
+        setCurrentRole('buyer');
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Hydrate theme preference from backend user preferences when authenticated.
+  useEffect(() => {
+    if (!isLoggedIn || !authClient.getToken()) {
+      setTheme('light');
+      return;
+    }
+    let cancelled = false;
+    void getUserPreference<'light' | 'dark'>(USER_PREFERENCE_KEYS.THEME).then((saved) => {
+      if (cancelled) return;
+      if (saved === 'light' || saved === 'dark') {
+        setTheme(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isLoggedIn, currentUserSession?.id]);
 
   useEffect(() => {
     if (typeof document !== 'undefined') {
@@ -1179,50 +1207,50 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     const tasks: Promise<unknown>[] = [];
 
     if (r === 'buyer') {
-      tasks.push(loaders.ensureActiveBuyerAccount());
+      tasks.push(loaders.ensureActiveBuyerAccount(true));
 
       if (path === '/buyer' || path === '/buyer/dashboard' || path.startsWith('/buyer/command-center')) {
         tasks.push(loaders.ensureRFQs(true));
-        tasks.push(loaders.ensureAIFeed());
+        tasks.push(loaders.ensureAIFeed(true));
       } else if (path.startsWith('/buyer/rfq-summary') || path.startsWith('/buyer/rfqs')) {
         tasks.push(loaders.ensureRFQs(true));
       } else if (path.startsWith('/buyer/rfq-details')) {
-        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureRFQs(true));
       } else if (path.startsWith('/buyer/quote-matrix')) {
-        tasks.push(loaders.ensureRFQs());
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureRFQs(true));
+        tasks.push(loaders.ensureVendors(true));
       } else if (path.startsWith('/buyer/vendor-summary')) {
         tasks.push(loaders.ensureVendors(true));
-        tasks.push(loaders.ensureVendorEvaluations());
+        tasks.push(loaders.ensureVendorEvaluations(true));
       } else if (path.startsWith('/buyer/vendor-evaluation-summary')) {
-        tasks.push(loaders.ensureVendorEvaluations());
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendorEvaluations(true));
+        tasks.push(loaders.ensureVendors(true));
       } else if (path.startsWith('/buyer/profile')) {
         tasks.push(loaders.ensureCategoryTaxonomy());
       } else if (path.startsWith('/buyer/ingestion-wizard')) {
-        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureRFQs(true));
         tasks.push(loaders.ensureCategoryTaxonomy());
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendors(true));
       } else if (path.startsWith('/buyer/buyer-directory')) {
-        tasks.push(loaders.ensureVendors());
+        tasks.push(loaders.ensureVendors(true));
       } else if (path.startsWith('/buyer/subscription-center') || path.startsWith('/buyer/billing-history')) {
         // Essential activeBuyerAccount already queued
       } else {
-        tasks.push(loaders.ensureRFQs());
+        tasks.push(loaders.ensureRFQs(true));
       }
     } else if (r === 'vendor') {
       tasks.push(loaders.refreshVendorCredits());
-      tasks.push(loaders.ensureRFQs());
-      tasks.push(loaders.ensureVendors());
+      tasks.push(loaders.ensureRFQs(true));
+      tasks.push(loaders.ensureVendors(true));
       tasks.push(loaders.ensureCategoryTaxonomy());
     } else if (r === 'category_manager' || r === 'admin') {
-      tasks.push(loaders.ensureRFQs());
-      tasks.push(loaders.ensureVendors());
-      tasks.push(loaders.ensureVendorEvaluations());
+      tasks.push(loaders.ensureRFQs(true));
+      tasks.push(loaders.ensureVendors(true));
+      tasks.push(loaders.ensureVendorEvaluations(true));
       tasks.push(loaders.ensureCategoryTaxonomy());
       tasks.push(loaders.refreshFromDB());
     } else {
-      tasks.push(loaders.ensureRFQs());
+      tasks.push(loaders.ensureRFQs(true));
       tasks.push(loaders.refreshFromDB());
     }
 
@@ -1290,12 +1318,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       void loaders.refreshAIFeed();
     }
   }, [isLoggedIn, currentUserSession?.id, currentRole]);
-
-  useEffect(() => {
-    if (rfqs.length > 0) {
-      setSessionCache('rfqs', rfqs);
-    }
-  }, [rfqs]);
 
   // activeSubscription/remainingFreeRFQs used to be pure local state, defaulted
   // to free_trial/5 and never read back from anywhere real — a page refresh or
@@ -2045,16 +2067,8 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     vendorDetails?: Partial<VendorEntry>
   ): Promise<VendorEvaluationRequestResult> => {
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
-    const reconciledList = !directVendor
-      ? reconcileBuyerVendorsWithUploadHistory(
-        buyerVendors,
-        loadVendorUploadHistoryFromStorage(),
-        activeBuyerAccount
-      )
-      : buyerVendors;
     const resolvedVendor =
       directVendor ||
-      reconciledList.find((v) => v.id === vendorId) ||
       (vendorDetails
         ? ({
           ...vendorDetails,
@@ -2285,16 +2299,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   const resolveVendorMutationTarget = (vendorId: string, hintVendor?: Partial<VendorEntry>) => {
     const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-') || vendorId.startsWith('v-hist-');
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
-    const matchedVendor =
-      directVendor ||
-      (isSyntheticId
-        ? reconcileBuyerVendorsWithUploadHistory(
-          buyerVendors,
-          loadVendorUploadHistoryFromStorage(),
-          activeBuyerAccount
-        ).find((v) => v.id === vendorId)
-        : undefined) ||
-      hintVendor;
+    const matchedVendor = directVendor || hintVendor;
     const resolvedEmailLower = String(matchedVendor?.email || hintVendor?.email || '').trim().toLowerCase();
     const masterIdSuffix = vendorId.startsWith('v-master-') ? vendorId.slice('v-master-'.length) : '';
     const persistedMatch =
@@ -2372,7 +2377,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       if (next.length !== prev.length) setSessionCache('vendors', next);
       return next;
     });
-    removeVendorsFromUploadHistoryInStorage(Array.from(idSet));
   };
 
   // The local list changes only after the server confirms the write, and it takes the record the server returns.
@@ -2415,22 +2419,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', next);
       return next;
     });
-    updateVendorInUploadHistoryStorage(
-      [vendorId, targetVendorId, savedId, String(saved.email || matchedVendor?.email || updates.email || ''), String(saved.name || matchedVendor?.name || updates.name || '')],
-      {
-        id: savedId,
-        name: saved.name || updates.name,
-        email: saved.email || updates.email,
-        majorCategory: saved.majorCategory || updates.majorCategory,
-        minorCategories: saved.minorCategories || updates.minorCategories,
-        contactPerson: saved.contactPerson || updates.contactPerson,
-        phone: saved.phone || updates.phone,
-        city: saved.city || updates.city,
-        state: saved.state || updates.state,
-        pincode: saved.pincode || updates.pincode,
-        location: saved.location || updates.location,
-      }
-    );
     void addAuditLog(`Updated vendor profile record for ID ${savedId}.`);
     showToast('Vendor Profile Updated', 'Vendor information saved successfully.', 'success');
     return true;
@@ -2489,15 +2477,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       setSessionCache('vendors', next);
       return next;
     });
-
-    const identifiersToSync = [
-      vendorId,
-      targetVendorId,
-      savedId,
-      String(saved.email || matchedVendor?.email || targetVendor?.email || ''),
-      String(saved.name || matchedVendor?.name || targetVendor?.name || ''),
-    ].filter(Boolean);
-    setVendorsActiveStateInStorage(identifiersToSync, isActive);
 
     const displayName = resolveVendorDisplayName(
       { ...matchedVendor, ...saved, id: savedId },
@@ -2671,30 +2650,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       );
     };
 
-    const syncedVendorsFromResolutions = confirmedResolutions
-      .map((item) => item.matchedVendor)
-      .filter((v): v is Partial<VendorEntry> => Boolean(v));
-    const matchedVendors = buyerVendors.filter(
-      (v) =>
-        Boolean(findMatchingUpdatedRow(v)) ||
-        affectedSet.has(v.id) ||
-        Boolean(v.email && affectedSet.has(v.email))
-    );
-    const identifiersToSync = Array.from(
-      new Set(
-        [
-          ...affectedIds,
-          ...[...matchedVendors, ...updatedRows, ...syncedVendorsFromResolutions].flatMap((v) => [
-            v.id,
-            v.email,
-            v.name,
-            v.masterRecordId ? `v-master-${v.masterRecordId}` : '',
-          ]),
-        ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
-      )
-    );
-    setVendorsActiveStateInStorage(identifiersToSync, isActive);
-
     const buildActiveEntry = (base: Partial<VendorEntry>, patch: Partial<VendorEntry>, resolvedId: string): VendorEntry => {
       const nextStatus = isActive
         ? (patch.status || base.previousStatus || 'REGISTERED / NOT EVALUATED')
@@ -2822,7 +2777,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       deletedVendor?.email,
       deletedVendor?.name,
     ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
-    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
 
     const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
 
@@ -2900,7 +2854,6 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
       )
     );
-    removeVendorsFromUploadHistoryInStorage(identifiersToRemove);
 
     const matchSet = new Set(identifiersToRemove.map((s) => s.trim().toLowerCase()));
 
@@ -3643,7 +3596,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
         setEvaluationModalOpen,
         openVendorEvaluationSummary,
         theme,
-        setTheme,
+        setTheme: applyTheme,
         toggleTheme,
         toastMessage,
         showToast,

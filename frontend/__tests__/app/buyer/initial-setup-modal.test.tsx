@@ -6,6 +6,16 @@ import { useApp } from '@/lib/store';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import { PO_DUMP_TEMPLATE_HEADERS } from '@/lib/constants';
 import { logger } from '@/lib/logger';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
+
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn().mockImplementation(async (batch) => ({
+    id: batch.id || 'batch-saved-mock',
+    ...batch,
+  })),
+  deleteVendorUploadHistoryBatch: jest.fn().mockResolvedValue(true),
+}));
 
 const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
@@ -4499,22 +4509,27 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     await waitFor(() => {
-      const history = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(history).toHaveLength(1);
-      expect(history[0].records[0]).toMatchObject({
-        name: 'Veera Solutions Pvt LTD',
-        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
-        city: 'Bengaluru',
-        state: 'Karnataka',
-        pincode: '560037',
-      });
-      expect(history[0].records[1]).toMatchObject({
-        name: 'Explicit Address Supplier',
-        address: 'Plot 12, Chakan MIDC',
-        city: 'Pune',
-        state: 'Maharashtra',
-        pincode: '410501',
-      });
+      expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileName: 'location-vendors.xlsx',
+          records: expect.arrayContaining([
+            expect.objectContaining({
+              name: 'Veera Solutions Pvt LTD',
+              address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+              city: 'Bengaluru',
+              state: 'Karnataka',
+              pincode: '560037',
+            }),
+            expect.objectContaining({
+              name: 'Explicit Address Supplier',
+              address: 'Plot 12, Chakan MIDC',
+              city: 'Pune',
+              state: 'Maharashtra',
+              pincode: '410501',
+            }),
+          ]),
+        })
+      );
     });
 
     // Inline edit address row and confirm address update handler updates without error
@@ -5841,11 +5856,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         discardIncomplete: true,
       });
 
-      const remainingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(remainingHistory.some((x: any) => x.fileName === 'unconfirmed.csv')).toBe(false);
-      expect(remainingHistory.some((x: any) => x.id === 'batch-prior')).toBe(true);
+      expect(vendorUploadHistoryClient.deleteVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.any(String),
+        'unconfirmed.csv'
+      );
       expect(updateEventFired).toBe(true);
-      expect(storageEventFired).toBe(true);
     } finally {
       window.removeEventListener('vendor_upload_history_updated', onUpdate);
       window.removeEventListener('storage', onStorage);
@@ -5854,9 +5869,11 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
   });
 
-  it('handles cancel fetch error and corrupt localStorage gracefully on close without PO dump', async () => {
+  it('handles cancel fetch error and upload history delete error gracefully on close without PO dump', async () => {
     const origFetch = global.fetch;
-    localStorage.setItem('procucev_vendor_upload_history', '{invalid-json');
+    (vendorUploadHistoryClient.deleteVendorUploadHistoryBatch as jest.Mock).mockRejectedValueOnce(
+      new Error('History delete failed')
+    );
 
     global.fetch = jest.fn().mockImplementation((url: string) => {
       if (url.includes('/api/vendor-ingestion/session')) {

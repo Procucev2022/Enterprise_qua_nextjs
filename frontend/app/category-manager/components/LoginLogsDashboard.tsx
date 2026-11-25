@@ -24,6 +24,8 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import type {
   LoginLogEntry,
   LoginLogsSummary,
@@ -52,20 +54,7 @@ const LOGIN_LOGS_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-const LOGIN_LOGS_COL_PREF_KEY = 'qua_login_logs_col_prefs';
-
-function loadColumnPrefs(): ColumnDef[] {
-  try {
-    const raw = localStorage.getItem(LOGIN_LOGS_COL_PREF_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as ColumnDef[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // ignore
-  }
-  return LOGIN_LOGS_DEFAULT_COLUMNS;
-}
+const LOGIN_LOGS_COL_PREF_KEY = USER_PREFERENCE_KEYS.LOGIN_LOGS_COLUMNS;
 
 // ---------------------------------------------------------------------------
 // SortIcon helper
@@ -123,13 +112,17 @@ export default function LoginLogsDashboard() {
   const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
   const [columns, setColumns] = useState<ColumnDef[]>(LOGIN_LOGS_DEFAULT_COLUMNS);
 
-  // Hydrate login logs column preferences safely after mount to prevent SSR mismatch
+  // Hydrate login logs column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    const saved = loadColumnPrefs();
-    if (saved && saved.length > 0) {
-      setColumns(saved);
-    }
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(LOGIN_LOGS_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setColumns(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // -------------------------------------------------------------------------
@@ -395,20 +388,12 @@ export default function LoginLogsDashboard() {
   // -------------------------------------------------------------------------
   const saveColumnPrefs = (newCols: ColumnDef[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(LOGIN_LOGS_COL_PREF_KEY, newCols);
   };
 
   const resetColumnPrefs = () => {
     setColumns(LOGIN_LOGS_DEFAULT_COLUMNS);
-    try {
-      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(LOGIN_LOGS_DEFAULT_COLUMNS));
-    } catch {
-      // ignore storage errors
-    }
+    void deleteUserPreference(LOGIN_LOGS_COL_PREF_KEY);
   };
 
   // -------------------------------------------------------------------------

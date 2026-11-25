@@ -3,6 +3,8 @@
 import React, { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
 import { useApp, getLastHistoricalDataError } from '@/lib/store';
+import { authClient } from '@/lib/authClient';
+import { deleteVendorUploadHistoryBatch, saveVendorUploadHistoryBatch } from '@/lib/vendorUploadHistoryClient';
 import {
   formatCurrency,
   normalizePoDate,
@@ -680,10 +682,7 @@ export default function InitialSetupModal() {
   };
 
   const authFetchHeaders = (): Record<string, string> => {
-    const token =
-      typeof window !== 'undefined'
-        ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
-        : null;
+    const token = authClient.getToken();
     return {
       'Content-Type': 'application/json',
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
@@ -817,23 +816,18 @@ export default function InitialSetupModal() {
     }
 
     if (hasUnconfirmedUpload) {
-      try {
-        const historyRaw = localStorage.getItem('procucev_vendor_upload_history');
-        const historyList = historyRaw ? JSON.parse(historyRaw) : [];
-        if (Array.isArray(historyList)) {
-          const activeBatchId = currentUploadBatchIdRef.current;
-          const activeFileName = vendorFileName;
-          const filteredHistory = historyList.filter(
-            (entry: any) =>
-              entry &&
-              (!activeBatchId || entry.id !== activeBatchId) &&
-              (!activeFileName || entry.fileName !== activeFileName)
-          );
-          localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(filteredHistory));
-          window.dispatchEvent(new Event('vendor_upload_history_updated'));
-          window.dispatchEvent(new Event('storage'));
+      const activeBatchId = currentUploadBatchIdRef.current;
+      const activeFileName = vendorFileName;
+      if (activeBatchId || activeFileName) {
+        try {
+          await deleteVendorUploadHistoryBatch(activeBatchId || '', activeFileName || undefined);
+          if (typeof window !== 'undefined') {
+            window.dispatchEvent(new Event('vendor_upload_history_updated'));
+          }
+        } catch (e) {
+          logger.log('WARN', 'Could not delete unconfirmed vendor upload history batch', { error: e }, 'VENDOR_INGESTION');
         }
-      } catch {}
+      }
       currentUploadBatchIdRef.current = null;
       setStoredVendors([]);
       setVendorMasterUploaded(false);
@@ -951,10 +945,7 @@ export default function InitialSetupModal() {
       // Stream directly to backend for large files / session tracking in parallel
       (async () => {
         try {
-          const token =
-            typeof window !== 'undefined'
-              ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
-              : null;
+          const token = authClient.getToken();
 
           const res = await fetch(`/api/vendor-ingestion/${sessionId}/stream-upload?type=VENDOR_MASTER&fileName=${encodeURIComponent(file.name)}`, {
             method: 'POST',
@@ -1229,27 +1220,19 @@ export default function InitialSetupModal() {
             skippedRecords: skippedDuplicates.length,
             failedRecords: 0,
           });
-          try {
-            const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-            const historyEntry = {
-              id: `up-${Date.now()}`,
-              fileName: file.name,
-              timestamp: new Date().toLocaleString(),
-              total: totalCandidateCount,
-              imported: 0,
-              duplicates: skippedDuplicates.length,
-              failed: 0,
-              ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
-              ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
-              records: [],
-            };
-            currentUploadBatchIdRef.current = historyEntry.id;
-            const updatedHistory = [
-              historyEntry,
-              ...existingHistory.filter((x: { fileName?: string }) => x.fileName !== file.name),
-            ].slice(0, 30);
-            localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
-          } catch {}
+          const batchId = `up-${Date.now()}`;
+          currentUploadBatchIdRef.current = batchId;
+          void saveVendorUploadHistoryBatch({
+            id: batchId,
+            fileName: file.name,
+            total: totalCandidateCount,
+            imported: 0,
+            duplicates: skippedDuplicates.length,
+            failed: 0,
+            ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+            ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
+            records: [],
+          });
           showToast(
             vmStrings.duplicatesWarningToastTitle,
             formatString(vmStrings.allDuplicatesToastBody, {
@@ -1331,45 +1314,40 @@ export default function InitialSetupModal() {
             setVendorJob(localFallbackJob);
           }
 
-        try {
-          const existingHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-          const historyEntry = {
-            id: `up-${Date.now()}`,
-            fileName: file.name,
-            timestamp: new Date().toLocaleString(),
-            total: totalCandidateCount,
-            imported: parsedVendors.length,
-            duplicates: skippedDuplicates.length,
-            failed: 0,
-            ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
-            ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
-            records: parsedVendors.slice(0, 100).map((v) => {
-              const loc = resolveVendorLocationFields({
-                address: v.address,
-                city: v.city,
-                state: v.state,
-                pincode: v.pincode,
-              });
-              return {
-                vendorCode: v.vendorCode,
-                name: v.companyName,
-                contactPerson: v.contactPerson,
-                email: v.email,
-                phone: v.phone,
-                gstin: v.gstNumber,
-                category: '',
-                address: loc.address || v.address,
-                city: loc.city,
-                ...(loc.state ? { state: loc.state } : {}),
-                ...(loc.pincode ? { pincode: loc.pincode } : {}),
-                rating: v.vendorRatingScore,
-              };
-            }),
-          };
-          currentUploadBatchIdRef.current = historyEntry.id;
-          const updatedHistory = [historyEntry, ...existingHistory.filter((x: any) => x.fileName !== file.name)].slice(0, 30);
-          localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(updatedHistory));
-        } catch { }
+        const batchId = `up-${Date.now()}`;
+        currentUploadBatchIdRef.current = batchId;
+        void saveVendorUploadHistoryBatch({
+          id: batchId,
+          fileName: file.name,
+          total: totalCandidateCount,
+          imported: parsedVendors.length,
+          duplicates: skippedDuplicates.length,
+          failed: 0,
+          ...(activeBuyerAccount?.id ? { buyerId: activeBuyerAccount.id } : {}),
+          ...(activeBuyerAccount?.corporateEmail ? { buyerEmail: activeBuyerAccount.corporateEmail } : {}),
+          records: parsedVendors.slice(0, 100).map((v) => {
+            const loc = resolveVendorLocationFields({
+              address: v.address,
+              city: v.city,
+              state: v.state,
+              pincode: v.pincode,
+            });
+            return {
+              vendorCode: v.vendorCode,
+              name: v.companyName,
+              contactPerson: v.contactPerson,
+              email: v.email,
+              phone: v.phone,
+              gstin: v.gstNumber,
+              category: '',
+              address: loc.address || v.address,
+              city: loc.city,
+              ...(loc.state ? { state: loc.state } : {}),
+              ...(loc.pincode ? { pincode: loc.pincode } : {}),
+              rating: v.vendorRatingScore,
+            };
+          }),
+        });
 
         if (skippedDuplicates.length > 0) {
           showToast(
@@ -1436,10 +1414,7 @@ export default function InitialSetupModal() {
       // Direct stream upload for large PO dumps / session tracking in parallel
       (async () => {
         try {
-          const token =
-            typeof window !== 'undefined'
-              ? localStorage.getItem('procucev_auth_token') || sessionStorage.getItem('procucev_auth_token')
-              : null;
+          const token = authClient.getToken();
 
           const res = await fetch(`/api/vendor-ingestion/${sessionId}/stream-upload?type=PO_DUMP&fileName=${encodeURIComponent(file.name)}`, {
             method: 'POST',

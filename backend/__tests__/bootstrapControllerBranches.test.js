@@ -54,7 +54,8 @@ describe('bootstrapController 100% Branch Coverage', () => {
     expect(res.data.data.evaluations).toEqual([evaluation]);
     expect(getBootSpy).toHaveBeenCalledWith(
       ['acc-full-1', 'buyer@full.com', 'org-full-1', 'sub-1', 'user-id-1', 'buyer@full.com', 'org-full-1'],
-      'buyer@full.com'
+      'buyer@full.com',
+      { includeManagementCollections: false }
     );
 
     // Partial buyerAccount (only corporateEmail)
@@ -76,7 +77,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
     const resSub = mockRes();
     await bootstrapController.getBootstrap(reqSub, resSub, jest.fn());
     expect(resSub.statusCode).toBe(200);
-    expect(getBootSpy).toHaveBeenCalledWith(['sub-only'], undefined);
+    expect(getBootSpy).toHaveBeenCalledWith(['sub-only'], undefined, { includeManagementCollections: false });
 
     // Without sub, with email
     const reqEmail = {
@@ -88,7 +89,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
     const resEmail = mockRes();
     await bootstrapController.getBootstrap(reqEmail, resEmail, jest.fn());
     expect(resEmail.statusCode).toBe(200);
-    expect(getBootSpy).toHaveBeenCalledWith(['fallback@buyer.com'], 'fallback@buyer.com');
+    expect(getBootSpy).toHaveBeenCalledWith(['fallback@buyer.com'], 'fallback@buyer.com', { includeManagementCollections: false });
   });
 
   test('non-buyer user with query buyerId and refresh = true with persisted source', async () => {
@@ -112,7 +113,7 @@ describe('bootstrapController 100% Branch Coverage', () => {
     expect(hydrateSpy).toHaveBeenCalled();
     expect(res.data.source).toBe('persisted');
     expect(res.data.data.evaluations).toEqual([ownEvaluation]);
-    expect(getBootSpy).toHaveBeenCalledWith(['query-buyer-1'], 'v@corp.com');
+    expect(getBootSpy).toHaveBeenCalledWith(['query-buyer-1'], 'v@corp.com', { includeManagementCollections: false });
 
     storeService.isHydratedFromDB = false;
   });
@@ -163,7 +164,7 @@ test('non-buyer user with query refresh = true handles hydration failure gracefu
     expect(res.statusCode).toBe(200);
     expect(res.data.source).toBe('in_memory');
     expect(res.data.data.evaluations).toEqual([]);
-    expect(getBootSpy).toHaveBeenCalledWith(null, undefined);
+    expect(getBootSpy).toHaveBeenCalledWith(null, undefined, { includeManagementCollections: false });
   });
 
   test('catch block forwards error to next middleware', async () => {

@@ -31,6 +31,8 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import {
   fetchPaymentDues,
   fetchPaymentDuesSummary,
@@ -79,7 +81,7 @@ const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-const LOCAL_STORAGE_KEY = 'qua_payment_dues_column_prefs';
+const PAYMENT_DUES_COL_PREF_KEY = USER_PREFERENCE_KEYS.PAYMENT_DUES_COLUMNS;
 
 const pickVal = (...vals: unknown[]): string => {
   for (const v of vals) {
@@ -296,43 +298,31 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     };
   }, []);
 
-  // Load saved column preferences from localStorage
+  // Load saved column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as PaymentDuesColumnConfig[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Merge with defaults to guarantee all keys exist
-            const merged = parsed.map((col) => {
-              const def = DEFAULT_COLUMNS.find((d) => d.key === col.key);
-              return { ...def, ...col };
-            });
-            DEFAULT_COLUMNS.forEach((def) => {
-              if (!merged.find((m) => m.key === def.key)) {
-                merged.push(def);
-              }
-            });
-            setColumns(merged);
-          }
+    let cancelled = false;
+    void getUserPreference<PaymentDuesColumnConfig[]>(PAYMENT_DUES_COL_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const merged = saved.map((col) => {
+        const def = DEFAULT_COLUMNS.find((d) => d.key === col.key);
+        return { ...def, ...col };
+      });
+      DEFAULT_COLUMNS.forEach((def) => {
+        if (!merged.find((m) => m.key === def.key)) {
+          merged.push(def);
         }
-      } catch {
-        // Fallback to default
-      }
-    }
+      });
+      setColumns(merged);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Save column preferences
+  // Save column preferences via backend user preferences API
   const saveColumnPreferences = useCallback((newCols: PaymentDuesColumnConfig[]) => {
     setColumns(newCols);
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newCols));
-      } catch {
-        // ignore
-      }
-    }
+    void saveUserPreference(PAYMENT_DUES_COL_PREF_KEY, newCols);
   }, []);
 
   // Fetch low-credit accounts

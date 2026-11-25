@@ -26,14 +26,26 @@ const pool = require('./db/pool');
 const d1Bridge = require('./db/d1Bridge');
 const { createStoreHydrationGate } = require('./middleware/storeHydrationGate');
 const { logger } = require('./services/loggerService');
-const { GRAPHQL_CONFIG, STORE_HYDRATION_CONFIG } = require('./config/constants');
+const { GRAPHQL_CONFIG, STORE_HYDRATION_CONFIG, API_NO_STORE_HEADERS } = require('./config/constants');
 
 const app = express();
+app.set('etag', false);
 
 // Security, request logging, and CORS preflight run before any hydration work.
 app.use(cors());
 app.options('*', cors());
 app.use(requestLogger);
+
+// Prevent browser/CDN/proxy caching of dynamic API and GraphQL payloads so every
+// browser and PC reads consistent live database state.
+const disableApiCaching = (req, res, next) => {
+  res.setHeader('Cache-Control', API_NO_STORE_HEADERS.CACHE_CONTROL);
+  res.setHeader('Pragma', API_NO_STORE_HEADERS.PRAGMA);
+  res.setHeader('Expires', API_NO_STORE_HEADERS.EXPIRES);
+  next();
+};
+app.use('/api', disableApiCaching);
+app.use('/graphql', disableApiCaching);
 // GraphQL accepts only bounded JSON bodies even though selected file-ingestion
 // APIs need the larger workspace upload limit below.
 app.use('/graphql', express.json({ limit: GRAPHQL_CONFIG.MAX_REQUEST_BODY_BYTES }));

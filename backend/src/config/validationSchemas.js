@@ -955,6 +955,35 @@ const VALIDATION_SCHEMAS = {
     },
   },
 
+  userPreferenceParams: {
+    key: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 128,
+      pattern: /^[a-z0-9][a-z0-9._:-]{0,127}$/i,
+      message: 'Preference key must be 1–128 alphanumeric, underscore, dot, colon, or hyphen characters.',
+    },
+  },
+
+  vendorUploadHistoryCreate: {
+    id: { type: 'string', required: false, maxLength: 64 },
+    fileName: {
+      type: 'string',
+      required: true,
+      minLength: 1,
+      maxLength: 512,
+      message: 'Upload fileName is required.',
+    },
+    total: { type: 'number', required: false, min: 0 },
+    imported: { type: 'number', required: false, min: 0 },
+    duplicates: { type: 'number', required: false, min: 0 },
+    failed: { type: 'number', required: false, min: 0 },
+    onboardingFailed: { type: 'number', required: false, min: 0 },
+    onboardingSkipped: { type: 'number', required: false, min: 0 },
+    status: { type: 'string', required: false, maxLength: 32 },
+  },
+
   vendorBulkImportInvitations: {
     vendorIds: {
       type: 'array',

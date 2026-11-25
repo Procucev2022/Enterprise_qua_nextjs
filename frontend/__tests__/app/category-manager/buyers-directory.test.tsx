@@ -655,7 +655,7 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.queryByText('New Client Awaiting Approval')).not.toBeInTheDocument();
   });
 
-  test('restores saved state from sessionStorage on mount', () => {
+  test('ignores stale sessionStorage filter state on mount so view is consistent across browsers', () => {
     const savedState = {
       searchTerm: 'Tata',
       selectedMode: RFQ_MODES.MODE_1,
@@ -670,8 +670,8 @@ describe('BuyersDirectory Component Suite', () => {
 
     render(<BuyersDirectory />);
 
-    expect(screen.getByDisplayValue('Tata')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Web App')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Tata')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('All Sources')).toBeInTheDocument();
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
 
     window.sessionStorage.clear();

@@ -77,22 +77,9 @@ async function resolveBuyerAccount(identifier, req = null) {
   const domainQueries = require('../db/domainQueries');
   const target = String(identifier).trim().toLowerCase();
 
-  // 1. Check in-memory store
-  let buyer = storeService.getBuyerAccounts().find(
-    (b) => b.id === identifier ||
-           b.userId === identifier ||
-           b.buyerId === identifier ||
-           b.organizationId === identifier ||
-           (b.corporateEmail && b.corporateEmail.toLowerCase() === target)
-  );
-
-  // 2. If buyer role session and still not found, try session email
-  if (!buyer && req && req.user && req.user.role === 'buyer' && req.user.email) {
-    buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-  }
-
-  // 3. Check database (supports matching on id, corporate_email, or raw JSON fields)
-  if (!buyer && pool.hasStorage()) {
+  // 1. Check database first when storage is configured so cross-isolate mutations are never shadowed by stale isolate memory
+  let buyer = null;
+  if (pool.hasStorage()) {
     try {
       buyer = await domainQueries.getBuyerAccountByIdFromDB(identifier);
       if (!buyer && identifier.includes('@')) {
@@ -108,7 +95,7 @@ async function resolveBuyerAccount(identifier, req = null) {
               OR lower(corporate_email) = lower($1)
            ORDER BY is_active DESC, updated_at DESC LIMIT 1`,
           [identifier],
-          { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 60000 }
+          { d1: true }
         );
         if (queryRes?.rows?.[0]?.raw) {
           const raw = queryRes.rows[0].raw;
@@ -118,6 +105,22 @@ async function resolveBuyerAccount(identifier, req = null) {
     } catch {
       buyer = null;
     }
+  }
+
+  // 2. Fallback to in-memory store when storage is not configured or row wasn't matched directly
+  if (!buyer) {
+    buyer = storeService.getBuyerAccounts().find(
+      (b) => b.id === identifier ||
+             b.userId === identifier ||
+             b.buyerId === identifier ||
+             b.organizationId === identifier ||
+             (b.corporateEmail && b.corporateEmail.toLowerCase() === target)
+    );
+  }
+
+  // 3. If buyer role session and still not found, try session email
+  if (!buyer && req && req.user && req.user.role === 'buyer' && req.user.email) {
+    buyer = await storeService.getBuyerAccountByEmail(req.user.email);
   }
 
   // 4. Check buyer profile identity tables if still not found

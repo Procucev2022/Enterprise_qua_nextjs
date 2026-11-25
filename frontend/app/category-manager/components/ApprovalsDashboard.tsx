@@ -40,15 +40,12 @@ import type {
   ApprovalTabKey,
   ActionCenterSummaryPopupColumn,
 } from '@/lib/types';
-import { APPROVAL_REQUEST_TYPES, DEFAULT_APPROVAL_COLUMNS, APPROVER_CONFIG } from '@/lib/constants';
+import { APPROVAL_REQUEST_TYPES, DEFAULT_APPROVAL_COLUMNS, APPROVER_CONFIG, USER_PREFERENCE_KEYS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
-const STORAGE_PREFS_KEY_PREFIX = 'procucev_approval_col_prefs_';
-
-const getUserStorageKey = (user: { id?: string; email?: string } | null | undefined): string => {
-  return `${STORAGE_PREFS_KEY_PREFIX}${user?.id || user?.email || 'default'}`;
-};
+const APPROVAL_COLUMNS_PREF_KEY = USER_PREFERENCE_KEYS.APPROVALS_COLUMNS;
 
 export interface ApprovalsDashboardProps {
   onApprovalDecision?: (approvalId: string, action: 'APPROVE' | 'REJECT', requestNumber?: string) => void;
@@ -185,32 +182,27 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
     }
   };
 
-  // Restore column preferences from localStorage
+  // Restore column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const userKey = getUserStorageKey(sessionUser);
-      const stored = localStorage.getItem(userKey);
-      if (stored) {
-        const parsed = JSON.parse(stored) as ApprovalTableColumnConfig[];
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const parsedMap = new Map(parsed.map((c) => [c.key, c]));
-          const merged: ApprovalTableColumnConfig[] = DEFAULT_APPROVAL_COLUMNS.map((defaultCol) => {
-            const userCol = parsedMap.get(defaultCol.key);
-            if (!userCol) return defaultCol;
-            return {
-              ...defaultCol,
-              visible: userCol.visible !== undefined ? userCol.visible : defaultCol.visible,
-              order: typeof userCol.order === 'number' ? userCol.order : defaultCol.order,
-            };
-          });
-          merged.sort((a, b) => a.order - b.order);
-          setColumns(merged);
-        }
-      }
-    } catch {
-      // Use defaults if parse fails
-    }
+    let cancelled = false;
+    void getUserPreference<ApprovalTableColumnConfig[]>(APPROVAL_COLUMNS_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const parsedMap = new Map(saved.map((c) => [c.key, c]));
+      const merged: ApprovalTableColumnConfig[] = DEFAULT_APPROVAL_COLUMNS.map((defaultCol) => {
+        const userCol = parsedMap.get(defaultCol.key);
+        if (!userCol) return defaultCol;
+        return {
+          ...defaultCol,
+          visible: userCol.visible !== undefined ? userCol.visible : defaultCol.visible,
+          order: typeof userCol.order === 'number' ? userCol.order : defaultCol.order,
+        };
+      });
+      merged.sort((a, b) => a.order - b.order);
+      setColumns(merged);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, [sessionUser]);
 
   useEffect(() => {
@@ -366,20 +358,20 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
     setIsProcessing(true);
     const res = await (authMode === 'otp'
       ? processApprovalAction(
-          selectedRequest.id,
-          pendingAction,
-          actionRemarks,
-          actionPassword.trim(),
-          actionApprover.trim(),
-          'otp'
-        )
+        selectedRequest.id,
+        pendingAction,
+        actionRemarks,
+        actionPassword.trim(),
+        actionApprover.trim(),
+        'otp'
+      )
       : processApprovalAction(
-          selectedRequest.id,
-          pendingAction,
-          actionRemarks,
-          actionPassword.trim(),
-          actionApprover.trim()
-        ));
+        selectedRequest.id,
+        pendingAction,
+        actionRemarks,
+        actionPassword.trim(),
+        actionApprover.trim()
+      ));
     setIsProcessing(false);
 
     if (res.success) {
@@ -397,11 +389,11 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
         prev.map((item) =>
           item.id === selectedRequest.id
             ? {
-                ...item,
-                status: finalStatus,
-                approver_name: actionApprover,
-                approver_remarks: actionRemarks,
-              }
+              ...item,
+              status: finalStatus,
+              approver_name: actionApprover,
+              approver_remarks: actionRemarks,
+            }
             : item
         )
       );
@@ -410,11 +402,11 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
         setDetailsRequest((prev) =>
           prev
             ? {
-                ...prev,
-                status: finalStatus,
-                approver_name: actionApprover,
-                approver_remarks: actionRemarks,
-              }
+              ...prev,
+              status: finalStatus,
+              approver_name: actionApprover,
+              approver_remarks: actionRemarks,
+            }
             : null
         );
       }
@@ -457,18 +449,12 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
 
   const handleResetColumns = () => {
     setColumns(DEFAULT_APPROVAL_COLUMNS);
-    const userKey = getUserStorageKey(sessionUser);
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem(userKey);
-    }
+    void deleteUserPreference(APPROVAL_COLUMNS_PREF_KEY);
     showToast(strings.resetToDefault);
   };
 
   const handleSaveColumns = () => {
-    const userKey = getUserStorageKey(sessionUser);
-    if (typeof window !== 'undefined') {
-      localStorage.setItem(userKey, JSON.stringify(columns));
-    }
+    void saveUserPreference(APPROVAL_COLUMNS_PREF_KEY, columns);
     setIsColumnSettingsOpen(false);
     showToast(strings.columnSettingsSaved);
   };
@@ -575,13 +561,12 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
       label: strings.colStatus,
       render: (item: ApprovalRequest) => (
         <span
-          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-            item.status === 'Approved'
+          className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${item.status === 'Approved'
               ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300'
               : item.status === 'Rejected'
-              ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
-              : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
-          }`}
+                ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
+                : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
+            }`}
         >
           {item.status}
         </span>
@@ -621,24 +606,21 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
           tabIndex={0}
           onClick={() => handleCardClick('total')}
           onKeyDown={(e) => handleKeyDownCard(e, 'total')}
-          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
-            statusFilter === 'all'
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${statusFilter === 'all'
               ? 'bg-slate-900 text-white dark:bg-white dark:text-slate-900 border-slate-900 shadow-xs'
               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-slate-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
-          }`}
+            }`}
           data-testid="card-total-requests"
         >
-          <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight ${
-            statusFilter === 'all' ? 'opacity-80' : 'text-slate-600 dark:text-slate-300'
-          }`}>
+          <p className={`text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight whitespace-nowrap leading-tight ${statusFilter === 'all' ? 'opacity-80' : 'text-slate-600 dark:text-slate-300'
+            }`}>
             {strings.total}
           </p>
           <p className="text-base sm:text-lg font-bold leading-none mt-1">
             {summary ? summary.total : UI_STRINGS.dataLoad.emptyCell}
           </p>
-          <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${
-            statusFilter === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
-          }`}>
+          <span className={`text-[10px] whitespace-nowrap mt-1 leading-tight ${statusFilter === 'all' ? 'opacity-70' : 'text-slate-400 dark:text-slate-500'
+            }`}>
             {strings.totalSubtitle}
           </span>
         </div>
@@ -649,11 +631,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
           tabIndex={0}
           onClick={() => handleCardClick('pending')}
           onKeyDown={(e) => handleKeyDownCard(e, 'pending')}
-          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
-            statusFilter === 'Pending'
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${statusFilter === 'Pending'
               ? 'bg-amber-600 text-white border-amber-600 shadow-xs'
               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-amber-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
-          }`}
+            }`}
           data-testid="card-pending-approvals"
         >
           <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-amber-700 dark:text-amber-300 whitespace-nowrap leading-tight">
@@ -673,11 +654,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
           tabIndex={0}
           onClick={() => handleCardClick('approved')}
           onKeyDown={(e) => handleKeyDownCard(e, 'approved')}
-          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
-            statusFilter === 'Approved'
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${statusFilter === 'Approved'
               ? 'bg-emerald-600 text-white border-emerald-600 shadow-xs'
               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-emerald-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
-          }`}
+            }`}
           data-testid="card-approved"
         >
           <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-emerald-700 dark:text-emerald-300 whitespace-nowrap leading-tight">
@@ -697,11 +677,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
           tabIndex={0}
           onClick={() => handleCardClick('rejected')}
           onKeyDown={(e) => handleKeyDownCard(e, 'rejected')}
-          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${
-            statusFilter === 'Rejected'
+          className={`px-2.5 py-1.5 rounded-lg border text-left transition-all cursor-pointer flex flex-col justify-between h-full min-h-[52px] sm:min-h-[58px] ${statusFilter === 'Rejected'
               ? 'bg-rose-600 text-white border-rose-600 shadow-xs'
               : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-800 hover:border-rose-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 shadow-xs'
-          }`}
+            }`}
           data-testid="card-rejected"
         >
           <p className="text-[10px] sm:text-[11px] font-semibold uppercase tracking-tight text-rose-700 dark:text-rose-300 whitespace-nowrap leading-tight">
@@ -1048,13 +1027,12 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                         return (
                           <td key={col.key} className="py-2 px-3 whitespace-nowrap">
                             <span
-                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${
-                                req.status === 'Approved'
+                              className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border ${req.status === 'Approved'
                                   ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/60 dark:text-emerald-300'
                                   : req.status === 'Rejected'
-                                  ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
-                                  : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
-                              }`}
+                                    ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/60 dark:text-rose-300'
+                                    : 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/60 dark:text-amber-300'
+                                }`}
                             >
                               {req.status}
                             </span>
@@ -1113,10 +1091,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
               {listError
                 ? UI_STRINGS.dataLoad.emptyCell
                 : formatString(strings.paginationShowing, {
-                    from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
-                    to: Math.min(currentPage * pageSize, total),
-                    total,
-                  })}
+                  from: total === 0 ? 0 : (currentPage - 1) * pageSize + 1,
+                  to: Math.min(currentPage * pageSize, total),
+                  total,
+                })}
             </span>
           </div>
 
@@ -1319,13 +1297,12 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
               <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-100 dark:border-slate-800">
                 <span className="text-[10px] text-slate-400 block font-semibold">{strings.currentStatusLabel}</span>
                 <span
-                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${
-                    detailsRequest.status === 'Approved'
+                  className={`inline-flex items-center px-2 py-0.5 rounded-full text-[10px] font-bold border mt-0.5 ${detailsRequest.status === 'Approved'
                       ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
                       : detailsRequest.status === 'Rejected'
-                      ? 'bg-rose-100 text-rose-800 border-rose-300'
-                      : 'bg-amber-100 text-amber-800 border-amber-300'
-                  }`}
+                        ? 'bg-rose-100 text-rose-800 border-rose-300'
+                        : 'bg-amber-100 text-amber-800 border-amber-300'
+                    }`}
                 >
                   {detailsRequest.status}
                 </span>
@@ -1706,15 +1683,15 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
             <p className="text-xs text-slate-600 dark:text-slate-300">
               {pendingAction === 'APPROVE'
                 ? formatString(strings.confirmApprovalPrompt, {
-                    id: selectedRequest.request_number,
-                    type: selectedRequest.module || selectedRequest.request_type || '',
-                    account: selectedRequest.applicant_name,
-                  })
+                  id: selectedRequest.request_number,
+                  type: selectedRequest.module || selectedRequest.request_type || '',
+                  account: selectedRequest.applicant_name,
+                })
                 : formatString(strings.confirmRejectionPrompt, {
-                    id: selectedRequest.request_number,
-                    type: selectedRequest.module || selectedRequest.request_type || '',
-                    account: selectedRequest.applicant_name,
-                  })}
+                  id: selectedRequest.request_number,
+                  type: selectedRequest.module || selectedRequest.request_type || '',
+                  account: selectedRequest.applicant_name,
+                })}
             </p>
 
             <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-800/60 border border-slate-200/60 dark:border-slate-700/60 text-xs space-y-1">
@@ -1776,11 +1753,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                       setOtpSentMessage('');
                       if (passwordError) setPasswordError('');
                     }}
-                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${
-                      actionApprover.trim().toLowerCase() === a.name.toLowerCase()
+                    className={`px-2 py-0.5 rounded text-[10px] font-medium border transition-colors ${actionApprover.trim().toLowerCase() === a.name.toLowerCase()
                         ? 'bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border-indigo-300 dark:border-indigo-700 font-semibold'
                         : 'bg-slate-50 dark:bg-slate-800 text-slate-600 dark:text-slate-400 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
-                    }`}
+                      }`}
                   >
                     {a.name}
                   </button>
@@ -1802,11 +1778,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                       setActionPassword('');
                       setPasswordError('');
                     }}
-                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${
-                      authMode === 'password'
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${authMode === 'password'
                         ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-2xs font-semibold'
                         : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                    }`}
+                      }`}
                   >
                     {strings.authModePassword}
                   </button>
@@ -1817,11 +1792,10 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                       setActionPassword('');
                       setPasswordError('');
                     }}
-                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${
-                      authMode === 'otp'
+                    className={`px-2 py-0.5 rounded-md font-medium transition-all ${authMode === 'otp'
                         ? 'bg-white dark:bg-slate-700 text-indigo-600 dark:text-indigo-300 shadow-2xs font-semibold'
                         : 'text-slate-500 hover:text-slate-700 dark:text-slate-400'
-                    }`}
+                      }`}
                   >
                     {strings.authModeOtp}
                   </button>
@@ -1851,8 +1825,8 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                       {isSendingOtp
                         ? strings.processing
                         : otpCountdown > 0
-                        ? formatString(strings.resendOtpBtn, { seconds: otpCountdown })
-                        : strings.sendOtpBtn}
+                          ? formatString(strings.resendOtpBtn, { seconds: otpCountdown })
+                          : strings.sendOtpBtn}
                     </button>
                   </div>
 
@@ -1865,9 +1839,8 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                       if (passwordError) setPasswordError('');
                     }}
                     placeholder={strings.otpPlaceholder}
-                    className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
-                      passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-                    } rounded-lg text-xs font-mono tracking-widest text-center focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                    className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                      } rounded-lg text-xs font-mono tracking-widest text-center focus:outline-none focus:ring-1 focus:ring-indigo-500`}
                   />
 
                   {otpSentMessage && !passwordError && (
@@ -1885,9 +1858,8 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                     if (passwordError) setPasswordError('');
                   }}
                   placeholder={strings.passwordPlaceholder}
-                  className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${
-                    passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
-                  } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
+                  className={`w-full p-2 bg-slate-50 dark:bg-slate-800 border ${passwordError ? 'border-rose-500' : 'border-slate-200 dark:border-slate-700'
+                    } rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500`}
                 />
               )}
 
@@ -1921,17 +1893,16 @@ export function ApprovalsDashboard({ onApprovalDecision }: ApprovalsDashboardPro
                 type="button"
                 disabled={isProcessing}
                 onClick={handleActionConfirm}
-                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg shadow-2xs ${
-                  pendingAction === 'APPROVE'
+                className={`px-4 py-1.5 text-xs font-bold text-white rounded-lg shadow-2xs ${pendingAction === 'APPROVE'
                     ? 'bg-emerald-600 hover:bg-emerald-700'
                     : 'bg-rose-600 hover:bg-rose-700'
-                }`}
+                  }`}
               >
                 {isProcessing
                   ? strings.processing
                   : pendingAction === 'APPROVE'
-                  ? strings.confirmApproveBtn
-                  : strings.confirmRejectBtn}
+                    ? strings.confirmApproveBtn
+                    : strings.confirmRejectBtn}
               </button>
             </div>
           </div>

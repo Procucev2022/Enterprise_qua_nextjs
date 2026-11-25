@@ -448,8 +448,24 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
     fireEvent.click(screen.getByText('Toggle Theme'));
     expect(contextValue.theme).toBe('light');
 
-    // Test mount with saved 'dark' theme in localStorage
-    localStorage.setItem('procucev_theme', 'dark');
+    // Test mount with saved 'dark' theme hydrated from backend /api/user-preferences
+    const { clearUserPreferencesCache } = await import('@/lib/userPreferencesClient');
+    clearUserPreferencesCache();
+    authClient.setSession(
+      { id: 'u-theme-1', email: 'theme@buyer.test', name: 'Theme Buyer', role: 'buyer', orgId: 'org-t', orgName: 'Theme Org' },
+      'theme-token-1'
+    );
+    const prevFetchImpl = mockFetch.getMockImplementation();
+    mockFetch.mockImplementation((url: string, init?: RequestInit) => {
+      if (String(url).startsWith('/api/user-preferences')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: { theme: 'dark' } }),
+        });
+      }
+      return prevFetchImpl ? prevFetchImpl(url, init) : Promise.resolve({ ok: true, status: 200, json: async () => ({ success: true, data: {} }) });
+    });
     let darkThemeContext: any;
     const DarkConsumer = () => {
       darkThemeContext = useApp();
@@ -460,8 +476,18 @@ describe('lib/store.tsx - AppProvider and useApp', () => {
         <DarkConsumer />
       </AppProvider>
     );
-    expect(darkThemeContext.theme).toBe('dark');
-    localStorage.removeItem('procucev_theme');
+    await waitFor(() => {
+      expect(darkThemeContext.theme).toBe('dark');
+    });
+    act(() => {
+      darkThemeContext.setTheme('light');
+    });
+    expect(darkThemeContext.theme).toBe('light');
+    clearUserPreferencesCache();
+    authClient.setSession(null, null);
+    if (prevFetchImpl) {
+      mockFetch.mockImplementation(prevFetchImpl);
+    }
 
     // Call refreshFromDB when activeBuyerAccount is already set to buyer-acc-1 (matching)
     await act(async () => {
@@ -3104,8 +3130,6 @@ describe('lib/store.tsx - channel chasers and bids', () => {
 
       // The ghost row is gone from in-memory state, so it can't fail the same way again on the next click.
       expect(ctx().buyerVendors.some((v: any) => v.id === 'v-hist-ghost-1')).toBe(false);
-      const historyAfterPrune = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(historyAfterPrune.some((b: any) => b.records.some((r: any) => r.id === 'v-hist-ghost-1'))).toBe(false);
     });
 
     it('prunes a vendor the status endpoint 404s as not found from buyerVendors', async () => {
@@ -3663,6 +3687,14 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         let saved = false;
         await act(async () => {
           saved = await ctx().updateBuyerVendor('v-hist-local-batch-syn-1-0', {
+            name: 'Govardhan Master Co',
+            email: 'govardhan@master.test',
+            phone: '9966766905',
+            contactPerson: 'Govardhan',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560037',
+            gstin: '27AAACA1928K1Z4',
             majorCategory: 'IT Infrastructure',
             minorCategories: ['Laptops'],
           });
@@ -3919,11 +3951,6 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         expect(disabledVendor?.isActive).toBe(false);
         expect(disabledVendor?.status).toBe('INACTIVE');
 
-        // Upload history is preserved with isActive: false
-        const historyAfterDisable = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-        expect(historyAfterDisable).toHaveLength(1);
-        expect(historyAfterDisable[0].records[0].isActive).toBe(false);
-
         // Inactive vendor is excluded from matchSuitableVendors across Mode 1 / 2 / 3 while active remains
         const sampleEntities: any[] = [{ id: 'ent-1', itemName: 'Pump & Valve', quantity: 1, unit: 'Nos', targetDate: '', technicalSpecs: '', confidence: 90, category: 'Mechanical', majorCategory: 'Mechanical', minorCategory: '' }];
         expect(ctx().matchSuitableVendors(sampleEntities, 'mode_1').map((v: any) => v.id)).not.toContain('v-tog-1');
@@ -4145,9 +4172,6 @@ describe('lib/store.tsx - channel chasers and bids', () => {
         expect(partialOk).toBe(true);
         expect(ctx().buyerVendors.find((v: any) => v.id === 'v-keep-B1')?.isActive).toBe(false);
         expect(ctx().buyerVendors.find((v: any) => v.id === 'v-keep-B2')?.isActive).not.toBe(false);
-        const histAfterPartial = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-        expect(histAfterPartial[0].records[0].isActive).toBe(false);
-        expect(histAfterPartial[0].records[1].isActive).toBeUndefined();
         expect(ctx().toastMessage).toMatchObject({
           description: formatString(UI_STRINGS.vendorStatusControl.bulkPartialUpdateToast, {
             updatedCount: 1,

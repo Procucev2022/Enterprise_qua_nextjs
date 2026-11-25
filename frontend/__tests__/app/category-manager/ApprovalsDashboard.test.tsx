@@ -4,6 +4,14 @@ import ApprovalsDashboard from '@/app/category-manager/components/ApprovalsDashb
 import * as approvalClient from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
 
 jest.mock('@/lib/approvalClient', () => {
   const actual = jest.requireActual('@/lib/approvalClient');
@@ -401,23 +409,24 @@ describe('ApprovalsDashboard', () => {
     fireEvent.click(saveBtn);
 
     expect(screen.queryByRole('heading', { name: strings.columnSettingsTitle })).not.toBeInTheDocument();
-    expect(window.localStorage.getItem('procucev_approval_col_prefs_u-1')).not.toBeNull();
+    expect(userPreferencesClient.saveUserPreference).toHaveBeenCalledWith(
+      USER_PREFERENCE_KEYS.APPROVALS_COLUMNS,
+      expect.any(Array)
+    );
   });
 
-  it('restores column preferences from localStorage when stored previously', async () => {
-    window.localStorage.setItem(
-      'procucev_approval_col_prefs_u-1',
-      JSON.stringify([
-        { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
-        { key: 'status', label: 'Status', visible: true, order: 2 },
-      ])
-    );
+  it('restores column preferences from backend user preferences when stored previously', async () => {
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce([
+      { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
+      { key: 'status', label: 'Status', visible: true, order: 2 },
+    ]);
 
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
+    expect(userPreferencesClient.getUserPreference).toHaveBeenCalledWith(USER_PREFERENCE_KEYS.APPROVALS_COLUMNS);
   });
 
   it('supports sorting columns on header click', async () => {

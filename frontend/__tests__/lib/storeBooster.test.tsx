@@ -63,7 +63,7 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
 
   describe('Standalone Cache & Dedupe Helpers', () => {
     test('dedupeRequest reuses in-flight promise and cleans up key after settling', async () => {
-      let resolveFirst: (val: string) => void = () => {};
+      let resolveFirst: (val: string) => void = () => { };
       const promise1 = new Promise<string>((res) => {
         resolveFirst = res;
       });
@@ -845,34 +845,92 @@ describe('lib/store.tsx Dedicated Booster Suite', () => {
       });
     });
 
-    test('getSessionCache and setSessionCache handle non-test environment and sessionStorage errors', () => {
+    test('getSessionCache and setSessionCache do not persist stale domain cache and clearSessionCache purges legacy keys', () => {
       const origEnv = process.env.NODE_ENV;
       try {
         (process.env as any).NODE_ENV = 'development';
-        // Mock sessionStorage.getItem returns JSON
-        const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockReturnValueOnce(JSON.stringify({ cached: true }));
-        const cached = getSessionCache<{ cached: boolean }>('test_key');
-        expect(cached?.cached).toBe(true);
+        sessionStorage.setItem('procucev_cache_vendors', JSON.stringify([{ id: 'stale' }]));
 
-        // Mock getItem throws error
-        getItemSpy.mockImplementationOnce(() => { throw new Error('Quota error'); });
-        expect(getSessionCache('test_err')).toBeNull();
+        // Domain session cache is intentionally disabled so all browsers read live backend API data
+        expect(getSessionCache<{ cached: boolean }>('test_key')).toBeNull();
 
-        // setSessionCache calls setItem
-        const setItemSpy = jest.spyOn(Storage.prototype, 'setItem').mockImplementationOnce(() => {});
+        const setItemSpy = jest.spyOn(Storage.prototype, 'setItem');
         setSessionCache('test_save', { saved: 1 });
-        expect(setItemSpy).toHaveBeenCalled();
+        expect(setItemSpy).not.toHaveBeenCalled();
 
-        // setSessionCache throws error
-        setItemSpy.mockImplementationOnce(() => { throw new Error('Storage full'); });
-        expect(() => setSessionCache('test_err', { bad: 1 })).not.toThrow();
-
-        // clearSessionCache calls removeItem
-        const removeItemSpy = jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {});
+        // clearSessionCache purges any legacy procucev_cache_* keys safely
         clearSessionCache();
-        expect(removeItemSpy).toHaveBeenCalled();
+        expect(sessionStorage.getItem('procucev_cache_vendors')).toBeNull();
+
+        const removeItemSpy = jest.spyOn(Storage.prototype, 'removeItem').mockImplementation(() => {
+          throw new Error('Storage denied');
+        });
+        expect(() => clearSessionCache()).not.toThrow();
+        removeItemSpy.mockRestore();
+        setItemSpy.mockRestore();
       } finally {
         (process.env as any).NODE_ENV = origEnv;
+      }
+    });
+
+    test('startup session revalidation syncs live user from backend and logs out when token is rejected', async () => {
+      const origEnv = process.env.NODE_ENV;
+      const getTokenSpy = jest.spyOn(authClient, 'getToken').mockReturnValue('live-jwt-token');
+      const getSessionUserSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+        id: 'u-boot-1',
+        email: 'stale@buyer.test',
+        name: 'Stale Name',
+        role: 'buyer',
+        orgId: 'org-1',
+        orgName: 'Stale Org',
+      });
+      const getSessionSpy = jest.spyOn(authClient, 'getSession');
+
+      try {
+        (process.env as any).NODE_ENV = 'development';
+        localStorage.setItem('procucev_theme', 'dark');
+
+        // 1. Live session returns refreshed name and role
+        getSessionSpy.mockResolvedValueOnce({
+          id: 'u-boot-1',
+          email: 'live@buyer.test',
+          name: 'Fresh Live Name',
+          role: 'category_manager',
+          orgId: 'org-1',
+          orgName: 'Fresh Live Org',
+        });
+
+        let stateA: any;
+        const { unmount } = render(
+          <AppProvider>
+            <TestConsumer onReady={(app) => { stateA = app; }} />
+          </AppProvider>
+        );
+        await waitFor(() => {
+          expect(stateA?.currentUserSession?.name).toBe('Fresh Live Name');
+          expect(stateA?.currentRole).toBe('category_manager');
+        });
+        expect(localStorage.getItem('procucev_theme')).toBeNull();
+        unmount();
+
+        // 2. Expired/revoked token returns null -> clears session cleanly
+        getSessionSpy.mockResolvedValueOnce(null);
+        let stateB: any;
+        const { unmount: unmountB } = render(
+          <AppProvider>
+            <TestConsumer onReady={(app) => { stateB = app; }} />
+          </AppProvider>
+        );
+        await waitFor(() => {
+          expect(stateB?.isLoggedIn).toBe(false);
+          expect(stateB?.currentUserSession).toBeNull();
+        });
+        unmountB();
+      } finally {
+        (process.env as any).NODE_ENV = origEnv;
+        getSessionSpy.mockRestore();
+        getSessionUserSpy.mockRestore();
+        getTokenSpy.mockRestore();
       }
     });
 
