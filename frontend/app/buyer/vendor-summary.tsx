@@ -405,6 +405,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [uploadHistoryList, setUploadHistoryList] = useState<any[]>([]);
   const [selectedHistoryBatch, setSelectedHistoryBatch] = useState<any | null>(null);
   const [batchSearchQuery, setBatchSearchQuery] = useState('');
+  
+  // GSTIN Validation State for vendor master table inline editing
+  const [gstinErrors, setGstinErrors] = useState<Map<number, string | null>>(new Map());
+  const [editingGstinIndex, setEditingGstinIndex] = useState<number | null>(null);
+  const editedGstins = useRef<Map<number, string>>(new Map());
+
   const [vendorTableSort, setVendorTableSort] = useState<TableSortState>({ key: null, dir: 'asc' });
   const [vendorColumns, setVendorColumns] = useState<TableColumnOption[]>(() =>
     BUYER_VENDOR_DIRECTORY_COLUMNS.map((col) => ({ ...col }))
@@ -547,6 +553,79 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       setPhoneFieldError(null);
     }
   };
+
+  /**
+   * Handle GSTIN change in vendor master batch table inline edit.
+   * Validates on change, stores edited value, and updates error state.
+   */
+  const handleGstinChange = (index: number, value: string) => {
+    const trimmed = value.trim().toUpperCase();
+    editedGstins.current.set(index, trimmed);
+
+    if (!trimmed) {
+      // Blank is always valid
+      setGstinErrors((prev) => {
+        const updated = new Map(prev);
+        updated.delete(index);
+        return updated;
+      });
+      return;
+    }
+
+    const validation = validateGstin(trimmed);
+    if (!validation.isValid) {
+      setGstinErrors((prev) => {
+        const updated = new Map(prev);
+        updated.set(index, validation.error || 'Invalid GSTIN');
+        return updated;
+      });
+    } else {
+      setGstinErrors((prev) => {
+        const updated = new Map(prev);
+        updated.delete(index);
+        return updated;
+      });
+    }
+  };
+
+  /**
+   * Handle blur on GSTIN input: save and close edit mode if valid or empty.
+   */
+  const handleGstinBlur = (index: number) => {
+    const edited = editedGstins.current.get(index) ?? '';
+    const hasError = gstinErrors.get(index);
+
+    if (!hasError && editingGstinIndex === index) {
+      setEditingGstinIndex(null);
+    }
+  };
+
+  /**
+   * Handle keydown on GSTIN input: Enter to save, Escape to cancel.
+   */
+  const handleGstinKeyDown = (e: React.KeyboardEvent<HTMLInputElement>, index: number) => {
+    if (e.key === 'Enter') {
+      const hasError = gstinErrors.get(index);
+      if (!hasError) {
+        setEditingGstinIndex(null);
+      }
+      e.preventDefault();
+    } else if (e.key === 'Escape') {
+      editedGstins.current.delete(index);
+      setGstinErrors((prev) => {
+        const updated = new Map(prev);
+        updated.delete(index);
+        return updated;
+      });
+      setEditingGstinIndex(null);
+      e.preventDefault();
+    }
+  };
+
+  /**
+   * Check if any GSTIN in the batch has validation errors.
+   */
+  const hasInvalidGstins = Array.from(gstinErrors.values()).some((err) => err !== null);
 
   const validateVendorPhoneOnSubmit = (): string | null => {
     const normalized = sanitize10DigitMobile(formPhone);
@@ -4447,8 +4526,50 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                                         {r.category || '—'}
                                       </span>
                                     </td>
-                                    <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-300 font-bold whitespace-nowrap">
-                                      {r.gstin || '—'}
+                                    <td className="p-2.5 font-mono text-[10px] text-slate-700 dark:text-gray-300 font-bold">
+                                      {editingGstinIndex === idx ? (
+                                        <div className="relative space-y-1">
+                                          <input
+                                            type="text"
+                                            autoFocus
+                                            value={editedGstins.current.get(idx) ?? r.gstin ?? ''}
+                                            onChange={(e) => handleGstinChange(idx, e.target.value)}
+                                            onBlur={() => handleGstinBlur(idx)}
+                                            onKeyDown={(e) => handleGstinKeyDown(e, idx)}
+                                            aria-invalid={Boolean(gstinErrors.get(idx))}
+                                            aria-describedby={gstinErrors.get(idx) ? `gstin-error-${idx}` : undefined}
+                                            className="w-32 px-2 py-1 text-xs border rounded bg-white dark:bg-gray-800 border-indigo-300 dark:border-indigo-600 focus:outline-none focus:ring-2 focus:ring-indigo-500/30"
+                                            placeholder="e.g., 27ABCDE1234F1Z5"
+                                          />
+                                          {gstinErrors.get(idx) && (
+                                            <div className="flex items-start gap-1">
+                                              <AlertCircle size={12} className="text-rose-600 dark:text-rose-400 mt-0.5 shrink-0" />
+                                              <p id={`gstin-error-${idx}`} className="text-[9px] text-rose-600 dark:text-rose-400 font-semibold">
+                                                {gstinErrors.get(idx)}
+                                              </p>
+                                            </div>
+                                          )}
+                                          {!gstinErrors.get(idx) && editedGstins.current.get(idx) && (
+                                            <div className="flex items-center gap-1">
+                                              <CheckCircle2 size={12} className="text-emerald-600 dark:text-emerald-400" />
+                                              <span className="text-[9px] text-emerald-600 dark:text-emerald-400 font-semibold">Valid</span>
+                                            </div>
+                                          )}
+                                        </div>
+                                      ) : (
+                                        <button
+                                          type="button"
+                                          onClick={() => {
+                                            editedGstins.current.set(idx, r.gstin || '');
+                                            setEditingGstinIndex(idx);
+                                          }}
+                                          className="inline-flex items-center gap-1 hover:bg-indigo-50 dark:hover:bg-indigo-900/30 px-2 py-1 rounded-md transition-colors group whitespace-nowrap"
+                                          title="Click to edit GSTIN"
+                                        >
+                                          <span className="truncate max-w-[80px]">{r.gstin || '—'}</span>
+                                          <Pencil size={10} className="text-indigo-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0" />
+                                        </button>
+                                      )}
                                     </td>
                                     <td className="p-2.5 whitespace-nowrap">
                                       <span className="inline-flex items-center gap-1 font-bold text-[11px] text-amber-600 dark:text-amber-400">
