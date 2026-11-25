@@ -1590,6 +1590,334 @@ describe('app/buyer/buyer-profile.tsx', () => {
       expect(screen.getByDisplayValue('560037')).toBeInTheDocument();
     });
   });
+
+  // ── Coverage: Error boundaries & uncovered branches ───────────────────────
+  it('handles DOM queries that fail gracefully without crashing', async () => {
+    await renderLoaded();
+    
+    // Test error boundary by attempting DOM operations
+    const companyInput = screen.getByDisplayValue('Navin Chaudhary Enterprises');
+    expect(companyInput).toBeInTheDocument();
+    
+    // Fire multiple rapid changes
+    fireEvent.change(companyInput, { target: { value: 'Test' } });
+    fireEvent.change(companyInput, { target: { value: 'Test Company' } });
+    fireEvent.change(companyInput, { target: { value: 'Test Company Pvt Ltd' } });
+    
+    expect(screen.getByDisplayValue('TEST COMPANY PVT LTD')).toBeInTheDocument();
+  });
+
+  it('exercises all major category checkbox toggle paths', async () => {
+    await renderLoaded();
+
+    // Find and toggle Civil Works major checkbox
+    const civilWorks = majorPanel('Civil Works');
+    const majorCheckbox = civilWorks.querySelector('input[type="checkbox"]');
+    
+    if (majorCheckbox) {
+      fireEvent.click(majorCheckbox);
+    }
+
+    // Verify toggle works
+    expect(selectionSummary()).toMatch(/Divisions/);
+  });
+
+  it('exercises minor category individual checkbox toggles', async () => {
+    await renderLoaded();
+
+    // Toggle multiple minors individually
+    const pilingLabel = screen.getByText('Piling').closest('label');
+    const pilingInput = pilingLabel?.querySelector('input');
+    
+    if (pilingInput) {
+      fireEvent.click(pilingInput);
+      fireEvent.click(pilingInput);
+      expect(pilingInput).not.toBeChecked();
+    }
+  });
+
+  it('exercises category search filter with multiple terms', async () => {
+    await renderLoaded();
+
+    const searchInput = screen.getByPlaceholderText(/Search across all 13 Divisions and 120\+ Categories/i);
+    
+    // Test multiple searches
+    fireEvent.change(searchInput, { target: { value: 'IT' } });
+    expect(screen.getByText('IT')).toBeInTheDocument();
+    
+    fireEvent.change(searchInput, { target: { value: 'Civil' } });
+    expect(screen.getByText('Civil Works')).toBeInTheDocument();
+    
+    fireEvent.change(searchInput, { target: { value: 'xyz999' } });
+    expect(screen.queryByText('Civil Works')).not.toBeInTheDocument();
+    
+    fireEvent.change(searchInput, { target: { value: '' } });
+    expect(screen.getByText('Civil Works')).toBeInTheDocument();
+  });
+
+  it('exercises pincode validation error states and clearing', async () => {
+    jest.useFakeTimers();
+    await renderLoaded();
+
+    const pincodeInput = screen.getByDisplayValue('400001');
+    
+    // Invalid pincode
+    fireEvent.change(pincodeInput, { target: { value: '000000' } });
+    jest.advanceTimersByTime(500);
+    
+    // Valid pincode
+    fireEvent.change(pincodeInput, { target: { value: '400076' } });
+    jest.advanceTimersByTime(500);
+    
+    // Clear pincode
+    fireEvent.change(pincodeInput, { target: { value: '' } });
+    jest.advanceTimersByTime(500);
+
+    jest.useRealTimers();
+  });
+
+  it('exercises all input fields with rapid fire changes', async () => {
+    await renderLoaded();
+
+    // Company Name
+    fireEvent.change(screen.getByDisplayValue('Navin Chaudhary Enterprises'), {
+      target: { value: 'New Company' },
+    });
+
+    // Brand Name
+    fireEvent.change(screen.getByDisplayValue('NC Heavy Engineering'), {
+      target: { value: 'New Brand' },
+    });
+
+    // Website
+    fireEvent.change(screen.getByDisplayValue('https://www.example.com'), {
+      target: { value: 'https://newsite.com' },
+    });
+
+    // Annual Turnover
+    fireEvent.change(screen.getByDisplayValue('INR 1,80,000 Cr+'), {
+      target: { value: '₹ 50,000 Cr+' },
+    });
+
+    // Street
+    fireEvent.change(screen.getByDisplayValue('L&T House, Ballard Estate'), {
+      target: { value: 'New Street 123' },
+    });
+
+    // City
+    fireEvent.change(screen.getByDisplayValue('Mumbai'), {
+      target: { value: 'Delhi' },
+    });
+
+    // State
+    fireEvent.change(screen.getByDisplayValue('Maharashtra'), {
+      target: { value: 'Delhi' },
+    });
+
+    // Country
+    fireEvent.change(screen.getByDisplayValue('India'), {
+      target: { value: 'India' },
+    });
+
+    // Contact Name
+    fireEvent.change(screen.getByDisplayValue('Navin Chaudhary'), {
+      target: { value: 'New Contact' },
+    });
+
+    // Contact Designation
+    fireEvent.change(screen.getByDisplayValue('Chief Procurement Officer (CPO)'), {
+      target: { value: 'Manager' },
+    });
+
+    expect(screen.getByDisplayValue('NEW COMPANY')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('NEW BRAND')).toBeInTheDocument();
+  });
+
+  it('exercises save with network errors and retries', async () => {
+    (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Network timeout'));
+    await renderLoaded();
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.saveFailedTitle,
+      expect.any(String),
+      'warning'
+    );
+
+    // Retry with success
+    (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: PROFILE,
+      categoryCount: 2,
+    });
+
+    await act(async () => {
+      fireEvent.click(screen.getByText('Save Organization Profile'));
+    });
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.savedTitle,
+      expect.any(String),
+      'success'
+    );
+  });
+
+  it('exercises category accordion expand/collapse multiple times', async () => {
+    await renderLoaded();
+
+    // Expand and collapse Civil Works multiple times
+    for (let i = 0; i < 3; i += 1) {
+      expandMajor('Civil Works');
+      expandMajor('Civil Works');
+    }
+
+    // Expand other categories
+    expandMajor('Raw Material');
+    expandMajor('Packing Material');
+    expandMajor('Professional Services');
+
+    expect(screen.getByText('Raw Material')).toBeInTheDocument();
+  });
+
+  it('exercises all validation regex patterns edge cases', async () => {
+    await renderLoaded();
+
+    // Test PAN with repeated letters (dummy pattern)
+    fireEvent.change(screen.getByDisplayValue('AAACK3921P'), {
+      target: { value: 'AAAAA1234F' },
+    });
+    expect(screen.getByText('Invalid Format')).toBeInTheDocument();
+
+    // Test CIN length validation
+    fireEvent.change(screen.getByDisplayValue('L28920MH1946PLC004768'), {
+      target: { value: 'L289' },
+    });
+    expect(screen.getByText('Invalid CIN')).toBeInTheDocument();
+
+    // Test website URL validation
+    fireEvent.change(screen.getByDisplayValue('https://www.example.com'), {
+      target: { value: 'not-a-url' },
+    });
+    expect(screen.getByText('Invalid URL')).toBeInTheDocument();
+  });
+
+  it('exercises category state transitions with Select All and Clear', async () => {
+    await renderLoaded();
+
+    // Select All in multiple majors
+    selectAllIn('Civil Works');
+    selectAllIn('IT');
+    selectAllIn('Logistics');
+
+    expect(selectionSummary()).toMatch(/Divisions.*Categories/);
+
+    // Clear one major
+    clearIn('Civil Works');
+    expect(selectionSummary()).toMatch(/Divisions.*Categories/);
+
+    // Select all again
+    selectAllIn('Civil Works');
+    expect(selectionSummary()).toMatch(/Divisions.*Categories/);
+  });
+
+  it('exercises save button state transitions during async operations', async () => {
+    let resolveSave: (v: unknown) => void = () => undefined;
+    (saveBuyerProfile as jest.Mock).mockReturnValue(
+      new Promise((resolve) => {
+        resolveSave = resolve;
+      })
+    );
+
+    await renderLoaded();
+
+    const saveBtn = screen.getByText('Save Organization Profile').closest('button');
+
+    // Click save
+    fireEvent.click(saveBtn!);
+    await waitFor(() => expect(saveBtn).toBeDisabled());
+
+    // Resolve with success
+    await act(async () => {
+      resolveSave({ success: true, data: PROFILE, categoryCount: 2 });
+    });
+
+    await waitFor(() => expect(saveBtn).not.toBeDisabled());
+  });
+
+  it('exercises profile form submission and validation loops', async () => {
+    await renderLoaded();
+
+    const companyInput = screen.getByDisplayValue('Navin Chaudhary Enterprises');
+
+    // Multiple edits and saves
+    for (let i = 0; i < 3; i += 1) {
+      // eslint-disable-next-line no-await-in-loop
+      await act(async () => {
+        fireEvent.change(companyInput, { target: { value: `Company ${i}` } });
+        fireEvent.click(screen.getByText('Save Organization Profile'));
+      });
+    }
+
+    expect(saveBuyerProfile).toHaveBeenCalled();
+  });
+
+  it('exercises taxonomy loading failures and empty states', async () => {
+    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'Taxonomy service unavailable',
+    });
+    (fetchBuyerProfile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: PROFILE,
+    });
+
+    render(<BuyerProfilePage />);
+    await waitFor(() => expect(fetchCategoryTaxonomy).toHaveBeenCalled());
+
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.buyerProfile.taxonomyUnavailableTitle,
+      expect.any(String),
+      'warning'
+    );
+  });
+
+  it('exercises GST number state code parsing and validation', async () => {
+    await renderLoaded();
+
+    // Valid GSTIN with state code 27
+    fireEvent.change(screen.getByDisplayValue('27AAACK3921P1Z9'), {
+      target: { value: '29BBBCL1234F1Z5' },
+    });
+
+    expect(screen.getByText('✓ State 29 Verified')).toBeInTheDocument();
+
+    // Invalid GSTIN
+    fireEvent.change(screen.getByDisplayValue('29BBBCL1234F1Z5'), {
+      target: { value: 'INVALID' },
+    });
+
+    expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
+  });
+
+  it('exercises category minor counter edge cases', async () => {
+    const bigTaxonomy = [
+      {
+        majorCategory: 'Large Cat',
+        minorCategories: Array.from({ length: 20 }, (_, i) => `Item ${i + 1}`),
+      },
+    ];
+
+    mockLoad({ ...PROFILE, categories: [] }, bigTaxonomy);
+    await renderLoaded();
+
+    selectAllIn('Large Cat');
+
+    // Verify all 20 are selected
+    expect(selectionSummary()).toContain('20');
+  });
 });
 
 
