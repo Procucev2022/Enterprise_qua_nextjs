@@ -230,7 +230,12 @@ function makeD1VendorQuoteSubmissionStatements(options) {
                   COALESCE(json_extract(v.raw, '$.unlimitedQuotes'), 0) = 1 OR
                   COALESCE(json_extract(v.raw, '$.unlimitedAccess'), 0) = 1 OR
                   COALESCE(json_extract(v.raw, '$.isUnlimited'), 0) = 1
-                ) OR ${existingQuote} OR
+                ) OR EXISTS (
+                  SELECT 1 FROM json_each(CASE
+                    WHEN json_type(v.raw, '$.quotedRfqIds') = 'array' THEN json_extract(v.raw, '$.quotedRfqIds')
+                    ELSE '[]'
+                  END) AS quoted WHERE CAST(quoted.value AS TEXT) = CAST($1 AS TEXT)
+                ) OR
                 EXISTS (SELECT 1 FROM vendor_credit_transactions WHERE idempotency_key = $11) OR 
                 CASE
                   WHEN lower(COALESCE(json_extract(v.raw, '$.subscriptionPlan'), '')) = 'select' THEN MAX(0, 100 - CAST(COALESCE(json_extract(v.raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
