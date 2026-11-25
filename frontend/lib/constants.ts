@@ -19,6 +19,12 @@ import { UI_STRINGS, formatString } from './uiStrings';
 import { EXTENSION_MIN_DAYS, EXTENSION_MAX_DAYS, isWholeExtensionDays } from './validationSchemas';
 
 /**
+ * Default GST (Goods and Services Tax) rate applied when no explicit tax rate is recorded.
+ * Standard GST for procurement in India is 18%.
+ */
+export const DEFAULT_GST_RATE = 0.18;
+
+/**
  * Centralized RFQ Modes Enum / Constants
  * V1 → Mode 1
  * V2 → Mode 2
