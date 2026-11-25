@@ -699,7 +699,14 @@ export default function LoginLogsDashboard() {
                   setCustomStartDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 cursor-pointer"
                 aria-label={strings.filters.startDate}
               />
               <span className="text-slate-400 text-xs">to</span>
@@ -710,7 +717,14 @@ export default function LoginLogsDashboard() {
                   setCustomEndDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 cursor-pointer"
                 aria-label={strings.filters.endDate}
               />
             </div>

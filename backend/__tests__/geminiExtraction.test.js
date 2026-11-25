@@ -266,9 +266,10 @@ describe('Gemini document extraction service', () => {
     });
 
     test('discards a storage/clock-speed spec token echoed into "unit" instead of trusting it as a real unit of measure', () => {
-      // Reproduces the reported bug: "Business Laptops" with specification
-      // "Intel Core i5, 16GB" and quantity 20 came back with unit "GB" (read
-      // from the 16GB RAM spec) instead of being left for the buyer to set.
+      // Reproduces Issue 28: "Business Laptops" with specification
+      // "Intel Core i5, 16GB" and quantity 20 previously came back with unit "GB" (read
+      // from the 16GB RAM spec). Dimension tokens like "GB" are rejected and countable items
+      // with quantity default to canonical "Nos" rather than empty.
       const rows = gemini.toRawLineItems({
         items: [
           // Compact array form: model put "GB" straight into the unit slot.
@@ -282,7 +283,7 @@ describe('Gemini document extraction service', () => {
 
       expect(rows).toHaveLength(3);
       for (const row of rows) {
-        expect(row.unit).toBe('');
+        expect(row.unit).toBe('Nos');
       }
       // A real stated unit for the same kind of item is still honored normally.
       const withRealUnit = gemini.toRawLineItems({
@@ -2844,6 +2845,22 @@ describe('geminiService.generateJson', () => {
         expect(rows[5].totalPrice).toBe(5000);
         expect(rows[6].unit).toBe('Mtr');
         expect(rows[7].unit).toBe('Pcs');
+      });
+
+      it('defaults unit to Nos when item has quantity but no unit is stated', () => {
+        const rows = gemini.toRawLineItems({
+          items: [
+            ['Business Laptops', 20, '', 'Intel Core i5, 16GB RAM and 512GB SSD'],
+            { item: 'Ergonomic Office Chair', qty: 15 },
+          ],
+        });
+        expect(rows).toHaveLength(2);
+        expect(rows[0].itemName).toBe('Business Laptops');
+        expect(rows[0].quantity).toBe(20);
+        expect(rows[0].unit).toBe('Nos');
+        expect(rows[1].itemName).toBe('Ergonomic Office Chair');
+        expect(rows[1].quantity).toBe(15);
+        expect(rows[1].unit).toBe('Nos');
       });
 
       it('exercises extractSpreadsheetLineItems fallback unit from itemName and spec', () => {

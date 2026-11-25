@@ -642,6 +642,14 @@ describe('normalizePoDate', () => {
 
       // Space separated emails
       expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+
+      // Excel copy-paste with tabs and newlines
+      expect(parseSearchTokens('Vendor One\tVendor Two\r\nVendor Three\nvendor4@example.com')).toEqual([
+        'Vendor One',
+        'Vendor Two',
+        'Vendor Three',
+        'vendor4@example.com',
+      ]);
     });
   });
 });
@@ -859,6 +867,15 @@ describe('Indian address location extraction helpers', () => {
     expect(canBuyerManageVendor(
       { source: 'buyer_uploaded', buyerAccountId: 'b-1', buyerEmail: 'me@co.test', addedByBuyerCompany: 'My Co' },
       { id: 'b-1', corporateEmail: 'me@co.test', organizationName: 'My Co' }
+    )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'buyer_uploaded', buyerEmail: 'buyer@corp.com' },
+      null,
+      { email: 'buyer@corp.com' }
+    )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'vendor_master_ingestion', organizationId: 'org-abc' },
+      { id: 'ba-123', organizationId: 'org-abc' }
     )).toBe(true);
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);

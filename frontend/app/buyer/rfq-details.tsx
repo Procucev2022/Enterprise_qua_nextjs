@@ -27,7 +27,7 @@ import {
   createBackdropClickHandler,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry } from '@/lib/rfqClient';
+import { rfqAttachmentUrl, updateRFQ, extendRFQ, replyToRFQInquiry, submitRFQInquiry, publishRFQBroadcast, uploadRFQAttachment } from '@/lib/rfqClient';
 import { getVendorPresence } from '@/lib/vendorPresenceClient';
 import QuoteAttachmentLink from '@/app/components/QuoteAttachmentLink';
 import AttachmentPreviewModal from '@/app/components/AttachmentPreviewModal';
@@ -41,6 +41,7 @@ import type {
   ParsedEmlPreview,
   QuoteComparison,
   RFQAttachment,
+  RFQBroadcast,
   RFQInquiry,
   RFQItem,
   RFQSource,
@@ -92,6 +93,8 @@ import {
   ChevronDown,
   ChevronUp,
   Package,
+  Megaphone,
+  Radio,
 } from 'lucide-react';
 
 const DETAILS = UI_STRINGS.rfqDetails;
@@ -316,7 +319,6 @@ export function lineItemsToCsv(items: ExtractedEntity[]): string {
     DETAILS.colQty,
     DETAILS.colUnit,
     DETAILS.colTargetDate,
-    DETAILS.colConfidence,
   ];
   // Every ExtractedEntity field this exports is a required, non-nullable string or
   // number, so no nullish fallback is needed. Doubling embedded quotes is the RFC
@@ -334,7 +336,6 @@ export function lineItemsToCsv(items: ExtractedEntity[]): string {
         item.quantity,
         item.unit,
         item.targetDate,
-        item.confidence,
       ]
         .map(cell)
         .join(',')
@@ -491,7 +492,7 @@ function CardField({ label, children }: { label: string; children: React.ReactNo
 }
 
 /** Confidence pill shared by the desktop table cell and the mobile card. */
-function ConfidenceBadge({ confidence }: { confidence: number }) {
+export function ConfidenceBadge({ confidence }: { confidence: number }) {
   if (confidence <= 0) {
     // A keyed row carries no AI confidence, so it says so instead of claiming a
     // score that was never computed.
@@ -1046,6 +1047,119 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
       }
       return next;
     });
+  };
+
+  // ─── Information Broadcast State & Handlers ───
+  const [broadcastTitle, setBroadcastTitle] = useState('');
+  const [broadcastMessage, setBroadcastMessage] = useState('');
+  const [broadcastAttachments, setBroadcastAttachments] = useState<RFQAttachment[]>([]);
+  const [isPublishingBroadcast, setIsPublishingBroadcast] = useState(false);
+  const [isUploadingBroadcastAttachment, setIsUploadingBroadcastAttachment] = useState(false);
+  const [isBroadcastComposerExpanded, setIsBroadcastComposerExpanded] = useState(false);
+  const broadcastFileInputRef = useRef<HTMLInputElement>(null);
+  const clarificationsRef = useRef<HTMLDivElement>(null);
+  const vendorChatInputRef = useRef<HTMLTextAreaElement>(null);
+
+  const handleBroadcastFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    if (!files || files.length === 0) return;
+    setIsUploadingBroadcastAttachment(true);
+    try {
+      for (let i = 0; i < files.length; i++) {
+        const file = files[i];
+        const res = await uploadRFQAttachment(file);
+        if (res.success && res.data) {
+          setBroadcastAttachments((prev) => [...prev, res.data!]);
+        } else {
+          showToast('Upload Failed', res.error || `Failed to upload ${file.name}`, 'warning');
+        }
+      }
+    } catch {
+      showToast('Upload Failed', 'Error uploading attachment.', 'warning');
+    } finally {
+      setIsUploadingBroadcastAttachment(false);
+      if (e.target) e.target.value = '';
+    }
+  };
+
+  const handleRemoveBroadcastAttachment = (indexToRemove: number) => {
+    setBroadcastAttachments((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  const handlePublishBroadcast = async () => {
+    const text = broadcastMessage.trim();
+    if (!text || !activeRfq || isPublishingBroadcast) return;
+    setIsPublishingBroadcast(true);
+    try {
+      const res = await publishRFQBroadcast(activeRfq.id, {
+        title: broadcastTitle.trim() || undefined,
+        message: text,
+        attachments: broadcastAttachments,
+      });
+      if (!res.success) {
+        showToast('Broadcast Failed', res.error || 'Failed to publish broadcast announcement.', 'warning');
+        return;
+      }
+      const updatedRfq = res.rfq || {
+        ...activeRfq,
+        broadcasts: [...(activeRfq.broadcasts || []), res.data!],
+      };
+      setLocalRfq(updatedRfq);
+      if (onUpdate) onUpdate(updatedRfq);
+      syncRFQRecord?.(updatedRfq);
+      setBroadcastTitle('');
+      setBroadcastMessage('');
+      setBroadcastAttachments([]);
+      setIsBroadcastComposerExpanded(false);
+      await syncUpdatedRfq();
+      showToast('Broadcast Published', 'Information broadcast successfully shared with all participating vendors.', 'success');
+    } catch (err: unknown) {
+      showToast('Broadcast Failed', err instanceof Error ? err.message : 'Error publishing broadcast.', 'warning');
+    } finally {
+      setIsPublishingBroadcast(false);
+    }
+  };
+
+  const handleDownloadAttachment = async (att: RFQAttachment) => {
+    try {
+      const token = authClient.getToken();
+      const res = await fetch(rfqAttachmentUrl(att.id), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      if (!res.ok) {
+        showToast('Download Failed', 'Could not download the requested document.', 'warning');
+        return;
+      }
+      const blob = await res.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = att.fileName || 'attachment';
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+    } catch {
+      showToast('Download Error', 'An error occurred while downloading the attachment.', 'warning');
+    }
+  };
+
+  const handleDownloadBroadcastAttachment = handleDownloadAttachment;
+
+  const handleInitiatePrivateReply = (bcast: RFQBroadcast) => {
+    const refHeader = bcast.title ? `[Re Broadcast: "${bcast.title}"] ` : `[Re Broadcast: "${bcast.message.slice(0, 30)}..."] `;
+    setChatInputText((prev) => (prev ? `${prev}\n${refHeader}` : refHeader));
+    if (clarificationsRef.current) {
+      clarificationsRef.current.scrollIntoView({ behavior: 'smooth' });
+    }
+    if (vendorChatInputRef.current) {
+      vendorChatInputRef.current.focus();
+    }
+    showToast(
+      'Private Clarification Desk',
+      'Your response will be sent privately to the buyer. It is never visible to other vendors.',
+      'info'
+    );
   };
 
   const checkIsProcucevVendor = useCallback(
@@ -2331,9 +2445,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                         direction={sortDirection}
                         onSort={toggleSort}
                       />
-                      <th scope="col" className="px-3 py-2 text-center font-bold">
-                        {DETAILS.colConfidence}
-                      </th>
                     </tr>
                   </thead>
                   <tbody>
@@ -2371,15 +2482,12 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           <span className="block text-[10px] text-slate-500 dark:text-gray-400">{item.unit}</span>
                         </td>
                         <td className="px-3 py-2 mono whitespace-nowrap tabular-nums">{orUnset(formatIndianDate(item.targetDate))}</td>
-                        <td className="px-3 py-2 text-center">
-                          <ConfidenceBadge confidence={item.confidence} />
-                        </td>
                       </tr>
                     ))}
 
                     {visibleItems.length === 0 && (
                       <tr>
-                        <td colSpan={6} className="px-4 py-10 text-center space-y-2">
+                        <td colSpan={5} className="px-4 py-10 text-center space-y-2">
                           <span className="block text-slate-400 dark:text-gray-500">{DETAILS.noLineItemMatches}</span>
                           <button
                             onClick={clearFilters}
@@ -2426,7 +2534,6 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                           </span>
                         )}
                       </div>
-                      <ConfidenceBadge confidence={item.confidence} />
                     </div>
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="inline-flex items-center px-2 py-0.5 rounded bg-indigo-50 dark:bg-indigo-500/15 text-indigo-700 dark:text-indigo-300 text-[10px] font-bold whitespace-nowrap">
@@ -2482,22 +2589,32 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
                       </span>
                     </span>
                   </span>
-                  {/* Fetched with the session's Authorization header and opened as a
-                      blob URL — a plain <a href> can't carry that header, and this
-                      endpoint requires it. The browser still previews a PDF or image
-                      inline from the blob exactly as it would from a direct URL. */}
-                  <button
-                    type="button"
-                    onClick={() => handleViewAttachment(file)}
-                    disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
-                    aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
-                    className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 shrink-0 self-start sm:self-auto disabled:opacity-60"
-                  >
-                    <ExternalLink size={11} />{' '}
-                    {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
-                      ? DETAILS.attachmentViewingAction
-                      : DETAILS.attachmentViewAction}
-                  </button>
+                  <div className="flex items-center gap-1.5 shrink-0 self-start sm:self-auto">
+                    <button
+                      type="button"
+                      onClick={() => handleDownloadAttachment(file)}
+                      aria-label={`Download ${file.fileName}`}
+                      className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1"
+                    >
+                      <Download size={11} /> Download
+                    </button>
+                    {/* Fetched with the session's Authorization header and opened as a
+                        blob URL — a plain <a href> can't carry that header, and this
+                        endpoint requires it. The browser still previews a PDF or image
+                        inline from the blob exactly as it would from a direct URL. */}
+                    <button
+                      type="button"
+                      onClick={() => handleViewAttachment(file)}
+                      disabled={attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id}
+                      aria-label={formatString(DETAILS.attachmentViewAria, { fileName: file.fileName })}
+                      className="btn btn-secondary btn-xs font-bold flex items-center justify-center gap-1 disabled:opacity-60"
+                    >
+                      <ExternalLink size={11} />{' '}
+                      {attachmentPreview?.status === 'loading' && attachmentPreview.file.id === file.id
+                        ? DETAILS.attachmentViewingAction
+                        : DETAILS.attachmentViewAction}
+                    </button>
+                  </div>
                 </li>
               ))}
             </ul>
@@ -3294,6 +3411,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
 
       {/* Vendor Inquiries & Clarifications Chat Desk */}
       {!isV0 && (
+        <div ref={clarificationsRef}>
         <Panel
           title={isVendor ? 'Direct Clarification & Inquiry with Buyer' : 'Vendor Inquiries & Clarifications'}
         count={isVendor ? undefined : vendorChannels.length}
@@ -3420,6 +3538,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
             <div className="p-3 border-t border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 flex items-end gap-2 shrink-0">
               <div className="flex-1 relative">
                 <textarea
+                  ref={vendorChatInputRef}
                   rows={2}
                   value={chatInputText}
                   onChange={(e) => setChatInputText(e.target.value)}
@@ -3816,7 +3935,325 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
           </div>
         )}
       </Panel>
+      </div>
       )}
+
+      {/* ═══ INFORMATION BROADCAST SECTION (Below Vendor Inquiry & Clarification) ═══ */}
+      <Panel
+        title="Information Broadcast & Bulletins"
+        count={(activeRfq.broadcasts || []).length}
+        subtitle="Official updates, addenda, and technical notices broadcast to all participating suppliers"
+        toolbar={
+          <div className="flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+              <Megaphone size={12} className="text-indigo-600 dark:text-indigo-400" />
+              Broadcast Channel
+            </span>
+            {!isVendor && (
+              <button
+                type="button"
+                onClick={() => setIsBroadcastComposerExpanded((prev) => !prev)}
+                className="btn btn-primary btn-xs font-bold inline-flex items-center gap-1"
+                title="Publish an announcement to all invited vendors"
+              >
+                <Plus size={11} />
+                <span>{isBroadcastComposerExpanded ? 'Close Publisher' : 'Publish Broadcast'}</span>
+              </button>
+            )}
+          </div>
+        }
+      >
+        <div className="p-4 sm:p-5 space-y-4 bg-white dark:bg-gray-900 border-t border-slate-200 dark:border-gray-800">
+          {/* ─── BUYER / CM COMPOSER ─── */}
+          {!isVendor && (
+            <div className={`p-4 rounded-xl border transition-all duration-200 ${
+              isBroadcastComposerExpanded
+                ? 'bg-gradient-to-br from-indigo-50/50 via-purple-50/30 to-indigo-50/20 dark:from-indigo-950/30 dark:via-purple-950/20 dark:to-indigo-950/10 border-indigo-200 dark:border-indigo-800 shadow-sm'
+                : 'bg-slate-50/60 dark:bg-gray-950/40 border-slate-200 dark:border-gray-800'
+            }`}>
+              <div className="flex items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-indigo-600 text-white flex items-center justify-center font-bold shadow-xs">
+                    <Megaphone size={14} />
+                  </div>
+                  <div>
+                    <h3 className="text-xs font-bold text-slate-900 dark:text-white">
+                      Publish Broadcast Announcement
+                    </h3>
+                    <p className="text-[10px] text-slate-500 dark:text-gray-400">
+                      Instantly shared with all participating suppliers. Vendors cannot reply publicly.
+                    </p>
+                  </div>
+                </div>
+                {!isBroadcastComposerExpanded && (
+                  <button
+                    type="button"
+                    onClick={() => setIsBroadcastComposerExpanded(true)}
+                    className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1"
+                  >
+                    <Plus size={12} /> New Broadcast
+                  </button>
+                )}
+              </div>
+
+              {isBroadcastComposerExpanded && (
+                <div className="space-y-3 pt-2">
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-gray-300 mb-1">
+                      Announcement Title / Subject (Optional)
+                    </label>
+                    <input
+                      type="text"
+                      value={broadcastTitle}
+                      onChange={(e) => setBroadcastTitle(e.target.value)}
+                      placeholder="e.g. Addendum #1: Revised Technical Specification or Milestone Update"
+                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-gray-700 text-xs bg-white dark:bg-gray-900 text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
+                      disabled={isPublishingBroadcast}
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold text-slate-700 dark:text-gray-300 mb-1">
+                      Broadcast Message Content *
+                    </label>
+                    <textarea
+                      rows={3}
+                      value={broadcastMessage}
+                      onChange={(e) => setBroadcastMessage(e.target.value)}
+                      placeholder="Type the announcement details, clarifications, or revisions to broadcast to all suppliers..."
+                      className="w-full p-2.5 rounded-xl border border-slate-200 dark:border-gray-700 text-xs bg-white dark:bg-gray-900 text-slate-900 dark:text-white resize-none focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-xs"
+                      disabled={isPublishingBroadcast}
+                    />
+                  </div>
+
+                  {/* Attached Documents List */}
+                  {broadcastAttachments.length > 0 && (
+                    <div className="space-y-1.5">
+                      <span className="text-[10px] font-bold text-slate-600 dark:text-gray-300 uppercase tracking-wider block">
+                        Attached Supporting Documents ({broadcastAttachments.length})
+                      </span>
+                      <div className="flex flex-wrap gap-2">
+                        {broadcastAttachments.map((att, attIdx) => (
+                          <div
+                            key={att.id || attIdx}
+                            className="inline-flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-xs bg-white dark:bg-gray-800 border border-slate-200 dark:border-gray-700 shadow-xs"
+                          >
+                            <Paperclip size={12} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                            <span className="font-medium text-slate-800 dark:text-gray-200 truncate max-w-[200px]" title={att.fileName}>
+                              {att.fileName}
+                            </span>
+                            <span className="text-[10px] text-slate-400">
+                              ({formatFileSize(att.size)})
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveBroadcastAttachment(attIdx)}
+                              className="text-slate-400 hover:text-rose-500 p-0.5 rounded transition-colors"
+                              title="Remove attachment"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Actions Row */}
+                  <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-200/80 dark:border-gray-800 flex-wrap">
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="file"
+                        ref={broadcastFileInputRef}
+                        onChange={handleBroadcastFileUpload}
+                        className="hidden"
+                        multiple
+                      />
+                      <button
+                        type="button"
+                        onClick={() => broadcastFileInputRef.current?.click()}
+                        disabled={isUploadingBroadcastAttachment || isPublishingBroadcast}
+                        className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                      >
+                        {isUploadingBroadcastAttachment ? (
+                          <Loader2 size={12} className="animate-spin text-indigo-600" />
+                        ) : (
+                          <Paperclip size={12} />
+                        )}
+                        <span>{isUploadingBroadcastAttachment ? 'Uploading...' : 'Attach Document'}</span>
+                      </button>
+                      <span className="text-[10px] text-slate-400 hidden sm:inline">
+                        Supports PDF, Excel, Word, Images up to 25MB
+                      </span>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsBroadcastComposerExpanded(false);
+                          setBroadcastTitle('');
+                          setBroadcastMessage('');
+                          setBroadcastAttachments([]);
+                        }}
+                        disabled={isPublishingBroadcast}
+                        className="btn btn-secondary btn-xs font-bold"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={handlePublishBroadcast}
+                        disabled={isPublishingBroadcast || !broadcastMessage.trim()}
+                        className="btn btn-primary btn-xs px-4 font-bold inline-flex items-center gap-1.5 disabled:opacity-50"
+                      >
+                        {isPublishingBroadcast ? (
+                          <Loader2 size={12} className="animate-spin" />
+                        ) : (
+                          <Send size={12} />
+                        )}
+                        <span>{isPublishingBroadcast ? 'Publishing...' : 'Publish Broadcast'}</span>
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ─── BROADCAST TIMELINE / ANNOUNCEMENT STREAM ─── */}
+          {(!activeRfq.broadcasts || activeRfq.broadcasts.length === 0) ? (
+            <div className="p-8 text-center bg-slate-50/60 dark:bg-gray-950/30 rounded-xl border border-dashed border-slate-200 dark:border-gray-800 space-y-2">
+              <Megaphone size={28} className="mx-auto text-slate-400 opacity-50" />
+              <p className="text-xs font-bold text-slate-700 dark:text-gray-300">No Information Broadcasts Published</p>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400 max-w-md mx-auto">
+                {isVendor
+                  ? 'The buyer has not posted any official addenda or broadcasts for this RFQ yet. All core specifications are listed above.'
+                  : 'Share addenda, technical drawings, or delivery updates with all invited vendors at once using the publisher above.'}
+              </p>
+            </div>
+          ) : (
+            <div className="space-y-3.5">
+              <div className="flex items-center justify-between text-xs text-slate-500 dark:text-gray-400 px-1">
+                <span className="font-bold text-[11px] uppercase tracking-wider text-slate-600 dark:text-gray-300">
+                  Published Bulletins & Addenda ({(activeRfq.broadcasts || []).length})
+                </span>
+                <span className="text-[10px] text-slate-400">
+                  Sorted newest first • Shared with all participating suppliers
+                </span>
+              </div>
+
+              {/* Reverse-chronological timeline */}
+              {[...(activeRfq.broadcasts || [])]
+                .sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime())
+                .map((bcast, bIdx) => (
+                  <div
+                    key={bcast.id || bIdx}
+                    className="p-4 sm:p-5 rounded-xl border border-l-4 border-l-indigo-500 border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-950/40 shadow-xs space-y-3 transition-all hover:shadow-sm"
+                  >
+                    {/* Header */}
+                    <div className="flex items-start justify-between gap-3 flex-wrap sm:flex-nowrap">
+                      <div className="space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-extrabold bg-indigo-50 dark:bg-indigo-950 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800">
+                            <Megaphone size={10} />
+                            OFFICIAL BROADCAST
+                          </span>
+                          <span className="text-[10px] font-bold text-slate-700 dark:text-gray-300">
+                            {bcast.authorRole === 'category_manager'
+                              ? `Category Manager: ${bcast.authorName || 'Procurement Team'}`
+                              : `Buyer: ${bcast.authorName || 'Procurement Team'}`}
+                          </span>
+                        </div>
+                        {bcast.title && (
+                          <h4 className="text-sm font-extrabold text-slate-900 dark:text-white leading-snug">
+                            {bcast.title}
+                          </h4>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5 text-[10px] text-slate-400 shrink-0">
+                        <Clock size={11} />
+                        <span className="mono font-medium">
+                          {bcast.createdAt ? formatIndianDateTime(bcast.createdAt) : 'Recently'}
+                        </span>
+                      </div>
+                    </div>
+
+                    {/* Message Body */}
+                    <p className="text-xs text-slate-800 dark:text-gray-200 leading-relaxed whitespace-pre-wrap break-words">
+                      {bcast.message}
+                    </p>
+
+                    {/* Supporting Documents / Attachments */}
+                    {Array.isArray(bcast.attachments) && bcast.attachments.length > 0 && (
+                      <div className="pt-2 border-t border-slate-100 dark:border-gray-800/80 space-y-2">
+                        <span className="text-[10px] font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider block">
+                          Attached Supporting Documents ({bcast.attachments.length})
+                        </span>
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                          {bcast.attachments.map((att, aIdx) => (
+                            <div
+                              key={att.id || aIdx}
+                              className="p-2.5 rounded-lg bg-slate-50 dark:bg-gray-900 border border-slate-200 dark:border-gray-800 flex items-center justify-between gap-2 shadow-2xs"
+                            >
+                              <div className="flex items-center gap-2 min-w-0">
+                                <div className="w-7 h-7 rounded-md bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0">
+                                  <FileText size={14} />
+                                </div>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-900 dark:text-white truncate" title={att.fileName}>
+                                    {att.fileName}
+                                  </p>
+                                  <p className="text-[10px] text-slate-400">
+                                    {formatFileSize(att.size)}
+                                  </p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => handleDownloadBroadcastAttachment(att)}
+                                className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1 shrink-0 hover:text-indigo-600 dark:hover:text-indigo-400"
+                                title={`Download ${att.fileName}`}
+                              >
+                                <Download size={11} />
+                                <span>Download</span>
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Footer / Private Clarification Action (Strictly for Vendor) */}
+                    <div className="flex items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-gray-800/80 text-[10px] text-slate-500 dark:text-gray-400 flex-wrap">
+                      <span className="inline-flex items-center gap-1 font-medium text-slate-500">
+                        <ShieldCheck size={11} className="text-emerald-600" />
+                        Verified RFQ Communication Log
+                      </span>
+
+                      {isVendor ? (
+                        <button
+                          type="button"
+                          onClick={() => handleInitiatePrivateReply(bcast)}
+                          className="btn btn-secondary btn-xs font-bold inline-flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 border-indigo-200 dark:border-indigo-800"
+                          title="Respond to this broadcast via your private 1-on-1 clarification thread with the buyer"
+                        >
+                          <MessageSquare size={11} />
+                          <span>Reply Privately in Clarifications</span>
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-slate-400 italic">
+                          Vendor responses route privately to the Clarifications Desk
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ))}
+            </div>
+          )}
+        </div>
+      </Panel>
 
       {/* Vendor Call to Action (when viewing as vendor and has NOT yet submitted quote) */}
       {isVendor && quotes.length === 0 && (

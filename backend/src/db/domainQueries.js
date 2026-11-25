@@ -209,6 +209,16 @@ function parseVendorRaw(value) {
       vendor.gstin = resolvedGstin;
       vendor.gst = resolvedGstin;
     }
+    const email = String(vendor.email || '').trim().toLowerCase();
+    if (email === 'bhumika@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech';
+      vendor.brandName = 'Vays Infotech';
+      vendor.companyName = 'Vays Infotech';
+    } else if (email === 'helpdesk@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech 1';
+      vendor.brandName = 'Vays Infotech 1';
+      vendor.companyName = 'Vays Infotech 1';
+    }
   }
   return vendor;
 }
@@ -263,7 +273,7 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false, activeOnly = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false, activeOnly = false, subscriptionOnly = false } = {}) {
   // Pincode prefix (3–6 digits). Anything else is ignored rather than turned into a LIKE pattern.
   const cleanPincode = /^\d{3,6}$/.test(String(pincode || '').replace(/\s+/g, '')) ? String(pincode).replace(/\s+/g, '') : '';
   if (!pool.hasStorage()) return { rows: [], total: 0 };
@@ -286,6 +296,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     ...(cleanMinorTerms.length > 0 ? [`minors:${cleanMinorTerms.join('|')}`] : []),
     ...(cleanPincode ? [`pincode:${cleanPincode}`] : []),
     ...(activeOnly ? ['activeOnly'] : []),
+    ...(subscriptionOnly ? ['subscriptionOnly'] : []),
   ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
@@ -558,6 +569,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (publicOnly || activeOnly) {
     conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
     d1Conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+  }
+  if (subscriptionOnly) {
+    conditions.push(`((raw->>'subscriptionPlan' IS NOT NULL AND lower(raw->>'subscriptionPlan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (raw->>'subscribedPlan' IS NOT NULL AND lower(raw->>'subscribedPlan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (raw->>'plan' IS NOT NULL AND lower(raw->>'plan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR raw->>'isSubscribed' = 'true')`);
+    d1Conditions.push(`((json_extract(raw, '$.subscriptionPlan') IS NOT NULL AND lower(json_extract(raw, '$.subscriptionPlan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (json_extract(raw, '$.subscribedPlan') IS NOT NULL AND lower(json_extract(raw, '$.subscribedPlan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (json_extract(raw, '$.plan') IS NOT NULL AND lower(json_extract(raw, '$.plan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR json_extract(raw, '$.isSubscribed') = 1 OR json_extract(raw, '$.isSubscribed') = 'true')`);
   }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
   const rawD1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';

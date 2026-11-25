@@ -173,7 +173,7 @@ async function loadBuyerMasterFallbackVendors({ user, resolvedBuyerAccount, buye
           ? 'INACTIVE'
           : (rec.evaluationRequested
               ? (rec.status || 'PENDING EVALUATION')
-              : (rec.status && rec.status !== 'PENDING EVALUATION' ? rec.status : 'REGISTERED / NOT EVALUATED')),
+              : (rec.status && rec.status !== 'PENDING EVALUATION' && rec.status !== 'REGISTERED / NOT EVALUATED' ? rec.status : 'NOT EVALUATED')),
         ...(rec.isActive === false
           ? {
               isActive: false,

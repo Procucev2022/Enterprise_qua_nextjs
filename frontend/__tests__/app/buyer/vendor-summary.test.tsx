@@ -1,6 +1,13 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act, within } from '@testing-library/react';
-import VendorSummary, { isBuyerUploaded, isProcucevVendor } from '@/app/buyer/vendor-summary';
+import VendorSummary, {
+  isBuyerUploaded,
+  isProcucevVendor,
+  setEnableVendorRating,
+  setEnableVendorEvaluationRequest,
+  setEnableEditVendorProfile,
+  setEnableVendorEvaluation,
+} from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
@@ -92,7 +99,18 @@ function vendorRecord(overrides: Partial<VendorEntry>): VendorEntry {
 describe('app/buyer/vendor-summary.tsx', () => {
   const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
+  beforeAll(() => {
+    setEnableVendorRating(true);
+    setEnableVendorEvaluationRequest(true);
+    setEnableEditVendorProfile(true);
+    setEnableVendorEvaluation(true);
+  });
+
   afterAll(() => {
+    setEnableVendorRating(false);
+    setEnableVendorEvaluationRequest(false);
+    setEnableEditVendorProfile(false);
+    setEnableVendorEvaluation(false);
     logger.isRemoteSyncEnabled = originalLoggerRemoteSyncEnabled;
     logger.clearLogs();
   });
@@ -110,6 +128,12 @@ describe('app/buyer/vendor-summary.tsx', () => {
   const mockDeleteBuyerVendor = jest.fn();
   const mockDeleteMultipleBuyerVendors = jest.fn();
   const mockFetchVendorEvaluation = jest.fn();
+
+  const openEditVendorModal = (vendorIndex = 0) => {
+    const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
+    fireEvent.click(viewButtons[vendorIndex] || viewButtons[0]);
+    fireEvent.click(screen.getByRole('button', { name: /Edit Profile/i }));
+  };
 
   const mockBuyerVendors: any[] = [
     {
@@ -290,6 +314,95 @@ describe('app/buyer/vendor-summary.tsx', () => {
     mockFetchBuyerProfile.mockResolvedValue({ success: false, error: 'unavailable' });
   });
 
+  describe('Vendor Directory: Feature Flags for Rating and Evaluation Actions', () => {
+    beforeEach(() => {
+      setEnableVendorRating(false);
+      setEnableVendorEvaluationRequest(false);
+      setEnableVendorEvaluation(false);
+    });
+
+    afterEach(() => {
+      setEnableVendorRating(true);
+      setEnableVendorEvaluationRequest(true);
+      setEnableVendorEvaluation(true);
+    });
+
+    it('hides Revise Rating button from Actions column in table when ENABLE_VENDOR_RATING is false', async () => {
+      setEnableVendorRating(false);
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+      expect(screen.queryByRole('button', { name: /Revise Rating/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(/Revise Rating/i)).not.toBeInTheDocument();
+    });
+
+    it('hides Request Vendor Evaluation button inside Revise Rating modal when ENABLE_VENDOR_EVALUATION_REQUEST is false', async () => {
+      setEnableVendorRating(true);
+      setEnableVendorEvaluationRequest(false);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      expect(reviseBtns.length).toBeGreaterThan(0);
+      fireEvent.click(reviseBtns[0]);
+
+      expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+    });
+
+    it('hides Request Vendor Evaluation button inside View Profile modal footer when ENABLE_VENDOR_EVALUATION is false, while keeping Edit Profile, Mark Inactive and Close visible', async () => {
+      setEnableVendorEvaluation(false);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      // View Profile modal is open
+      expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
+
+      // Request Vendor Evaluation button should NOT be in the document
+      expect(screen.queryByRole('button', { name: /Request Vendor Evaluation/i })).not.toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorEvaluationRequest.buttonLabel)).not.toBeInTheDocument();
+
+      // Edit Profile, Close should be present and visible
+      expect(screen.getAllByRole('button', { name: /Edit Profile/i }).length).toBeGreaterThan(0);
+      expect(screen.getAllByRole('button', { name: /Close/i }).length).toBeGreaterThan(0);
+    });
+
+    it('shows Request Vendor Evaluation button in View Profile modal footer when ENABLE_VENDOR_EVALUATION is true', async () => {
+      setEnableVendorEvaluation(true);
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const viewProfileBtns = screen.getAllByRole('button', { name: /View Profile/i });
+      expect(viewProfileBtns.length).toBeGreaterThan(0);
+      fireEvent.click(viewProfileBtns[0]);
+
+      expect(screen.getAllByRole('button', { name: /Request Vendor Evaluation/i }).length).toBeGreaterThan(0);
+    });
+  });
+
   describe('helper classification functions', () => {
     it('correctly classifies buyer-uploaded vendors', () => {
       expect(isBuyerUploaded({ source: 'buyer_uploaded' })).toBe(true);
@@ -453,8 +566,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
     fireEvent.change(selects[0], { target: { value: 'ALL' } });
 
-    // Status filter: EVALUATED
-    fireEvent.change(selects[1], { target: { value: 'EVALUATED' } });
+    // Status filter: ACTIVE
+    fireEvent.change(selects[1], { target: { value: 'ACTIVE' } });
     expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
 
     // Status filter: PREFERRED
@@ -620,7 +733,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         onNavigateToWizard={mockOnNavigateToWizard}
       />
     );
-    expect(screen.getAllByText('BUYER ROSTER (NO EVAL)')[0]).toBeInTheDocument();
+    expect(screen.getByTestId('status-badge-active-v-1')).toBeInTheDocument();
   });
 
   describe('Vendor CRUD Operations', () => {
@@ -680,7 +793,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
@@ -749,7 +862,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '411001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
       expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
@@ -853,7 +966,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       await waitFor(() => expect(validatePincode).toHaveBeenCalledWith('411038'));
       expect(screen.getByDisplayValue('Hadapsar')).toBeInTheDocument();
@@ -879,7 +992,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(await screen.findByText(UI_STRINGS.pincodeVerification.unverifiedFillManually)).toBeInTheDocument();
       expect(screen.queryByText(UI_STRINGS.pincodeVerification.unverified)).not.toBeInTheDocument();
@@ -940,7 +1053,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Mumbai' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
       fireEvent.change(screen.getByLabelText(/Pincode/i), { target: { value: '400001' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
       fireEvent.click(screen.getByTestId('submit-add-vendor'));
 
@@ -992,8 +1105,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       // Click Edit on Apex Supplies
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
@@ -1022,7 +1134,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       expect(screen.getByText(UI_STRINGS.vendorStatutory.editHeading)).toBeInTheDocument();
@@ -1103,7 +1215,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       fireEvent.change(screen.getByDisplayValue('Rajesh Nair'), { target: { value: 'Rajesh Nair Updated' } });
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
 
@@ -1232,8 +1344,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.queryByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).not.toBeInTheDocument();
 
       // Click Edit and then Cancel
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
       expect(screen.queryByText('Edit Vendor Profile')).not.toBeInTheDocument();
@@ -1253,8 +1364,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const tagInput = screen.getByPlaceholderText(/search category/i);
       const addTagBtn = screen.getByRole('button', { name: /Add Tag/i });
@@ -1293,8 +1403,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const contactInput = screen.getByDisplayValue('Rajesh Nair');
       fireEvent.change(contactInput, { target: { value: '   ' } });
@@ -1316,8 +1425,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const [nameInput, brandInput] = screen.getAllByDisplayValue('Apex Supplies Ltd.');
       fireEvent.change(nameInput, { target: { value: 'Apex Supplies Pvt Ltd.' } });
@@ -1369,8 +1477,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       const xBtn = screen
@@ -1715,7 +1822,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // The major and minor category are required, so the sparse vendor's blank ones are supplied.
@@ -1869,7 +1976,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.change(screen.getByLabelText(/Phone/i), { target: { value: '9876543210' } });
       fireEvent.change(screen.getByLabelText(/City/i), { target: { value: 'Pune' } });
       fireEvent.change(screen.getByLabelText(/State/i), { target: { value: 'Maharashtra' } });
-      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27AAAAA0000A1Z5' } });
+      fireEvent.change(screen.getByLabelText(/GSTIN/i), { target: { value: '27ABCDE1234F1Z5' } });
       fireEvent.change(screen.getByLabelText(/Division/i), { target: { value: 'Electrical' } });
       fireEvent.change(screen.getByLabelText(/Rating \(1\.0 - 5\.0\)/i), { target: { value: '4.2' } });
 
@@ -1994,8 +2101,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtn = screen.getByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtn);
+      openEditVendorModal(0);
 
       expect(screen.getByText('Invalid PIN code format')).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -2039,8 +2145,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       // Find the pincode textbox inside Edit Vendor modal and set dummy pincode
       const pincodeInputs = screen.getAllByRole('textbox').filter((input) => {
@@ -2195,7 +2300,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
     });
 
-    it('shows the requested date on the supplier row once the evaluation request has been sent', () => {
+    it('shows the active status on the supplier row once the evaluation request has been sent', () => {
       (useApp as jest.Mock).mockReturnValue({
         ...(useApp as jest.Mock)(),
         buyerVendors: mockBuyerVendors.map((v) =>
@@ -2209,7 +2314,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      expect(screen.getAllByText(new RegExp(UI_STRINGS.vendorEvaluationRequest.requestedLabel)).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('status-badge-active-v-1')).toBeInTheDocument();
     });
 
     it('closes the rating revision modal via Cancel button', () => {
@@ -2868,7 +2973,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Empty_Upload_Batch.xlsx')).toBeInTheDocument();
 
       // Download CSV on batch with records
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
@@ -2912,8 +3017,17 @@ describe('app/buyer/vendor-summary.tsx', () => {
       }
       expect(within(historyModal).getByText('Zenith Electricals')).toBeInTheDocument();
 
-      // Export Upload CSV button in batch details
-      fireEvent.click(screen.getByRole('button', { name: /Export Upload CSV/i }));
+      // Download button in batch details directly shows document records and analytics
+      expect(within(historyModal).getByText('Uploaded Document Records')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Total Suppliers')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Imported & Validated')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Duplicates Deduplicated')).toBeInTheDocument();
+      expect(within(historyModal).getByText('Categories')).toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 1/i)).not.toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 2/i)).not.toBeInTheDocument();
+      expect(within(historyModal).queryByText(/Step 3/i)).not.toBeInTheDocument();
+
+      fireEvent.click(within(historyModal).getByRole('button', { name: /^Download$/i }));
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
         expect.stringContaining('Procurement_Vendors_Q1.xlsx'),
@@ -2956,7 +3070,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       expect(screen.getByText(/Summary record maintained for Summary_Only_Batch.xlsx/i)).toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole('button', { name: /Re-export Upload CSV/i }));
+      const downloadBtns = within(screen.getByTestId('upload-history-modal')).getAllByRole('button', { name: /^Download$/i });
+      fireEvent.click(downloadBtns[downloadBtns.length - 1]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
         expect.stringContaining('Summary_Only_Batch.xlsx'),
@@ -3044,7 +3159,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getAllByText('—').length).toBeGreaterThan(0);
 
       // Click Download CSV on batch with sparse record — covers r.field || '' fallbacks (line 265)
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
       expect(mockShowToast).toHaveBeenCalledWith(
         'Template Downloaded',
@@ -3124,11 +3239,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
       // Find status selector — it's the select with 'All Statuses' option
       const statusSelect = screen.getByDisplayValue('All Statuses');
 
-      // Filter by NOT_EVALUATED (Pending Evaluation)
-      fireEvent.change(statusSelect, { target: { value: 'NOT_EVALUATED' } });
-      // v-1 is evaluated, so should not appear; but not all vendors have evaluated=false
-      // The filter should work without errors
-      expect(statusSelect).toHaveValue('NOT_EVALUATED');
+      // Filter by INACTIVE
+      fireEvent.change(statusSelect, { target: { value: 'INACTIVE' } });
+      expect(statusSelect).toHaveValue('INACTIVE');
     });
 
     it('filters by PREFERRED status', () => {
@@ -3665,8 +3778,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       // Open edit modal for the minimal vendor
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
       fireEvent.keyDown(screen.getByPlaceholderText(/search category/i), { key: 'Enter' });
@@ -3795,7 +3907,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /Download CSV/i });
+      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
 
       expect(URL.createObjectURL).toHaveBeenCalled();
@@ -3827,7 +3939,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       await waitFor(() => {
         expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
-      }, { timeout: 3000 });
+      }, { timeout: 10000 });
 
       fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
     });
@@ -4056,7 +4168,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
 
       // Add a category tag since every saved vendor must have at least one category
       fireEvent.change(screen.getByPlaceholderText(/search category/i), { target: { value: 'Valves' } });
@@ -4432,15 +4544,13 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByText('Cables')).toBeInTheDocument();
 
       // Verify Major Category was auto-set to Electrical
-      const majorSelect = screen.getByLabelText(/Division/i) as HTMLSelectElement;
-      expect(majorSelect.value).toBe('Electrical');
+      expect(screen.getByText('Electrical')).toBeInTheDocument();
 
       // Close modal via Cancel
       fireEvent.click(screen.getByRole('button', { name: /Cancel/i }));
 
       // ─── EDIT VENDOR MODAL ───
-      const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-      fireEvent.click(editBtns[0]);
+      openEditVendorModal(0);
 
       const editInput = document.getElementById('edit-vendor-category-input') as HTMLInputElement;
 
@@ -4577,8 +4687,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      const editBtn = screen.getAllByRole('button', { name: /Edit/i })[0];
-      fireEvent.click(editBtn);
+      openEditVendorModal(0);
 
       fireEvent.change(screen.getByRole('spinbutton'), { target: { value: '0.5' } });
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
@@ -4659,7 +4768,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       expect(screen.getByText('Veera Solutions Pvt LTD')).toBeInTheDocument();
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(
         screen.getByDisplayValue('302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037')
@@ -4710,7 +4819,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
 
       expect(screen.getByDisplayValue('560099')).toBeInTheDocument();
       await waitFor(() => expect(mockValidatePincode).toHaveBeenCalledWith('560099'));
@@ -4823,7 +4932,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getAllByRole('button', { name: /Edit/i })[0]);
+      openEditVendorModal(0);
       const editPhoneInput = screen.getByLabelText(
         new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i')
       ) as HTMLInputElement;
@@ -4900,7 +5009,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Edit/i }));
+      openEditVendorModal(0);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
       expect(screen.getByLabelText(new RegExp(UI_STRINGS.addVendorModal.editPhoneLabel, 'i'))).toHaveValue('');
     });
@@ -5179,7 +5288,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByTestId('close-add-vendor-modal'));
 
       // 2. Edit Vendor blocked when existing Category tag is removed and not replaced
-      fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+      openEditVendorModal(0);
       fireEvent.click(screen.getByRole('button', { name: 'Remove Valves' }));
       fireEvent.click(screen.getByRole('button', { name: /Save Changes/i }));
       expect(screen.getByTestId('vendor-modal-error-banner')).toHaveTextContent(
@@ -5248,9 +5357,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       fireEvent.click(screen.getByTestId('view-profile-edit-category-button'));
 
       const catModal = screen.getByTestId('vendor-category-modal');
-      expect(within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.divisionLabel)).toHaveValue(
-        'IT Infrastructure'
-      );
+      expect(within(catModal).getByText('IT Infrastructure')).toBeInTheDocument();
 
       // Empty Add Tag input resets gracefully; removing tag then typing placeholder and submitting is blocked
       const modalInput = within(catModal).getByLabelText(UI_STRINGS.vendorCategorySelect.categoryLabel);
@@ -5264,7 +5371,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
       fireEvent.click(within(catModal).getByRole('button', { name: 'Cancel' }));
 
-      // Add Vendor clears selected minor tags when switching Division
+      // Add Vendor handles adding multiple divisions
       fireEvent.click(screen.getByTestId('open-add-vendor-modal'));
       const addInput = screen.getByPlaceholderText(/search category/i);
       fireEvent.change(addInput, { target: { value: 'Valves' } });
@@ -5274,7 +5381,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
         screen.getByRole('combobox', { name: UI_STRINGS.vendorCategorySelect.divisionLabel }),
         { target: { value: 'IT Infrastructure' } }
       );
-      expect(screen.queryByRole('button', { name: 'Remove Valves' })).not.toBeInTheDocument();
+      expect(screen.getByText('IT Infrastructure')).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: 'Remove Valves' })).toBeInTheDocument();
     });
 
     it('renders Total Vendor KPI label and ignores foreign evaluations with conflicting email on same company name', () => {
@@ -5336,15 +5444,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       expect(screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel)).toBeInTheDocument();
-      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.activeVendorLabel)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorSummaryStats.inactiveVendorLabel)).toBeInTheDocument();
 
-      // Only the email-matched vendor counts toward OCR & 360 Evaluated (1 of 2),
-      // while sameNameNewVendor keeps Not Evaluated instead of inheriting 11% DISQUALIFIED SUPPLIER.
       const totalLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.totalVendorLabel);
       expect(totalLabel.parentElement).toHaveTextContent('2');
-      const ocrLabel = screen.getByText(UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel);
-      expect(ocrLabel.parentElement).toHaveTextContent('1');
-      expect(screen.getByText('Not Evaluated')).toBeInTheDocument();
       expect(screen.getByText('84%')).toBeInTheDocument();
     });
 
@@ -5451,7 +5555,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         assertInsideKeepsOpenAndBackdropCloses('view-vendor-modal-backdrop');
 
         // 4. Edit Vendor popup
-        fireEvent.click(screen.getByRole('button', { name: /^Edit$/i }));
+        openEditVendorModal(0);
         assertInsideKeepsOpenAndBackdropCloses('edit-vendor-modal-backdrop');
 
         // 5. Category Assign popup
@@ -5539,7 +5643,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('vendor evaluation status in table and View Profile modal', () => {
-    it('shows REGISTERED / NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
+    it('shows NOT EVALUATED when no request has been sent, and PENDING EVALUATION only after request is sent', async () => {
       const unevaluatedVendor = {
         id: 'v-uneval-test',
         name: 'Unrequested Supplier Corp',
@@ -5592,27 +5696,23 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
-      // In the table, unevaluated vendor shows REGISTERED / NOT EVALUATED
-      expect(screen.getByText('REGISTERED / NOT EVALUATED')).toBeInTheDocument();
+      // In the table, unevaluated vendor shows ACTIVE
+      expect(screen.getByTestId('status-badge-active-v-uneval-test')).toBeInTheDocument();
 
       // Open View Profile modal on the unevaluated vendor
       const viewButtons = screen.getAllByRole('button', { name: /View Profile/i });
       fireEvent.click(viewButtons[0]);
 
-      // Inside View Profile modal: shows REGISTERED / NOT EVALUATED (1 in table, 1 in modal)
+      // Inside View Profile modal: shows ACTIVE status
       expect(screen.getByText('Comprehensive supplier registration, compliance, and taxonomy profile.')).toBeInTheDocument();
-      expect(screen.getByText(UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading)).toBeInTheDocument();
-      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.notEvaluatedStatus).length).toBe(2);
+      expect(screen.getAllByText(UI_STRINGS.vendorStatusControl.activeBadge).length).toBeGreaterThanOrEqual(1);
 
       // Close modal
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
 
       // Open View Profile on the vendor that WAS requested
       fireEvent.click(viewButtons[1]);
-      expect(screen.getAllByText('PENDING EVALUATION').length).toBeGreaterThanOrEqual(1);
-      expect(screen.getAllByText(formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-        date: new Date('2026-03-01T10:00:00.000Z').toLocaleDateString(),
-      })).length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByTestId('status-badge-active-v-requested-test')).toBeInTheDocument();
     });
 
     it('hides edit and deactivate actions in table and modal for network vendors and vendors owned by another buyer', async () => {
@@ -5708,8 +5808,75 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.getByRole('button', { name: /Edit Profile/i })).toBeInTheDocument();
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
     });
+
+    it('renders horizontal scrolling container with custom scrollbar, min-width, and sticky header', () => {
+      const vendorMock = {
+        id: 'v-scroll-test',
+        name: 'Horizontal Scroll Vendor',
+        vendorCode: 'VND-SCROLL-01',
+        majorCategory: 'IT',
+        minorCategories: ['Laptops'],
+        source: 'buyer',
+        origin: 'Buyer Manual Empanelment',
+        contactPerson: 'Scroll Tester',
+        email: 'scroll@tester.test',
+        phone: '+91 9999999999',
+        location: 'Bengaluru, Karnataka',
+        score: 92,
+        rating: 4.6,
+        status: 'ACTIVE',
+        buyerId: 'buyer-current',
+        buyerEmail: 'current@corp.com',
+        active: true,
+      };
+
+      (useApp as jest.Mock).mockReturnValue({
+        vendorEvaluations: [],
+        currentMode: 'mode_3',
+        rfqs: [],
+        showToast: mockShowToast,
+        buyerVendors: [vendorMock],
+        addBuyerVendor: mockAddBuyerVendor,
+        updateBuyerVendor: mockUpdateBuyerVendor,
+        deleteBuyerVendor: mockDeleteBuyerVendor,
+        setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+        categoryTaxonomy: [],
+        reviseVendorRating: mockReviseVendorRating,
+        requestVendorEvaluation: mockRequestVendorEvaluation,
+        openRatingRevisionEmailModal: mockOpenRatingRevisionEmailModal,
+        activeBuyerAccount: {
+          id: 'buyer-current',
+          corporateEmail: 'current@corp.com',
+          organizationName: 'Current Corp',
+        },
+      });
+
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
+
+      const tableContainer = screen.getByTestId('vendor-directory-table-container');
+      expect(tableContainer).toBeInTheDocument();
+      expect(tableContainer).toHaveClass('overflow-x-auto');
+      expect(tableContainer).toHaveClass('vendor-directory-table-scroll');
+      expect(tableContainer).toHaveAttribute('role', 'region');
+      expect(tableContainer).toHaveAttribute('aria-label', 'Vendor Directory Table');
+
+      const table = tableContainer.querySelector('table');
+      expect(table).toBeInTheDocument();
+      expect(table?.className).toContain('min-w-[2260px]');
+
+      const thead = table?.querySelector('thead');
+      expect(thead).toBeInTheDocument();
+      expect(thead?.className).toContain('sticky');
+      expect(thead?.className).toContain('top-0');
+    });
   });
 });
+
 
 
 

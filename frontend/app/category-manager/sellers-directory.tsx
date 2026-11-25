@@ -146,6 +146,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedRating, setSelectedRating] = useState<string>('all');
+  const [selectedSubscription, setSelectedSubscription] = useState<boolean>(false);
 
   // Sorting state
   const [sortColumn, setSortColumn] = useState<SellerDirectoryColumnKey | null>(null);
@@ -236,7 +237,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   // Reset to first page when search or filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedSource, selectedCategory, selectedRating]);
+  }, [searchTerm, selectedSource, selectedCategory, selectedRating, selectedSubscription]);
 
   // Escape key support to close column settings modal
   useEffect(() => {
@@ -274,6 +275,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
             pageSize: 150,
             search: query || undefined,
             category: selectedCategory !== 'all' ? selectedCategory : undefined,
+            subscription: selectedSubscription ? true : undefined,
           })
         );
         if (active && seq === fetchSeqRef.current && res.success && (res.candidates || (res as any).data)) {
@@ -292,7 +294,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       active = false;
       controller.abort();
     };
-  }, [debouncedSearch, selectedCategory]);
+  }, [debouncedSearch, selectedCategory, selectedSubscription]);
 
   // Merge remote vendors and buyer-uploaded vendors into unified seller entities
   const allSellers = useMemo(() => {
@@ -394,9 +396,19 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     }
   }, [initialSellerId, allSellers]);
 
+  // Helper to determine whether a vendor is on a paid/active subscription tier
+  const isSubscriptionVendor = useCallback((v: any): boolean => {
+    if (!v) return false;
+    const plan = String(v.subscriptionPlan || v.subscribedPlan || v.plan || '').toLowerCase().trim();
+    const isSub = v.isSubscribed === true || v.isSubscribed === 'true' || v.isSubscribed === 1;
+    return Boolean((plan && !['none', 'free', 'free_tier', 'free_trial', 'premium'].includes(plan)) || isSub);
+  }, []);
+
   // Live Database KPI counts (Removes 500-cap)
   const [dbKPIStats, setDbKPIStats] = useState<{
     totalSuppliers: number;
+    subscriptionVendors?: number;
+    subscriptionVendorsCount?: number;
     networkSuppliers: number;
     buyerUploaded: number;
     verifiedActive: number;
@@ -414,6 +426,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       ) {
         setDbKPIStats({
           totalSuppliers: res.totalSuppliers,
+          subscriptionVendors: typeof res.subscriptionVendors === 'number' ? res.subscriptionVendors : (typeof res.subscriptionVendorsCount === 'number' ? res.subscriptionVendorsCount : 0),
+          subscriptionVendorsCount: typeof res.subscriptionVendorsCount === 'number' ? res.subscriptionVendorsCount : (typeof res.subscriptionVendors === 'number' ? res.subscriptionVendors : 0),
           networkSuppliers: typeof res.networkSuppliers === 'number' ? res.networkSuppliers : 0,
           buyerUploaded: typeof res.buyerUploaded === 'number' ? res.buyerUploaded : 0,
           verifiedActive: typeof res.verifiedActive === 'number' ? res.verifiedActive : 0,
@@ -427,6 +441,9 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
 
   // KPI Metrics Calculation
   const totalSellersCount = dbKPIStats ? dbKPIStats.totalSuppliers : allSellers.length;
+  const subscriptionVendorsCount = dbKPIStats && typeof dbKPIStats.subscriptionVendors === 'number'
+    ? dbKPIStats.subscriptionVendors
+    : allSellers.filter(isSubscriptionVendor).length;
   const networkSellersCount = dbKPIStats
     ? dbKPIStats.networkSuppliers
     : allSellers.filter((s) => s.source === 'procucev_network').length;
@@ -503,9 +520,11 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         (selectedRating === '4plus' && Number(seller.rating) >= 4) ||
         (selectedRating === '4.5plus' && Number(seller.rating) >= 4.5);
 
-      return matchesSearch && matchesSource && matchesCategory && matchesRating;
+      const matchesSubscription = !selectedSubscription || isSubscriptionVendor(seller);
+
+      return matchesSearch && matchesSource && matchesCategory && matchesRating && matchesSubscription;
     });
-  }, [allSellers, searchTerm, selectedSource, selectedCategory, selectedRating]);
+  }, [allSellers, searchTerm, selectedSource, selectedCategory, selectedRating, selectedSubscription, isSubscriptionVendor]);
 
   // Sorting Handler
   const handleSort = (columnKey: SellerDirectoryColumnKey) => {
@@ -587,7 +606,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const supplierPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
     {
       key: 'name',
-      label: 'Supplier Name',
+      label: 'Vendor Name',
       render: (item) => (
         <span className="font-semibold text-slate-900 dark:text-white">
           {String(item.name || EMPTY_VALUE)}
@@ -691,9 +710,10 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     },
   ], []);
 
-  const handleSummaryCardClick = (type: 'total' | 'network' | 'buyer' | 'score' | 'quotes') => {
+  const handleSummaryCardClick = (type: 'total' | 'subscription' | 'network' | 'buyer' | 'score' | 'quotes') => {
     if (type === 'total') {
       setSelectedSource('all');
+      setSelectedSubscription(false);
       setSummaryModalState({
         isOpen: true,
         title: strings.totalSuppliers,
@@ -701,6 +721,18 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         totalCount: allSellers.length,
         columns: supplierPopupColumns,
         records: allSellers as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'subscription') {
+      const nextSubscriptionState = !selectedSubscription;
+      setSelectedSubscription(nextSubscriptionState);
+      const filtered = allSellers.filter(isSubscriptionVendor);
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.subscriptionVendors,
+        subtitle: formatString(strings.freeTierSubtext, { count: String(Math.max(0, totalSellersCount - subscriptionVendorsCount)) }),
+        totalCount: filtered.length,
+        columns: supplierPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
       });
     } else if (type === 'network') {
       setSelectedSource('network');
@@ -765,7 +797,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       RFQDownloadsUsed: s.rfqDownloadsUsed ?? EMPTY_VALUE,
       Status: s.status || EMPTY_VALUE,
     }));
-    exportReportToExcel(rows, `Sellers_Directory_${new Date().toISOString().split('T')[0]}`, 'SellersDirectory');
+    exportReportToExcel(rows, `Vendors_Directory_${new Date().toISOString().split('T')[0]}`, 'VendorsDirectory');
   };
 
   const visibleColumns = useMemo(() => {
@@ -774,8 +806,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
 
   return (
     <div className="space-y-4">
-      {/* 5 SUMMARY CARDS IN ONE HORIZONTAL ROW (Compact & Clickable) */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5 w-full">
+      {/* 6 SUMMARY CARDS IN ONE HORIZONTAL ROW (Compact & Clickable) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full">
         {/* Card 1: Total Suppliers */}
         <div
           role="group"
@@ -795,7 +827,30 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 2: Network Suppliers */}
+        {/* Card 2: Subscription Vendors */}
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('subscription')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('subscription'); } }}
+          className={`bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full ${
+            selectedSubscription
+              ? 'ring-2 ring-indigo-500 border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20'
+              : 'border-slate-200 dark:border-slate-800'
+          }`}
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.subscriptionVendors}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+            {subscriptionVendorsCount}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {formatString(strings.freeTierSubtext, { count: String(Math.max(0, totalSellersCount - subscriptionVendorsCount)) })}
+          </span>
+        </div>
+
+        {/* Card 3: Network Suppliers */}
         <div
           role="group"
           tabIndex={0}
@@ -814,7 +869,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 3: Buyer Uploaded */}
+        {/* Card 4: Buyer Uploaded */}
         <div
           role="group"
           tabIndex={0}
@@ -833,7 +888,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 4: Average 360° Score */}
+        {/* Card 5: Average 360° Score */}
         <div
           role="group"
           tabIndex={0}
@@ -857,7 +912,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 5: Quoted Opportunities */}
+        {/* Card 6: Quoted Opportunities */}
         <div
           role="group"
           tabIndex={0}

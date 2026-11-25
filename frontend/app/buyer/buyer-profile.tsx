@@ -20,7 +20,19 @@ import {
   isDummyPincode,
   derivePanFromGstin,
   parsePrimaryPlantLocation,
+  validateGstin,
+  isGstValid,
 } from '@/lib/validationSchemas';
+
+const BUYER_DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F', 'AAMCP4349L']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+export function isDummyBuyerPan(pan: unknown): boolean {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return BUYER_DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_PATTERN.test(clean);
+}
 import { logger } from '@/lib/logger';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
@@ -34,8 +46,6 @@ import {
   MapPin,
   User,
   Search,
-  CheckSquare,
-  Square,
   ChevronDown,
   ChevronRight,
   Save,
@@ -275,7 +285,7 @@ export default function BuyerProfilePage() {
       activeAcc?.registeredAddress ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
     const resolvedGst = (profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '').toUpperCase();
-    const resolvedPan =
+    const rawPan =
       (
         profile.panNumber ||
         activeAcc?.panNumber ||
@@ -283,6 +293,7 @@ export default function BuyerProfilePage() {
         derivePanFromGstin(resolvedGst) ||
         ''
       ).toUpperCase();
+    const resolvedPan = isDummyBuyerPan(rawPan) ? '' : rawPan;
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -364,19 +375,19 @@ export default function BuyerProfilePage() {
 
     const savedGst = (activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '').toUpperCase();
     setGstNumber((prev) => prev || savedGst || prev);
-    const savedPan = (
+    const rawSavedPan = (
       activeBuyerAccount.panNumber ||
       activeBuyerAccount.pan ||
       derivePanFromGstin(savedGst) ||
       ''
     ).toUpperCase();
+    const savedPan = isDummyBuyerPan(rawSavedPan) ? '' : rawSavedPan;
     setPanNumber((prev) => prev || savedPan || prev);
   }, [activeBuyerAccount, currentUserSession?.email, isLoaded]);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+  // No longer need local isGstValid - using imported comprehensive validation
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
@@ -387,48 +398,6 @@ export default function BuyerProfilePage() {
   /** Minors of a major, from the taxonomy the database returned. */
   const minorsOf = (majorName: string) =>
     activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
-
-  // Toggle Major Category, capped at BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES
-  // divisions and BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES minor categories in
-  // total — selecting a major auto-selects every minor under it, so that bulk
-  // add is blocked outright (not partially filled) whenever it would push the
-  // total minor count over the cap, re-enforced server-side on save.
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-      return;
-    }
-
-    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
-    if (typeof MAX_MAJOR_CATEGORIES === 'number' && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      showToast(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
-        'warning'
-      );
-      return;
-    }
-    const allMinor = minorsOf(majorName);
-    if (
-      typeof MAX_MINOR_CATEGORIES === 'number' &&
-      totalSelectedMinorCount + allMinor.length > MAX_MINOR_CATEGORIES
-    ) {
-      showToast(
-        UI_STRINGS.buyerProfile.limitReachedTitle,
-        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
-        'warning'
-      );
-      return;
-    }
-
-    setSelectedMajor((prev) => [...prev, majorName]);
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor }));
-  };
 
   // Toggle Minor Category, capped at BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES in total.
   const toggleMinorCategory = (majorName: string, minorName: string) => {
@@ -477,12 +446,24 @@ export default function BuyerProfilePage() {
     setSelectedMinor((prev) => ({ ...prev, [majorName]: [...(prev[majorName] || []), minorName] }));
   };
 
-  // Select all minor for a major, capped the same way as toggleMajorCategory.
+  // Select all minor for a major, capped at MAX_MAJOR_CATEGORIES and MAX_MINOR_CATEGORIES.
   const selectAllMinorInMajor = (majorName: string) => {
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (
+      !selectedMajor.includes(majorName) &&
+      typeof MAX_MAJOR_CATEGORIES === 'number' &&
+      selectedMajor.length >= MAX_MAJOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
+      return;
+    }
     const allMinor = minorsOf(majorName);
     const alreadySelected = selectedMinor[majorName] || [];
     const additional = allMinor.filter((m) => !alreadySelected.includes(m)).length;
-    const { MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
     if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount + additional > MAX_MINOR_CATEGORIES) {
       showToast(
         UI_STRINGS.buyerProfile.limitReachedTitle,
@@ -730,11 +711,13 @@ export default function BuyerProfilePage() {
                 <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
-                {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
-                ) : (
-                  <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
-                )}
+                {panNumber.trim() ? (
+                  isPanValid(panNumber) && !isDummyBuyerPan(panNumber) ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
+                  )
+                ) : null}
               </div>
               <input
                 type="text"
@@ -766,7 +749,7 @@ export default function BuyerProfilePage() {
                   setGstNumber(nextGst);
                   if (!panNumber.trim()) {
                     const derivedPan = derivePanFromGstin(nextGst);
-                    if (derivedPan) setPanNumber(derivedPan);
+                    if (derivedPan && !isDummyBuyerPan(derivedPan)) setPanNumber(derivedPan);
                   }
                 }}
                 maxLength={15}
@@ -952,6 +935,20 @@ export default function BuyerProfilePage() {
           </div>
         </div>
 
+        {/* Save Profile Button - positioned after profile sections, before category selection */}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveProfile}
+            disabled={isLoading || isSaving}
+            aria-busy={isSaving}
+            className="btn btn-primary btn-md shadow-md font-bold flex items-center gap-2"
+          >
+            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
+            Save Organization Profile
+          </button>
+        </div>
+
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
         <div id="section-categories" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
@@ -1009,11 +1006,11 @@ export default function BuyerProfilePage() {
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-2.5 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
-                      <button type="button" className="text-indigo-600 dark:text-indigo-400">
-                        {isMajorSelected ? <CheckSquare size={16} /> : <Square size={16} className="text-slate-400" />}
-                      </button>
+                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3">
+                    <div 
+                      className="flex items-center gap-2.5 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))}
+                    >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                           {cat.majorCategory}
@@ -1030,10 +1027,12 @@ export default function BuyerProfilePage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))
-                        }
-                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }));
+                        }}
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 transition-colors"
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cat.majorCategory}`}
                       >
                         {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </button>
@@ -1097,19 +1096,6 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
-          </div>
-
-          <div className="flex justify-end border-t border-slate-100 dark:border-gray-800 pt-2.5">
-            <button
-              type="submit"
-              onClick={handleSaveProfile}
-              disabled={isLoading || isSaving}
-              aria-busy={isSaving}
-              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
-            >
-              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
-              {UI_STRINGS.buyerProfile.saveCategoryButton}
-            </button>
           </div>
         </div>
       </form>

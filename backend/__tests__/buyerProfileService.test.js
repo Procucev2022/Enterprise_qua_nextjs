@@ -149,30 +149,26 @@ describe('Buyer profile service', () => {
       );
     });
 
-    test('accepts up to the 5-division cap and rejects a 6th distinct major', () => {
-      const atCap = ['A', 'B', 'C', 'D', 'E'].map((major) => ({ major, minor: 'x' }));
-      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(5);
+    test('accepts unlimited major categories (no longer capped at 5)', () => {
+      const tenMajor = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map((major) => ({ major, minor: 'x' }));
+      expect(buyerProfileService.normalizeCategories(tenMajor)).toHaveLength(10);
 
-      const overCap = ['A', 'B', 'C', 'D', 'E', 'F'].map((major, i) => ({ major, minor: `x${i}` }));
-      expect(() => buyerProfileService.normalizeCategories(overCap)).toThrow(
-        'You can select at most 5 major procurement categories. Clear one before adding another.'
-      );
+      const twentyMajor = Array.from({ length: 20 }, (_, i) => ({ major: `Major${i}`, minor: `x${i}` }));
+      expect(buyerProfileService.normalizeCategories(twentyMajor)).toHaveLength(20);
     });
 
-    test('accepts up to the 10-minor-category cap and rejects an 11th', () => {
-      const atCap = Array.from({ length: 10 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
-      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(10);
+    test('accepts unlimited minor categories (no longer capped at 10)', () => {
+      const fiftyMinor = Array.from({ length: 50 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(buyerProfileService.normalizeCategories(fiftyMinor)).toHaveLength(50);
 
-      const overCap = Array.from({ length: 11 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
-      expect(() => buyerProfileService.normalizeCategories(overCap)).toThrow(
-        'You can select at most 10 minor procurement categories in total. Clear one before adding another.'
-      );
+      const hundredMinor = Array.from({ length: 100 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(buyerProfileService.normalizeCategories(hundredMinor)).toHaveLength(100);
     });
 
-    test('the minor-category cap is checked against the de-duplicated set, so a repeated pair cannot exhaust it', () => {
+    test('the minor-category deduplication still removes duplicate pairs', () => {
       const nineUnique = Array.from({ length: 9 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
-      const withARepeat = [...nineUnique, nineUnique[0], { major: 'IT', minor: 'minor-9' }];
-      expect(buyerProfileService.normalizeCategories(withARepeat)).toHaveLength(10);
+      const withRepeats = [...nineUnique, nineUnique[0], nineUnique[1], { major: 'IT', minor: 'minor-9' }];
+      expect(buyerProfileService.normalizeCategories(withRepeats)).toHaveLength(10);
     });
   });
 

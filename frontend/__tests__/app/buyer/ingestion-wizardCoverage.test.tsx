@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import IngestionWizard, { resolveConfirmationVendorCount } from '@/app/buyer/ingestion-wizard';
+import IngestionWizard, { resolveConfirmationVendorCount, setEnableMode3 } from '@/app/buyer/ingestion-wizard';
 import { useApp } from '@/lib/store';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { validatePincode, type PostOfficeDetail } from '@/lib/validationSchemas';
@@ -1062,6 +1062,12 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
 // ------------------------------------------------------------------------------
 
 describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
+  beforeAll(() => {
+    setEnableMode3(true);
+  });
+  afterAll(() => {
+    setEnableMode3(false);
+  });
   const ALPHA = candidate({
     id: 'net-alpha',
     name: 'Alpha Pumps',

@@ -14,8 +14,6 @@ import {
   Mail,
   Phone,
   Search,
-  CheckSquare,
-  Square,
   ChevronDown,
   ChevronRight,
   Save,
@@ -33,7 +31,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan } from '@/lib/validationSchemas';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan, validateGstin, isGstValid } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
   const {
@@ -279,24 +277,7 @@ export default function VendorProfilePage() {
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => Boolean(usablePan(pan));
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
-
-  // Toggle Major Category
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-    } else {
-      setSelectedMajor((prev) => [...prev, majorName]);
-      const allMinor = getMinorCategories(majorName);
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: [...allMinor] }));
-    }
-  };
+  // No longer need local isGstValid - using imported comprehensive validation
 
   // Toggle Minor Category (unlimited selections)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
@@ -1316,11 +1297,11 @@ export default function VendorProfilePage() {
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-3.5 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-3 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
-                      <button type="button" className="text-emerald-600 dark:text-emerald-400">
-                        {isMajorSelected ? <CheckSquare size={18} /> : <Square size={18} className="text-slate-400" />}
-                      </button>
+                  <div className="p-3.5 flex items-center justify-between gap-3">
+                    <div 
+                      className="flex items-center gap-3 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))}
+                    >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                           {cat.majorCategory}
@@ -1337,10 +1318,12 @@ export default function VendorProfilePage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))
-                        }
-                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }));
+                        }}
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 transition-colors"
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cat.majorCategory}`}
                       >
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>

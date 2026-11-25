@@ -21,7 +21,7 @@ const pool = require('../db/pool');
 const storeService = require('./storeService');
 const { logger } = require('./loggerService');
 const { BUYER_ACCOUNT_RESOLUTION, BUYER_FREE_TRIAL_RFQ_CREDITS } = require('../config/constants');
-const { derivePanFromGstin, parsePrimaryPlantLocation } = require('../config/validationSchemas');
+const { derivePanFromGstin, parsePrimaryPlantLocation, isDummyPan } = require('../config/validationSchemas');
 
 const LOG_CATEGORY = 'BUYER_ACCOUNT';
 
@@ -51,13 +51,14 @@ async function mapProfileToBuyerAccount(profile, extras = {}) {
     legacyAccount?.gst ||
     ''
   ).trim().toUpperCase();
-  const resolvedPan = (
+  const rawPan = (
     profile.panNumber ||
     legacyAccount?.pan ||
     legacyAccount?.panNumber ||
     derivePanFromGstin(resolvedGst) ||
     ''
   ).trim().toUpperCase();
+  const resolvedPan = isDummyPan(rawPan) ? '' : rawPan;
   const resolvedCity = profile.city || legacyAccount?.city || parsedPlant.city || '';
   const resolvedState = profile.state || legacyAccount?.state || parsedPlant.state || '';
   const resolvedPincode = profile.pincode || legacyAccount?.pincode || legacyAccount?.zip_code || legacyAccount?.zipCode || parsedPlant.pincode || '';

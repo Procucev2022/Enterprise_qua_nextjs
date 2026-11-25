@@ -10,6 +10,7 @@ import {
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import * as validationSchemas from '@/lib/validationSchemas';
 import type { BuyerProfile } from '@/lib/types';
+import { BUYER_PROFILE_LIMITS } from '@/lib/constants';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -49,8 +50,8 @@ const PROFILE: BuyerProfile = {
   companyName: 'Navin Chaudhary Enterprises',
   brandName: 'NC Heavy Engineering',
   organizationType: 'Public Limited',
-  panNumber: 'AAACL1234F',
-  gstNumber: '27AAACL1234F1Z5',
+  panNumber: 'AAACK3921P',
+  gstNumber: '27AAACK3921P1Z9',
   cinNumber: 'L28920MH1946PLC004768',
   website: 'https://www.example.com',
   annualTurnover: 'INR 1,80,000 Cr+',
@@ -79,6 +80,10 @@ function mockLoad(profile: BuyerProfile | null = PROFILE, taxonomy = TAXONOMY) {
   );
 }
 
+function getSaveButton(): HTMLButtonElement {
+  return screen.getAllByRole('button', { name: /Save Organization Profile/i })[0] as HTMLButtonElement;
+}
+
 /**
  * Render and wait for the mount-time load to settle.
  */
@@ -87,7 +92,7 @@ async function renderLoaded() {
   rerenderCurrent = () => utils.rerender(<BuyerProfilePage />);
   await waitFor(() => expect(fetchBuyerProfile).toHaveBeenCalled());
   await waitFor(() =>
-    expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled()
+    expect(getSaveButton()).not.toBeDisabled()
   );
   return utils;
 }
@@ -135,6 +140,21 @@ function selectAllIn(name: string): void {
     expandMajor(name);
     button = Array.from(majorPanel(name).querySelectorAll('button')).find(
       (b) => b.textContent?.trim() === 'Select All'
+    );
+  }
+  fireEvent.click(button as HTMLButtonElement);
+}
+
+/** Click "Clear" inside a specific major, expanding it first if needed. */
+function clearIn(name: string): void {
+  const panel = majorPanel(name);
+  let button = Array.from(panel.querySelectorAll('button')).find(
+    (b) => b.textContent?.trim() === 'Clear'
+  );
+  if (!button) {
+    expandMajor(name);
+    button = Array.from(majorPanel(name).querySelectorAll('button')).find(
+      (b) => b.textContent?.trim() === 'Clear'
     );
   }
   fireEvent.click(button as HTMLButtonElement);
@@ -189,8 +209,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Navin Chaudhary Enterprises')).toBeInTheDocument();
     expect(screen.getByDisplayValue('NC Heavy Engineering')).toBeInTheDocument();
     expect(screen.getByDisplayValue('Public Limited Company')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('AAACL1234F')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('27AAACL1234F1Z5')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('AAACK3921P')).toBeInTheDocument();
+    expect(screen.getByDisplayValue('27AAACK3921P1Z9')).toBeInTheDocument();
     expect(screen.getByDisplayValue('L28920MH1946PLC004768')).toBeInTheDocument();
     expect(screen.getByDisplayValue('https://www.example.com')).toBeInTheDocument();
     expect(screen.getByDisplayValue('INR 1,80,000 Cr+')).toBeInTheDocument();
@@ -283,7 +303,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     rerenderCurrent();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(latestToast).toHaveBeenCalledWith(
@@ -323,14 +343,14 @@ describe('app/buyer/buyer-profile.tsx', () => {
     );
 
     render(<BuyerProfilePage />);
-    expect(screen.getByText('Save Organization Profile').closest('button')).toBeDisabled();
+    expect(getSaveButton().closest('button')).toBeDisabled();
 
     await act(async () => {
       resolveProfile({ success: true, data: PROFILE });
     });
 
     await waitFor(() =>
-      expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled()
+      expect(getSaveButton().closest('button')).not.toBeDisabled()
     );
   });
 
@@ -347,8 +367,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     fireEvent.change(screen.getByDisplayValue('Public Limited Company'), {
       target: { value: 'Private Limited' },
     });
-    fireEvent.change(screen.getByDisplayValue('AAACL1234F'), { target: { value: 'bbbcl1234f' } });
-    fireEvent.change(screen.getByDisplayValue('27AAACL1234F1Z5'), {
+    fireEvent.change(screen.getByDisplayValue('AAACK3921P'), { target: { value: 'bbbcl1234f' } });
+    fireEvent.change(screen.getByDisplayValue('27AAACK3921P1Z9'), {
       target: { value: '27bbbcl1234f1z5' },
     });
     fireEvent.change(screen.getByDisplayValue('L28920MH1946PLC004768'), {
@@ -391,8 +411,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByText('✓ Valid PAN')).toBeInTheDocument();
     expect(screen.getByText('✓ State 27 Verified')).toBeInTheDocument();
 
-    fireEvent.change(screen.getByDisplayValue('AAACL1234F'), { target: { value: 'NOPE' } });
-    fireEvent.change(screen.getByDisplayValue('27AAACL1234F1Z5'), { target: { value: 'NOPE' } });
+    fireEvent.change(screen.getByDisplayValue('AAACK3921P'), { target: { value: 'NOPE' } });
+    fireEvent.change(screen.getByDisplayValue('27AAACK3921P1Z9'), { target: { value: 'NOPE' } });
 
     expect(screen.getByText('Invalid Format')).toBeInTheDocument();
     expect(screen.getByText('Invalid GSTIN')).toBeInTheDocument();
@@ -423,10 +443,10 @@ describe('app/buyer/buyer-profile.tsx', () => {
   it('toggles a major category on and off', async () => {
     await renderLoaded();
 
-    fireEvent.click(screen.getByText('Logistics'));
+    selectAllIn('Logistics');
     expect(selectionSummary()).toBe('3 Divisions • 3 Categories Selected');
 
-    fireEvent.click(screen.getByText('Logistics'));
+    clearIn('Logistics');
     expect(selectionSummary()).toBe('2 Divisions • 2 Categories Selected');
   });
 
@@ -435,7 +455,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).not.toHaveBeenCalled();
@@ -451,14 +471,14 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).toHaveBeenCalledWith(
       expect.objectContaining({
         companyName: 'Navin Chaudhary Enterprises',
         organizationType: 'Public Limited',
-        panNumber: 'AAACL1234F',
+        panNumber: 'AAACK3921P',
         pincode: '400001',
         contactName: 'Navin Chaudhary',
       })
@@ -489,7 +509,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(screen.getByDisplayValue('INR 2,00,000 Cr+')).toBeInTheDocument();
@@ -512,7 +532,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -527,7 +547,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -545,7 +565,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       target: { value: '' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).not.toHaveBeenCalled();
@@ -557,8 +577,8 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   it.each([
-    ['AAACL1234F', 'NOTAPAN', UI_STRINGS.buyerProfile.panInvalid],
-    ['27AAACL1234F1Z5', '27AAACL1234F1Z', UI_STRINGS.buyerProfile.gstInvalid],
+    ['AAACK3921P', 'NOTAPAN', UI_STRINGS.buyerProfile.panInvalid],
+    ['27AAACK3921P1Z9', '27AAACL1234F1Z', UI_STRINGS.buyerProfile.gstInvalid],
     ['L28920MH1946PLC004768', 'L28920MH1946PLC0047', UI_STRINGS.buyerProfile.cinInvalid],
     ['https://www.example.com', 'example.com', UI_STRINGS.buyerProfile.websiteInvalid],
     ['400001', '040001', UI_STRINGS.buyerProfile.pincodeInvalid],
@@ -567,7 +587,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     fireEvent.change(screen.getByDisplayValue(current), { target: { value: next } });
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).not.toHaveBeenCalled();
@@ -584,7 +604,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     await renderLoaded();
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).not.toHaveBeenCalled();
@@ -607,7 +627,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       target: { value: 'Edited Name' },
     });
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -628,13 +648,13 @@ describe('app/buyer/buyer-profile.tsx', () => {
     );
     await renderLoaded();
 
-    fireEvent.click(screen.getByText('Save Organization Profile'));
+    fireEvent.click(getSaveButton());
 
     await waitFor(() =>
-      expect(screen.getByText('Save Organization Profile').closest('button')).toBeDisabled()
+      expect(getSaveButton().closest('button')).toBeDisabled()
     );
 
-    fireEvent.click(screen.getByText('Save Organization Profile'));
+    fireEvent.click(getSaveButton());
     expect(saveBuyerProfile).toHaveBeenCalledTimes(1);
 
     await act(async () => {
@@ -642,7 +662,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     await waitFor(() =>
-      expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled()
+      expect(getSaveButton().closest('button')).not.toBeDisabled()
     );
   });
 
@@ -663,15 +683,15 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     // 3. Save profile
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(saveBuyerProfile).toHaveBeenCalled();
   });
 
   it('validates pincode debounce, dummy pincode, and invalid format', async () => {
-    jest.useFakeTimers();
     await renderLoaded();
+    jest.useFakeTimers();
 
     const pincodeInput = screen.getByDisplayValue('400001');
 
@@ -765,59 +785,77 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   it('blocks a 6th major category once the 5-division cap is reached', async () => {
-    const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
-      majorCategory: `Category ${i + 1}`,
-      minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
-    }));
-    const initialMajors = bigTaxonomy.slice(0, 5).map((c) => ({
-      major: c.majorCategory,
-      minor: c.minorCategories[0],
-    }));
+    const origMajor = BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES;
+    const origMinor = BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES;
+    (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = 5;
+    (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = 10;
+    try {
+      const bigTaxonomy = Array.from({ length: 7 }, (_, i) => ({
+        majorCategory: `Category ${i + 1}`,
+        minorCategories: [`Subcat ${i + 1}A`, `Subcat ${i + 1}B`],
+      }));
+      const initialMajors = bigTaxonomy.slice(0, 5).map((c) => ({
+        major: c.majorCategory,
+        minor: c.minorCategories[0],
+      }));
 
-    mockLoad({ ...PROFILE, categories: initialMajors }, bigTaxonomy);
-    await renderLoaded();
+      mockLoad({ ...PROFILE, categories: initialMajors }, bigTaxonomy);
+      await renderLoaded();
 
-    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
+      expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
 
-    // At the 5-division cap: selecting a 6th is blocked with a toast and the
-    // selection is left exactly as it was.
-    fireEvent.click(screen.getByText('Category 6'));
+      // At the 5-division cap: selecting a 6th is blocked with a toast and the
+      // selection is left exactly as it was.
+      selectAllIn('Category 6');
 
-    expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
-    expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: 5 }),
-      'warning'
-    );
+      expect(selectionSummary()).toBe('5 Divisions • 5 Categories Selected');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: 5 }),
+        'warning'
+      );
+    } finally {
+      (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = origMajor;
+      (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = origMinor;
+    }
   });
 
   it('blocks a 11th minor category once the 10-category cap is reached', async () => {
-    const minors = Array.from({ length: 15 }, (_, i) => `Subcat ${i + 1}`);
-    const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
-    const initialCategories = minors.slice(0, 9).map((m) => ({
-      major: 'Huge Category',
-      minor: m,
-    }));
+    const origMajor = BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES;
+    const origMinor = BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES;
+    (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = 5;
+    (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = 10;
+    try {
+      const minors = Array.from({ length: 15 }, (_, i) => `Subcat ${i + 1}`);
+      const bigTaxonomy = [{ majorCategory: 'Huge Category', minorCategories: minors }];
+      const initialCategories = minors.slice(0, 9).map((m) => ({
+        major: 'Huge Category',
+        minor: m,
+      }));
 
-    mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
-    await renderLoaded();
+      mockLoad({ ...PROFILE, categories: initialCategories }, bigTaxonomy);
+      await renderLoaded();
 
-    // The 10th minor is still under the cap and succeeds.
-    const subcat10 = screen.getByText('Subcat 10').closest('label')!.querySelector('input')!;
-    fireEvent.click(subcat10);
-    expect(subcat10).toBeChecked();
-    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
+      // The 10th minor is still under the cap and succeeds.
+      const subcat10 = screen.getByText('Subcat 10').closest('label')!.querySelector('input')!;
+      fireEvent.click(subcat10);
+      expect(subcat10).toBeChecked();
+      expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
 
-    // The 11th is blocked outright, with no partial addition and no toggle.
-    const subcat11 = screen.getByText('Subcat 11').closest('label')!.querySelector('input')!;
-    fireEvent.click(subcat11);
-    expect(subcat11).not.toBeChecked();
-    expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
-    expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
-      'warning'
-    );
+      // The 11th is blocked outright, with no partial addition and no toggle.
+      const subcat11 = screen.getByText('Subcat 11').closest('label')!.querySelector('input')!;
+      fireEvent.click(subcat11);
+      expect(subcat11).not.toBeChecked();
+      expect(selectionSummary()).toBe('1 Division • 10 Categories Selected');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
+        'warning'
+      );
+    } finally {
+      (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = origMajor;
+      (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = origMinor;
+    }
   });
 
   it('backfills profile fields from activeBuyerAccount if profile returned blank fields', async () => {
@@ -874,11 +912,37 @@ describe('app/buyer/buyer-profile.tsx', () => {
     expect(screen.getByDisplayValue('Aditi Sharma')).toBeInTheDocument();
   });
 
+  it('does not display dummy PAN details if the buyer account or profile has dummy or placeholder PAN', async () => {
+    const dummyPanProfile: BuyerProfile = {
+      ...PROFILE,
+      panNumber: 'AAACL1234F',
+    };
+    const mockAccount = {
+      organizationName: 'Dummy PAN Org',
+      panNumber: 'ABCDE1234F',
+      corporateEmail: 'dummy@buyer.com',
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      addAuditLog: mockAddAuditLog,
+      showToast: mockShowToast,
+      activeBuyerAccount: mockAccount,
+    });
+
+    mockLoad(dummyPanProfile);
+    await renderLoaded();
+
+    const panField = screen.getByText(/^PAN Number \*/).parentElement?.nextElementSibling as HTMLInputElement;
+    expect(panField).toHaveValue('');
+    expect(screen.queryByDisplayValue('AAACL1234F')).not.toBeInTheDocument();
+    expect(screen.queryByDisplayValue('ABCDE1234F')).not.toBeInTheDocument();
+  });
+
   it('lets the buyer clear a backfilled PAN/GSTIN and leaves it blank, instead of snapping back on every keystroke', async () => {
     const mockAccount = {
       organizationName: 'Clearable Org',
-      gstin: '27AAACL1234F1Z5',
-      panNumber: 'AAACL1234F',
+      gstin: '27AAACK3921P1Z9',
+      panNumber: 'AAACK3921P',
       corporateEmail: 'clearable@buyer.com',
     };
 
@@ -938,7 +1002,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     // Trying to save while pincode has error blocks save (lines 509-510)
-    const saveBtn = screen.getByRole('button', { name: /^Save Organization Profile$/i });
+    const saveBtn = getSaveButton();
     fireEvent.click(saveBtn);
     expect(mockShowToast).toHaveBeenCalledWith(
       UI_STRINGS.buyerProfile.validationErrorTitle,
@@ -964,56 +1028,65 @@ describe('app/buyer/buyer-profile.tsx', () => {
   });
 
   it('blocks any further bulk addition — toggling a whole major, a lone minor, or Select All — once the 10-minor cap is already reached', async () => {
-    const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
-    const largeTaxonomy = Array.from({ length: 6 }, (_, i) => ({
-      majorCategory: `Major Cat ${i + 1}`,
-      minorCategories: [`Minor ${i + 1}-A`, `Minor ${i + 1}-B`, `Minor ${i + 1}-C`, `Minor ${i + 1}-D`, `Minor ${i + 1}-E`],
-    }));
-    (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
+    const origMajor = BUYER_PROFILE_LIMITS.MAX_MAJOR_CATEGORIES;
+    const origMinor = BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES;
+    (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = 5;
+    (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = 10;
+    try {
+      const { fetchCategoryTaxonomy } = jest.requireMock('@/lib/buyerProfileClient');
+      const largeTaxonomy = Array.from({ length: 6 }, (_, i) => ({
+        majorCategory: `Major Cat ${i + 1}`,
+        minorCategories: [`Minor ${i + 1}-A`, `Minor ${i + 1}-B`, `Minor ${i + 1}-C`, `Minor ${i + 1}-D`, `Minor ${i + 1}-E`],
+      }));
+      (fetchCategoryTaxonomy as jest.Mock).mockResolvedValue({ success: true, data: largeTaxonomy });
 
-    mockLoad({
-      ...PROFILE,
-      categories: [
-        { major: 'Major Cat 1', minor: 'Minor 1-A' },
-        { major: 'Major Cat 1', minor: 'Minor 1-B' },
-        { major: 'Major Cat 1', minor: 'Minor 1-C' },
-        { major: 'Major Cat 1', minor: 'Minor 1-D' },
-        { major: 'Major Cat 1', minor: 'Minor 1-E' },
-        { major: 'Major Cat 2', minor: 'Minor 2-A' },
-        { major: 'Major Cat 2', minor: 'Minor 2-B' },
-        { major: 'Major Cat 2', minor: 'Minor 2-C' },
-        { major: 'Major Cat 2', minor: 'Minor 2-D' },
-        { major: 'Major Cat 2', minor: 'Minor 2-E' },
-      ],
-    }, largeTaxonomy);
+      mockLoad({
+        ...PROFILE,
+        categories: [
+          { major: 'Major Cat 1', minor: 'Minor 1-A' },
+          { major: 'Major Cat 1', minor: 'Minor 1-B' },
+          { major: 'Major Cat 1', minor: 'Minor 1-C' },
+          { major: 'Major Cat 1', minor: 'Minor 1-D' },
+          { major: 'Major Cat 1', minor: 'Minor 1-E' },
+          { major: 'Major Cat 2', minor: 'Minor 2-A' },
+          { major: 'Major Cat 2', minor: 'Minor 2-B' },
+          { major: 'Major Cat 2', minor: 'Minor 2-C' },
+          { major: 'Major Cat 2', minor: 'Minor 2-D' },
+          { major: 'Major Cat 2', minor: 'Minor 2-E' },
+        ],
+      }, largeTaxonomy);
 
-    await renderLoaded();
-    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+      await renderLoaded();
+      expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
 
-    // Selecting Major Cat 3 would auto-add all 5 of its minors, pushing the
-    // total to 15 — blocked outright rather than partially filled.
-    fireEvent.click(screen.getByText('Major Cat 3'));
-    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
-    expect(mockShowToast).toHaveBeenCalledWith(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
-      'warning'
-    );
+      // Selecting Major Cat 3 would auto-add all 5 of its minors, pushing the
+      // total to 15 — blocked outright rather than partially filled.
+      selectAllIn('Major Cat 3');
+      expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+      expect(mockShowToast).toHaveBeenCalledWith(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: 10, max: 10 }),
+        'warning'
+      );
 
-    // A single additional minor under a new major is blocked the same way.
-    expandMajor('Major Cat 4');
-    fireEvent.click(screen.getByText('Minor 4-A'));
-    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+      // A single additional minor under a new major is blocked the same way.
+      expandMajor('Major Cat 4');
+      fireEvent.click(screen.getByText('Minor 4-A'));
+      expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
 
-    // Select All on another major's minors is blocked the same way too.
-    const panel5 = majorPanel('Major Cat 5');
-    expandMajor('Major Cat 5');
-    const selectAllBtn5 = Array.from(panel5.querySelectorAll('button')).find(
-      (b) => b.textContent?.trim() === 'Select All'
-    );
-    expect(selectAllBtn5).toBeTruthy();
-    fireEvent.click(selectAllBtn5!);
-    expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+      // Select All on another major's minors is blocked the same way too.
+      const panel5 = majorPanel('Major Cat 5');
+      expandMajor('Major Cat 5');
+      const selectAllBtn5 = Array.from(panel5.querySelectorAll('button')).find(
+        (b) => b.textContent?.trim() === 'Select All'
+      );
+      expect(selectAllBtn5).toBeTruthy();
+      fireEvent.click(selectAllBtn5!);
+      expect(selectionSummary()).toBe('2 Divisions • 10 Categories Selected');
+    } finally {
+      (BUYER_PROFILE_LIMITS as any).MAX_MAJOR_CATEGORIES = origMajor;
+      (BUYER_PROFILE_LIMITS as any).MAX_MINOR_CATEGORIES = origMinor;
+    }
   });
 
   it('covers postal pincode successful resolution with post office auto-populating city and state', async () => {
@@ -1212,7 +1285,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     // 4. Save failure without an error string
     const { saveBuyerProfile } = jest.requireMock('@/lib/buyerProfileClient');
     (saveBuyerProfile as jest.Mock).mockResolvedValueOnce({ success: false });
-    const saveBtn = screen.getByRole('button', { name: /^Save Organization Profile$/i });
+    const saveBtn = getSaveButton();
     fireEvent.click(saveBtn);
     await waitFor(() => {
       expect(mockShowToast).toHaveBeenCalledWith(
@@ -1422,7 +1495,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(screen.getByDisplayValue('302 Sharada, AECS Layout')).toBeInTheDocument();
@@ -1456,7 +1529,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
     });
 
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(screen.getByDisplayValue('Normalized Corp')).toBeInTheDocument();
@@ -1464,7 +1537,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
 
     (saveBuyerProfile as jest.Mock).mockRejectedValueOnce(new Error('Unexpected transport error'));
     await act(async () => {
-      fireEvent.click(screen.getByText('Save Organization Profile'));
+      fireEvent.click(getSaveButton());
     });
 
     expect(mockShowToast).toHaveBeenCalledWith(
@@ -1472,7 +1545,7 @@ describe('app/buyer/buyer-profile.tsx', () => {
       'Unexpected transport error',
       'warning'
     );
-    expect(screen.getByText('Save Organization Profile').closest('button')).not.toBeDisabled();
+    expect(getSaveButton().closest('button')).not.toBeDisabled();
   });
 
   it('ignores mismatched activeBuyerAccount when currentUserSession belongs to another email, and hydrates registeredAddress for matching session', async () => {

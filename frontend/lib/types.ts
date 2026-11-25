@@ -428,6 +428,9 @@ export interface FetchAllVendorsOptions {
   pincode?: string;
   /** Soft proximity pincode (3–6 digits) used to prioritize local public suppliers before fallback. */
   preferredPincode?: string;
+  /** Filter to only subscription (paid/tier) vendors. */
+  subscription?: boolean;
+  subscriptionOnly?: boolean;
 }
 
 /** Outcome of fetching one page of the full (unfiltered-by-category) vendor directory. */
@@ -450,6 +453,8 @@ export type RFQInviteVendorsResult =
       invitedCount: number;
       excludedCount?: number;
       excludedVendors?: RFQExcludedVendor[];
+      provisionedCount?: number;
+      provisioningErrors?: Array<{ id: string; email: string; error?: string }>;
     }
   | { success: false; reason: RFQTransportFailure; error: string };
 
@@ -693,6 +698,7 @@ export interface RFQItem {
   /** Whether RFQ is pending manual vendor assignment by a Category Manager */
   needsCategoryManagerAssignment?: boolean;
   inquiries?: RFQInquiry[];
+  broadcasts?: RFQBroadcast[];
   quotesHidden?: boolean;
   quotesHiddenUntil?: string;
   quotesHiddenReason?: string;
@@ -746,6 +752,19 @@ export interface RFQInquiry {
   repliedAt?: string;
   repliedBy?: string;
   messages?: RFQChatMessage[];
+}
+
+export interface RFQBroadcast {
+  id: string;
+  rfqId: string;
+  rfqNumber: string;
+  title?: string;
+  message: string;
+  attachments?: RFQAttachment[];
+  authorName?: string;
+  authorRole?: 'buyer' | 'category_manager' | 'admin' | string;
+  authorEmail?: string | null;
+  createdAt: string;
 }
 
 /** One entry on RFQItem.assignedVendors — a vendor invited to this RFQ. */
@@ -1231,6 +1250,7 @@ export interface VendorEntry {
     | 'PREFERRED ENTERPRISE SUPPLIER'
     | 'CONDITIONAL / UNDER REVIEW'
     | 'REGISTERED / NOT EVALUATED'
+    | 'NOT EVALUATED'
     | 'DISQUALIFIED SUPPLIER'
     | 'INACTIVE'
     | 'ACTIVE'
@@ -2270,6 +2290,10 @@ export interface BuyerAccount {
   remainingFreeRFQs: number;
   creditBalance?: number;
   available_credits?: number;
+  trialActive?: boolean;
+  trialDays?: number;
+  trialStartDate?: string;
+  trialEndDate?: string;
   unlimitedRfqAccess?: boolean;
   unlimitedAccess?: boolean;
   accountSource: 'public_system' | 'web_registration' | 'enterprise_sso';
@@ -3394,6 +3418,10 @@ export interface BuyerCreditSummary {
   adjustedCredits: number;
   currentEntitlementMode: string;
   currentSubscriptionPlan: string;
+  trialActive?: boolean;
+  trialDays?: number;
+  trialStartDate?: string;
+  trialEndDate?: string;
 }
 
 export interface BuyerCreditTransaction {
@@ -3877,4 +3905,80 @@ export interface SupplierCategoryFilterResult<T> {
   effectiveMajor: string;
   effectiveMinor: string;
   filteredSuppliers: T[];
+}
+
+/** Category Manager Dashboard KPI counters */
+export interface CategoryManagerDashboardKPI {
+  totalRfqs: number;
+  openRfqs: number;
+  rfqsWithoutQuotes: number;
+  buyerSubscriptions: number;
+  vendorSubscriptions: number;
+  totalBuyers: number;
+  totalVendors: number;
+  buyerRegistration: number;
+  vendorRegistration: number;
+  totalLogins: number;
+}
+
+/** Trend data point for 3 monthly line graphs */
+export interface CategoryManagerDashboardCharts {
+  months: string[];
+  totalRfqsAndSubs: { month: string; rfqs: number; buyerSubs: number; vendorSubs: number }[];
+  newRegistrations: { month: string; newBuyers: number; newVendors: number }[];
+  activityRfqsVsQuotes: { month: string; rfqsRaised: number; vendorQuotes: number }[];
+}
+
+/** API response payload for Category Manager Dashboard metrics */
+export interface CategoryManagerDashboardMetricsResponse {
+  success: boolean;
+  kpi: CategoryManagerDashboardKPI;
+  charts: CategoryManagerDashboardCharts;
+  error?: string;
+}
+
+export type CategoryManagerDashboardRecordType =
+  | 'total_rfqs'
+  | 'open_rfqs'
+  | 'rfqs_without_quotes'
+  | 'buyer_subscriptions'
+  | 'vendor_subscriptions'
+  | 'total_buyers'
+  | 'total_vendors'
+  | 'buyer_registration'
+  | 'vendor_registration'
+  | 'total_logins';
+
+export interface CategoryManagerDashboardPopupRecord {
+  id: string;
+  title?: string;
+  name?: string;
+  email?: string;
+  userName?: string;
+  organizationName?: string;
+  companyName?: string;
+  rfqNumber?: string;
+  category?: string;
+  majorCategory?: string;
+  status?: string;
+  targetBudget?: number;
+  quotesCount?: number;
+  subscriptionPlan?: string;
+  contactPerson?: string;
+  loginAt?: string;
+  logoutAt?: string;
+  durationSeconds?: number;
+  ipAddress?: string;
+  deviceInfo?: string;
+  location?: string;
+  createdAt?: string;
+  [key: string]: unknown;
+}
+
+export interface CategoryManagerDashboardRecordsResponse {
+  success: boolean;
+  type: CategoryManagerDashboardRecordType;
+  total: number;
+  records: CategoryManagerDashboardPopupRecord[];
+  error?: string;
 }

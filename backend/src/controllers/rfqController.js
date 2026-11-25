@@ -429,6 +429,7 @@ const RFQ_UPDATABLE_FIELDS = [
   'extractedEntities',
   'attachments',
   'inquiries',
+  'broadcasts',
   'assignedVendors',
 ];
 
@@ -662,6 +663,8 @@ async function inviteVendors(req, res, next) {
       invitedCount: result.invitedCount,
       excludedCount: result.excludedCount || 0,
       excludedVendors: result.excludedVendors || [],
+      provisionedCount: result.provisionedCount || 0,
+      provisioningErrors: result.provisioningErrors || [],
     });
   } catch (err) {
     logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
@@ -954,7 +957,15 @@ async function createRFQ(req, res, next) {
 
     // Every line item must be complete. The form asks for the same fields, and a vendor cannot
     // quote against a row that leaves any of them out.
-    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const rawLineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const lineItems = rawLineItems.map((item) => {
+      const qty = Number(item?.quantity) || 0;
+      const rawUnit = typeof item?.unit === 'string' ? item.unit.trim() : '';
+      return {
+        ...item,
+        unit: rawUnit || (qty > 0 ? 'Nos' : rawUnit),
+      };
+    });
     const lineItemValidation = validateRFQLineItemsForCreate(lineItems);
     if (!lineItemValidation.isValid) {
       logger.warn('Failed to create RFQ: line item validation failed', { errors: lineItemValidation.errors }, 'RFQ_CONTROLLER');
@@ -2311,7 +2322,7 @@ async function generateEmailPreview(req, res, next) {
     const { id } = req.params;
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    const rfq = await storeService.getRFQByIdAsync(id);
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -2531,6 +2542,64 @@ async function replyInquiry(req, res, next) {
   }
 }
 
+async function getBroadcasts(req, res, next) {
+  try {
+    const { id } = req.params;
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+    return res.status(200).json({ success: true, data: rfq.broadcasts || [] });
+  } catch (err) {
+    logger.error(`Error getting broadcasts for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+async function addBroadcast(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { message, title, attachments } = req.body || {};
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Broadcast message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const broadcast = {
+      id: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `bcast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title: title && typeof title === 'string' ? title.trim() : '',
+      message: message.trim(),
+      attachments: Array.isArray(attachments)
+        ? attachments.filter((att) => att && (att.id || att.fileName))
+        : [],
+      authorName: (req.user && (req.user.name || req.user.orgName)) || 'Procurement Team',
+      authorRole: (req.user && req.user.role) || 'buyer',
+      authorEmail: (req.user && req.user.email) || null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const result = await storeService.addBroadcastToRFQ(rfq.id, broadcast);
+    if (!result) {
+      return res.status(500).json({ success: false, error: 'Failed to record broadcast announcement.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: result.broadcast,
+      rfq: result.updatedRfq,
+    });
+  } catch (err) {
+    logger.error(`Error publishing broadcast for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getRFQs,
   getAllRFQs,
@@ -2558,6 +2627,8 @@ module.exports = {
   approvePO,
   addInquiry,
   replyInquiry,
+  getBroadcasts,
+  addBroadcast,
   validateVendorCategories,
   requestVendorCategoryUpdate,
   isPastDate,

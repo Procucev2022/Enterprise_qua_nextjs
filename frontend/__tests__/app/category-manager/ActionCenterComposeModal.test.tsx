@@ -833,19 +833,19 @@ describe('ActionCenterComposeModal', () => {
     expect(scenarioSelect).toBeInTheDocument();
 
     // Select conversion scenario
-    fireEvent.change(scenarioSelect, { target: { value: 'buyer_conversion_followup' } });
+    fireEvent.change(scenarioSelect, { target: { value: 'followup_new' } });
 
     await waitFor(() => {
       const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
-      expect(subjectInput.value).toContain('Procurement Optimization & Commercial Plan for Acme Industrial');
+      expect(subjectInput.value).toContain('Following Up: Sourcing & Procurement Opportunities for Acme Industrial');
     });
 
-    // Select call outcome scenario
-    fireEvent.change(scenarioSelect, { target: { value: 'buyer_call_outcome_connected' } });
+    // Select send proposal scenario
+    fireEvent.change(scenarioSelect, { target: { value: 'send_proposal' } });
 
     await waitFor(() => {
       const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
-      expect(subjectInput.value).toContain('Discussion Recap & Commercial Proposal for Acme Industrial');
+      expect(subjectInput.value).toContain('Commercial Proposal for Acme Industrial');
     });
   });
 
@@ -980,7 +980,7 @@ describe('ActionCenterComposeModal', () => {
         entityId="byr-scenario-init"
         defaultRecipientName="Global Corp"
         defaultRecipientEmail="global@corp.com"
-        defaultScenarioId="buyer_call_outcome_no_answer"
+        defaultScenarioId="followup_new"
         defaultChannel="EMAIL"
       />
     );
@@ -988,7 +988,7 @@ describe('ActionCenterComposeModal', () => {
     await waitFor(() => {
       const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
       expect(select).not.toBeNull();
-      expect(select.value).toBe('buyer_call_outcome_no_answer');
+      expect(select.value).toBe('followup_new');
     });
 
     // Change to empty option
@@ -996,9 +996,9 @@ describe('ActionCenterComposeModal', () => {
     fireEvent.change(select, { target: { value: '' } });
     expect(select.value).toBe('');
 
-    // Change to custom
-    fireEvent.change(select, { target: { value: 'custom' } });
-    expect(select.value).toBe('custom');
+    // Change to demo_schedule
+    fireEvent.change(select, { target: { value: 'demo_schedule' } });
+    expect(select.value).toBe('demo_schedule');
   });
 
   it('displays SMS character counter warning when message exceeds 160 characters', () => {
@@ -1056,17 +1056,19 @@ describe('ActionCenterComposeModal', () => {
 
     // Select scenario when recipientName is empty and matching vault collateral exists
     const select = container.querySelector('#compose-scenario') as HTMLSelectElement;
-    fireEvent.change(select, { target: { value: 'buyer_conversion_followup' } });
+    fireEvent.change(select, { target: { value: 'followup_new' } });
 
     // The record id is never used as a company name. With no recipient name the token stays blank.
     await waitFor(() => {
       const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
-      expect(subjectInput.value).toBe('Follow-up: Procurement Optimization & Commercial Plan for ');
+      expect(subjectInput.value).toBe('Following Up: Sourcing & Procurement Opportunities for ');
     });
 
-    // Verify auto-attached document appears
+    // Select send proposal scenario
+    fireEvent.change(select, { target: { value: 'send_proposal' } });
     await waitFor(() => {
-      expect(screen.getByText('Enterprise Marketing Deck')).toBeInTheDocument();
+      const subjectInput = container.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toBe('Commercial Proposal for  – Procucev Enterprise');
     });
   });
 
@@ -1083,7 +1085,7 @@ describe('ActionCenterComposeModal', () => {
         defaultRecipientName="Acme Corp"
         defaultRecipientEmail="acme@example.com"
         defaultMessage="Ready to submit"
-        defaultScenarioId="buyer_conversion_followup"
+        defaultScenarioId="followup_new"
         defaultAttachments={[
           {
             id: 'att-1',
@@ -1109,7 +1111,7 @@ describe('ActionCenterComposeModal', () => {
     await waitFor(() => {
       expect(mockDispatch).toHaveBeenCalledWith(
         expect.objectContaining({
-          scenarioId: 'buyer_conversion_followup',
+          scenarioId: 'followup_new',
           attachments: expect.arrayContaining([expect.objectContaining({ id: 'att-1' })]),
           scheduleFollowup: expect.objectContaining({
             dueDate: '2026-12-01',
@@ -1149,5 +1151,100 @@ describe('ActionCenterComposeModal', () => {
     // Backdrop click closes modal
     fireEvent.click(dialog);
     expect(onClose).toHaveBeenCalledTimes(2);
+  });
+
+  it('covers supplier and internal_task entity types when choosing scenarios and handling files', async () => {
+    // 1. entityType supplier_dossier
+    const { container: supContainer } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="supplier_dossier"
+        entityId="sup-test-1"
+        defaultRecipientName="Acme Supplies"
+      />
+    );
+    const supSelect = supContainer.querySelector('#compose-scenario') as HTMLSelectElement;
+    fireEvent.change(supSelect, { target: { value: 'credit_quote' } });
+    await waitFor(() => {
+      const subjectInput = supContainer.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toContain('Seller');
+    });
+
+    // 2. entityType internal_task
+    const { container: taskContainer } = render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="internal_task"
+        entityId="tsk-test-1"
+        defaultRecipientName="Internal Ops"
+      />
+    );
+    const taskSelect = taskContainer.querySelector('#compose-scenario') as HTMLSelectElement;
+    fireEvent.change(taskSelect, { target: { value: 'internal_operations' } });
+    await waitFor(() => {
+      const subjectInput = taskContainer.querySelector('#compose-subject') as HTMLInputElement;
+      expect(subjectInput.value).toContain('[Internal Operations]');
+    });
+
+    // 3. Local file cancel (no file selected)
+    const fileInput = supContainer.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(fileInput, { target: { files: [] } });
+
+    // 4. Local file with empty type
+    const emptyTypeFile = new File(['dummy content'], 'report.pdf', { type: '' });
+    fireEvent.change(fileInput, { target: { files: [emptyTypeFile] } });
+    expect(screen.getByText(/report \(Local Upload\)/i)).toBeInTheDocument();
+  });
+
+  it('covers partial delivery and queued follow-up error branches', async () => {
+    // Queued follow-up scheduling warning
+    mockDispatch.mockResolvedValueOnce({
+      success: true,
+      queued: true,
+      followupError: 'Follow-up worker temporarily busy',
+    });
+
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-queued-err"
+        defaultRecipientEmail="queued@buyer.com"
+        defaultMessage="Queued test message"
+      />
+    );
+
+    fireEvent.submit(screen.getByRole('dialog').querySelector('form')!);
+    await waitFor(() => {
+      expect(screen.getByText(/queued for delivery/i)).toBeInTheDocument();
+    });
+
+    // Partial delivery where SMS succeeds and Email fails without error message
+    mockDispatch.mockResolvedValueOnce({
+      success: false,
+      emailResult: { success: false },
+      smsResult: { success: true },
+    });
+
+    render(
+      <ActionCenterComposeModal
+        isOpen={true}
+        onClose={mockOnClose}
+        entityType="buyer_dossier"
+        entityId="byr-partial-2"
+        defaultChannel="BOTH"
+        defaultRecipientEmail="test@buyer.com"
+        defaultRecipientPhone="9876543210"
+        defaultMessage="Partial test message"
+      />
+    );
+
+    fireEvent.submit(screen.getAllByRole('dialog')[1].querySelector('form')!);
+    await waitFor(() => {
+      expect(screen.getByText(/Partial delivery/i)).toBeInTheDocument();
+    });
   });
 });

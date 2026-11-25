@@ -160,7 +160,7 @@ async function syncDatabaseLogs(force = false) {
     // 1. Category Manager sessions from vendor_directory_sessions
     try {
       const vdirRes = await pool.query(
-        'SELECT id, user_uuid, email, role, login_at, last_activity_at, logout_at, duration_seconds, status, ip_address, user_agent, created_at FROM vendor_directory_sessions ORDER BY login_at DESC LIMIT 20',
+        'SELECT id, user_uuid, email, role, login_at, last_activity_at, logout_at, duration_seconds, status, ip_address, user_agent, created_at FROM vendor_directory_sessions ORDER BY login_at DESC LIMIT 500',
         [],
         { d1: true }
       );

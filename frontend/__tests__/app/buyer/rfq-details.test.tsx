@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import RFQDetails, {
+  ConfidenceBadge,
   buildSupplierCategoryFilters,
   daysUntil,
   lineItemsToCsv,
@@ -249,6 +250,17 @@ describe('lineItemsToCsv', () => {
 
   test('handles an empty list', () => {
     expect(lineItemsToCsv([]).split('\n')).toHaveLength(1);
+  });
+});
+
+describe('ConfidenceBadge component', () => {
+  it('renders high confidence, review, and manual states', () => {
+    const { rerender } = render(<ConfidenceBadge confidence={95} />);
+    expect(screen.getByText(DETAILS.confidenceHigh)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={50} />);
+    expect(screen.getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={0} />);
+    expect(screen.getByText(DETAILS.manualConfidence)).toBeInTheDocument();
   });
 });
 
@@ -525,7 +537,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(screen.queryByText(/Package(?:s)? requirement specification/i)).not.toBeInTheDocument();
     });
 
-    it('renders every line item with its classification and confidence', () => {
+    it('renders every line item with its classification and without confidence column', () => {
       renderDetails(twoItems());
 
       // Scoped to the table: the minor category also appears as a filter option.
@@ -534,13 +546,15 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(table).getByText('Flanged Gate Valve')).toBeInTheDocument();
       expect(within(table).getByText('ASTM A216 WCB body')).toBeInTheDocument();
       expect(within(table).getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
-      expect(within(table).getAllByText(DETAILS.confidenceHigh)).toHaveLength(2);
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.confidenceHigh)).not.toBeInTheDocument();
       expect(within(table).queryByText(/95%/)).not.toBeInTheDocument();
     });
 
-    it('flags a low-confidence row as needing review without percentage', () => {
+    it('does not display confidence column or review pill in line items table', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 50 })] }));
-      expect(within(lineItemTable()).getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.confidenceReview)).not.toBeInTheDocument();
       expect(within(lineItemTable()).queryByText(/50%/)).not.toBeInTheDocument();
     });
 
@@ -571,12 +585,13 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(totalQuantity()).toBe('12');
     });
 
-    // A keyed row has no AI confidence, so reporting 0% would misrepresent it.
-    it('labels a manually keyed row instead of claiming zero confidence', () => {
+    // The confidence column is removed in the buyer portal, so manualConfidence is omitted from the table.
+    it('omits confidence column for manually keyed row', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 0 })] }));
 
       const table = screen.getByRole('table');
-      expect(within(table).getByText(DETAILS.manualConfidence)).toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.manualConfidence)).not.toBeInTheDocument();
       expect(within(table).queryByText(/0% /)).not.toBeInTheDocument();
     });
 
@@ -3785,6 +3800,74 @@ function makeInquiry(overrides: any = {}): any {
       });
 
       global.fetch = origFetch;
+    });
+
+    it('exercises handleDownloadAttachment download button for supporting documents across Buyer, Category Manager, and Vendor views', async () => {
+      const origFetch = global.fetch;
+      const origCreate = window.URL.createObjectURL;
+      const origRevoke = window.URL.revokeObjectURL;
+
+      window.URL.createObjectURL = jest.fn(() => 'blob:mock-doc-download');
+      window.URL.revokeObjectURL = jest.fn();
+
+      const sampleRfq = buildRFQ({
+        attachments: [
+          { id: 'att-sup-1', fileName: 'Engineering_Specs.pdf', size: 2048, mimeType: 'application/pdf' } as any,
+        ],
+      });
+
+      // 1. Buyer view download success
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        blob: jest.fn().mockResolvedValue(new Blob(['pdf-bytes'], { type: 'application/pdf' })),
+      } as any);
+
+      renderDetails(sampleRfq);
+
+      const downloadBtn = screen.getByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(downloadBtn).toBeInTheDocument();
+      fireEvent.click(downloadBtn);
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+        expect(window.URL.createObjectURL).toHaveBeenCalled();
+      });
+
+      // 2. Category Manager view
+      renderDetails(sampleRfq);
+      const cmDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(cmDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(cmDownloadBtns[cmDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 3. Vendor view renders and allows download
+      renderDetails(sampleRfq, { isVendorView: true });
+      const vendorDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(vendorDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(vendorDownloadBtns[vendorDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 4. Download failure (ok: false)
+      global.fetch = jest.fn().mockResolvedValue({ ok: false } as any);
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Failed', 'Could not download the requested document.', 'warning');
+      });
+
+      // 5. Download exception
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network drop'));
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Error', 'An error occurred while downloading the attachment.', 'warning');
+      });
+
+      global.fetch = origFetch;
+      window.URL.createObjectURL = origCreate;
+      window.URL.revokeObjectURL = origRevoke;
     });
 
     it('exercises line items table sorting by quantity, targetDate with nulls, and category', () => {

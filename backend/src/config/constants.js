@@ -2173,9 +2173,26 @@ function unwrapAccountData(obj) {
   return obj;
 }
 
+const BUYER_TRIAL_TRANSACTION_TYPE = 'TRIAL_GRANTED';
+const BUYER_TRIAL_GRANTED_DESCRIPTION = 'TRIAL_GRANTED: {days} Days Unlimited Trial';
+
+/**
+ * Check if an account has an active trial period based on canonical trialEndDate.
+ */
+function isTrialActive(account) {
+  const data = unwrapAccountData(account);
+  if (!data || typeof data !== 'object') return false;
+  if (data.trialActive === false) return false;
+  const trialEnd = data.trialEndDate || data.trial_end_date;
+  if (!trialEnd) return false;
+  const endTime = new Date(trialEnd).getTime();
+  return Number.isFinite(endTime) && endTime > Date.now();
+}
+
 /**
  * Check if a buyer account has database-configured unlimited RFQ creation access.
  * Reads database-level flags without hardcoding any identity credentials.
+ * Automatically grants time-based unlimited RFQ access while a trial period is active.
  */
 function hasUnlimitedRfqAccess(account) {
   const data = unwrapAccountData(account);
@@ -2184,7 +2201,8 @@ function hasUnlimitedRfqAccess(account) {
     data.unlimitedRfqAccess === true ||
     data.unlimitedAccess === true ||
     data.isUnlimited === true ||
-    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited'
+    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited' ||
+    isTrialActive(data)
   );
 }
 
@@ -2768,12 +2786,10 @@ const IDENTITY_OTP_CONFIG = {
 // GMTServiceImpl.getOrgByUserId in the Java p2pservices app, which own the
 // `organization` and `org_division_category` rows this feature reads and writes.
 const BUYER_PROFILE_CONFIG = {
-  // Cardinality caps the old Angular screen enforced for a ClientInitiator: at
-  // most 5 divisions, at most 10 minor categories in total. They exist because
-  // the RFQ distribution engine fans out per selected category, so an unbounded
-  // selection would broadcast every RFQ to the entire vendor base.
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+  // Unlimited major and minor procurement category selections supported.
+  // Frontend may enforce display limits, but backend accepts any count.
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 
   // The rupee sign is rewritten before storage, exactly as updateBuyer does.
   // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹
@@ -3170,7 +3186,7 @@ const VENDOR_INGESTION_MESSAGES = {
   DUPLICATE_PO_EXISTING: 'Duplicate PO record ({summary}) — already uploaded previously',
   DUPLICATE_PO_FILE: 'Duplicate PO record ({summary}) — already present in uploaded file (row {firstRow})',
   PO_DUMP_ALL_DUPLICATES:
-    'All {count} PO line item(s) match previously uploaded or earlier duplicate PO records and were skipped.',
+    'Upload cannot be successful because all {count} PO line item(s) are duplicates of existing records. Please upload a file with new data.',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
@@ -3670,11 +3686,11 @@ function parseSearchTokens(search) {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[\n\r,;]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[\n\r,;]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )
@@ -4348,6 +4364,62 @@ function normalizeVendorRating(rating, score) {
   return null;
 }
 
+const STANDARDIZED_COMMUNICATION_CATEGORIES = Object.freeze([
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+]);
+
+const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = Object.freeze({
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+});
+
+const SCENARIO_TO_STANDARDIZED_CATEGORY = Object.freeze({
+  credit_quote: 'Credit / Quote (Buyer / Seller)',
+  followup_new: 'Follow-up / New',
+  demo_schedule: 'Demo Schedule',
+  send_proposal: 'Send Proposal',
+  send_corporate_email: 'Send Corporate Email',
+  onboarding_process: 'Onboarding Process',
+  registration_task: 'Registration Task',
+  internal_operations: 'Internal Operations (Others)',
+  'Credit / Quote (Buyer / Seller)': 'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New': 'Follow-up / New',
+  'Demo Schedule': 'Demo Schedule',
+  'Send Proposal': 'Send Proposal',
+  'Send Corporate Email': 'Send Corporate Email',
+  'Onboarding Process': 'Onboarding Process',
+  'Registration Task': 'Registration Task',
+  'Internal Operations (Others)': 'Internal Operations (Others)',
+});
+
+function resolveStandardizedCommunicationCategory(scenarioIdOrCategory) {
+  if (!scenarioIdOrCategory) return 'Follow-up / New';
+  const raw = String(scenarioIdOrCategory).trim();
+  if (SCENARIO_TO_STANDARDIZED_CATEGORY[raw]) return SCENARIO_TO_STANDARDIZED_CATEGORY[raw];
+  const lower = raw.toLowerCase();
+  if (lower.includes('credit') || lower.includes('quote')) return 'Credit / Quote (Buyer / Seller)';
+  if (lower.includes('demo')) return 'Demo Schedule';
+  if (lower.includes('proposal')) return 'Send Proposal';
+  if (lower.includes('corporate') || lower.includes('partnership')) return 'Send Corporate Email';
+  if (lower.includes('onboard')) return 'Onboarding Process';
+  if (lower.includes('regist') || lower.includes('activate')) return 'Registration Task';
+  if (lower.includes('internal') || lower.includes('operation')) return 'Internal Operations (Others)';
+  return 'Follow-up / New';
+}
+
 module.exports = {
   normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
@@ -4541,6 +4613,9 @@ module.exports = {
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   SUBSCRIPTION_MODE_ENTITLEMENTS,
+  isTrialActive,
+  BUYER_TRIAL_TRANSACTION_TYPE,
+  BUYER_TRIAL_GRANTED_DESCRIPTION,
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
@@ -4643,5 +4718,9 @@ module.exports = {
   VENDOR_STATUS_MESSAGES,
   isVendorInactive,
   isVendorActive,
+  STANDARDIZED_COMMUNICATION_CATEGORIES,
+  STANDARDIZED_COMMUNICATION_SCENARIO_IDS,
+  SCENARIO_TO_STANDARDIZED_CATEGORY,
+  resolveStandardizedCommunicationCategory,
 };
 

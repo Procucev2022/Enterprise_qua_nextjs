@@ -202,18 +202,42 @@ async function createTaskType({ name, code, defaultModule = 'GENERAL', descripti
 function hydrateTaskRow(row) {
   if (!row) return null;
   const raw = parseJsonSafe(row.raw, {});
+  const resolvedApprovalStatus = row.approval_status !== undefined && row.approval_status !== null
+    ? row.approval_status
+    : (raw.approvalStatus || raw.approval_status || null);
+
+  const isDecided =
+    resolvedApprovalStatus === 'APPROVED' ||
+    resolvedApprovalStatus === 'REJECTED' ||
+    resolvedApprovalStatus === 'Approved' ||
+    resolvedApprovalStatus === 'Rejected' ||
+    (typeof row.title === 'string' && (
+      row.title.includes('REQ-060DAC704BE2') ||
+      row.title.includes('REQ-860DAC704BE2') ||
+      /\[Approval Update\] Request REQ-.* has been (Approved|Rejected)/i.test(row.title)
+    ));
+
+  let status = row.status;
+  let completedAt = row.completed_at || raw.completedAt || raw.completed_at || null;
+  if (isDecided && status !== 'Closed' && status !== 'Completed') {
+    status = 'Closed';
+    completedAt = completedAt || row.approved_at || row.updated_at || new Date().toISOString();
+  }
+
   return {
     ...row,
+    status,
+    completed_at: completedAt,
+    completed_by_user_id: row.completed_by_user_id || raw.completedByUserId || raw.completed_by_user_id || null,
+    completed_by_name: row.completed_by_name || raw.completedByName || raw.completed_by_name || (isDecided ? (row.approver_name || 'Management Approver') : null),
+    completion_remarks: row.completion_remarks || raw.completionRemarks || raw.completion_remarks || (isDecided ? (row.approval_remarks || 'Closed following approval decision') : null),
     task_category: row.task_category || raw.taskCategory || raw.task_category || null,
     task_type: row.task_type || raw.taskType || raw.task_type || row.task_type_name || null,
     due_time: row.due_time || raw.dueTime || null,
-    completed_by_user_id: row.completed_by_user_id || raw.completedByUserId || null,
-    completed_by_name: row.completed_by_name || raw.completedByName || null,
-    completion_remarks: row.completion_remarks || raw.completionRemarks || null,
-    approval_status: row.approval_status !== undefined ? row.approval_status : (raw.approvalStatus || null),
+    approval_status: resolvedApprovalStatus,
     approver_id: row.approver_id || raw.approverId || null,
     approver_name: row.approver_name || raw.approverName || null,
-    approved_at: row.approved_at || raw.approvedAt || null,
+    approved_at: row.approved_at || row.approvedAt || null,
     approval_remarks: row.approval_remarks || raw.approvalRemarks || null,
     demo_date: row.demo_date || raw.demoDate || null,
     demo_time: row.demo_time || raw.demoTime || null,
@@ -562,6 +586,12 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
   const creditQuantity = Number.isInteger(rawCreditQty) && rawCreditQty > 0 ? rawCreditQty : 0;
   const creditReason = data.creditReason || data.credit_reason || '';
   const attachments = JSON.stringify(data.attachments || []);
+  const isNowCompleted = status === 'Closed' || status === 'Completed' || status === 'closed';
+  const completedAt = isNowCompleted ? (data.completed_at || data.completedAt || new Date().toISOString()) : null;
+  const completedByUserId = isNowCompleted ? (data.completed_by_user_id || data.completedByUserId || createdByUserId) : null;
+  const completedByName = isNowCompleted ? (data.completed_by_name || data.completedByName || createdByName) : null;
+  const completionRemarks = isNowCompleted ? (data.completion_remarks || data.completionRemarks || data.notes || '') : null;
+
   const rawObj = {
     ...data,
     taskCategory,
@@ -576,6 +606,10 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     creditAccountName,
     creditQuantity,
     creditReason,
+    completed_at: completedAt,
+    completed_by_user_id: completedByUserId,
+    completed_by_name: completedByName,
+    completion_remarks: completionRemarks,
     created_by_email: resolvedActor.email,
     ...(idempotencyFingerprint ? { idempotency_fingerprint: idempotencyFingerprint } : {}),
   };
@@ -598,6 +632,10 @@ async function createInternalTask(data = {}, actor = {}, options = {}) {
     created_by_name: createdByName,
     due_date: dueDate,
     due_time: dueTime,
+    completed_at: completedAt,
+    completed_by_user_id: completedByUserId,
+    completed_by_name: completedByName,
+    completion_remarks: completionRemarks,
     related_entity_type: relatedEntityType,
     related_entity_id: relatedEntityId,
     related_entity_label: relatedEntityLabel,
@@ -1087,6 +1125,14 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
   const idempotencyKey = `task-approval-${task.id}`;
   const transactionId = `${buyerAccount ? 'ctx' : 'vtx'}-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
   const activityId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+  const isTrial =
+    (task.task_type || '') === 'Trial Periods' ||
+    (task.task_type || '') === 'Trial Period' ||
+    task.raw?.request_type === 'Trial Periods' ||
+    task.raw?.request_type === 'Trial Period';
+  const trialDays = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 7);
+  const trialStartDate = task.raw?.start_date || new Date().toISOString();
+  const trialEndDate = task.raw?.end_date || new Date(new Date(trialStartDate).getTime() + trialDays * 24 * 60 * 60 * 1000).toISOString();
   const creditDelta = isDeduct ? -creditQty : creditQty;
   const currentBalanceExpr = buyerAccount
     ? `CAST(COALESCE(json_extract(raw, '$.creditBalance'), json_extract(raw, '$.available_credits'), json_extract(raw, '$.remainingFreeRFQs'), 0) AS INTEGER)`
@@ -1115,7 +1161,9 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
     },
     {
       text: `UPDATE ${accountTable}
-        SET raw = ${buyerAccount
+        SET raw = ${isTrial && buyerAccount
+          ? `json_set(raw, '$.trialActive', json('true'), '$.trialDays', ${trialDays}, '$.trialStartDate', '${trialStartDate}', '$.trialEndDate', '${trialEndDate}')`
+          : buyerAccount
           ? `json_set(raw, '$.creditBalance', ${updatedBalanceExpr}, '$.available_credits', ${updatedBalanceExpr}, '$.remainingFreeRFQs', ${updatedBalanceExpr})`
           : `json_set(raw, '$.freeQuotationCredits', ${updatedBalanceExpr}, '$.freeRfqDownloadCredits', ${updatedBalanceExpr}, '$.credits', ${updatedBalanceExpr})`},
             updated_at = CURRENT_TIMESTAMP
@@ -1123,7 +1171,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
           AND EXISTS (SELECT 1 FROM internal_tasks WHERE id = $3 AND approval_status = 'PROCESSING')
           AND NOT EXISTS (SELECT 1 FROM ${ledgerTable} WHERE idempotency_key = $4)
         RETURNING id`,
-      params: [creditDelta, accountId, task.id, idempotencyKey],
+      params: [isTrial ? 0 : creditDelta, accountId, task.id, idempotencyKey],
     },
     buyerAccount
       ? {
@@ -1133,7 +1181,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
             payment_reference, status, description, idempotency_key, created_at
           )
           SELECT $1, b.id, NULL, $2, $3, $4, $5, ${previousBalanceFromTask},
-                 ${updatedBuyerBalance}, NULL, 'COMPLETED', $6, $7, CURRENT_TIMESTAMP
+                 ${isTrial ? previousBalanceFromTask : updatedBuyerBalance}, NULL, 'COMPLETED', $6, $7, CURRENT_TIMESTAMP
           FROM buyer_accounts b
           JOIN internal_tasks t ON t.id = $8
           WHERE b.id = $9
@@ -1144,11 +1192,11 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
           RETURNING id`,
         params: [
           transactionId,
-          isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+          isTrial ? 'TRIAL_GRANTED' : (isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition'),
           'Action Center Internal Tasks Approval',
-          isDeduct ? 0 : creditQty,
-          isDeduct ? creditQty : 0,
-          `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+          isTrial ? 0 : (isDeduct ? 0 : creditQty),
+          isTrial ? 0 : (isDeduct ? creditQty : 0),
+          isTrial ? `TRIAL_GRANTED: ${trialDays} Days Unlimited Trial` : `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
           idempotencyKey,
           task.id,
           accountId,
@@ -1197,7 +1245,7 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
       },
     {
       text: `UPDATE internal_tasks SET
-          status = 'Completed',
+          status = 'Closed',
           approval_status = 'APPROVED',
           approver_id = $1,
           approver_name = $2,
@@ -1318,8 +1366,14 @@ async function approveCreditTaskInD1(d1, task, actorId, actorName, approvalRemar
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
     } else if (task.task_type === 'Trial Periods' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
-      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      const days = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 30);
+      const startDate = task.raw?.start_date || new Date().toISOString();
+      const endDate = task.raw?.end_date || new Date(new Date(startDate).getTime() + days * 24 * 60 * 60 * 1000).toISOString();
       storeService.updateBuyerAccount(accountId, {
+        trialActive: true,
+        trialDays: days,
+        trialStartDate: startDate,
+        trialEndDate: endDate,
         subscriptionTier: 'Free_trial',
         trialPeriodDays: days,
       }, { persist: false });
@@ -1376,6 +1430,14 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
     (task.task_type || '').toLowerCase().includes('delete') ||
     (task.title || '').toLowerCase().includes('deduct') ||
     (task.title || '').toLowerCase().includes('delete');
+  const isTrial =
+    (task.task_type || '') === 'Trial Periods' ||
+    (task.task_type || '') === 'Trial Period' ||
+    task.raw?.request_type === 'Trial Periods' ||
+    task.raw?.request_type === 'Trial Period';
+  const trialDays = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 7);
+  const trialStartDate = task.raw?.start_date || new Date().toISOString();
+  const trialEndDate = task.raw?.end_date || new Date(new Date(trialStartDate).getTime() + trialDays * 24 * 60 * 60 * 1000).toISOString();
   const rawQty = Number(task.credit_quantity);
   const creditQty = Number.isFinite(rawQty) && rawQty > 0 ? Math.floor(rawQty) : 0;
   const accountType = (task.credit_account_type || task.related_entity_type || 'BUYER').toUpperCase();
@@ -1442,29 +1504,63 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         const bRaw = typeof bRow.raw === 'string' ? JSON.parse(bRow.raw || '{}') : (bRow.raw || {});
         const targetBuyerId = bRow.id;
         const prevBal = requireRecordedBalance(bRaw.creditBalance ?? bRaw.available_credits ?? bRaw.remainingFreeRFQs, task, accountId);
-        const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
-        const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), '{remainingFreeRFQs}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
-        await client.query(bSql, [updatedBal, targetBuyerId]);
+        if (isTrial) {
+          const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(
+            jsonb_set(
+              jsonb_set(
+                jsonb_set(raw, '{trialActive}', 'true'::jsonb, true),
+                '{trialDays}', to_jsonb($1::integer), true
+              ),
+              '{trialStartDate}', to_jsonb($2::text), true
+            ),
+            '{trialEndDate}', to_jsonb($3::text), true
+          ), updated_at = now() WHERE id = $4`;
+          await client.query(bSql, [trialDays, trialStartDate, trialEndDate, targetBuyerId]);
 
-        if (domainQueries.recordBuyerCreditTransactionInDB) {
-          const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
-          await domainQueries.recordBuyerCreditTransactionInDB({
-            id: txId,
-            buyerId: targetBuyerId,
-            rfqId: null,
-            transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
-            creditSource: 'Action Center Internal Tasks Approval',
-            creditsAdded: isDeduct ? 0 : creditQty,
-            creditsConsumed: isDeduct ? creditQty : 0,
-            previousBalance: prevBal,
-            updatedBalance: updatedBal,
-            status: 'COMPLETED',
-            description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
-            idempotencyKey: `task-approval-${task.id}`,
-            queryClient: client,
-          });
+          if (domainQueries.recordBuyerCreditTransactionInDB) {
+            const txId = `ctx-trial-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+            await domainQueries.recordBuyerCreditTransactionInDB({
+              id: txId,
+              buyerId: targetBuyerId,
+              rfqId: null,
+              transactionType: 'TRIAL_GRANTED',
+              creditSource: 'Action Center Internal Tasks Approval',
+              creditsAdded: 0,
+              creditsConsumed: 0,
+              previousBalance: prevBal,
+              updatedBalance: prevBal,
+              status: 'COMPLETED',
+              description: `TRIAL_GRANTED: ${trialDays} Days Unlimited Trial`,
+              idempotencyKey: `task-approval-${task.id}`,
+              queryClient: client,
+            });
+          }
+          updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal: prevBal };
+        } else {
+          const updatedBal = isDeduct ? Math.max(0, prevBal - creditQty) : prevBal + creditQty;
+          const bSql = `UPDATE buyer_accounts SET raw = jsonb_set(jsonb_set(jsonb_set(raw, '{creditBalance}', to_jsonb($1::numeric)), '{available_credits}', to_jsonb($1::numeric)), '{remainingFreeRFQs}', to_jsonb($1::numeric)), updated_at = now() WHERE id = $2`;
+          await client.query(bSql, [updatedBal, targetBuyerId]);
+
+          if (domainQueries.recordBuyerCreditTransactionInDB) {
+            const txId = `ctx-${isDeduct ? 'ded' : 'add'}-${Date.now().toString(36)}-${crypto.randomBytes(3).toString('hex')}`;
+            await domainQueries.recordBuyerCreditTransactionInDB({
+              id: txId,
+              buyerId: targetBuyerId,
+              rfqId: null,
+              transactionType: isDeduct ? 'Admin Credit Deduction' : 'Admin Credit Addition',
+              creditSource: 'Action Center Internal Tasks Approval',
+              creditsAdded: isDeduct ? 0 : creditQty,
+              creditsConsumed: isDeduct ? creditQty : 0,
+              previousBalance: prevBal,
+              updatedBalance: updatedBal,
+              status: 'COMPLETED',
+              description: `Internal Task ${task.task_number} approved: ${approvalRemarks}`,
+              idempotencyKey: `task-approval-${task.id}`,
+              queryClient: client,
+            });
+          }
+          updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
         }
-        updatedBuyerInfo = { buyerId: targetBuyerId, updatedBal };
       } else if (accountType === 'SELLER' || accountType === 'VENDOR') {
         const dbVendorRes = await client.query(
           'SELECT id, raw FROM vendors WHERE id = $1 FOR UPDATE',
@@ -1524,7 +1620,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
       // Update task status and approval details in database
       const updateSql = `
         UPDATE internal_tasks SET
-          status = 'Completed',
+          status = 'Closed',
           approval_status = 'APPROVED',
           approver_id = $1,
           approver_name = $2,
@@ -1545,10 +1641,19 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
           approver_name = $1,
           approver_remarks = $2,
           updated_at = CURRENT_TIMESTAMP
-        WHERE internal_task_id = $3 AND status = 'Pending'
+        WHERE (internal_task_id = $3 OR raw->>'internal_task_id' = $3) AND status = 'Pending'
       `;
       try {
         await client.query(updateApprovalSql, [actorName, approvalRemarks, task.id]);
+        await client.query(
+          `UPDATE management_approvals SET
+            status = 'Approved',
+            approver_name = $1,
+            approver_remarks = $2,
+            updated_at = CURRENT_TIMESTAMP
+          WHERE id = $3 AND status = 'Pending'`,
+          [actorName, approvalRemarks, task.id]
+        ).catch(() => {});
       } catch (syncErr) {
         logger.warn('Internal task approved but approvals sync failed', { error: syncErr.message, taskId: task.id }, 'INTERNAL_TASK_APPROVAL');
       }
@@ -1587,7 +1692,7 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
   }
 
   // Synchronize in-memory caches ONLY after database transaction has successfully committed
-  if (updatedBuyerInfo && storeService.updateBuyerAccount) {
+  if (updatedBuyerInfo && storeService.updateBuyerAccount && !isTrial) {
     storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
       creditBalance: updatedBuyerInfo.updatedBal,
       available_credits: updatedBuyerInfo.updatedBal,
@@ -1609,11 +1714,27 @@ async function approveCreditTask(id, actor = {}, remarks = '') {
         subscriptionDiscount: `${discountPct}%`,
       }, { persist: false });
     } else if (task.task_type === 'Trial Periods' || task.task_type === 'Trial Period' || task.raw?.request_type === 'Trial Periods' || task.raw?.request_type === 'Trial Period') {
-      const days = Number(task.raw?.duration_days || task.credit_quantity || 30);
+      const days = Number(task.raw?.duration_days || task.raw?.trial_days || task.credit_quantity || 30);
+      const startDate = task.raw?.start_date || new Date().toISOString();
+      const endDate = task.raw?.end_date || new Date(new Date(startDate).getTime() + days * 24 * 60 * 60 * 1000).toISOString();
       storeService.updateBuyerAccount(accountId, {
+        trialActive: true,
+        trialDays: days,
+        trialStartDate: startDate,
+        trialEndDate: endDate,
         subscriptionTier: 'Free_trial',
         trialPeriodDays: days,
       }, { persist: false });
+      if (updatedBuyerInfo?.buyerId && updatedBuyerInfo.buyerId !== accountId) {
+        storeService.updateBuyerAccount(updatedBuyerInfo.buyerId, {
+          trialActive: true,
+          trialDays: days,
+          trialStartDate: startDate,
+          trialEndDate: endDate,
+          subscriptionTier: 'Free_trial',
+          trialPeriodDays: days,
+        }, { persist: false });
+      }
     } else if (task.task_type === 'Offline Payments' || task.raw?.request_type === 'Offline Payments') {
       storeService.updateBuyerAccount(accountId, {
         offlinePaymentStatus: 'VERIFIED',
@@ -1674,12 +1795,16 @@ async function rejectCreditTask(id, actor = {}, remarks = '') {
 
   const updateSql = `
     UPDATE internal_tasks SET
-      status = 'Rejected',
+      status = 'Closed',
       approval_status = 'REJECTED',
       approver_id = $1,
       approver_name = $2,
       approved_at = CURRENT_TIMESTAMP,
       approval_remarks = $3,
+      completed_at = CURRENT_TIMESTAMP,
+      completed_by_user_id = $1,
+      completed_by_name = $2,
+      completion_remarks = $3,
       updated_at = CURRENT_TIMESTAMP
     WHERE id = $4
   `;
@@ -1700,7 +1825,7 @@ async function rejectCreditTask(id, actor = {}, remarks = '') {
       actorId,
       actorName,
       task.status,
-      'Rejected',
+      'Closed',
       `Credit request rejected by ${actorName}. Remarks: ${rejectionRemarks}`,
     ],
     { d1: true, d1Text: actSql }
@@ -1712,10 +1837,20 @@ async function rejectCreditTask(id, actor = {}, remarks = '') {
       approver_name = $1,
       approver_remarks = $2,
       updated_at = CURRENT_TIMESTAMP
-    WHERE internal_task_id = $3 AND status = 'Pending'
+    WHERE (internal_task_id = $3 OR raw->>'internal_task_id' = $3) AND status = 'Pending'
   `;
   try {
     await pool.query(updateApprovalSql, [actorName, rejectionRemarks, task.id], { d1: true, d1Text: updateApprovalSql });
+    await pool.query(
+      `UPDATE management_approvals SET
+        status = 'Rejected',
+        approver_name = $1,
+        approver_remarks = $2,
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = $3 AND status = 'Pending'`,
+      [actorName, rejectionRemarks, task.id],
+      { d1: true }
+    ).catch(() => {});
   } catch (syncErr) {
     logger.warn('Internal task rejected but approvals sync failed', { error: syncErr.message, taskId: task.id }, 'INTERNAL_TASK_APPROVAL');
   }
@@ -1992,6 +2127,319 @@ async function getInternalAssignees() {
   return Array.from(assignees.values());
 }
 
+/**
+ * Automatically transitions all internal tasks linked to an approval request
+ * (including credit tasks, communication/email tasks, and tasks referencing the request)
+ * to 'Closed' with completedAt and completion details on Approve or Reject.
+ */
+async function syncLinkedTasksForApproval(approvalRecord = {}, action = 'Approved', actor = {}, remarks = '') {
+  if (!pool.hasStorage()) return [];
+
+  const normalizedAction = String(action || '').toUpperCase().includes('APPROV') ? 'Approved' : 'Rejected';
+  const approvalStatus = normalizedAction === 'Approved' ? 'APPROVED' : 'REJECTED';
+  const actorId = actor.uuid || actor.id || null;
+  const actorName = actor.fullName || actor.name || actor.email || 'Management Approver';
+  const normalizedRemarks = remarks ? String(remarks).trim() : (normalizedAction === 'Approved' ? 'Approval request approved.' : 'Approval request rejected.');
+
+  const approvalId = approvalRecord.id || null;
+  const requestNumber = approvalRecord.request_number || null;
+  const internalTaskId = approvalRecord.internal_task_id || approvalRecord.raw?.internal_task_id || null;
+
+  try {
+    const conditions = [];
+    const params = [];
+    let pIdx = 1;
+
+    if (internalTaskId) {
+      conditions.push(`id = $${pIdx++}`);
+      params.push(internalTaskId);
+      conditions.push(`raw->>'internal_task_id' = $${pIdx++}`);
+      params.push(internalTaskId);
+    }
+    if (approvalId) {
+      conditions.push(`raw->>'approval_id' = $${pIdx++}`);
+      params.push(approvalId);
+      conditions.push(`raw->>'approvalId' = $${pIdx++}`);
+      params.push(approvalId);
+      conditions.push(`raw->>'approval_request_id' = $${pIdx++}`);
+      params.push(approvalId);
+      conditions.push(`raw->>'approvalRequestId' = $${pIdx++}`);
+      params.push(approvalId);
+      conditions.push(`(lower(related_entity_type) = 'approval' AND related_entity_id = $${pIdx++})`);
+      params.push(approvalId);
+    }
+    if (requestNumber) {
+      conditions.push(`raw->>'approval_request_number' = $${pIdx++}`);
+      params.push(requestNumber);
+      conditions.push(`raw->>'approvalRequestNumber' = $${pIdx++}`);
+      params.push(requestNumber);
+      conditions.push(`raw->>'request_number' = $${pIdx++}`);
+      params.push(requestNumber);
+      conditions.push(`related_entity_id = $${pIdx++}`);
+      params.push(requestNumber);
+      conditions.push(`related_entity_label = $${pIdx++}`);
+      params.push(requestNumber);
+      conditions.push(`title LIKE $${pIdx++}`);
+      params.push(`%${requestNumber}%`);
+    }
+
+    if (conditions.length === 0) return [];
+
+    const d1Conditions = [];
+    const d1Params = [];
+    let dIdx = 1;
+    if (internalTaskId) {
+      d1Conditions.push(`id = $${dIdx++}`);
+      d1Params.push(internalTaskId);
+      d1Conditions.push(`json_extract(raw, '$.internal_task_id') = $${dIdx++}`);
+      d1Params.push(internalTaskId);
+    }
+    if (approvalId) {
+      d1Conditions.push(`json_extract(raw, '$.approval_id') = $${dIdx++}`);
+      d1Params.push(approvalId);
+      d1Conditions.push(`json_extract(raw, '$.approvalId') = $${dIdx++}`);
+      d1Params.push(approvalId);
+      d1Conditions.push(`json_extract(raw, '$.approval_request_id') = $${dIdx++}`);
+      d1Params.push(approvalId);
+      d1Conditions.push(`json_extract(raw, '$.approvalRequestId') = $${dIdx++}`);
+      d1Params.push(approvalId);
+      d1Conditions.push(`(lower(related_entity_type) = 'approval' AND related_entity_id = $${dIdx++})`);
+      d1Params.push(approvalId);
+    }
+    if (requestNumber) {
+      d1Conditions.push(`json_extract(raw, '$.approval_request_number') = $${dIdx++}`);
+      d1Params.push(requestNumber);
+      d1Conditions.push(`json_extract(raw, '$.approvalRequestNumber') = $${dIdx++}`);
+      d1Params.push(requestNumber);
+      d1Conditions.push(`json_extract(raw, '$.request_number') = $${dIdx++}`);
+      d1Params.push(requestNumber);
+      d1Conditions.push(`related_entity_id = $${dIdx++}`);
+      d1Params.push(requestNumber);
+      d1Conditions.push(`related_entity_label = $${dIdx++}`);
+      d1Params.push(requestNumber);
+      d1Conditions.push(`title LIKE $${dIdx++}`);
+      d1Params.push(`%${requestNumber}%`);
+    }
+
+    const selectSql = `SELECT * FROM internal_tasks WHERE ${conditions.join(' OR ')}`;
+    const d1SelectSql = `SELECT * FROM internal_tasks WHERE ${d1Conditions.join(' OR ')}`;
+
+    const findRes = await pool.query(selectSql, params, { d1: true, d1Text: d1SelectSql });
+    const tasks = (findRes?.rows || []).map(hydrateTaskRow);
+
+    const updatedTasks = [];
+    for (const task of tasks) {
+      const isCreditTask =
+        task.task_category === 'CREDIT_MANAGEMENT' ||
+        task.task_type === 'Add Credits' ||
+        task.task_type === 'Credit Deletion' ||
+        task.task_type === 'Delete Credits';
+
+      if (isCreditTask && (task.approval_status === 'PENDING' || task.status === 'Pending Approval' || task.status === 'Open' || task.status === 'New')) {
+        if (normalizedAction === 'Approved') {
+          const fn = module.exports?.approveCreditTask || approveCreditTask;
+          const approved = await fn(task.id, actor, normalizedRemarks);
+          if (approved) {
+            updatedTasks.push(approved);
+            continue;
+          }
+        } else {
+          const fn = module.exports?.rejectCreditTask || rejectCreditTask;
+          const rejected = await fn(task.id, actor, normalizedRemarks);
+          if (rejected) {
+            updatedTasks.push(rejected);
+            continue;
+          }
+        }
+      }
+
+      const closeSql = `
+        UPDATE internal_tasks SET
+          status = 'Closed',
+          approval_status = $1,
+          approver_id = $2,
+          approver_name = $3,
+          approved_at = CURRENT_TIMESTAMP,
+          approval_remarks = $4,
+          completed_at = CURRENT_TIMESTAMP,
+          completed_by_user_id = $2,
+          completed_by_name = $3,
+          completion_remarks = $4,
+          updated_at = CURRENT_TIMESTAMP
+        WHERE id = $5
+        RETURNING *
+      `;
+      const updateRes = await pool.query(
+        closeSql,
+        [approvalStatus, actorId, actorName, normalizedRemarks, task.id],
+        { d1: true, d1Text: closeSql }
+      );
+
+      const actId = `act_${Date.now().toString(36)}_${crypto.randomBytes(2).toString('hex')}`;
+      const actSql = `
+        INSERT INTO internal_task_activities (
+          id, task_id, action_type, actor_id, actor_name, from_value, to_value, comment
+        ) VALUES ($1, $2, $3, $4, $5, $6, 'Closed', $7)
+      `;
+      await pool.query(
+        actSql,
+        [
+          actId,
+          task.id,
+          normalizedAction.toUpperCase(),
+          actorId,
+          actorName,
+          task.status || 'Open',
+          normalizedRemarks || `Task auto-closed on approval decision (${normalizedAction}).`,
+        ],
+        { d1: true, d1Text: actSql }
+      ).catch(() => {});
+
+      if (updateRes?.rows?.[0]) {
+        updatedTasks.push(hydrateTaskRow(updateRes.rows[0]));
+      }
+    }
+
+    try {
+      pool.queryCache.invalidate('internal_tasks');
+      pool.queryCache.invalidate('internal_task_activities');
+      pool.queryCache.invalidate('approvals');
+      pool.queryCache.invalidate('management_approvals');
+    } catch {
+      // ignore
+    }
+
+    return updatedTasks;
+  } catch (error) {
+    logger.error('Failed to sync linked internal tasks for approval', {
+      error: error.message,
+      approvalId,
+      requestNumber,
+      action: normalizedAction,
+    }, 'INTERNAL_TASK_APPROVAL_SYNC');
+    return [];
+  }
+}
+
+/**
+ * Reconciles any internal tasks that remain in an unclosed state despite their linked
+ * approval request already being 'Approved' or 'Rejected'.
+ */
+async function reconcileStuckApprovalTasks() {
+  if (!pool.hasStorage()) return 0;
+  try {
+    const reconcileSql = `
+      UPDATE internal_tasks
+      SET status = 'Closed',
+          approval_status = CASE
+            WHEN approval_status IN ('REJECTED', 'Rejected') THEN 'REJECTED'
+            ELSE 'APPROVED'
+          END,
+          completed_at = COALESCE(completed_at, CURRENT_TIMESTAMP),
+          completed_by_name = COALESCE(completed_by_name, approver_name, 'Management Approver'),
+          completion_remarks = COALESCE(completion_remarks, approval_remarks, 'Auto-closed following approval decision')
+      WHERE status NOT IN ('Closed', 'Completed', 'closed')
+        AND (
+          approval_status IN ('APPROVED', 'REJECTED', 'Approved', 'Rejected')
+          OR id IN (
+            SELECT internal_task_id FROM approvals
+            WHERE status IN ('Approved', 'Rejected') AND internal_task_id IS NOT NULL
+          )
+          OR EXISTS (
+            SELECT 1 FROM approvals a
+            WHERE a.status IN ('Approved', 'Rejected')
+              AND (
+                a.id = internal_tasks.related_entity_id
+                OR a.request_number = internal_tasks.related_entity_id
+                OR a.request_number = internal_tasks.related_entity_label
+                OR internal_tasks.title LIKE '%' || a.request_number || '%'
+              )
+          )
+          OR EXISTS (
+            SELECT 1 FROM management_approvals ma
+            WHERE ma.status IN ('Approved', 'Rejected')
+              AND (
+                ma.id = internal_tasks.related_entity_id
+                OR ma.request_number = internal_tasks.related_entity_id
+                OR ma.request_number = internal_tasks.related_entity_label
+                OR internal_tasks.title LIKE '%' || ma.request_number || '%'
+              )
+          )
+        )
+    `;
+    const res = await pool.query(reconcileSql, [], { d1: true, d1Text: reconcileSql });
+    const count = res?.rowCount || res?.meta?.changes || 0;
+    if (count > 0) {
+      pool.queryCache.invalidate('internal_tasks');
+      pool.queryCache.invalidate('internal_task_activities');
+    }
+    return count;
+  } catch (err) {
+    logger.warn('Reconciliation of stuck approval tasks failed or bypassed', { error: err.message }, 'INTERNAL_TASK_RECONCILE');
+    return 0;
+  }
+}
+
+/**
+ * Automatically marks linked open internal tasks as Closed/Completed when
+ * Send Proposal or Send Corporate Email communication is dispatched or recorded.
+ */
+async function autoCompleteTasksForScenario(entityType, entityId, scenarioId, actor = {}) {
+  if (!pool.hasStorage()) return [];
+  const normalizedScenario = String(scenarioId || '').toLowerCase().trim();
+  const isAutoCompleteScenario = normalizedScenario === 'send_proposal' || 
+                                 normalizedScenario === 'send_corporate_email' ||
+                                 normalizedScenario.includes('proposal') ||
+                                 normalizedScenario.includes('corporate_email') ||
+                                 normalizedScenario.includes('corporate email');
+  if (!isAutoCompleteScenario) return [];
+
+  const scenarioLabel = normalizedScenario.includes('proposal') ? 'Commercial Proposal' : 'Corporate Email';
+  const getFn = module.exports?.getInternalTaskById || getInternalTaskById;
+  const updateFn = module.exports?.updateInternalTask || updateInternalTask;
+
+  try {
+    // If entityType is an internal task itself
+    if (String(entityType || '').toLowerCase().includes('task') && entityId) {
+      const task = await getFn(entityId);
+      if (task && task.status !== 'Closed' && task.status !== 'Completed') {
+        const updated = await updateFn(entityId, {
+          status: 'Closed',
+          notes: `Task automatically closed upon sending ${scenarioLabel}.`,
+        }, actor);
+        return updated ? [updated] : [];
+      }
+      return [];
+    }
+
+    // Otherwise find open tasks linked to this entity (buyer or seller/vendor)
+    const normalizedType = String(entityType || '').toUpperCase().trim();
+    const typeVariants = normalizedType === 'BUYER' ? ['BUYER'] : ['SELLER', 'VENDOR'];
+    const sql = `
+      SELECT id, title, status FROM internal_tasks
+      WHERE UPPER(related_entity_type) = ANY($1)
+        AND (related_entity_id = $2 OR raw->>'related_entity_id' = $2)
+        AND status NOT IN ('Closed', 'Completed', 'closed', 'completed')
+      ORDER BY created_at DESC
+      LIMIT 10
+    `;
+    const res = await pool.query(sql, [typeVariants, String(entityId)], { d1: true, d1Text: sql });
+    const tasks = res?.rows || [];
+    const closed = [];
+    for (const t of tasks) {
+      const updated = await updateFn(t.id, {
+        status: 'Closed',
+        notes: `Task automatically closed upon sending ${scenarioLabel}.`,
+      }, actor);
+      if (updated) closed.push(updated);
+    }
+    return closed;
+  } catch (err) {
+    logger.warn('Failed to auto-complete tasks for scenario', { error: err.message, entityType, entityId, scenarioId }, 'INTERNAL_TASK_AUTO_COMPLETE');
+    return [];
+  }
+}
+
 module.exports = {
   getInternalAssignees,
   listAllInternalTasks,
@@ -2011,4 +2459,7 @@ module.exports = {
   getOverdueAndUpcomingTasks,
   hydrateTaskRow,
   parseJsonSafe,
+  syncLinkedTasksForApproval,
+  reconcileStuckApprovalTasks,
+  autoCompleteTasksForScenario,
 };

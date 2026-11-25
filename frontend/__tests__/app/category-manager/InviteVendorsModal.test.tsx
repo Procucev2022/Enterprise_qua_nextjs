@@ -3,6 +3,7 @@ import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { MAX_INVITE_VENDORS } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate } from '@/lib/types';
 
 jest.setTimeout(35000);
@@ -597,20 +598,24 @@ describe('InviteVendorsModal — All Vendors tab', () => {
   });
 
   describe('InviteVendorsModal — Add New Vendor (V0 & V2 feature)', () => {
-    test('renders Add New Vendor button for V0 and V2 RFQs, but not for V1 RFQs', () => {
+    test('renders Add New Vendor button across all sourcing modes (Mode 0, 1, 2, 3)', () => {
       const v0Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_0' };
       const { rerender } = render(
         <InviteVendorsModal isOpen={true} rfq={v0Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />
       );
       expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
 
+      const v1Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_1' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v1Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
+
       const v2Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_2' };
       rerender(<InviteVendorsModal isOpen={true} rfq={v2Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
       expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
 
-      const v1Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_1' };
-      rerender(<InviteVendorsModal isOpen={true} rfq={v1Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
-      expect(screen.queryByTestId('add-new-vendor-button')).not.toBeInTheDocument();
+      const v3Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_3' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v3Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
     });
 
     test('opens Add New Vendor modal, validates input, handles duplicate (409) and successful vendor creation', async () => {
@@ -753,6 +758,120 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name: 'New Test Vendor' }),
         'success'
       );
+    });
+
+    test('supports Excel copy-paste into search to auto-match and auto-select vendors with inline summary', async () => {
+      const candidateList = Array.from({ length: 25 }, (_, i) =>
+        candidate({
+          id: `v-cand-${i + 1}`,
+          name: `Vendor Cell ${i + 1}`,
+          email: `vendor${i + 1}@domain.com`,
+          majorCategory: 'Mechanical & Fluid Equipment',
+        })
+      );
+      mockFetchCandidates.mockResolvedValue({ success: true, candidates: candidateList });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('Vendor Cell 1')).toBeInTheDocument());
+
+      const searchInput = screen.getByTestId('invite-vendors-search');
+
+      // Paste 22 vendors copied from an Excel column (newline-delimited) plus 2 unknown
+      const pastedExcelText = [
+        ...candidateList.slice(0, 22).map((c) => c.email),
+        'unknown1@domain.com',
+        'unknown2@domain.com',
+      ].join('\r\n');
+
+      fireEvent.paste(searchInput, {
+        clipboardData: {
+          getData: () => pastedExcelText,
+        },
+      });
+
+      // Verify limit reached toast (max 20)
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Limit Reached',
+        formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS }),
+        'warning'
+      );
+
+      // Verify inline paste summary (22 matched & selected up to limit, 2 not found)
+      await waitFor(() => {
+        const summary = screen.getByTestId('invite-paste-summary');
+        expect(summary).toBeInTheDocument();
+        expect(summary).toHaveTextContent(
+          formatString(S.pasteSummary, { matched: 22, notFound: 2 })
+        );
+      });
+
+      // Clearing search clears paste summary
+      await waitFor(() => {
+        expect(screen.getByTestId('clear-search-btn')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('clear-search-btn'));
+      expect(screen.queryByTestId('invite-paste-summary')).not.toBeInTheDocument();
+    });
+
+    test('handles Excel paste where all entries match', async () => {
+      const candidatesList = [
+        candidate({ id: 'v-p1', name: 'P1 Vendor', email: 'p1@test.com' }),
+        candidate({ id: 'v-p2', name: 'P2 Vendor', email: 'p2@test.com' }),
+      ];
+      mockFetchCandidates.mockResolvedValue({ success: true, candidates: candidatesList });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('P1 Vendor')).toBeInTheDocument());
+
+      const searchInput = screen.getByTestId('invite-vendors-search');
+      fireEvent.paste(searchInput, {
+        clipboardData: {
+          getData: () => 'p1@test.com\tp2@test.com',
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('invite-paste-summary')).toHaveTextContent(
+          formatString(S.pasteSummaryAllMatched, { matched: 2 })
+        );
+      });
+    });
+
+    test('shows success message with provisioned account count and handles provisioning error warnings', async () => {
+      mockFetchCandidates.mockResolvedValue({
+        success: true,
+        candidates: [candidate({ id: 'v-unregistered', name: 'Unregistered Vendor', email: 'unregistered@test.com' })],
+      });
+      mockInvite.mockResolvedValue({
+        success: true,
+        rfq: RFQ,
+        invitedCount: 1,
+        provisionedCount: 1,
+        provisioningErrors: [{ id: 'v-unregistered', email: 'unregistered@test.com', error: 'SMTP timeout' }],
+      });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('Unregistered Vendor')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          S.successTitle,
+          formatString(S.successWithAccountsMessage, {
+            count: 1,
+            rfqNumber: RFQ.rfqNumber,
+            provisioned: 1,
+          }),
+          'success'
+        );
+        expect(mockShowToast).toHaveBeenCalledWith(
+          S.onboardingDeliveryWarningTitle,
+          formatString(S.onboardingDeliveryWarning, { count: 1 }),
+          'warning'
+        );
+      });
     });
   });
 });

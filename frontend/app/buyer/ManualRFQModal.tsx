@@ -182,7 +182,12 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
     [reconciledBuyerVendors]
   );
-  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
+  const isTrialActive = Boolean(
+    activeBuyerAccount?.trialEndDate &&
+    new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+    activeBuyerAccount.trialActive !== false
+  );
+  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess || isTrialActive);
   const reportedPlan = toReportedPlan(activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
   const reportedBalance = toReportedCount(activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs);
   // With no plan reported, the modes are not restricted here. The server checks the plan on every RFQ it receives.
@@ -1400,11 +1405,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               // Empty string for null so a blank row shows blank
                               // rather than a zero the buyer never typed.
                               value={item.quantity ?? ''}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const qtyVal = e.target.value === '' ? null : Number(e.target.value);
                                 patchItem(item.id, {
-                                  quantity: e.target.value === '' ? null : Number(e.target.value),
-                                })
-                              }
+                                  quantity: qtyVal,
+                                  ...(qtyVal !== null && qtyVal > 0 && !item.unit ? { unit: 'Nos' } : {}),
+                                });
+                              }}
                               placeholder={MODAL.qtyPlaceholder}
                               className="mono w-28"
                             />

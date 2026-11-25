@@ -850,6 +850,13 @@ async function getCreditHistory(req, res, next) {
       if (missingRfqs.length > 0) {
         for (const rfq of missingRfqs) {
           const rfqDate = rfq.createdAt || rfq.created_at || new Date().toISOString();
+          const rfqTime = new Date(rfqDate).getTime();
+          const trialStart = buyer.trialStartDate ? new Date(buyer.trialStartDate).getTime() : 0;
+          const trialEnd = buyer.trialEndDate ? new Date(buyer.trialEndDate).getTime() : 0;
+          const isDuringTrial = trialEnd > 0 && rfqTime >= trialStart && rfqTime <= trialEnd;
+          if (isDuringTrial) {
+            continue;
+          }
           const syntheticTx = {
             id: `ctx-rfq-${rfq.id}`,
             buyer_id: buyer.id,
@@ -954,6 +961,12 @@ async function getCreditHistory(req, res, next) {
       ).catch(() => {});
     }
 
+    const isTrial = Boolean(
+      buyer.trialEndDate &&
+      new Date(buyer.trialEndDate).getTime() > Date.now() &&
+      buyer.trialActive !== false
+    );
+
     const summary = {
       totalCreditsAllocated: totalAllocated,
       totalCreditsConsumed: totalConsumed,
@@ -962,6 +975,10 @@ async function getCreditHistory(req, res, next) {
       adjustedCredits,
       currentEntitlementMode: sourcingMode,
       currentSubscriptionPlan: subscriptionPlan,
+      trialActive: isTrial,
+      trialDays: buyer.trialDays || null,
+      trialStartDate: buyer.trialStartDate || null,
+      trialEndDate: buyer.trialEndDate || null,
     };
 
     const formattedTransactions = transactions.map((t) => {
@@ -1219,6 +1236,15 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
+    const isCreditRequest = ['ADD_CREDIT', 'DELETE_CREDIT'].includes(taskType) ||
+      ['Add Credits', 'Delete Credits', 'Buyer Credit Addition', 'Buyer Credit Deletion'].includes(taskCategory) ||
+      ['Buyer Credit Addition', 'Buyer Credit Deletion'].includes(requestType) ||
+      String(requestType || '').toLowerCase().includes('credit');
+
+    const taskAssignedUserId = isCreditRequest ? (makerId || null) : (approverId || null);
+    const taskAssignedName = isCreditRequest ? (makerName || 'Requester') : approverName;
+    const taskAssignedTeam = isCreditRequest ? 'Requester Tracking' : 'Management Approvers';
+
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
         taskCategory,
@@ -1228,9 +1254,9 @@ async function requestCreditApproval(req, res, next) {
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
-        assignedToUserId: approverId || null,
-        assignedToName: approverName,
-        assignedTeam: 'Management Approvers',
+        assignedToUserId: taskAssignedUserId,
+        assignedToName: taskAssignedName,
+        assignedTeam: taskAssignedTeam,
         createdByName: makerName,
         createdByUserId: makerId || null,
         creditAccountType: 'buyer',
@@ -1238,7 +1264,9 @@ async function requestCreditApproval(req, res, next) {
         creditAccountName: buyer.organizationName,
         creditQuantity: effectiveAmount,
         creditReason: reason,
-        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
+        notes: isCreditRequest
+          ? `Initiated By: ${makerName}. Routed to Admin (${approverName}) for review and approval.`
+          : `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
@@ -1532,6 +1560,10 @@ async function recordBuyerCommunication(req, res, next) {
     const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(buyerPhone);
     const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
 
+    const scenarioId = req.body?.scenarioId || req.body?.metadata?.scenarioId || req.body?.metadata?.templateType;
+    const { resolveStandardizedCommunicationCategory } = require('../config/constants');
+    const canonicalCategory = resolveStandardizedCommunicationCategory(scenarioId || req.body?.category || req.body?.metadata?.category);
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: id,
       accountType: 'buyer',
@@ -1545,6 +1577,9 @@ async function recordBuyerCommunication(req, res, next) {
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
+        category: canonicalCategory,
+        templateType: scenarioId || canonicalCategory,
+        scenarioId: scenarioId || 'followup_new',
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
@@ -1696,6 +1731,14 @@ async function recordBuyerCommunication(req, res, next) {
         }, actor);
       } catch (followupErr) {
         logger.warn('Failed to create pending follow-up internal task for buyer communication', { error: followupErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    if (scenarioId) {
+      try {
+        await internalTaskQueries.autoCompleteTasksForScenario('BUYER', id, scenarioId, req.user);
+      } catch (autoErr) {
+        logger.warn('Failed to auto-complete tasks for buyer scenario', { error: autoErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
       }
     }
 

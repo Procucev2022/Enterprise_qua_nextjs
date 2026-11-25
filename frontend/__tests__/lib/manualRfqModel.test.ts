@@ -691,5 +691,13 @@ describe('fromExtractedEntity', () => {
       expect(row.quantity).toBe(5);
       expect(row.unit).toBe('Sets');
     });
+
+    it('defaults unit to Nos when omitted from entity without explicit unit', () => {
+      const row = fromExtractedEntity(
+        extracted({ itemName: 'Business Laptops', quantity: 20, unit: '' })
+      );
+      expect(row.quantity).toBe(20);
+      expect(row.unit).toBe('Nos');
+    });
   });
 });

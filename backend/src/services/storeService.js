@@ -76,7 +76,6 @@ const { evaluateQuotes, calculate360Evaluation, calculateRevisedRating } = requi
 // storeService; every send is fire-and-forget and no-ops under test / when SMTP
 // is unconfigured.
 const mailerService = require('./mailerService');
-const mailTransport = require('./mailTransport');
 // Real multi-channel outreach services — both are fire-and-forget and
 // no-op under test (NODE_ENV === 'test') or when credentials are not
 // configured, matching the same pattern mailerService uses above.
@@ -1859,7 +1858,9 @@ class StoreService {
       (sId) =>
         (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
         (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
-        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId)
+        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId) ||
+        (vendor.email && String(vendor.email).toLowerCase() === sId) ||
+        (vendor.addedByBuyerCompany && String(vendor.addedByBuyerCompany).toLowerCase() === sId)
     );
     return matches ? vendor : undefined;
   }
@@ -2259,6 +2260,11 @@ class StoreService {
         email: vendor.email,
         outboxId: onboardingEvent.id,
       }, 'STORE_SERVICE');
+      this._background(
+        eventOutboxService.dispatchDueEventOutboxJobs(1, [onboardingEvent.id]),
+        'Failed to immediately dispatch vendor onboarding event',
+        { vendorId: vendor.id, outboxId: onboardingEvent.id }
+      );
       return { status: 'pending', error: null };
     }
 
@@ -3210,11 +3216,10 @@ class StoreService {
     const hasAccess =
       hasUnlimitedDownloads ||
       isAlreadyUnlocked ||
-      isV0 ||
-      coversRfq ||
       isDirect ||
       isInvited ||
-      (isNetworkMode && categoryMatches);
+      isNetworkMode ||
+      coversRfq;
 
     if (!hasAccess) {
       return {
@@ -4128,6 +4133,13 @@ class StoreService {
     let vendor = this.getVendorById(vendorId, scopedBuyerId);
     if (!vendor && pool.hasStorage()) {
       vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
+    }
+    if (!vendor && ratingData && (ratingData.vendorEmail || ratingData.email)) {
+      const emailHint = String(ratingData.vendorEmail || ratingData.email).trim().toLowerCase();
+      vendor = this.getVendorById(emailHint, scopedBuyerId);
+      if (!vendor && pool.hasStorage()) {
+        vendor = await this.getVendorByIdWithDBFallback(emailHint, scopedBuyerId, { fresh: true });
+      }
     }
     if (!vendor) return null;
     let revisionSource = vendor;
@@ -6915,6 +6927,47 @@ class StoreService {
     return { updatedRfq: updated, inquiry: updatedInquiry };
   }
 
+  async addBroadcastToRFQ(rfqId, broadcast) {
+    const rfq = await this.getRFQByIdAsync(rfqId);
+    if (!rfq) return null;
+
+    const existingBroadcasts = Array.isArray(rfq.broadcasts) ? [...rfq.broadcasts] : [];
+    const timestamp = broadcast.createdAt || new Date().toISOString();
+    const newBroadcast = {
+      id: broadcast.id || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `bcast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title: broadcast.title ? String(broadcast.title).trim() : '',
+      message: String(broadcast.message || '').trim(),
+      attachments: Array.isArray(broadcast.attachments) ? broadcast.attachments : [],
+      authorName: broadcast.authorName || 'Procurement Team',
+      authorRole: broadcast.authorRole || 'buyer',
+      authorEmail: broadcast.authorEmail || null,
+      createdAt: timestamp,
+    };
+
+    const updatedBroadcasts = [...existingBroadcasts, newBroadcast];
+    const updated = await this.updateRFQDurably(rfq.id, { broadcasts: updatedBroadcasts });
+    if (!updated) return null;
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Information Broadcast on ${rfq.rfqNumber}`,
+      message: `Announcement: "${newBroadcast.title ? `${newBroadcast.title}: ` : ''}${newBroadcast.message.slice(0, 100)}"`,
+      recipient: 'All Vendors',
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Information broadcast published on ${rfq.rfqNumber}: "${(newBroadcast.title || newBroadcast.message).slice(0, 80)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: broadcast.authorEmail || 'system@procucev.ai',
+    });
+
+    return { updatedRfq: updated, broadcast: newBroadcast };
+  }
+
   deleteRFQ(id) {
     const rfq = this.rfqs.find((record) => record.id === id || record.rfqNumber === id);
     if (!rfq) return false;
@@ -8711,7 +8764,9 @@ class StoreService {
         }
       }
 
-      const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+      // With a database, the queue (rfq_vendor_invite_email) sends every invitation e-mail, so each vendor gets
+      // one. The request path sends it only when there is no database, because then there is no queue.
+      const sendEmailViaOutboxOnly = pool.hasStorage();
       if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
@@ -9080,7 +9135,8 @@ class StoreService {
             }
           }
 
-          const sendEmailViaOutboxOnly = pool.hasStorage() && mailTransport.isWorkersRuntime();
+          // The queue is the only sender when a database is configured (see augmentV0AssignmentsFromDB).
+          const sendEmailViaOutboxOnly = pool.hasStorage();
           if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
@@ -9462,6 +9518,8 @@ class StoreService {
       };
     }
 
+    const newlyProvisioned = [];
+    const provisioningErrors = [];
     for (const vendor of dispatchedInvites) {
       const isOverride = dispatchedOverrides.some((ov) => ov.id === vendor.id);
       this.addAuditLog({
@@ -9471,6 +9529,34 @@ class StoreService {
           : `Category Manager manual assignment: Vendor ${vendor.name} (${vendor.id}) invited to RFQ ${rfq.rfqNumber}`,
         rfqNumber: rfq.rfqNumber,
       });
+
+      // Auto-Provision Directory/Unregistered Vendors on RFQ Invite
+      const vendorEmail = resolveVendorEmail(vendor);
+      if (vendorEmail) {
+        try {
+          const existingIdentity = await identityQueries.findUserByEmail(vendorEmail);
+          if (!existingIdentity) {
+            logger.info(
+              `Auto-provisioning login account for invited vendor ${vendorEmail} (${vendor.id}) on RFQ ${rfq.rfqNumber}`,
+              { vendorId: vendor.id, rfqNumber: rfq.rfqNumber },
+              'STORE_SERVICE'
+            );
+            const onboarding = await this._provisionVendorOnboarding(vendor, actorEmail);
+            if (onboarding?.status === 'sent' || onboarding?.status === 'pending') {
+              newlyProvisioned.push({ id: vendor.id, email: vendorEmail, status: onboarding.status });
+            } else if (onboarding?.status === 'failed') {
+              provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: onboarding.error });
+            }
+          }
+        } catch (provErr) {
+          logger.warn(
+            `Failed to check or auto-provision identity for invited vendor ${vendorEmail}`,
+            { error: provErr, vendorId: vendor.id },
+            'STORE_SERVICE'
+          );
+          provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: provErr?.message || 'Provisioning error' });
+        }
+      }
 
       // Real in-app notification
       const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
@@ -9489,7 +9575,6 @@ class StoreService {
       this._persistNotification(notification);
 
       // Real invite email
-      const vendorEmail = resolveVendorEmail(vendor);
       if (vendorEmail && !pool.hasStorage()) {
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
@@ -9562,6 +9647,8 @@ class StoreService {
       overrideCount: dispatchedOverrides.length,
       excludedCount: excludedVendors.length,
       excludedVendors,
+      provisionedCount: newlyProvisioned.length,
+      provisioningErrors,
     };
   }
 

@@ -34,8 +34,10 @@ const paymentDuesRoutes = require('./paymentDues');
 const actionCenterCommRoutes = require('./actionCenterCommunications');
 const documentVaultRoutes = require('./documentVault');
 const loginLogsRoutes = require('./loginLogs');
+const categoryManagerRoutes = require('./categoryManager');
 
 // Mount sub-routers
+router.use('/category-manager', categoryManagerRoutes);
 router.use('/action-center/communications', actionCenterCommRoutes);
 router.use('/document-vault', documentVaultRoutes);
 router.use('/login-logs', loginLogsRoutes);

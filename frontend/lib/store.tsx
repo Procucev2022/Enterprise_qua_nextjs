@@ -872,7 +872,17 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       }
       if (json.success && json.data) {
         const d = json.data;
-        const vendorsList = d.vendors || [];
+        const rawVendorsList = d.vendors || [];
+        const vendorsList = rawVendorsList.map((v: VendorEntry) => {
+          const email = String(v?.email || '').trim().toLowerCase();
+          if (email === 'bhumika@vaysinfotech.com') {
+            return { ...v, name: 'Vays Infotech', brandName: 'Vays Infotech', companyName: 'Vays Infotech' };
+          }
+          if (email === 'helpdesk@vaysinfotech.com') {
+            return { ...v, name: 'Vays Infotech 1', brandName: 'Vays Infotech 1', companyName: 'Vays Infotech 1' };
+          }
+          return v;
+        });
         const evalsList = d.evaluations || [];
         setBuyerAccounts(d.buyerAccounts || []);
         setBuyerVendors(vendorsList);
@@ -1930,8 +1940,10 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     // is POST '/api/vendors/:id/rating-revision' — await it and use its
     // response as the source of truth for what actually got saved.
     let res: Response;
+    const resolvedTarget = resolveVendorMutationTarget(vendorId, targetVendor);
+    const targetVendorId = resolvedTarget.targetVendorId || targetVendor?.id || vendorId;
     try {
-      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendor?.id || vendorId)}/rating-revision`, {
+      res = await fetch(`/api/vendors/${encodeURIComponent(targetVendorId)}/rating-revision`, {
         method: 'POST',
         headers: authFetchHeaders(),
         body: JSON.stringify({
@@ -1942,6 +1954,12 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           buyerCompany,
           buyerName,
           buyerEmail,
+          vendorEmail: targetVendor?.email,
+          vendorName: targetVendor?.name,
+          vendorCode: targetVendor?.vendorCode,
+          contactPerson: targetVendor?.contactPerson,
+          majorCategory: targetVendor?.majorCategory,
+          minorCategories: targetVendor?.minorCategories,
         }),
       });
     } catch (e) {
@@ -2050,7 +2068,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
     }
 
     const isSyntheticId =
-      vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+      vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-') || vendorId.startsWith('v-hist-');
     const resolvedEmailLower = String(resolvedVendor.email || '').trim().toLowerCase();
     const persistedByEmail =
       isSyntheticId && resolvedEmailLower
@@ -2058,12 +2076,13 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           (v) =>
             !String(v.id || '').startsWith('v-master-') &&
             !String(v.id || '').startsWith('v-hist-local-') &&
+            !String(v.id || '').startsWith('v-hist-') &&
             String(v.email || '').trim().toLowerCase() === resolvedEmailLower
         )
         : undefined;
     const targetVendor = persistedByEmail || resolvedVendor;
     const requestPayload: Record<string, unknown> = { notes: notes || '' };
-    if (targetVendor.id.startsWith('v-master-') || targetVendor.id.startsWith('v-hist-local-')) {
+    if (targetVendor.id.startsWith('v-master-') || targetVendor.id.startsWith('v-hist-local-') || targetVendor.id.startsWith('v-hist-')) {
       if (targetVendor.email) requestPayload.vendorEmail = targetVendor.email;
       if (targetVendor.name) requestPayload.vendorName = targetVendor.name;
       if (targetVendor.contactPerson) requestPayload.contactPerson = targetVendor.contactPerson;
@@ -2264,7 +2283,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
   };
 
   const resolveVendorMutationTarget = (vendorId: string, hintVendor?: Partial<VendorEntry>) => {
-    const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-');
+    const isSyntheticId = vendorId.startsWith('v-master-') || vendorId.startsWith('v-hist-local-') || vendorId.startsWith('v-hist-');
     const directVendor = buyerVendors.find((v) => v.id === vendorId);
     const matchedVendor =
       directVendor ||
@@ -2284,6 +2303,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
           (v) =>
             !String(v.id || '').startsWith('v-master-') &&
             !String(v.id || '').startsWith('v-hist-local-') &&
+            !String(v.id || '').startsWith('v-hist-') &&
             ((masterIdSuffix && v.masterRecordId === masterIdSuffix) ||
               (resolvedEmailLower && String(v.email || '').trim().toLowerCase() === resolvedEmailLower))
         )
@@ -3419,7 +3439,14 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Subscription required');
     }
 
+    const isTrialActive = Boolean(
+      activeBuyerAccount?.trialEndDate &&
+      new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+      activeBuyerAccount.trialActive !== false
+    );
+
     if (
+      !isTrialActive &&
       activeSubscription === 'free_trial' &&
       rfqData.sourcingMode !== RFQ_MODES.MODE_0 &&
       remainingFreeRFQs !== null &&
@@ -3429,7 +3456,7 @@ export function AppProvider({ children }: { children: React.ReactNode }) {
       throw new Error('Free account quota exhausted');
     }
 
-    if (activeSubscription !== null && activeSubscription !== 'free_trial') {
+    if (!isTrialActive && activeSubscription !== null && activeSubscription !== 'free_trial') {
       if (rfqData.sourcingMode === RFQ_MODES.MODE_2 && activeSubscription === 'version_1') {
         showToast('Upgrade Required', `${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} Sourcing requires a ${RFQ_MODE_LABELS[RFQ_MODES.MODE_2]} (Hybrid Network) Plan subscription.`, 'warning');
         throw new Error('Subscription required');

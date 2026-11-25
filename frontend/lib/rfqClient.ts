@@ -9,6 +9,7 @@ import type {
   FetchAllVendorsOptions,
   RFQAttachment,
   RFQAttachmentResult,
+  RFQBroadcast,
   RFQCreatePayload,
   RFQDeleteResult,
   RFQExtractionRequest,
@@ -766,6 +767,7 @@ export async function fetchAllVendors(
   if (/^\d{3,6}$/.test(cleanPincode)) params.set('pincode', cleanPincode);
   const cleanPreferredPincode = String(preferredPincode || '').replace(/\s+/g, '');
   if (/^\d{3,6}$/.test(cleanPreferredPincode)) params.set('preferredPincode', cleanPreferredPincode);
+  if (options.subscription || options.subscriptionOnly) params.set('subscription', 'true');
 
   let res: Response;
   try {
@@ -846,6 +848,8 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     invitedCount?: number;
     excludedCount?: number;
     excludedVendors?: RFQExcludedVendor[];
+    provisionedCount?: number;
+    provisioningErrors?: Array<{ id: string; email: string; error?: string }>;
     error?: string;
   } = {};
   try {
@@ -882,6 +886,12 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     ...(typeof body.excludedCount === 'number' && body.excludedCount > 0 ? { excludedCount: body.excludedCount } : {}),
     ...(Array.isArray(body.excludedVendors) && body.excludedVendors.length > 0
       ? { excludedVendors: body.excludedVendors }
+      : {}),
+    ...(typeof body.provisionedCount === 'number' && body.provisionedCount > 0
+      ? { provisionedCount: body.provisionedCount }
+      : {}),
+    ...(Array.isArray(body.provisioningErrors) && body.provisioningErrors.length > 0
+      ? { provisioningErrors: body.provisioningErrors }
       : {}),
   };
 }
@@ -1111,6 +1121,60 @@ export async function replyToRFQInquiry(
   } catch (err: unknown) {
     logRfqTransportFailure('RFQ inquiry reply request failed', err);
     return { success: false, error: getRfqTransportErrorMessage(err, 'Network error submitting reply.') };
+  }
+}
+
+/**
+ * Publish an information broadcast / announcement on an RFQ (buyer/category manager).
+ */
+export async function publishRFQBroadcast(
+  rfqIdOrNumber: string,
+  payload: { title?: string; message: string; attachments?: RFQAttachment[] }
+): Promise<{ success: boolean; data?: RFQBroadcast; rfq?: RFQItem; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to publish broadcast announcement.' };
+    }
+    return { success: true, data: body.data, rfq: body.rfq };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcast publish request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error publishing broadcast announcement.') };
+  }
+}
+
+/**
+ * Fetch all broadcast announcements for an RFQ.
+ */
+export async function fetchRFQBroadcasts(
+  rfqIdOrNumber: string
+): Promise<{ success: boolean; data?: RFQBroadcast[]; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to fetch broadcast announcements.' };
+    }
+    return { success: true, data: body.data || [] };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcasts fetch request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching broadcast announcements.') };
   }
 }
 

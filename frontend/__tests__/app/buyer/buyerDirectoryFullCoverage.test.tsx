@@ -1,6 +1,6 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import VendorSummary from '@/app/buyer/vendor-summary';
+import VendorSummary, { setEnableEditVendorProfile, setEnableVendorRating } from '@/app/buyer/vendor-summary';
 import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
@@ -130,6 +130,11 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     },
   ];
 
+  beforeAll(() => {
+    setEnableEditVendorProfile(true);
+    setEnableVendorRating(true);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     (useApp as jest.Mock).mockReturnValue({
@@ -254,10 +259,12 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     }
 
 
-    // Click Edit button on a vendor
-    const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-    if (editBtns.length > 0) {
-      fireEvent.click(editBtns[0]);
+    // Click View Profile then Edit Profile on a vendor
+    const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+    if (viewBtns.length > 0) {
+      fireEvent.click(viewBtns[0]);
+      const editProfileBtn = screen.getByRole('button', { name: /Edit Profile/i });
+      fireEvent.click(editProfileBtn);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // Add a minor category tag

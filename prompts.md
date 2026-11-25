@@ -7672,6 +7672,7 @@ check all the previous  pr pass all the coverages are not if not pass  all theco
 ```
 
 ---
+
 ### Prompt 359
 
 **Timestamp**: 2026-11-21T07:42:41+05:30
@@ -7811,7 +7812,6 @@ Fix all the issue in the category manager portal everyything every button should
 
 ---
 
-
 ### Prompt 364
 
 **Timestamp**: 2026-11-21T12:01:20+05:30
@@ -7871,6 +7871,7 @@ create the pr for this code and pass all the coverges and gemini pr check unit t
 ```
 
 ---
+
 ### Prompt 376
 
 **Timestamp**: 2026-11-21T19:11:18+05:30
@@ -7880,6 +7881,7 @@ contiinue
 ```
 
 ---
+
 ### Prompt 377
 
 **Timestamp**: 2026-11-21T19:43:00+05:30
@@ -7889,6 +7891,7 @@ contiinue
 ```
 
 ---
+
 ### Prompt 378
 
 **Timestamp**: 2026-11-21T20:51:06+05:30
@@ -7935,6 +7938,7 @@ REUSE Existing code and functionality don't merge the code in test-v3 use same b
 ```
 
 ---
+
 ### Prompt 379
 
 **Timestamp**: 2026-11-21T21:37:36+05:30
@@ -7944,6 +7948,7 @@ why it is not showing available credits
 ```
 
 ---
+
 ### Prompt 380
 
 **Timestamp**: 2026-11-21T22:08:37+05:30
@@ -7953,6 +7958,7 @@ Remove the 6th and 12th in discount request in seller directory and update the  
 ```
 
 ---
+
 ### Prompt 381
 
 **Timestamp**: 2026-11-21T22:09:09+05:30
@@ -7962,6 +7968,7 @@ Remove the 6th and 12th  months in discount request in seller directory and upda
 ```
 
 ---
+
 ### Prompt 382
 
 **Timestamp**: 2026-11-21T22:24:16+05:30
@@ -8028,10 +8035,10 @@ In **both Buyers Directory and Sellers Directory** (and every Request Approval m
 continue
 ```
 
-
 ---
 
 ### User Prompt 385 (Timestamp: 22 Nov 2026, 12:12 AM IST)
+
 ```text
 continue
 ```
@@ -8039,14 +8046,15 @@ continue
 ---
 
 ### User Prompt 386 (Timestamp: 22 Nov 2026, 02:37 AM IST)
+
 ```text
 continue
 ```
 
-
 ---
 
 ### User Prompt 387 (Timestamp: 22 Nov 2026, 09:27 AM IST)
+
 ```text
 Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 issues across the Category Manager (Buyers Directory, Sellers Directory, Dossier Drawers, Approvals, Credits, and Communications).
 
@@ -8103,8 +8111,8 @@ Perform a deep root-cause investigation and COMPLETELY SOLVE the following 4 iss
 - Run fast verification (`npm run qc:fast` or `npm run check:fast`) and ensure 0 test failures.
 ```
 
-
 ## Prompt 388 — 2026-11-22T13:26:12+05:30
+
 ```text
 Summary of Changes
 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
@@ -8214,8 +8222,8 @@ Merging can be performed automatically.
 pass all the coverages
 ```
 
-
 ## Prompt 389 — 2026-11-22T14:00:55+05:30
+
 ```text
 Quality checks
 Check
@@ -8265,11 +8273,13 @@ Pass all the coverages and ready to merge
 ```
 
 ## Prompt 390 — 2026-11-22T14:45:00+05:30
+
 ```text
 continue
 ```
 
 ## Prompt 391 — 2026-11-22T15:23:47+05:30
+
 ```text
 Summary of Changes
 1. Root Cause Fix — Buyer Dossier Credit Balance, Payments Lookup & Post-Approval DB Sync
@@ -8378,7 +8388,6 @@ Successful in 27s
 pass gemini pr check as well
 ```
 
-
 ---
 
 ### Prompt 386
@@ -8387,9 +8396,8 @@ pass gemini pr check as well
 
 ```text
 remove this 2 emails from production anshul.goel@procucev.com , gmtrfq@procucev.com
-add quateam@procucev.com , sudheer.kangala@procucev.com  
+add quateam@procucev.com , sudheer.kangala@procucev.com
 ```
-
 
 ---
 
@@ -8398,7 +8406,7 @@ add quateam@procucev.com , sudheer.kangala@procucev.com
 **Timestamp**: 2026-11-23T11:38:01+05:30
 
 ```text
-raise the pr for this only code of 6 files and pass all  the coverages and gemini pr and  don't merge in test-v3 i can merge the pr manuallly 
+raise the pr for this only code of 6 files and pass all  the coverages and gemini pr and  don't merge in test-v3 i can merge the pr manuallly
 ```
 
 ---
@@ -8457,7 +8465,6 @@ ALL done?
 continue
 ```
 
-
 ---
 
 ### Prompt 391
@@ -8503,4 +8510,1502 @@ Update the **Internal tasks** table rows so every row is a compact, single-line 
 
 ```text
 raise the pr and with this branch and don't merge directly pass all the covergaes and gemini pr checck?
+```
+
+---
+
+### Prompt 393
+
+**Timestamp**: 2026-11-23T16:43:14+05:30
+
+```text
+Refactor the Buyer RFQ Console into a compact, single-line Excel-style table matching Vendor Performance and Action Center, with 100-buyers-per-page pagination, full ascending/descending sorting on every column (including date-wise), and drag-and-drop column reordering.
+
+### STRICT CONSTRAINTS — READ FIRST
+- Strictly reuse existing code, methods, and functionality: Reuse the existing Buyer Console data fetching, search/company/buyer filter state, KPI calculations, Review RFQ Details drill-down handler, and the Action Center shared table utilities (drag-to-rearrange columns, gear-icon column settings, sorting helpers, and pagination bar). Do NOT duplicate business logic or build parallel table/drag systems.
+- 100% Feature Parity — Every Existing Button & Data Point Must Stay Connected:
+  - Do NOT drop or disconnect any button, click handler, filter, or data field from the previous Buyer RFQ Console UI.
+  - Every existing element must be wired directly into the new layout:
+    - Top 3 KPI cards (Total Active Spend Sourced, Total Sourcing Volume, Avg Quotes Per RFQ) -> connected to the exact existing live KPI calculations.
+    - Search Buyer name or company..., All Companies, and All Buyers -> connected to the exact existing context/filter state and handlers.
+    - Every buyer card's data (Buyer Name, Company Name, Email, Phone, Sourcing Mode, Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ, Date) -> mapped cleanly into the table columns.
+    - Every buyer's Review RFQ Details > button -> wired to the exact existing click/drawer/navigation handler.
+- Do NOT break any existing UI or functionality: Keep all unrelated tabs, modals, popups, and workflows 100% intact.
+
+---
+
+### 1. Compact Top KPI Row & Remove Bulky Distribution List
+- Place the 3 KPI cards (Total Active Spend Sourced, Total Sourcing Volume, Avg Quotes Per RFQ) in a single slim horizontal row at the top.
+- Remove the tall Buyer Company Wise Spend & RFQ Volume Distribution list and the 2-column card grid so the main buyer table is immediately visible above the fold.
+
+---
+
+### 2. Single-Row Filter Toolbar (No Horizontal Overflow)
+- Unify the existing context filters and search bar into one single-row horizontal toolbar (flex items-center gap-2 w-full, no horizontal scrollbar):
+  1. Search input: flex-1 min-w-[200px] with pl-9 so the magnifying glass icon does not overlap the placeholder.
+  2. All Companies dropdown: w-[160px] shrink-0 (reusing existing company filter state).
+  3. All Buyers dropdown: w-[160px] shrink-0 (reusing existing buyer filter state).
+  4. Export button: Solid emerald green button (shrink-0 whitespace-nowrap), reusing the existing export utility.
+  5. Refresh icon button: w-9 h-9 shrink-0 (reusing existing reload handler).
+  6. Gear icon button: w-9 h-9 shrink-0 (reusing the Action Center column visibility/reset settings popover).
+
+---
+
+### 3. Strict Single-Line Excel-Style Table
+- Render every buyer on strictly one horizontal line (whitespace-nowrap, compact row height py-2, subtle row dividers) — zero stacked two-line cells. Use truncate with hover tooltips for long company names or emails.
+- Columns:
+  1. Buyer Name (single line with small initial avatar)
+  2. Company Name (single line, truncated with hover tooltip)
+  3. Email (single line, truncated with hover tooltip)
+  4. Phone (single line)
+  5. Sourcing Mode (compact pill badge)
+  6. Total RFQs (right-aligned numeric)
+  7. Active RFQs (right-aligned numeric)
+  8. Sourced Spend (right-aligned currency)
+  9. Avg Quotes / RFQ (right-aligned numeric)
+  10. Date (single line, for date-wise sorting)
+  11. Actions (compact single-line Review RFQ Details > button wired to the existing handler)
+
+---
+
+### 4. Full Column Sorting (Asc / Desc) & Drag-to-Rearrange Columns (Like Action Center)
+- Sort every column (Ascending & Descending):
+  - Make every data column header clickable with sort arrows (↑↓), supporting date-wise (Date), numeric (Total RFQs, Active RFQs, Sourced Spend, Avg Quotes / RFQ), and alphabetical (Buyer Name, Company Name, Email, Phone, Sourcing Mode) ascending/descending sorting.
+- Drag-to-rearrange columns:
+  - Reuse the exact drag-and-drop column reordering and persistence logic already used in the Action Center tables so users can drag headers to rearrange columns (and toggle/reset columns via the Gear icon).
+
+---
+
+### 5. Exact DB Count & 100-Buyers-Per-Page Pagination
+- Page Size: Display 100 buyers per page (PAGE_SIZE = 100).
+- Remove the 500 cap: Fetch and display the exact live DB count (COUNT(*)) rather than capping at 500 or deriving totals from rows.length.
+- Pagination Bar: Dock the existing compact single-row pagination bar at the bottom of the table card (Showing 1–100 of <exact total> Buyers on the left; < Previous, active teal page numbers, Next > on the right).
+- Reset to Page 1 whenever search, company, buyer, or sort filters change, and smoothly scroll the table back to the top on page change.
+```
+
+---
+
+### Prompt 394
+
+**Timestamp**: 2026-11-23T16:05:44+05:30
+
+```text
+Implement the following frontend-only UI changes in the **Buyer Login** portal.
+
+**Strict Constraint:** Do NOT delete, modify, or remove any backend code, API endpoints, database logic, or existing frontend handlers. Wrap hidden/disabled features in a simple boolean feature flag (e.g., `const ENABLE_MODE_3 = false;`, `const ENABLE_VENDOR_RATING = false;`) so they can be easily re-enabled later.
+
+### 1. AI RFQ Create — Disable Mode 3 Flow ("Coming Soon")
+- **Location:** Buyer Login → `AI RFQ Create` → `Select Sourcing Mode`
+- **Requirement:**
+  - Keep **Mode 3 – Autonomous AI + 360 Qualification** visible in the sourcing mode selector, but mark it as **Coming Soon** (e.g., add a "Coming Soon" badge or show a "Coming Soon" state/message when clicked).
+  - When a buyer selects Mode 3, do **not** render the active Mode 3 supplier roster/protocol flow, and disable the **Create & Dispatch RFQ** button (or prevent form submission) so Mode 3 RFQs cannot be dispatched.
+  - Ensure Mode 0, Mode 1, and Mode 2 continue working normally without any regression.
+
+### 2. Vendor Directory — Hide Rating & Evaluation Actions
+- **Location:** Buyer Login → `Vendor Directory`
+- **Requirement:**
+  - Hide the **Revise Rating** button from the **Actions** column in the Vendor Directory table.
+  - Inside the **Revise Supplier Performance Rating** modal, hide the **Request Vendor Evaluation** button (and keep the modal/rating code intact behind the feature flag).
+  - Do not remove any underlying API calls, state logic, or components—only conditionally hide them from the UI.
+```
+
+---
+
+### Prompt 395
+
+**Timestamp**: 2026-11-23T16:46:12+05:30
+
+```text
+create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
+```
+
+---
+
+### Prompt 394
+
+**Timestamp**: 2026-11-23T17:40:12+05:30
+
+```text
+create the pr and pass all the covergaes don't merge in test-v3 pass all the gemini pr check and all coverages make the pr ready to merge
+```
+
+---
+
+### Prompt 396
+
+**Timestamp**: 2026-11-23T19:32:49+05:30
+
+```text
+Implement a frontend-only UI change in the **Buyer Login → Vendor Directory** (`View Profile` modal).
+
+**Strict Constraint:** Do NOT delete or modify any backend code, API endpoints, database logic, or existing frontend handlers. Wrap the button in a boolean feature flag (e.g., `const ENABLE_VENDOR_EVALUATION = false;`) so it can be easily re-enabled later.
+
+### Vendor Directory — View Profile Modal
+- **Location:** Buyer Login → `Vendor Directory` → `View Profile` modal footer.
+- **Requirement:**
+  - Hide the **Request Vendor Evaluation** button from the modal footer (next to `Edit Profile` and `Mark Inactive`).
+  - Keep **Edit Profile**, **Mark Inactive**, and **Close** buttons visible and functioning normally.
+  - Do not remove any underlying API calls or handler functions—only conditionally hide the button from the frontend UI.
+```
+
+---
+
+### Prompt 397
+
+**Timestamp**: 2026-11-23T19:35:11+05:30
+
+```text
+create the pr using this branch and pass all the coverages and gemini pr and ready to merge with test-v3 i can merge after that
+```
+
+---
+
+### Prompt 398
+
+**Timestamp**: 2026-11-23T20:57:02+05:30
+
+```text
+Identify the root cause and fix the sync bug where linked tasks in **Action Center > Internal tasks** remain in `Open` state after their corresponding request in **Action Center > Approvals** is `Approved` or `Rejected`.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Trace the exact approval decision endpoint/service (`approve` / `reject`), the link between approval requests and internal tasks (`taskId` / `approvalRequestId`), and the status mapping in **Internal tasks**.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing approval handlers, internal task update methods, and state refresh hooks. Do NOT duplicate business logic.
+- **Do NOT break any existing UI or functionality**: Keep all existing approval flows (Buyer/Seller Credits, Discounts, etc.), email notifications, and Internal Tasks filters/actions 100% intact.
+
+---
+
+### 1. Auto-Close Linked Internal Task on Approve or Reject (Backend)
+- In the existing approval decision flow (covering **all** approval types — Buyer Credit Addition/Deletion, Seller Credit Addition/Deletion, Discounts, etc.):
+  - Whenever an approver clicks **Approve** OR **Reject**, automatically update the linked Internal Task in the database:
+    - Transition its status from `Open` (or `Pending Approval`) to `Closed` (matching the exact canonical closed status used by Internal Tasks).
+    - Mark the task as done (`Done` checkbox checked / `completedAt` set) so the Due Date column shows `Closed` just like manually completed tasks.
+  - Verify the foreign key / reference lookup (`approvalRequestId`, `taskId`, or metadata reference) so the linked task is always found and updated reliably.
+
+---
+
+### 2. Reconcile Already-Decided Approval Tasks & Sync Frontend State
+- **Frontend state refresh**: When an approval is approved or rejected in the **Approvals** tab, immediately refresh/invalidate the **Internal tasks** query/state and KPI counters (`NEW TASKS`, `PENDING APPROVAL`, `COMPLETED`, and the `Internal tasks` tab badge count) so the row flips from `Open` to `Closed` immediately without a manual reload.
+- **Existing stuck records**: Ensure any internal task linked to an approval request that is already `Approved` or `Rejected` (e.g., `REQ-060DAC704BE2`) resolves as `Closed` instead of staying stuck in `Open`.
+
+---
+
+### 3. Regression Tests (Prevent Future Recurrence)
+- Add automated tests asserting that:
+  1. Approving a request automatically transitions its linked Internal Task from `Open` to `Closed` (with `Done` checked) and updates the KPI counts.
+  2. Rejecting a request also automatically transitions its linked Internal Task from `Open` to `Closed` (with `Done` checked) and updates the KPI counts.
+```
+
+---
+
+### Prompt 399
+
+**Timestamp**: 2026-11-23T23:09:57+05:30
+
+```text
+contineu finish that?
+```
+
+---
+
+### Prompt 400
+
+**Timestamp**: 2026-11-23T23:22:52+05:30
+
+```text
+Replace ALL existing email/communication templates across **Internal Tasks** (`Action Center Communication` modal), **Buyer Directory** (`Record Communication & Activity` modal), and **Seller Directory** (`Record Communication` modal), wire up the standardized communication categories, task auto-completion rules, Add/Delete Credit routing, and Category Manager Analytics tracking.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Remove ALL current templates completely**: Delete every existing template/conversion scenario currently in the dropdowns (including `Post-Call Follow-up & Commercial Proposal`, `Platform Demo Invitation`, `Enterprise Sourcing Plan Overview`, all `Call Outcome: ...` entries, `Post-Call Follow-up & Paid Roster Invitation`, `Supplier Membership Plan Invitation`, `Featured Supplier Sponsorship`, `Custom Sales Pitch / Bespoke Proposal`, etc.).
+- **Single Shared Source of Truth**: Define the 8 new templates and categories in **one shared constant/config file** and import it into all 3 modals (Internal Tasks, Buyer Directory, Seller Directory) so they never drift out of sync.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing modals, channel selectors (`Call`, `SMS`, `WhatsApp`, `Email`, `Both`), placeholder interpolation logic (using the codebase's existing token format), send/log API handlers, internal task update methods, approval handlers, and analytics queries.
+- **Do NOT break any existing UI or functionality**: Keep all modal layouts, recipient auto-fill, attachments, click-outside dismissal, and communication history logging 100% intact.
+
+---
+
+### 1. Standardized Communication Categories & Email Templates (Replace All Existing Options With ONLY These 8)
+Update the template dropdown in **Internal Tasks**, **Buyer Directory**, and **Seller Directory** to show ONLY these 8 options. Selecting any option must auto-fill `Subject` and `Message` with live entity values while keeping both fields editable before sending:
+
+#### 1. `Credit / Quote (Buyer / Seller)`
+- **Subject:** `Update on Your {accountType} Credits / Quote Balance – {companyName}`
+- **Body:**
+
+Hi {contactName},
+
+Your {accountType} account for {companyName} has been updated on Procucev QUA AI.
+
+Action: {creditAction} ({creditAmount} Credits)
+
+Updated Available Balance: {availableCredits} Credits
+
+You can log in to your dashboard to continue raising RFQs / submitting quotes. Please reach out if you need any assistance.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 2. `Follow-up / New` *(Supports Call, SMS, WhatsApp, Email)*
+- **Subject:** `Following Up: Sourcing & Procurement Opportunities for {companyName}`
+- **Body:**
+Hi {contactName},
+
+Reaching out from Procucev regarding your account for {companyName}. We wanted to follow up on your current sourcing requirements / active RFQs and check if you need any help getting started or reviewing quotes.
+
+Let us know a convenient time for a quick call, or reply directly to this email.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 3. `Demo Schedule`
+- **Subject:** `Procucev QUA AI Platform Demo Scheduled – {companyName}`
+- **Body:**
+Hi {contactName},
+
+Your walkthrough of the Procucev QUA AI platform for {companyName} is scheduled as follows:
+
+Date & Time: {demoDate} at {demoTime} IST
+
+Meeting Link: {meetingLink}
+
+We will cover automated RFQ workflows, vendor quote comparison, and dashboard setup. Let us know if you need to reschedule.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 4. `Send Proposal` *(Auto-completes Task)*
+- **Subject:** `Commercial Proposal for {companyName} – Procucev Enterprise`
+- **Body:**
+Hi {contactName},
+
+Please find attached our commercial proposal tailored for {companyName}, outlining subscription tiers, credit allocations, and sourcing support on Procucev QUA AI.
+
+Please review the details and let us know if you have any questions or would like to proceed with activation.
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 5. `Send Corporate Email` *(Auto-completes Task)*
+- **Subject:** `Procucev Enterprise Partnership – {companyName}`
+- **Body:**
+Dear {contactName},
+
+On behalf of Procucev Enterprise Solutions, we are pleased to connect with {companyName}. Our AI-driven B2B procurement platform streamlines multi-vendor RFQs, bid evaluation, and supplier onboarding.
+
+We would welcome the opportunity to align with your procurement team on upcoming requirements.
+
+Warm regards,
+{senderName} | Category Management, Procucev
+
+
+#### 6. `Onboarding Process`
+- **Subject:** `Welcome to Procucev – Complete Your Onboarding for {companyName}`
+- **Body:**
+Hi {contactName},
+
+Welcome to Procucev! To complete onboarding for {companyName}, please finish these quick steps:
+
+Verify your registered mobile number and corporate email.
+
+Upload your company GSTIN / statutory documents in the portal.
+
+Confirm your primary product categories.
+
+Complete onboarding here: {onboardingLink}
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 7. `Registration Task`
+- **Subject:** `Action Required: Verify & Activate Your Procucev Account – {companyName}`
+- **Body:**
+Hi {contactName},
+
+Your account for {companyName} has been created on Procucev QUA AI. To activate full access and receive real-time RFQ/quote updates, please verify your contact details and set your password:
+
+Activate Account: {activationLink}
+
+Regards,
+{senderName} | Category Management, Procucev
+
+
+#### 8. `Internal Operations (Others)`
+- **Subject:** `[Internal Operations] Update Regarding {companyName} – {referenceId}`
+- **Body:**
+Hi {contactName},
+
+This is an operational update regarding {companyName} ({referenceId}):
+
+{customMessage}
+
+Please reply if any further action is required from our side.
+
+Regards,
+{senderName} | Procucev Operations
+
+
+---
+
+### 2. Task Auto-Completion Rules
+- When **`Send Proposal`** or **`Send Corporate Email`** is sent/recorded, automatically mark the corresponding linked Internal Task as `Closed` / `Completed` (reusing the existing internal task update handler).
+
+---
+
+### 3. Add / Delete Credit Two-Track Routing (Approvals vs. Task)
+Enforce the two-track workflow whenever an **Add / Delete Credit** request is created (for either Buyer or Seller):
+- **Approvals -> Admin**: Route the credit addition/deletion approval request to the **Admin / Approver** in the **Approvals** tab.
+- **Task -> Requester**: Assign the linked **Internal Task** to the **Requester** (`Initiated By`) so they can track it, and automatically transition that task to `Closed` once the Admin approves or rejects the request.
+
+---
+
+### 4. Category Manager Analytics Linkage
+- Persist the selected communication category/template type on every logged communication record in the DB.
+- Wire **Category Manager Analytics** (for Buyer Directory & Seller Directory communications) directly to these live DB records so outreach counts accurately break down by category (`Credit / Quote`, `Follow-up / New`, `Demo Schedule`, `Send Proposal`, `Send Corporate Email`, `Onboarding Process`, `Registration Task`, `Internal Operations`) and channel (`Call`, `SMS`, `WhatsApp`, `Email`).
+
+---
+
+### 5. Verification & Regression Tests
+- Update any existing tests referencing the old removed templates.
+- Add tests confirming:
+1. Only the 8 new templates appear in Internal Tasks, Buyer Directory, and Seller Directory communication modals.
+2. Sending `Send Proposal` or `Send Corporate Email` auto-completes the linked Internal Task.
+3. `Add / Delete Credit` routes the Approval to Admin and the linked Task to Requester.
+4. Logged communication categories persist to DB and reflect accurately in Category Manager Analytics.
+```
+
+---
+
+### Prompt 401
+
+**Timestamp**: 2026-11-24T01:08:29+05:30
+
+```text
+contineu finish that?
+```
+
+---
+
+### Prompt 402
+
+**Timestamp**: 2026-11-24T07:49:39+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 403
+
+**Timestamp**: 2026-11-24T11:24:26+05:30 (approximate: the send time was not recorded. Sent after Prompt 216 while that work was being reported, and recorded when work resumed.)
+
+```text
+Can't see any change, is the issue fixed & commited
+```
+
+---
+
+### Prompt 404
+
+**Timestamp**: 2026-11-24T11:24:26+05:30
+
+```text
+resume
+```
+
+---
+
+### Prompt 405
+
+**Timestamp**: 2026-11-24T10:20:28+05:30
+
+```text
+Tell me category manager invite button feature he can invite the vendors with mismatch the category also or not?
+```
+
+---
+
+### Prompt 406
+
+**Timestamp**: 2026-11-24T10:47:51+05:30
+
+```text
+check why category manager internal task not working for site visiting?
+```
+
+---
+
+### Prompt 407
+
+**Timestamp**: 2026-11-24T11:10:17+05:30
+
+```text
+Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlers—only modify what is needed to resolve these bugs.
+
+1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
+- Root cause: The Filter Tasks drawer extends to the bottom-right corner behind/under the floating chat icon, so clicking "Apply Filters" triggers the chat widget.
+- Fix:
+  - Make the Filter Tasks popup slightly more compact vertically (e.g., floating panel with top/right/bottom margin or bottom clearance above the chat button) with an internal scrollable body and sticky footer.
+  - Ensure the Filter Tasks drawer and its backdrop have a higher z-index than the floating chat widget so the chat icon never intercepts clicks while the filter panel is open.
+
+2. Open Date Picker on Clicking Anywhere in Date Input Boxes (Action Center & Category Manager)
+- For all date filter inputs (Action Center "Due From" / "Due To" and Category Manager date filters), attach an `onClick` handler that triggers `e.currentTarget.showPicker?.()` inside a `try/catch` block (with `.focus()` fallback) and add `cursor-pointer`.
+- Clicking anywhere inside the date input box—not just the small calendar icon—must open the native date calendar.
+
+3. Full Audit & Root-Cause Fix for Action Center
+- Inspect the Action Center component end-to-end and fix any broken functionality, console errors, or edge cases, specifically verifying:
+  - Category, Status, Priority, Assigned User search (case-insensitive, null-safe), and Due Date Range filters (proper date format/timezone comparison).
+  - "Reset" clears both draft and active filter states and refreshes the table.
+  - "Apply Filters" applies the selected filters cleanly and closes the popup.
+  - All existing table actions, handlers, and backend integrations continue working without regression.
+```
+
+---
+
+### Prompt 408
+
+**Timestamp**: 2026-11-24T11:59:58+05:30
+
+```text
+raise the pr and pass all the covergaes and gemini pr check and ready to merge i can merge after that
+```
+
+---
+
+### Prompt 409
+
+**Timestamp**: 2026-11-24T12:29:14+05:30
+
+```text
+Is there any admin portal role  in this project
+```
+
+---
+
+### Prompt 410
+
+**Timestamp**: 2026-11-24T12:49:35+05:30
+
+```text
+run locally that admin portal
+```
+
+---
+
+### Prompt 411
+
+**Timestamp**: 2026-11-24T13:30:05+05:30
+
+````text
+Identify the root cause and permanently fix the **Trial Period** logic so that granting a trial period (e.g., 7 days) provides **time-based unlimited RFQs across any version/mode** with a live **day-by-day countdown**, instead of adding numeric credits and deducting 1 credit per RFQ.
+
+### STRICT CONSTRAINTS — READ FIRST
+- **Find and fix the root cause first**: Trace the Trial Period request/approval flow, buyer entitlement/credit schema, and RFQ creation credit-deduction middleware BEFORE editing.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)—keep Trial Period and Credit Addition cleanly separated.
+- **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, plans, and workflows 100% intact.
+
+---
+
+### 1. Root Cause Fix — Separate Trial Period (Time-Based) from Numeric Credits (Backend)
+- **Observed Bug**: Granting a 7-day trial period currently executes `Admin Credit Addition (+7)` and logs `RFQ_CREATE (-1)` per RFQ (`FREE_TRIAL`), burning through the 7 "credits" in a single day.
+- **Required Fix**:
+  - When a **Trial Period** request (e.g., `7 days`) is approved, do **NOT** add `7` to `remainingFreeCredits` and do **NOT** create an `Admin Credit Addition (+7)` transaction.
+  - Instead, persist canonical time-based trial fields on the buyer account in the DB (reusing existing trial/entitlement columns or JSON fields if present):
+    - `trialActive: true`
+    - `trialDays: <N>` (e.g., `7`)
+    - `trialStartDate: <ISO timestamp>`
+    - `trialEndDate: <ISO timestamp = start + N days>`
+  - Log a clean audit/ledger entry for the trial grant (e.g., `TRIAL_GRANTED: 7 Days Unlimited Trial`) without mutating the numeric credit balance.
+
+---
+
+### 2. Unlimited RFQs in Any Version/Mode During Active Trial (Backend)
+- Update the RFQ creation and credit-deduction service/middleware:
+  - Before checking or deducting credits, check if the buyer has an **active trial period** (`trialEndDate && now < trialEndDate`).
+  - **While the trial is active**:
+    - Allow the buyer to raise **unlimited RFQs** in **any version / sourcing mode** (Mode 0, Mode 1, Mode 2, Mode 3, etc.).
+    - **Do NOT deduct any credits** (`0` credits consumed) and do **NOT** block RFQ creation even if `remainingFreeCredits === 0`.
+  - **Once the trial expires** (`now >= trialEndDate`):
+    - Automatically revert to normal credit / subscription plan enforcement.
+
+---
+
+### 3. Live Day-by-Day Trial Countdown in Buyer Account & Category Manager Dossier (Frontend)
+Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` → next day `6 Days Trial Period` → ... → `1 Day Left` → expired):
+- **Buyer Account (`/buyer/dashboard` header & credit/plan display)**:
+  - Where the buyer's credits / active plan are shown, clearly display the live trial badge (e.g., `7 Days Trial Period (Unlimited RFQs)`), updating automatically to `6 Days Trial Period` the next day, `5 Days`, etc.
+- **Category Manager > Buyer Dossier (`Profile` & `Credit` tabs)**:
+  - Display the active trial countdown (`7 Days Trial Period — Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
+
+---
+
+### 4. Verification & Regression Tests (Prevent Future Recurrence)
+Add automated backend and frontend tests asserting that:
+1. Approving a **7-day trial** sets `trialEndDate` to 7 days from approval and does **not** add 7 numeric credits.
+2. A buyer with an active 7-day trial can create multiple RFQs (e.g., 10+ RFQs) across any mode/version with **0 credit deductions**.
+3. The UI displays `7 Days Trial Period` on Day 1, `6 Days Trial Period` on Day 2, and reverts to normal credit/plan display after expiry.
+4. Normal **Buyer Credit Addition** (e.g., `+5 Credits`) continues to add numeric credits and deduct 1 per RFQ as expected when no trial is active.
+---
+### Prompt 405
+**Timestamp**: 2026-11-24T12:37:20+05:30
+```text
+1. ignore old or earlier RFQ's.
+2. No need to re-send failed emails.
+3. I think, the  own vendor limit is already 25 per minor, we don't need to change.
+4. No need to send duplicate email, keep it from queue.
+````
+
+---
+
+### Prompt 406
+
+**Timestamp**: 2026-11-24T14:15:00+05:30
+
+```text
+Tell me category manager invite button feature he can invite the vendors with mismatch the category also or not?
+```
+
+---
+
+### Prompt 407
+
+**Timestamp**: 2026-11-24T14:20:00+05:30
+
+```text
+check why category manager internal task not working for site visiting?
+```
+
+---
+
+### Prompt 408
+
+**Timestamp**: 2026-11-24T14:25:00+05:30
+
+```text
+Fix the following UI and functional issues in the Action Center and Category Manager. Preserve all existing backend APIs, methods, and working UI handlers—only modify what is needed to resolve these bugs.
+
+1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
+- Root cause: The Filter Tasks drawer extends to the bottom-right corner behind/under the floating chat icon, so clicking "Apply Filters" triggers the chat widget.
+- Fix:
+  - Make the Filter Tasks popup slightly more compact vertically (e.g., floating panel with top/right/bottom margin or bottom clearance above the chat button) with an internal scrollable body and sticky footer.
+  - Ensure the Filter Tasks drawer and its backdrop have a higher z-index than the floating chat widget so the chat icon never intercepts clicks while the filter panel is open.
+
+2. Open Date Picker on Clicking Anywhere in Date Input Boxes (Action Center & Category Manager)
+- For all date filter inputs (Action Center "Due From" / "Due To" and Category Manager date filters), attach an onClick handler that triggers e.currentTarget.showPicker?.() inside a try/catch block (with .focus() fallback) and add cursor-pointer.
+- Clicking anywhere inside the date input box—not just the small calendar icon—must open the native date calendar.
+
+3. Full Audit & Root-Cause Fix for Action Center
+- Inspect the Action Center component end-to-end and fix any broken functionality, console errors, or edge cases, specifically verifying:
+  - Category, Status, Priority, Assigned User search (case-insensitive, null-safe), and Due Date Range filters (proper date format/timezone comparison).
+  - "Reset" clears both draft and active filter states and refreshes the table.
+  - "Apply Filters" applies the selected filters cleanly and closes the popup.
+  - All existing table actions, handlers, and backend integrations continue working without regression.
+```
+
+---
+
+### Prompt 409
+
+**Timestamp**: 2026-11-24T14:36:00+05:30
+
+```text
+raise the pr and pass all the covergaes and gemini pr check and ready to merge i can merge after that
+```
+
+---
+
+### Prompt 410
+
+**Timestamp**: 2026-11-24T15:06:55+05:30
+
+```text
+Refactor the Category Manager UI, sidebar navigation, and Dashboard page to match the attached reference mockup.
+
+### 1. Core Rules & Code Preservation
+- **Reuse existing code:** Preserve all existing backend routes, database models, services, authentication logic, and UI handlers across all other tabs. Do not break or remove existing functionality.
+- **Live DB data only:** Do not use any hardcoded or mock numbers. Every KPI card count, popup table row, and chart data point must be fetched accurately from the database.
+- **Date filter reactivity:** All KPI card counts, popup queries, and date-scoped metrics must dynamically update when the user changes the date filter.
+
+---
+
+### 2. Sidebar Tab Rearrangement (Operational Desk)
+Update the left sidebar navigation order under **OPERATIONAL DESK** as follows (keep all other sections/tabs intact):
+1. **Dashboard** (rename existing `Operational Kanban` tab to `Dashboard` and route it to `/category-manager/dashboard`).
+2. **WhatsApp Analytics** (new 2nd tab):
+   - Clicking **WhatsApp Analytics** must load and display `https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard` directly inside the main content area (full-width, full-height embedded view/iframe with a loading state and an optional "Open in new tab" fallback icon in case of frame restrictions).
+3. **Action Center** (3rd tab — preserve existing component and handlers).
+4. **Spend Analytics** (4th tab — preserve existing component and handlers).
+
+---
+
+### 3. Dashboard Header & Date Filter Bar
+- **No page heading:** Do NOT render a "Dashboard" title heading inside the main content area above the cards.
+- **Top-right Date Filter Bar:** Render 5 compact, uniform rounded buttons aligned to the top-right:
+  - `Today`
+  - `This Week`
+  - `This Month`
+  - `Start Date` (individual clickable button with calendar icon)
+  - `End Date` (individual clickable button with calendar icon)
+- **Full-box calendar trigger:** Clicking anywhere inside the `Start Date` or `End Date` button must immediately open the calendar picker (e.g., via `inputRef.current?.showPicker()` on click), not just on a tiny icon.
+
+---
+
+### 4. KPI Cards (2 Rows × 5 Cards) & Click-to-Popup Behavior
+Style all 10 cards as clean, compact clickable rounded rectangles matching the mockup:
+- **Minimalist card content ONLY:** Show ONLY the uppercase colored label on top and the bold live DB count underneath. Do NOT include icons, subtitles (no "All records", "Active pipeline", etc.), or footer links.
+
+**Row 1 (5 equal-width cards in one row):**
+1. **TOTAL RFQS** (dark navy active card style)
+2. **OPEN RFQS**
+3. **RFQS WITHOUT QUOTES**
+4. **BUYER SUBSCRIPTIONS** (active buyer subscriptions)
+5. **VENDOR SUBSCRIPTIONS** (active vendor subscriptions)
+
+**Row 2 (5 equal-width cards in one row):**
+1. **TOTAL BUYERS** (dark blue card style)
+2. **TOTAL VENDORS**
+3. **BUYER REGISTRATION** (new buyer registrations within selected date filter)
+4. **VENDOR REGISTRATION** (new vendor registrations within selected date filter)
+5. **TOTAL LOGINS** (dark indigo card style) — **CRITICAL:** Must query and count **ONLY Category Manager Portal logins** (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
+
+**Click Behavior (All Row 1 & Row 2 Cards):**
+- Clicking any card in Row 1 or Row 2 must fetch the exact matching filtered records from the database (respecting the active date filter) and open a **Popup Modal**.
+- Display the fetched records inside the popup in a clean, high-density single-line table with column sorting, quick search, and a close button.
+- For **TOTAL LOGINS**, the popup table should display internal Category Manager user login details (e.g., User Name/Email, Login Timestamp, Session/Activity info).
+
+---
+
+### 5. Three Separate Monthly Line Graphs (Bottom Row)
+Below the KPI cards, render **3 separate white rounded chart cards** side-by-side in a 3-column grid:
+- **X-axis:** Always **Month** (e.g., last 6 months: `Jun` to `Nov`, dynamically generated from DB dates).
+- **Y-axis:** Exact numeric counts from the DB.
+- **Legend style:** Use **circular colored dots** (not rectangle boxes) for all series indicators.
+
+1. **Card 1 — Total RFQs & Subscriptions (Monthly)**
+   - 3 lines: `RFQs`, `Buyer Subs`, `Vendor Subs`
+2. **Card 2 — New Registrations (Monthly)**
+   - 2 lines: `New Buyers`, `New Vendors`
+3. **Card 3 — Activity: RFQs Raised vs. Quotes (Monthly)**
+   - 2 lines: `RFQs Raised by Clients`, `No. of Vendor Quotes` (tracking client-raised RFQs against total vendor quotes received per month)
+```
+
+---
+
+### Prompt 411: Fix Trial Period Logic to Time-Based Unlimited RFQs with Live Countdown
+
+Identify the root cause and permanently fix the **Trial Period** logic so that granting a trial period (e.g., 7 days) provides **time-based unlimited RFQs across any version/mode** with a live **day-by-day countdown**, instead of adding numeric credits and deducting 1 credit per RFQ.
+
+### STRICT CONSTRAINTS — READ FIRST
+
+- **Find and fix the root cause first**: Trace the Trial Period request/approval flow, buyer entitlement/credit schema, and RFQ creation credit-deduction middleware BEFORE editing.
+- **Strictly reuse existing code, methods, and functionality**: Reuse the existing Approval workflow, Buyer Account DB schema/API, RFQ creation guard, Buyer Dashboard header/credit display, and Buyer Dossier drawer. Do NOT break normal numeric credit additions (e.g., `Buyer Credit Addition: +5 Credits`)—keep Trial Period and Credit Addition cleanly separated.
+- **Do NOT break any existing UI or functionality**: Keep all unrelated tabs, plans, and workflows 100% intact.
+
+---
+
+### 1. Root Cause Fix — Separate Trial Period (Time-Based) from Numeric Credits (Backend)
+
+- **Observed Bug**: Granting a 7-day trial period currently executes `Admin Credit Addition (+7)` and logs `RFQ_CREATE (-1)` per RFQ (`FREE_TRIAL`), burning through the 7 "credits" in a single day.
+- **Required Fix**:
+  - When a **Trial Period** request (e.g., `7 days`) is approved, do **NOT** add `7` to `remainingFreeCredits` and do **NOT** create an `Admin Credit Addition (+7)` transaction.
+  - Instead, persist canonical time-based trial fields on the buyer account in the DB (reusing existing trial/entitlement columns or JSON fields if present):
+    - `trialActive: true`
+    - `trialDays: <N>` (e.g., `7`)
+    - `trialStartDate: <ISO timestamp>`
+    - `trialEndDate: <ISO timestamp = start + N days>`
+  - Log a clean audit/ledger entry for the trial grant (e.g., `TRIAL_GRANTED: 7 Days Unlimited Trial`) without mutating the numeric credit balance.
+
+---
+
+### 2. Unlimited RFQs in Any Version/Mode During Active Trial (Backend)
+
+- Update the RFQ creation and credit-deduction service/middleware:
+  - Before checking or deducting credits, check if the buyer has an **active trial period** (`trialEndDate && now < trialEndDate`).
+  - **While the trial is active**:
+    - Allow the buyer to raise **unlimited RFQs** in **any version / sourcing mode** (Mode 0, Mode 1, Mode 2, Mode 3, etc.).
+    - **Do NOT deduct any credits** (`0` credits consumed) and do **NOT** block RFQ creation even if `remainingFreeCredits === 0`.
+  - **Once the trial expires** (`now >= trialEndDate`):
+    - Automatically revert to normal credit / subscription plan enforcement.
+
+---
+
+### 3. Live Day-by-Day Trial Countdown in Buyer Account & Category Manager Dossier (Frontend)
+
+Compute remaining trial days dynamically from `trialEndDate` (e.g., `Math.max(0, Math.ceil((new Date(trialEndDate) - now) / (1000 * 60 * 60 * 24)))`) so it automatically counts down each day (`7 Days Trial Period` → next day `6 Days Trial Period` → ... → `1 Day Left` → expired):
+
+- **Buyer Account (`/buyer/dashboard` header & credit/plan display)**:
+  - Where the buyer's credits / active plan are shown, clearly display the live trial badge (e.g., `7 Days Trial Period (Unlimited RFQs)`), updating automatically to `6 Days Trial Period` the next day, `5 Days`, etc.
+- **Category Manager > Buyer Dossier (`Profile` & `Credit` tabs)**:
+  - Display the active trial countdown (`7 Days Trial Period — Unlimited RFQs`) and expiry date in the quota/credit cards instead of showing `7 Credits` being decremented per RFQ.
+
+---
+
+### 4. Verification & Regression Tests (Prevent Future Recurrence)
+
+Add automated backend and frontend tests asserting that:
+
+1. Approving a **7-day trial** sets `trialEndDate` to 7 days from approval and does **not** add 7 numeric credits.
+2. A buyer with an active 7-day trial can create multiple RFQs (e.g., 10+ RFQs) across any mode/version with **0 credit deductions**.
+3. The UI displays `7 Days Trial Period` on Day 1, `6 Days Trial Period` on Day 2, and reverts to normal credit/plan display after expiry.
+4. Normal **Buyer Credit Addition** (e.g., `+5 Credits`) continues to add numeric credits and deduct 1 per RFQ as expected when no trial is active.
+
+---
+
+### Prompt 412: Solve PR #510 CI Coverage and Quality Gate Failures
+
+Summary of Changes
+
+1. Fix "Apply Filters" Button Overlap with Floating Chat Widget (Action Center)
+   Root Cause: The Filter Tasks drawer stretched the full viewport height (inset-y-0 right-0) with z-50, overlapping behind the floating support chat widget (fixed bottom-5 right-5 z-50). Clicking "Apply Filters" was intercepted by the chat widget.
+   Fix:
+   Restyled the filter drawer as a compact floating card (top-3 sm:top-4 right-3 sm:right-4 bottom-20 sm:bottom-22 max-w-sm w-[calc(100vw-1.5rem)]) with an internal scrollable body and sticky action footer.
+   Raised backdrop and panel z-index to z-[70], ensuring no click interception or visual collision with the floating chat button.
+2. Native Date Picker Activation on Clicking Anywhere in Date Inputs
+   Attached safe onClick handler (e.currentTarget.showPicker?.() with fallback) and cursor-pointer to all date inputs across Category Manager:
+   internal-tasks.tsx (Due From, Due To, Demo Date, Due Date, Reschedule Date)
+   all-rfqs.tsx (Start Date, End Date)
+   RegistrationsDashboard.tsx (Start Date, End Date)
+   TicketsDashboard.tsx (Date From, Date To)
+   daily-reports.tsx (Start Date, End Date)
+   ScorecardDashboard.tsx (Custom Start Date, End Date)
+   LoginLogsDashboard.tsx (Custom Start Date, End Date)
+   ActionCenterComposeModal.tsx (Follow-up Due Date)
+   BuyerDossierDrawer.tsx & SupplierDossierDrawer.tsx (Trial Start/End Dates, Offline Payment Dates, Follow-up Dates)
+3. Action Center End-to-End Audit & Site Visit Task Creation
+   Added SITE_VISIT category to INTERNAL_TASK_CATEGORIES in backend/src/config/validationSchemas.js so category manager site visit tasks validate and save correctly without 400 validation failures.
+   Verified drawer "Apply Filters" cleanly applies filters, resets pagination, and refreshes the table and summary counts.
+   Verified drawer "Reset" clears both active and draft filters and refreshes the table.
+   Preserved all UI test IDs (drawer-filter-category, drawer-filter-status, drawer-filter-priority, drawer-filter-assignee, drawer-filter-due-from, drawer-filter-due-to, drawer-apply-filters-btn, drawer-reset-filters-btn).
+   Verification & Quality Standards
+   Schema Parity: Passed (PostgreSQL & D1 schema parity verified).
+   TypeScript Typecheck: Passed (tsc --noEmit clean with 0 errors).
+   ESLint: Passed across frontend and backend.
+   Unit Tests:
+   Backend: 39 tests passing in internalTasks.test.js.
+   Frontend: 22 test suites, 764 tests passing, 0 failures.
+   Per-File Coverage: >= 90% statements, branches, functions, and lines across all modified files.
+   Production Build: Verified (next build compiled 52/52 static pages without errors).
+   [fix(action-center): resolve filter overlap with chat widget, native d…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/5f59e6a599a703f67d3b156ca9f3c49485691eda)
+   [5f59e6a](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/5f59e6a599a703f67d3b156ca9f3c49485691eda)
+   [github-actions](https://github.com/apps/github-actions) Botcommented[2 hours ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510#issuecomment-7125022076)•
+   Procucev Enterprise CI Quality & Coverage Summary
+   Strict 90% per-file coverage gate: FAILED
+   338 / 353 application files passed source verification.Every executable file must meet at least 90% statements, branches, functions and lines. The source inventory rejects absent runtime files or invalid metrics.
+   Unit test results
+   Project
+   Total
+   Passed
+   Failed
+   Skipped / Todo
+   backend
+   7449
+   7449
+   0
+   0
+   frontend
+   3831
+   3831
+   0
+   0
+   Workspace
+   11280
+   11280
+   0
+   0
+   Coverage
+   Project
+   Statements
+   Branches
+   Functions
+   Lines
+   Files passed
+   backend
+   98.21%
+   92.46%
+   98.64%
+   98.96%
+   166 / 166
+   frontend
+   81.72%
+   74.75%
+   80.34%
+   82.75%
+   172 / 187
+   Workspace
+   90.84%
+   84.96%
+   87.61%
+   91.77%
+   338 / 353
+   Declaration-only modules (frontend/lib/types.ts) have no executable coverage metrics. Their parsed source is inventoried and their declarations are verified by TypeScript typecheck.
+   Quality checks
+   Check
+   Actual step status
+   Backend unit tests
+   PASSED
+   Backend per-file coverage
+   PASSED
+   Frontend unit tests
+   FAILED
+   Frontend per-file coverage
+   FAILED
+   Production build
+   FAILED
+   TypeScript typecheck
+   FAILED
+   Lint
+   FAILED
+   Database migrations
+   PASSED
+   PostgreSQL / D1 schema parity
+   PASSED
+   Schema parity checker tests
+   PASSED
+   Coverage failures
+   frontend: app/buyer/ManualRFQModal.tsx: statements 0.00% < 90%.
+   frontend: app/buyer/ManualRFQModal.tsx: branches 0.00% < 90%.
+   frontend: app/buyer/ManualRFQModal.tsx: functions 0.00% < 90%.
+   frontend: app/buyer/ManualRFQModal.tsx: lines 0.00% < 90%.
+   frontend: app/buyer/ingestion-wizard.tsx: statements 0.00% < 90%.
+   frontend: app/buyer/ingestion-wizard.tsx: branches 0.00% < 90%.
+   frontend: app/buyer/ingestion-wizard.tsx: functions 0.00% < 90%.
+   frontend: app/buyer/ingestion-wizard.tsx: lines 0.00% < 90%.
+   frontend: app/buyer/rfq-details.tsx: statements 0.00% < 90%.
+   frontend: app/buyer/rfq-details.tsx: branches 0.00% < 90%.
+   frontend: app/buyer/rfq-details.tsx: functions 0.00% < 90%.
+   frontend: app/buyer/rfq-details.tsx: lines 0.00% < 90%.
+   frontend: app/buyer/rfq-details/page.tsx: functions 87.50% < 90%.
+   frontend: app/buyer/rfq_details/page.tsx: statements 0.00% < 90%.
+   frontend: app/buyer/rfq_details/page.tsx: lines 0.00% < 90%.
+   frontend: app/buyer/vendor-summary.tsx: missing from the coverage report.
+   frontend: app/category-manager/InviteVendorsModal.tsx: statements 0.00% < 90%.
+   frontend: app/category-manager/InviteVendorsModal.tsx: branches 0.00% < 90%.
+   frontend: app/category-manager/InviteVendorsModal.tsx: functions 0.00% < 90%.
+   frontend: app/category-manager/InviteVendorsModal.tsx: lines 0.00% < 90%.
+   frontend: app/category-manager/all-rfqs.tsx: statements 0.00% < 90%.
+   frontend: app/category-manager/all-rfqs.tsx: branches 0.00% < 90%.
+   frontend: app/category-manager/all-rfqs.tsx: functions 0.00% < 90%.
+   frontend: app/category-manager/all-rfqs.tsx: lines 0.00% < 90%.
+   frontend: app/category-manager/buyers-directory.tsx: statements 0.00% < 90%.
+   frontend: app/category-manager/buyers-directory.tsx: branches 0.00% < 90%.
+   frontend: app/category-manager/buyers-directory.tsx: functions 0.00% < 90%.
+   frontend: app/category-manager/buyers-directory.tsx: lines 0.00% < 90%.
+   frontend: app/category-manager/components/BuyerDossierDrawer.tsx: missing from the coverage report.
+   frontend: app/components/Header.tsx: branches 89.05% < 90%.
+   frontend: app/components/Modals.tsx: branches 89.97% < 90%.
+   frontend: app/vendor/rfq-details/page.tsx: statements 0.00% < 90%.
+   frontend: app/vendor/rfq-details/page.tsx: branches 0.00% < 90%.
+   frontend: app/vendor/rfq-details/page.tsx: functions 0.00% < 90%.
+   frontend: app/vendor/rfq-details/page.tsx: lines 0.00% < 90%.
+   frontend: lib/categoryTaxonomy.ts: branches 89.33% < 90%.
+   frontend: lib/vendorMatching.ts: statements 0.00% < 90%.
+   frontend: lib/vendorMatching.ts: branches 0.00% < 90%.
+   frontend: lib/vendorMatching.ts: functions 0.00% < 90%.
+   frontend: lib/vendorMatching.ts: lines 0.00% < 90%.
+   frontend: OVERALL TOTAL: statements 81.72% < 90%.
+   frontend: OVERALL TOTAL: branches 74.75% < 90%.
+   frontend: OVERALL TOTAL: functions 80.34% < 90%.
+   frontend: OVERALL TOTAL: lines 82.75% < 90%.
+   [veerababuprocucev](https://github.com/veerababuprocucev) added 2 commits [1 hour ago](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510#commits-pushed-660d618)
+   [fix(quality): resolve vendor-summary, buyer-profile, vendor-profile c…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/660d6186d41ed9f340ef1f029936707837a38ebd)
+   [660d618](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/660d6186d41ed9f340ef1f029936707837a38ebd)
+   [Merge branch 'test-v3' into fix/action-center-filter-overlap-and-date…](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/f4e3a9202a1f087f9167b2d658ee6463241ea456)
+   [f4e3a92](https://github.com/Procucev2022/Enterprise_qua_nextjs/pull/510/commits/f4e3a9202a1f087f9167b2d658ee6463241ea456)
+   This branch has not been deployed
+   No deployments
+   Merge info
+   Some checks were not successful
+   2 failing, 2 successful checks
+   failing checks
+   [Workspace Quality Gate / Frontend Build, Lint, Typecheck & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45360981533/job/138330705921?pr=510)
+   Failing after 3m
+   [Workspace Quality Gate / Master Quality & PR Summary (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45360981533/job/138333890156?pr=510)
+   Failing after 23s
+   successful checks
+   [Direct Gemini PR Review / review (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45360981599/job/138330707024?pr=510)
+   Successful in 2m
+   [Workspace Quality Gate / Backend Tests, Migrations & Coverage (pull_request)](https://github.com/Procucev2022/Enterprise_qua_nextjs/actions/runs/45360981533/job/138330706414?pr=510)
+   Successful in 5m
+
+solve this pr first then create the new pr for this branch
+
+---
+
+### Prompt 411
+
+**Timestamp**: 2026-11-24T15:56:59+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 412
+
+**Timestamp**: 2026-11-24T16:15:00+05:30
+
+```text
+for this use the current branch and create new pr for this code and pass all the coverages and gemini pr and ready to merge with test-v3
+```
+
+---
+
+### Prompt 413
+
+**Timestamp**: 2026-11-24T16:20:00+05:30
+
+```text
+1. Core Rules & Code Preservation
+- Reuse existing code: Preserve all existing backend routes, database models, services, authentication logic, and UI handlers across all other tabs. Do not break or remove existing functionality.
+- Live DB data only: Do not use any hardcoded or mock numbers. Every KPI card count, popup table row, and chart data point must be fetched accurately from the database.
+- Date filter reactivity: All KPI card counts, popup queries, and date-scoped metrics must dynamically update when the user changes the date filter.
+
+2. Sidebar Tab Rearrangement (Operational Desk)
+Update the left sidebar navigation order under OPERATIONAL DESK as follows (keep all other sections/tabs intact):
+1. Dashboard (rename existing Operational Kanban tab to Dashboard and route it to /category-manager/dashboard).
+2. WhatsApp Analytics (new 2nd tab):
+   - Clicking WhatsApp Analytics must load and display https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard directly inside the main content area (full-width, full-height embedded view/iframe with a loading state and an optional "Open in new tab" fallback icon in case of frame restrictions).
+3. Action Center (3rd tab — preserve existing component and handlers).
+4. Spend Analytics (4th tab — preserve existing component and handlers).
+
+3. Dashboard Header & Date Filter Bar
+- No page heading: Do NOT render a "Dashboard" title heading inside the main content area above the cards.
+- Top-right Date Filter Bar: Render 5 compact, uniform rounded buttons aligned to the top-right:
+  - Today
+  - This Week
+  - This Month
+  - Start Date (individual clickable button with calendar icon)
+  - End Date (individual clickable button with calendar icon)
+- Full-box calendar trigger: Clicking anywhere inside the Start Date or End Date button must immediately open the calendar picker (e.g., via inputRef.current?.showPicker() on click), not just on a tiny icon.
+
+4. KPI Cards (2 Rows × 5 Cards) & Click-to-Popup Behavior
+Style all 10 cards as clean, compact clickable rounded rectangles matching the mockup:
+- Minimalist card content ONLY: Show ONLY the uppercase colored label on top and the bold live DB count underneath. Do NOT include icons, subtitles (no "All records", "Active pipeline", etc.), or footer links.
+
+Row 1 (5 equal-width cards in one row):
+1. TOTAL RFQS (dark navy active card style)
+2. OPEN RFQS
+3. RFQS WITHOUT QUOTES
+4. BUYER SUBSCRIPTIONS (active buyer subscriptions)
+5. VENDOR SUBSCRIPTIONS (active vendor subscriptions)
+
+Row 2 (5 equal-width cards in one row):
+1. TOTAL BUYERS (dark blue card style)
+2. TOTAL VENDORS
+3. BUYER REGISTRATION (new buyer registrations within selected date filter)
+4. VENDOR REGISTRATION (new vendor registrations within selected date filter)
+5. TOTAL LOGINS (dark indigo card style) — CRITICAL: Must query and count ONLY Category Manager Portal logins (individual internal company user credentials to track internal portal usage). Strictly exclude Buyer and Vendor logins.
+
+Click Behavior (All Row 1 & Row 2 Cards):
+- Clicking any card in Row 1 or Row 2 must fetch the exact matching filtered records from the database (respecting the active date filter) and open a Popup Modal.
+- Display the fetched records inside the popup in a clean, high-density single-line table with column sorting, quick search, and a close button.
+- For TOTAL LOGINS, the popup table should display internal Category Manager user login details (e.g., User Name/Email, Login Timestamp, Session/Activity info).
+
+5. Three Separate Monthly Line Graphs (Bottom Row)
+Below the KPI cards, render 3 separate white rounded chart cards side-by-side in a 3-column grid:
+- X-axis: Always Month (e.g., last 6 months: Jun to Nov, dynamically generated from DB dates).
+- Y-axis: Exact numeric counts from the DB.
+- Legend style: Use circular colored dots (not rectangle boxes) for all series indicators.
+
+1. Card 1 — Total RFQs & Subscriptions (Monthly)
+   - 3 lines: RFQs, Buyer Subs, Vendor Subs
+2. Card 2 — New Registrations (Monthly)
+   - 2 lines: New Buyers, New Vendors
+3. Card 3 — Activity: RFQs Raised vs. Quotes (Monthly)
+   - 2 lines: RFQs Raised by Clients, No. of Vendor Quotes (tracking client-raised RFQs against total vendor quotes received per month)
+```
+
+---
+
+### Prompt 414
+
+**Timestamp**: 2026-11-24T16:26:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 415
+
+**Timestamp**: 2026-11-24T16:20:23+05:30
+
+```text
+Check in production how many unregister buyer can send the requirement to rfq@procuev.com from last monday
+16-11-2026 till today
+```
+
+---
+
+### Prompt 416
+
+**Timestamp**: 2026-11-24T16:38:11+05:30
+
+```text
+noo the data is not correct narasimha also there fetch and tell exact number and email id  only in production
+```
+
+---
+
+### Prompt 417
+
+**Timestamp**: 2026-11-24T17:18:26+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 418
+
+**Timestamp**: 2026-11-24T17:47:00+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 419
+
+**Timestamp**: 2026-11-24T17:50:48+05:30
+
+```text
+Tell me the category manager invite button 20 vendor copy paste option is there are not and in every mode the category manager can add new vendors and invite vendors are not?
+if catgeory manager invite new vendor the login credentials not going and account not created check the issue?
+```
+
+---
+
+### Prompt 420
+
+**Timestamp**: 2026-11-24T18:31:11+05:30
+
+```text
+i don't know why it is shoowing 404 because of code is not merge in dev
+check if all the covergaes pass create pr and merge in  test-v3 directly and after that 404 not found error not come
+```
+
+---
+
+### Prompt 413: Create New PR from Current Branch with All Coverages Passing and Ready to Merge with test-v3
+
+Root Cause & Permanent Solution Summary
+
+1. Root Cause Analysis
+   Observed Defect: Previously, approving a "Trial Period" request (e.g. 7 days) treated requestedQuantity: 7 as 7 numeric credits by calling the credit balance mutator (creditQty = 7). This added 7 credits under an Admin Credit Addition (+7) transaction. Each RFQ creation in Mode 1/2/3 then deducted 1 credit (RFQ_CREATE (-1) with reason FREE_TRIAL), consuming the 7 days' worth of "trial" in minutes if a buyer raised 7 RFQs.
+   Underlying Cause:
+   In internalTaskQueries.js, credit approval logic lumped 'Trial Periods' under general numeric credit additions.
+   In buyerRfqCreationQueries.js, credit-deduction middleware checked numeric remainingFreeRFQs rather than checking whether the buyer had an active time-based trial (now < trialEndDate).
+   The Buyer Header and Category Manager Buyer Dossier displayed credit badges and quota cards based solely on the integer remainingFreeCredits.
+2. Implemented Architecture & Permanent Fixes
+   A. Backend Engine
+   Canonical Time-Based Trial Persistence: In internalTaskQueries.js, when approving a task with type 'Trial Periods' or 'Trial Period':
+   creditQty and creditDelta are set to 0 (the numeric credit balance remaining_free_rfqs is never mutated).
+   Canonical time-based fields are persisted on the buyer account in PostgreSQL and Cloudflare D1:
+   trialActive: true
+   trialDays: <N> (e.g. 7)
+   trialStartDate: <now ISO string>
+   trialEndDate: <now + N days ISO string>
+   A clean audit ledger entry is appended to buyer_credit_transactions:
+   transaction_type: 'TRIAL_GRANTED'
+   credits_added: 0, credits_consumed: 0
+   description: 'TRIAL_GRANTED: 7 Days Unlimited Trial'
+   Unlimited RFQs Across Any Mode / Version (Zero Credit Deductions):
+   In constants.js, added isTrialActive(account) checking canonical trialEndDate > Date.now() and trialActive !== false.
+   Updated hasUnlimitedRfqAccess(account) so active trial accounts receive unconstrained RFQ capabilities across all modes (Mode 0, Mode 1, Mode 2, Mode 3).
+   In buyerRfqCreationQueries.js, RFQ creation during an active trial sets shouldCharge: false and consumes 0 credits. The buyer is never blocked even if remainingFreeRFQs === 0.
+   Reconciliation & Credit History:
+   In buyerAccountController.js, getCreditHistory includes trialActive, trialDays, trialStartDate, and trialEndDate in the summary and skips synthesizing synthetic credit debits for RFQs created during active trials.
+   B. Frontend UI & Live Day-by-Day Countdown
+   Live Dynamic Countdown Utility:
+   In constants.ts, added isBuyerTrialActive(account) and getRemainingTrialDays(trialEndDate):
+   remainingDays = max(0, ceil((trialEndDate - now) / (1000 _ 60 _ 60 \* 24)))
+   Buyer Account Dashboard Header (/buyer/dashboard):
+   In Header.tsx, whenever a trial is active, the header renders an indigo trial badge:
+   Day 1: 7 Days Trial Period (Unlimited RFQs)
+   Day 2: 6 Days Trial Period (Unlimited RFQs)
+   Day 7: 1 Day Left (Unlimited RFQs)
+   Expired: Reverts back to standard plan/credits display.
+   Category Manager > Buyer Dossier Drawer:
+   In BuyerDossierDrawer.tsx:
+   Profile Tab: Under "Available Quota", displays {trialDaysLeft} Days Trial Period / Unlimited RFQs (Expires {expiryDate}).
+   Credit Tab: Under "Remaining Free Credits", displays {trialDaysLeft} Days Trial Period — Unlimited RFQs / Expires: {expiryDate}.
+   Transaction history filters now include the TRIAL_GRANTED transaction type.
+   Creation Modals:
+   In ManualRFQModal.tsx, ingestion-wizard.tsx, and store.tsx, active trial users can select and submit RFQs across all modes without encountering "Quota Exhausted" locks.
+3. Verification & Automated Regression Tests
+   Backend Integration Suite (trialPeriodTimeBased.test.js):
+   12/12 PASSING:
+   Approving a 7-day trial sets trialEndDate to +7 days without adding numeric credits.
+   Cloudflare D1 query builder generates zero-credit TRIAL_GRANTED transaction.
+   Buyer with active trial can raise 10+ sequential RFQs across Modes 0, 1, 2, and 3 with 0 credit deductions even with 0 remaining credits.
+   Expired trial automatically reverts to standard quota enforcement.
+   Normal credit additions (+5 Credits) continue adding numeric credits and deducting 1 credit per RFQ.
+   Frontend Component & Countdown Suite (trialPeriodTimeBased.test.tsx):
+   9/9 PASSING:
+   Verified Day 1 countdown badge renders 7 Days Trial Period (Unlimited RFQs).
+   Verified Day 2 countdown badge updates to 6 Days Trial Period (Unlimited RFQs).
+   Verified Day 7 countdown badge shows 1 Day Left (Unlimited RFQs).
+   Verified expired trial reverts to normal credits badge.
+   Verified Buyer Dossier Profile & Credit tabs render countdown and unlimited RFQ access.
+   Quality & Coverage Gate (npm run qc:fast):
+   DB Schema Parity: Passed (0.82s).
+   TypeScript Typecheck: Passed (tsc --noEmit, 0 type errors).
+   ESLint: Passed with 0 warnings/errors.
+   Backend Related Unit Tests: Passed (12/12 tests).
+   Frontend Test Suite: 99/99 test suites passed, 3044/3044 tests passed with >= 90% code coverage across all modified files.
+
+for this use the current branch and create new pr for this code and pass all the coverages and gemini pr and ready to merge with test-v3
+
+---
+
+### Prompt 421
+
+**Timestamp**: 2026-11-24T19:24:30+05:30
+
+```text
+continnue
+```
+
+---
+
+### Prompt 420
+
+**Timestamp**: 2026-11-24T19:27:24+05:30
+
+```text
+Implement the following three updates across the Category Manager vendor invitation and onboarding workflow.
+
+---
+
+### 1. Direct Excel Copy-Paste & Auto-Select (Up to 20 Vendors)
+**Files:** `InviteVendorsModal.tsx`, `constants.ts`
+
+- Update the vendor search/bulk-paste input (and `parseSearchTokens`) to natively support raw copy-paste directly from Excel columns or rows (newline `\n`, carriage return `\r\n`, and tab `\t` delimited) without requiring commas, colons, or manual formatting.
+- When a user pastes a list of vendor names or emails (e.g., 20 rows copied straight from Excel):
+  1. Parse and normalize the pasted entries (trim whitespace, ignore empty lines, preserve multi-word vendor names when separated by newlines/tabs instead of splitting on spaces).
+  2. Automatically match them against the available vendors list.
+  3. **Automatically check/select** all matched vendors up to `MAX_INVITE_VENDORS` (20).
+- If more than 20 matches are found, select the first 20 and trigger the existing limit warning toast (`"Limit Reached: You can select a maximum of 20 vendors per invitation batch."`).
+- Display a brief inline summary of the paste result (e.g., `"18 matched & selected, 2 not found"`) so the Category Manager can immediately review and click **Send Invitations**.
+
+---
+
+### 2. Enable "+ Add New Vendor" Across All Sourcing Modes (Mode 0, 1, 2, 3)
+**Files:** `InviteVendorsModal.tsx` (lines ~897–919), backend `POST /api/vendors` route/middleware
+
+- Remove the `isV0OrV2` conditional restriction around the **"+ Add New Vendor"** button in `InviteVendorsModal.tsx` so Category Managers can add new vendors in **Mode 0 (V0), Mode 1 (V1), Mode 2 (V2), and Mode 3 (V3)**.
+- Verify there are no mode-based guards in the backend (`POST /api/vendors`) or parent pages (`all-rfqs.tsx`, `rfq-details.tsx`) that block adding new vendors in Mode 1 or Mode 3.
+
+---
+
+### 3. Guarantee Account Creation & Login Credential Delivery on Vendor Invite
+**Files:** `storeService.js` (`inviteVendorsToRFQ`, `_provisionVendorOnboarding`), `eventOutboxService`, `mailerService`
+
+Ensure that whenever a vendor is invited to an RFQ and does not yet have a login account, their account is created and their login credentials are reliably emailed so they can log in and communicate:
+
+1. **Auto-Provision Directory/Unregistered Vendors on RFQ Invite (`POST /api/rfqs/:id/invite-vendors`):**
+   - Inside `storeService.inviteVendorsToRFQ`, check each invited vendor with `identityQueries.findUserByEmail(vendor.email)`.
+   - If no user identity record exists, call `_provisionVendorOnboarding` to create their login account in the `user` table and send their onboarding/login credentials in addition to the RFQ Bid Alert email.
+   - If an account already exists (`account_exists`), keep the existing behavior (do not overwrite their password; send only the RFQ Bid Alert email).
+
+2. **Fix Silent Failures in `_provisionVendorOnboarding` (`POST /api/vendors` & Invite Flow):**
+   - **Encryption Key Check:** Do not silently swallow missing `AES_ENCRYPTION_KEY` / `AES_SECRET_KEY`. Log a clear error and return an actionable error status/message to the frontend if credential encryption is misconfigured.
+   - **Reliable Email Dispatch:** Ensure `EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL` is either dispatched immediately via `mailerService.sendVendorIngestionEmail` upon onboarding or immediately triggers `eventOutboxService.dispatchScheduledEventOutboxJobs` so credentials are not stuck waiting in `event_outbox`.
+   - **Delivery Feedback:** Return the onboarding/credential delivery status (`sent`, `account_exists`, `failed`) in the API response so the UI can show a clear confirmation or warning toast if SMTP/SendGrid delivery fails.
+
+---
+
+### Verification Checklist
+- [ ] Pasting 20 vendor emails/names copied directly from an Excel column auto-matches and auto-selects them without needing commas or colons.
+- [ ] The **"+ Add New Vendor"** button is visible and functional in Mode 0, Mode 1, Mode 2, and Mode 3.
+- [ ] Inviting a newly added vendor or an unregistered directory vendor creates their `user` account and immediately delivers their login credentials email.
+```
+
+---
+
+### Prompt 422
+
+**Timestamp**: 2026-11-24T19:28:53+05:30
+
+```text
+continnue
+```
+
+---
+
+### Prompt 423
+
+**Timestamp**: 2026-11-24T20:52:35+05:30
+
+```text
+continue create pr and pass all the coverages and ready to merge in test-v3 i can merge
+```
+
+---
+
+### Prompt 423
+
+**Timestamp**: 2026-11-24T20:52:52+05:30
+
+```text
+continue it is running still 8 hr please do it fast
+```
+
+---
+
+### Prompt 424
+
+**Timestamp**: 2026-11-24T21:06:20+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 424
+
+**Timestamp**: 2026-11-24T21:06:37+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 425
+
+**Timestamp**: 2026-11-24T21:50:08+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 426
+
+```text
+Fix the Category Manager Dashboard (`/category-manager/dashboard`) so it displays real live data from the database, reuses the existing working backend logic/APIs, and closes the KPI popup modal when clicking outside.
+
+### 1. Fix "All Zeros & Blank Charts" (Live DB Data Not Loading)
+Currently, all 10 KPI cards show `0` and all 3 monthly charts are empty even though tests passed. Diagnose and fix the real end-to-end data flow (do not rely only on mocked unit tests):
+- **Check Frontend API Call & Auth:** Verify the dashboard fetch call uses the exact same API client, base URL, auth headers/cookies, and error handling as the other working Category Manager pages (`All RFQs`, `Buyer RFQ Console`, `Vendor Directory`, `Action Center`). Do not swallow API errors silently into `0`s.
+- **Reuse Existing Backend Queries & Services:** Inspect how the existing working endpoints query RFQs, Open RFQs, Quotes, Buyers, Vendors, Subscriptions, and Category Manager Login Logs in the live DB (PostgreSQL / D1). Reuse those exact table names, column names, status values, and query logic instead of writing mismatched queries.
+- **Fix Date Filter & Chart Aggregation:**
+  - Verify the date filter SQL comparison works properly with the actual timestamp format stored in the DB (e.g., ISO strings vs. timestamps, timezone handling).
+  - Ensure **Total Buyers**, **Total Vendors**, **Total RFQs**, **Open RFQs**, **RFQs Without Quotes**, **Buyer Subscriptions**, and **Vendor Subscriptions** return accurate live counts from the DB.
+  - Ensure the 3 monthly trend charts always render the last 6 months on the X-axis (e.g., `Jun`–`Nov`) with actual aggregated monthly DB counts and visible plotted lines (do not leave the X-axis blank).
+- **Preserve Existing Functionality:** Keep all existing backend routes, methods, and UI handlers across all other tabs completely intact.
+
+### 2. Fix KPI Popup Modal (Click Outside to Close + Live Data)
+- **Close on Outside Click:** When any KPI card in Row 1 or Row 2 is clicked and the popup modal opens, clicking anywhere outside the modal box (on the dark/blurred backdrop overlay) must immediately close the popup.
+  - Attach `onClick={onClose}` to the backdrop overlay container and `onClick={(e) => e.stopPropagation()}` to the inner modal card.
+  - Also support closing the popup with the `Escape` key in addition to the close (`×`) button.
+- **Live Filtered Records:** Ensure clicking each of the 10 KPI cards fetches and displays the exact matching live DB records in the popup table (including **TOTAL LOGINS** scoped strictly to internal Category Manager Portal user logins).
+
+### 3. Verification Before Finishing
+- Verify the live `/category-manager/dashboard` API response returns non-zero real DB counts and populated 6-month chart series (check Network tab / server logs for any 401/403/404/500 or SQL errors).
+- Confirm clicking outside the opened KPI popup closes it cleanly.
+- Re-run typecheck, lint, tests, and production build.
+```
+
+
+---
+
+### Prompt 427
+
+**Timestamp**: 2026-11-24T23:26:46+05:30
+
+```text
+Again the Dashboard showing zeros only after fix the issue identify the root cause?
+```
+
+
+---
+
+### Prompt 428
+
+**Timestamp**: 2026-11-24T23:29:55+05:30
+
+```text
+STOP relying on mocked unit tests. The live page `/category-manager/dashboard` is STILL showing all `0`s and blank charts for the 3rd time. Do a strict root-cause audit by comparing `DashboardView.tsx` and `categoryManagerDashboardController.js` directly against the ALREADY WORKING Category Manager pages (`All RFQs`, `Action Center`, `Spend Analytics`, `Vendor Directory`).
+
+### Step 1: Mandatory Root-Cause Audit (Compare Against Working Code)
+Before editing any file, inspect and report the exact differences between `DashboardView.tsx` / `categoryManagerDashboardController.js` and the working `Action Center` & `All RFQs` pages for ALL 5 of these failure points:
+
+1. **API Base URL & Fetch Client:**
+   - How do `All RFQs` and `Action Center` call the backend? (e.g., shared `apiClient`, `NEXT_PUBLIC_API_URL`, or relative `/api/...`?)
+   - `DashboardView.tsx` MUST use the exact same API helper, base URL, and auth headers as those working pages. Do NOT write a custom `fetch()` if the app uses a shared API client.
+
+2. **Route Mounting & Exact Path:**
+   - Check `server.js` / `app.js` / route index to verify `/api/category-manager/dashboard/metrics` and `/records` are actually mounted under the exact prefix the frontend calls (no 404s, no duplicate `/api/api/...` prefix).
+
+3. **Auth Middleware & Role String:**
+   - Check the exact `authenticate` and `requireRole(...)` middleware used on the working `All RFQs` and `Action Center` routes.
+   - Use the EXACT same middleware and role list on the dashboard routes (e.g., check if the logged-in Category Manager role is `category_manager`, `cm`, `internal`, `admin`, etc. — do not guess).
+
+4. **Response JSON Shape Mismatch:**
+   - Trace the exact JSON returned by `categoryManagerDashboardController.js` (e.g., `{ success: true, data: { ... } }` vs `{ metrics: { ... } }`) and verify `DashboardView.tsx` reads the exact same keys and nesting.
+
+5. **Date Filter & Empty-Result Trap:**
+   - Verify that when `This Month` is selected by default, the date filter does NOT accidentally filter out cumulative totals like **TOTAL BUYERS**, **TOTAL VENDORS**, **TOTAL RFQS**, **OPEN RFQS**, **BUYER SUBSCRIPTIONS**, and **VENDOR SUBSCRIPTIONS** if they should show current/active totals, AND verify the DB timestamp format matches the date filter comparison.
+   - Reuse the EXACT working query/service functions already used by `All RFQs`, `Vendor Directory`, and `Login Logs` — do not invent new query paths.
+
+---
+
+### Step 2: Eliminate Silent Error Swallowing
+- In `DashboardView.tsx`, **stop silently swallowing API errors into `0`s**.
+- If `/metrics` or `/records` returns a non-2xx status or throws, log the exact URL, HTTP status, and response body to `console.error` AND render a visible compact error banner on the dashboard showing the actual error/status code so failures can never be hidden as `0`s again.
+
+---
+
+### Step 3: Preserve Existing Code & Verify Real Execution
+- Keep all existing backend routes, services, and UI handlers across all other tabs completely intact.
+- Keep the popup modal click-outside + `Escape` close behavior working.
+- **Real verification required:** Start/hit the actual backend route (or run a real non-mocked integration check against the Express router + controller) to prove the endpoint returns HTTP 200 with real non-zero counts and populated 6-month chart arrays—not just mocked Jest tests.
+- Run typecheck, lint, tests, and `next build`, then report the **exact root cause** you found before pushing.
+```
+
+
+---
+
+### Prompt 427
+
+**Timestamp**: 2026-11-24T23:14:02+05:30
+
+```text
+### Remove the "Done" Column from Internal Tasks (`/category-manager/internal-tasks`)
+
+In the **Internal Tasks** table (Action Center -> Internal tasks):
+
+1. **Remove the "Done" Column:**
+   - Remove the `Done` column header and all checkbox cells from the table.
+   - Make `Status` the first column of the table (followed by `Task Subject & ID`, `Category & Type`, `Related Entity`, `Priority`, `Assigned To`, `Due Date & Time`, and `Actions`).
+
+2. **Clean Up Checkbox Toggle Logic:**
+   - Remove the checkbox toggle handler that automatically switches a task's status between `Closed` (when checked) and `Open` (when unchecked).
+   - Remove any unused state, props, imports, or table column configuration references tied to the `Done` column (including column visibility settings or CSV export mappings, if applicable).
+
+3. **Preserve Existing Functionality:**
+   - Keep the `Status` badges (`Open`, `Closed`, `Pending Approval`, etc.) and ensure status changes continue to work through the existing Edit / Actions workflow.
+   - Adjust column widths/spacing so the table layout remains clean and aligned.
+
+### Verification Checklist
+- [ ] The `Done` column and checkboxes are completely removed from `/category-manager/internal-tasks`.
+- [ ] `Status` is now the leftmost column with no layout or alignment issues.
+- [ ] No unused code, TypeScript errors, or console warnings remain.
+```
+
+
+---
+
+### Prompt 428
+
+**Timestamp**: 2026-11-24T23:34:39+05:30
+
+```text
+Update the **Action Center** (`Vendors Directory` tab) to rename "Seller" terminology to "Vendor" and add a live **SUBSCRIPTION VENDORS** KPI card/button 
+
+### 1. Core Rules & Code Preservation
+- **Reuse existing code:** Preserve all existing backend routes, database models, services, and UI handlers across Action Center and other tabs. Do not break existing functionality or API contracts.
+- **Live DB data only:** Do not hardcode or mock counts. The **SUBSCRIPTION VENDORS** count and filtered table rows must be fetched directly from the database using the existing vendor/subscription query logic.
+
+---
+
+### 2. Rename "Seller" to "Vendor" Across Action Center
+- Rename the Action Center tab label from **`Sellers Directory`** to **`Vendors Directory`**.
+- Replace visible UI occurrences of **"Seller" / "Sellers"** with **"Vendor" / "Vendors"** across the Action Center views (tab labels, headers, filter labels, empty states, badges, and tooltips) while keeping underlying internal route keys or backend identifiers intact if other components depend on them.
+
+---
+
+### 3. Add `SUBSCRIPTION VENDORS` Card/Button in Vendors Directory
+- Match the exact design, behavior, and interactivity of the existing **`SUBSCRIPTION BUYERS`** card in the **Buyers Directory**:
+  - **Label:** `SUBSCRIPTION VENDORS`
+  - **Primary Metric:** Exact live count of active subscribed vendors fetched from the database.
+  - **Subtitle (optional parity):** Show the remaining non-subscribed / free-tier vendor count (e.g., `<X> Free Trial` or `<X> Free Tier`), matching the `SUBSCRIPTION BUYERS` card format.
+  - **Layout:** Keep all KPI cards in the Vendors Directory cleanly aligned in a single horizontal row (adjust grid columns smoothly so the added card fits without wrapping or breaking the layout).
+- **Click-to-Filter Functionality:**
+  - Clicking the **`SUBSCRIPTION VENDORS`** card/button must filter the Vendors Directory table to display only subscription vendors (matching the exact click-to-filter toggle/active-state behavior used by **`SUBSCRIPTION BUYERS`** in the Buyers Directory).
+  - Clicking it again (or clicking `TOTAL SUPPLIERS` / clearing filters) must reset the filter cleanly.
+
+---
+
+### 4. Backend & Database Integration
+- Reuse the existing vendor directory API/service and subscription query logic (the same source of truth used for active vendor subscriptions in the DB).
+- Ensure the summary metrics endpoint returns the exact `subscriptionVendorsCount` (and supports a filter parameter such as `subscription=true` or equivalent) so both the KPI count and paginated/filtered directory table stay 100% in sync with the database.
+
+---
+
+### 5. Verification
+- Verify in the live UI that **`Vendors Directory`** shows the exact live DB count on the **`SUBSCRIPTION VENDORS`** card and filters the table accurately when clicked.
+- Confirm no regressions in **Buyers Directory**, **Export Directory**, search, dropdown filters, column sorting, or `360° Dossier` actions.
+- Run typecheck (`tsc --noEmit`), lint, tests, and production build.
+```
+
+---
+
+### Prompt 429
+
+**Timestamp**: 2026-11-25T10:15:58+05:30
+
+```text
+Fix the Category Manager Dashboard (`/category-manager/dashboard`) data mismatch permanently. The dashboard is currently showing truncated and incorrect counts because it is using `limit: 1000` / `200`, wrong subscription predicates, and defaulting to a single-day/month filter instead of **All Time**.
+
+### Exact Ground-Truth Mismatches to Fix (Verified Against Live Pages)
+Compare `categoryManagerDashboardController.js` directly against the live working controllers for **All RFQs**, **Buyers Directory**, **Vendors Directory**, and **Login Logs**:
+
+1. **Default Filter Must Be `All` (No Date Filter), NOT `Today` or `This Month`:**
+   - On initial load, do NOT activate `Today`, `This Week`, or `This Month` by default. Show **all-time DB totals** by default.
+   - Only apply date filtering when the user explicitly clicks `Today`, `This Week`, `This Month`, or selects `Start Date` / `End Date` (and allow clicking an active filter again to clear it back to All Time).
+
+2. **Remove ALL Row-Limit Truncations (`1000`, `200`, etc.):**
+   - `TOTAL RFQS` is showing `200` instead of the real `240` shown in **All RFQs** and **Buyers Directory**. Reuse the exact same DB count/query used by **All RFQs** (no `limit: 200` cap).
+   - `TOTAL BUYERS` is showing `1,000` instead of the real `1,925` shown in **Buyers Directory** because `getBuyerAccountsFromDB(1000)` caps the result at 1,000. Use a real DB `COUNT(*)` / full-table aggregate query—the exact same source of truth as **Buyers Directory**.
+   - `TOTAL VENDORS` must match **Vendors Directory** (`633,851`) using the exact same `total` query.
+
+3. **Fix `BUYER SUBSCRIPTIONS` & `VENDOR SUBSCRIPTIONS` Logic:**
+   - `BUYER SUBSCRIPTIONS` is wrongly showing `997` instead of **`5`** (as shown in **Buyers Directory** where `5` are Subscription Buyers and `1,920` are `Free_trial`).
+   - `VENDOR SUBSCRIPTIONS` is wrongly showing `967` for the same reason.
+   - Inspect the exact predicate used by **Buyers Directory** (`SUBSCRIPTION BUYERS`) and **Vendors Directory** (`SUBSCRIPTION VENDORS`) to distinguish paid/subscribed accounts from `Free_trial` / free-tier accounts, and reuse that **exact** DB query/predicate in `categoryManagerDashboardController.js`.
+
+4. **Fix `BUYER REGISTRATION`, `VENDOR REGISTRATION`, and `TOTAL LOGINS` Showing `0`:**
+   - With default **All Time** selected, these must return the real non-zero DB counts (not `0`), and dynamically filter when a date button is clicked.
+   - For `TOTAL LOGINS`, inspect the exact `userType` / `role` column values actually stored in the `Login Logs` table for Category Manager Portal users (check **Action Center → Login Logs** to see how it queries them) and count only internal Category Manager Portal logins.
+
+5. **Sync Popup Modal & Monthly Charts to the Same Source of Truth:**
+   - Every KPI card count, its click-to-open popup table, and the 3 bottom monthly line charts must query the exact same DB tables and predicates—zero hardcoded fallbacks, zero `limit: 1000` truncation on counts.
+   - Preserve all existing backend routes, services, and UI handlers across all other tabs.
+
+### Mandatory Verification Before Finishing
+- Verify that with no date filter selected, the Dashboard numbers match **All RFQs** (`240`), **Buyers Directory** (`1,925` buyers, `5` subscription buyers), and **Vendors Directory** (`633,851` vendors) 1-to-1.
+- Verify that clicking `Today`, `This Week`, `This Month`, `Start Date`, and `End Date` dynamically recalculates all 10 cards and popup records from the DB.
+- Run typecheck, lint, tests, and production build.
+```
+
+---
+
+### Prompt 430
+
+**Timestamp**: 2026-11-25T11:29:37+05:30
+
+```text
+create pr and check all the covergaes and merge directly in test-v3
+```
+
+---
+
+### Prompt 431
+
+**Timestamp**: 2026-11-25T12:05:39+05:30
+
+```text
+Tell me process of vendor submit the bid/quote only in that format can create the bid or which is madetory and whichh is optional
 ```

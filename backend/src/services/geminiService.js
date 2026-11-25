@@ -64,7 +64,7 @@ CRITICAL QUANTITY AND UNIT EXTRACTION:
 - Extract both the purchase quantity and the unit of measure (e.g. "Nos", "Mtr", "Set", "Kg", "Units", "Pcs", "Boxes", "Bags") for every line item.
 - If quantity and unit are written together (e.g. "10 Nos", "500 Mtr", "25 Sets", "100 Pcs", "50 Kg"), separate them: put the numeric count in "quantity" and the unit in "unit".
 - If the unit is in the column header (e.g. "Qty (Nos)", "Quantity in Mtrs") or in the item description (e.g. "Gate Valve 2 inch - 10 Nos"), extract the unit into "unit".
-- If no unit is stated anywhere for an item, return null or empty for "unit". Never guess or invent a unit.
+- If no unit is stated anywhere for a countable item with quantity (e.g. "20 Business Laptops", "5 Motors"), default to "Nos". Only return null/empty if no quantity or count exists.
 
 EXHAUSTIVE EXTRACTION ACROSS ALL WORKSHEETS (NO ARBITRARY LIMITS):
 - Extract ALL valid procurement line items across all worksheets (indicated by "SHEET: <sheetName>") and all sections in the document.
@@ -611,6 +611,10 @@ function toRawLineItems(parsed) {
           unit = normalizeUnit(extracted) || '';
         }
 
+        if (!unit && qty !== null && qty > 0) {
+          unit = 'Nos';
+        }
+
         const row = {
           itemName,
           quantity: qty,
@@ -655,6 +659,10 @@ function toRawLineItems(parsed) {
       if (!unit) {
         const extracted = extractUnitFromText(rawItemQty) || extractUnitFromText(itemName) || extractUnitFromText(item?.specification || item?.technicalSpecs || item?.specs) || '';
         unit = normalizeUnit(extracted) || '';
+      }
+
+      if (!unit && qty !== null && qty > 0) {
+        unit = 'Nos';
       }
 
       const row = {

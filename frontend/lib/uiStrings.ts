@@ -173,6 +173,12 @@ export const UI_STRINGS = {
         totalAllocated: 'Total Credits Allocated',
         totalConsumed: 'Total Credits Consumed',
         remainingFree: 'Remaining Free Credits',
+        trialPeriodCountdown: '{days} Days Trial Period — Unlimited RFQs',
+        trialPeriodCountdownSingle: '1 Day Left — Unlimited RFQs',
+        trialExpiresOn: 'Expires: {expiryDate}',
+        trialAvailableQuota: '{days} Days Trial Period',
+        trialAvailableQuotaSingle: '1 Day Left',
+        trialUnlimitedSubtext: 'Unlimited RFQs (Expires {expiryDate})',
         historyUnavailable: 'Credit history is not recorded for this account. The displayed remaining balance comes from the buyer account; past allocations and consumption need reconciliation.',
         purchased: 'Purchased Credits',
         adjusted: 'Adjusted Credits',
@@ -482,7 +488,7 @@ export const UI_STRINGS = {
   },
 
   sellerDirectory: {
-    title: 'Sellers Directory',
+    title: 'Vendors Directory',
     searchPlaceholder: 'Search company, contact, email, category, city...',
     allSources: 'All Sources',
     buyerUploaded: 'Buyer Uploaded',
@@ -491,6 +497,7 @@ export const UI_STRINGS = {
     allRatings: 'All Ratings',
     exportDirectory: 'Export Directory',
     totalSuppliers: 'Total Suppliers',
+    subscriptionVendors: 'Subscription Vendors',
     networkSuppliers: 'Network Suppliers',
     buyerUploadedCard: 'Buyer Uploaded',
     avgScore: 'Average 360° Score',
@@ -500,10 +507,11 @@ export const UI_STRINGS = {
     aiEvaluationBenchmark: 'AI evaluation benchmark',
     totalBidsDelivered: 'Total bids delivered',
     verifiedActiveSubtext: '{count} Verified active',
+    freeTierSubtext: '{count} Free Tier',
     columnSettingsTitle: 'Column Settings',
     columnSettingsSubtitle: 'Show, hide, and drag handles to reorder columns',
     resetDefault: 'Reset to Default',
-    noSellersFound: 'No suppliers found matching your query.',
+    noSellersFound: 'No vendors found matching your query.',
     dossierAction: '360° Dossier',
     dossier: {
       profileTab: 'Profile',
@@ -873,8 +881,16 @@ export const UI_STRINGS = {
         description: 'Vendor master, PO history & AI categorisation',
       },
       operationalKanban: {
-        label: 'Operational Kanban',
-        description: 'Pipeline stages & chasing control board',
+        label: 'Dashboard',
+        description: 'Pipeline metrics, live KPIs & executive trends',
+      },
+      dashboard: {
+        label: 'Dashboard',
+        description: 'Pipeline metrics, live KPIs & executive trends',
+      },
+      whatsappAnalytics: {
+        label: 'WhatsApp Analytics',
+        description: 'Real-time conversational telemetry and bot analytics',
       },
       spendAnalytics: {
         label: 'Spend Analytics',
@@ -909,7 +925,7 @@ export const UI_STRINGS = {
         description: 'Complete profiles, RFQ history, credits & transaction governance',
       },
       sellersDirectory: {
-        label: 'Sellers Directory',
+        label: 'Vendors Directory',
         description: 'Verified supplier profiles, quotes, catalog & communication logs',
       },
       dailyReports: {
@@ -1716,6 +1732,11 @@ export const UI_STRINGS = {
     // The vendor was saved, but the response had no id, so it cannot be selected safely.
     createdVendorIdMissing: 'The vendor was saved, but the server did not return its ID, so it was not added to the selection. Reload the candidate list and check before adding the vendor again.',
     categoryOptionsLoadFailed: 'The category list could not be loaded from the server, so the category options may be incomplete. Reload to try again.',
+    pasteSummary: '{matched} matched & selected, {notFound} not found',
+    pasteSummaryAllMatched: '{matched} matched & selected',
+    successWithAccountsMessage: '{count} vendor(s) invited to {rfqNumber}. {provisioned} new login account(s) created with credentials delivered.',
+    onboardingDeliveryWarning: '{count} vendor account(s) had issues receiving credentials.',
+    onboardingDeliveryWarningTitle: 'Credential Delivery Warning',
   },
 
   notifications: {
@@ -2076,7 +2097,7 @@ export const UI_STRINGS = {
     maxMajorReached:
       'You can select at most {max} procurement divisions. Clear one before adding another.',
     maxMinorReached:
-      'You have selected {count} of {max} procurement categories. Clear one before adding another.',
+      'You have selected more than the allowed limit of 10 categories. Please select only 10 most relevant categories to proceed.',
   },
 
   // ============================================================================
@@ -2434,11 +2455,11 @@ export const UI_STRINGS = {
       duplicatesSkippedBannerTitle: '{count} Duplicate PO {rowWord} Skipped',
       duplicatesSkippedBannerHint:
         'The following duplicate PO records were detected and rejected so they will not be uploaded again:',
-      allDuplicatesBannerTitle: 'No New PO Records Imported ({count} Duplicates Skipped)',
+      allDuplicatesBannerTitle: 'Upload Unsuccessful: All PO Records Are Duplicates ({count} Duplicates Skipped)',
       allDuplicatesBannerHint:
-        'Every PO record in "{fileName}" was already uploaded previously or is duplicated within the file.',
+        'Upload cannot be successful because all records in "{fileName}" are duplicates of already uploaded PO data. Please upload a file with new data.',
       allDuplicatesError:
-        'All {count} PO records in "{fileName}" are duplicates of previously uploaded or earlier rows and were not accepted.',
+        'Upload cannot be successful because all {count} PO records in "{fileName}" are duplicates of already uploaded data. Please upload a file with new data.',
       duplicatesSummaryInline: ' ({count} duplicate(s) skipped)',
       duplicateRowSingular: 'Row',
       duplicateRowPlural: 'Rows',
@@ -2454,7 +2475,7 @@ export const UI_STRINGS = {
       duplicatesWarningToastBody:
         '{imported} new PO records loaded from {fileName}. {skipped} duplicate PO record(s) skipped.',
       allDuplicatesToastBody:
-        'All {skipped} PO records in {fileName} were already uploaded or duplicated and were rejected.',
+        'Upload cannot be successful because all {skipped} PO records in {fileName} are duplicates. Please upload a file with new data.',
       downloadDuplicatesCsv: 'Download Duplicate POs CSV',
       dismissDuplicatesAction: 'Clear Duplicate List',
     },
@@ -2648,6 +2669,14 @@ export const UI_STRINGS = {
     mode_1: 'Mode 1 – Internal Vendors',
     mode_2: 'Mode 2 – Internal + Procucev Vetted Vendors',
     mode_3: 'Mode 3 – Autonomous AI + 360 Qualification',
+    comingSoonBadge: 'Coming Soon',
+    mode3ComingSoonTitle: 'Mode 3: Autonomous AI + 360° Qualification — Coming Soon',
+    mode3ComingSoonDescription:
+      'Autonomous AI sourcing and double-blind 360° qualification protocol is currently under final calibration and will be available soon. Please select Mode 0, Mode 1, or Mode 2 to proceed with dispatching your RFQ.',
+    mode3ComingSoonTag: 'Launching in upcoming release',
+    mode3DisabledButtonTooltip: 'Mode 3 is coming soon. Please select Mode 0, Mode 1, or Mode 2 to dispatch.',
+    mode3SubmitBlockedTitle: 'Mode 3 Coming Soon',
+    mode3SubmitBlockedDesc: 'Mode 3 Sourcing is coming soon. Please select Mode 0, Mode 1, or Mode 2 to dispatch your RFQ.',
   },
 
   vendorSubscriptionModal: {
@@ -2807,6 +2836,8 @@ export const UI_STRINGS = {
     needSupport: 'Need Support?',
     /** Shown in place of a sourcing credit balance the server has not reported. */
     creditBalanceUnknown: '—',
+    trialPeriodBadge: '{days} Days Trial Period (Unlimited RFQs)',
+    trialPeriodBadgeSingle: '1 Day Left (Unlimited RFQs)',
     profile: 'Profile',
     openProfileTitle: 'Open profile page',
   },
@@ -2863,7 +2894,7 @@ export const UI_STRINGS = {
       approvals: 'Approvals',
       scorecard: 'Scorecard',
       buyersDirectory: 'Buyers Directory',
-      sellersDirectory: 'Sellers Directory',
+      sellersDirectory: 'Vendors Directory',
       registrations: 'Registrations',
       paymentDues: 'Payment Dues',
       documentVault: 'Document Vault',
@@ -3927,7 +3958,11 @@ export const UI_STRINGS = {
     filterNotEvaluated: 'Not Evaluated',
     filterPendingEvaluation: 'Pending Evaluation',
     evaluationStatusCardHeading: 'Evaluation Status',
-    notEvaluatedStatus: 'REGISTERED / NOT EVALUATED',
+    registrationStatusCardHeading: 'Registration Status',
+    registeredBadge: 'Registered',
+    notRegisteredBadge: 'Not Registered',
+    notEvaluatedStatus: 'NOT EVALUATED',
+    activeBadge: 'ACTIVE',
     inactiveBadge: 'INACTIVE',
     inactiveTooltip: 'Marked inactive — excluded from future RFQs, invitations, and evaluation flows while preserving historical records',
     markInactiveButton: 'Mark Inactive',
@@ -3985,6 +4020,78 @@ export const UI_STRINGS = {
     ocrEvaluatedLabel: 'OCR & 360° Evaluated',
     activeVendorLabel: 'Active',
     inactiveVendorLabel: 'Inactive',
+  },
+
+  buyerConsole: {
+    kpiSpendTitle: 'Total Active Spend Sourced',
+    kpiVolumeTitle: 'Total Sourcing Volume',
+    kpiAvgQuotesTitle: 'Avg Quotes Per RFQ',
+    rfqsLiveSuffix: 'RFQs Live',
+    searchPlaceholder: 'Search Buyer name or company...',
+    allCompanies: 'All Companies',
+    allBuyers: 'All Buyers',
+    exportBtn: 'Export',
+    refreshBtn: 'Refresh',
+    columnSettingsBtn: 'Column Settings',
+    noBuyersFound: 'No buyer accounts found matching your query.',
+    showingPagination: 'Showing {start}–{end} of {total} Buyers',
+    showingEmptyPagination: 'Showing 0 of 0 Buyers',
+    prevPage: 'Previous',
+    nextPage: 'Next',
+  },
+
+  categoryManagerDashboard: {
+    filters: {
+      today: 'Today',
+      thisWeek: 'This Week',
+      thisMonth: 'This Month',
+      startDate: 'Start Date',
+      endDate: 'End Date',
+      clearDates: 'Clear',
+    },
+    kpi: {
+      totalRfqs: 'TOTAL RFQS',
+      openRfqs: 'OPEN RFQS',
+      rfqsWithoutQuotes: 'RFQS WITHOUT QUOTES',
+      buyerSubscriptions: 'BUYER SUBSCRIPTIONS',
+      vendorSubscriptions: 'VENDOR SUBSCRIPTIONS',
+      totalBuyers: 'TOTAL BUYERS',
+      totalVendors: 'TOTAL VENDORS',
+      buyerRegistration: 'BUYER REGISTRATION',
+      vendorRegistration: 'VENDOR REGISTRATION',
+      totalLogins: 'TOTAL LOGINS',
+    },
+    charts: {
+      totalRfqsAndSubs: 'Total RFQs & Subscriptions (Monthly)',
+      newRegistrations: 'New Registrations (Monthly)',
+      activityRfqsVsQuotes: 'Activity: RFQs Raised vs. Quotes (Monthly)',
+      rfqs: 'RFQs',
+      buyerSubs: 'Buyer Subs',
+      vendorSubs: 'Vendor Subs',
+      newBuyers: 'New Buyers',
+      newVendors: 'New Vendors',
+      rfqsRaisedByClients: 'RFQs Raised by Clients',
+      noOfVendorQuotes: 'No. of Vendor Quotes',
+    },
+    modal: {
+      close: 'Close',
+      searchPlaceholder: 'Search records...',
+      noRecords: 'No matching records found',
+      totalRecords: '{count} Records',
+      recordsFound: 'Records Found',
+    },
+    errors: {
+      metricsLoadFailed: 'Failed to load dashboard metrics',
+      recordsLoadFailed: 'Failed to load records',
+      retry: 'Retry',
+      errorPrefix: 'Dashboard Data Error:',
+    },
+    whatsapp: {
+      title: 'WhatsApp Analytics',
+      openNewTab: 'Open in new tab',
+      loading: 'Loading WhatsApp Analytics...',
+      fallbackNotice: 'If the external dashboard does not render inside the frame, click Open in new tab.',
+    },
   },
 
 };

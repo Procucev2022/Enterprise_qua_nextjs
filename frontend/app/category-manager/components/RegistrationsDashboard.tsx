@@ -583,6 +583,13 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
                 setStartDate(e.target.value);
                 setCurrentPage(1);
               }}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
+              }}
               aria-label={strings.startDatePlaceholder}
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
             />
@@ -613,6 +620,13 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
               onChange={(e) => {
                 setEndDate(e.target.value);
                 setCurrentPage(1);
+              }}
+              onClick={(e) => {
+                try {
+                  e.currentTarget.showPicker?.();
+                } catch {
+                  e.currentTarget.focus();
+                }
               }}
               aria-label={strings.endDatePlaceholder}
               className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"

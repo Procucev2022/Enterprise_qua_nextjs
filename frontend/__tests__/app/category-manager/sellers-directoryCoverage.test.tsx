@@ -43,7 +43,7 @@ const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 const mockExportReport = reportsClient.exportReportToExcel as jest.Mock;
 
 const SEARCHING_HINT = 'Searching...';
-const NO_RESULTS_MESSAGE = 'No suppliers found matching your query.';
+const NO_RESULTS_MESSAGE = UI_STRINGS.sellerDirectory.noSellersFound;
 const DOSSIER_BUTTON = /360° Dossier/;
 const SEARCH_PLACEHOLDER = /Search company/i;
 const DEBOUNCE_MS = 350;
@@ -868,8 +868,8 @@ describe('SellersDirectory coverage companion', () => {
       expect(mockExportReport).toHaveBeenCalledTimes(1);
       const [allRows, fileName, sheetName] = mockExportReport.mock.calls[0];
       expect(allRows).toHaveLength(85);
-      expect(fileName).toBe('Sellers_Directory_2026-05-10');
-      expect(sheetName).toBe('SellersDirectory');
+      expect(fileName).toBe('Vendors_Directory_2026-05-10');
+      expect(sheetName).toBe('VendorsDirectory');
 
       fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value: 'Client Supplier 0' } });
       fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));

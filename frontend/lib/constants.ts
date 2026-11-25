@@ -258,6 +258,28 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
 };
 
 /**
+ * Check if a buyer has an active trial period based on canonical trialEndDate.
+ */
+export function isBuyerTrialActive(account?: { trialActive?: boolean; trialEndDate?: string } | null): boolean {
+  if (!account || account.trialActive === false || !account.trialEndDate) return false;
+  const end = new Date(account.trialEndDate).getTime();
+  return Number.isFinite(end) && end > Date.now();
+}
+
+/**
+ * Calculates remaining trial days dynamically from trialEndDate.
+ * Returns 0 if expired or invalid.
+ */
+export function getRemainingTrialDays(trialEndDate?: string | null): number {
+  if (!trialEndDate) return 0;
+  const end = new Date(trialEndDate).getTime();
+  if (!Number.isFinite(end)) return 0;
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+/**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
  * For free_trial:
@@ -564,7 +586,27 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.operationalKanban.description,
       icon: 'Kanban',
       group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/kanban-board',
+      route: '/category-manager/dashboard',
+    },
+    {
+      id: 'whatsapp_analytics',
+      screenTag: 'Screen 2.11',
+      shortTag: '2.11',
+      label: NAV_ITEMS.whatsappAnalytics.label,
+      description: NAV_ITEMS.whatsappAnalytics.description,
+      icon: 'MessageSquare',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/whatsapp-analytics',
+    },
+    {
+      id: 'internal_tasks',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
+      label: NAV_ITEMS.internalTasks.label,
+      description: NAV_ITEMS.internalTasks.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/internal-tasks',
     },
     {
       id: 'spend_dashboard',
@@ -645,16 +687,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'FileSpreadsheet',
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/daily-reports',
-    },
-    {
-      id: 'internal_tasks',
-      screenTag: 'Screen 2.10',
-      shortTag: '2.10',
-      label: NAV_ITEMS.internalTasks.label,
-      description: NAV_ITEMS.internalTasks.description,
-      icon: 'ClipboardList',
-      group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/internal-tasks',
     },
   ],
   vendor: [
@@ -766,7 +798,7 @@ export const SIDEBAR_LAYOUT = {
 /** Route the sign-in flow redirects to, chosen by the role on the user record. */
 export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
   buyer: '/buyer/dashboard',
-  category_manager: '/category-manager/kanban-board',
+  category_manager: '/category-manager/dashboard',
   vendor: '/vendor/opportunity-feed',
   admin: '/admin/infra-control',
 };
@@ -782,6 +814,10 @@ export const LOGIN_ROUTE = '/login';
 
 /** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
 export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
+
+/** Embedded URL for the WhatsApp conversational telemetry dashboard. */
+export const WHATSAPP_ANALYTICS_EMBED_URL =
+  'https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard';
 
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back
@@ -833,8 +869,8 @@ export const BUYER_PROFILE_LIMITS: {
   MAX_MAJOR_CATEGORIES: number | null;
   MAX_MINOR_CATEGORIES: number | null;
 } = {
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 };
 
 /**
@@ -1896,10 +1932,17 @@ export function isVendorActive(v: Partial<VendorEntry> | null | undefined): bool
  * missing name here, and a generic placeholder is used instead.
  */
 export function resolveVendorDisplayName(
-  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id'>> | null | undefined,
+  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id' | 'email'>> | null | undefined,
   genericLabel: string,
   ...fallbackCandidates: Array<string | null | undefined>
 ): string {
+  const vEmail = String(vendor?.email || '').trim().toLowerCase();
+  if (vEmail === 'bhumika@vaysinfotech.com') {
+    return 'Vays Infotech';
+  }
+  if (vEmail === 'helpdesk@vaysinfotech.com') {
+    return 'Vays Infotech 1';
+  }
   const codeOrId = [vendor?.vendorCode, vendor?.id].map((v) => String(v || '').trim()).filter(Boolean);
   const candidates = [vendor?.name, ...fallbackCandidates];
   for (const candidate of candidates) {
@@ -1935,23 +1978,91 @@ export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined
  */
 export function canBuyerManageVendor(
   vendor: Partial<VendorEntry> | null | undefined,
-  activeBuyerAccount?: { id?: string; corporateEmail?: string; organizationName?: string } | null
+  activeBuyerAccount?: {
+    id?: string | null;
+    corporateEmail?: string | null;
+    organizationName?: string | null;
+    organizationId?: string | null;
+    buyerAccountId?: string | null;
+    userId?: string | null;
+    [key: string]: any;
+  } | null,
+  currentUserSession?: {
+    id?: string | null;
+    userUuid?: string | null;
+    sub?: string | null;
+    email?: string | null;
+    orgId?: string | null;
+    organizationId?: string | null;
+    orgName?: string | null;
+    organizationName?: string | null;
+    role?: string | null;
+    [key: string]: any;
+  } | null
 ): boolean {
   if (!vendor || vendor.isProcucevNetwork) return false;
   if (!isBuyerUploadedVendor(vendor)) return false;
-  if (!activeBuyerAccount) return true;
+  if (!activeBuyerAccount && !currentUserSession) return true;
 
-  const buyerId = String(activeBuyerAccount.id || '').trim().toLowerCase();
-  const buyerEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
-  const buyerOrg = String(activeBuyerAccount.organizationName || '').trim().toLowerCase();
+  const buyerIds = [
+    activeBuyerAccount?.id,
+    (activeBuyerAccount as any)?.organizationId,
+    (activeBuyerAccount as any)?.buyerAccountId,
+    (activeBuyerAccount as any)?.userId,
+    currentUserSession?.id,
+    currentUserSession?.userUuid,
+    currentUserSession?.sub,
+    currentUserSession?.orgId,
+    (currentUserSession as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
 
-  const vBuyerId = String(vendor.buyerId || vendor.buyerAccountId || '').trim().toLowerCase();
+  const buyerEmail = String(
+    activeBuyerAccount?.corporateEmail ||
+    (activeBuyerAccount as any)?.email ||
+    currentUserSession?.email ||
+    ''
+  ).trim().toLowerCase();
+
+  const buyerOrg = String(
+    activeBuyerAccount?.organizationName ||
+    (activeBuyerAccount as any)?.company ||
+    currentUserSession?.orgName ||
+    currentUserSession?.organizationName ||
+    ''
+  ).trim().toLowerCase();
+
+  const vBuyerIds = [
+    vendor.buyerId,
+    vendor.buyerAccountId,
+    (vendor as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
+
   const vBuyerEmail = String(vendor.buyerEmail || '').trim().toLowerCase();
   const vCompany = String(vendor.addedByBuyerCompany || '').trim().toLowerCase();
 
-  if (vBuyerId && buyerId && vBuyerId !== buyerId) return false;
-  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail) return false;
-  if (vCompany && buyerOrg && vCompany !== buyerOrg) return false;
+  // If ANY positive ownership match is confirmed, allow management:
+  const matchesId = vBuyerIds.length > 0 && buyerIds.some((bId) => vBuyerIds.includes(bId));
+  const matchesEmail = Boolean(vBuyerEmail && buyerEmail && (vBuyerEmail === buyerEmail || buyerIds.includes(vBuyerEmail)));
+  const matchesCompany = Boolean(vCompany && buyerOrg && (vCompany === buyerOrg || vCompany.includes(buyerOrg) || buyerOrg.includes(vCompany)));
+
+  if (matchesId || matchesEmail || matchesCompany) {
+    return true;
+  }
+
+  // If vendor explicitly belongs to a foreign buyer/company with no matching claim, deny:
+  if (vBuyerIds.length > 0 && buyerIds.length > 0 && !buyerIds.some((bId) => vBuyerIds.includes(bId))) {
+    return false;
+  }
+  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail && !buyerIds.includes(vBuyerEmail)) {
+    return false;
+  }
+  if (vCompany && buyerOrg && vCompany !== buyerOrg && !vCompany.includes(buyerOrg) && !buyerOrg.includes(vCompany)) {
+    return false;
+  }
 
   return true;
 }
@@ -2416,11 +2527,11 @@ export function parseSearchTokens(search?: string | null): string[] {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[,\n\r;]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[,\n\r;]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )
@@ -3154,8 +3265,8 @@ export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = 
   { key: 'email', label: 'Email', visible: true },
   { key: 'phone', label: 'Phone', visible: true },
   { key: 'location', label: 'Location', visible: true },
-  { key: 'score', label: 'AI Score', visible: true },
-  { key: 'rating', label: 'Rating', visible: true },
+  { key: 'score', label: 'AI Score', visible: false }, // Hidden: Evaluation-related
+  { key: 'rating', label: 'Rating', visible: true }, // Re-enabled: Show vendor ratings
   { key: 'status', label: 'Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
@@ -3370,4 +3481,31 @@ export function normalizeVendorRating(rating: unknown, score?: unknown): number 
   }
   return null;
 }
+
+/**
+ * Standardized Communication Categories across Internal Tasks, Buyer Directory, and Seller Directory.
+ */
+export const STANDARDIZED_COMMUNICATION_CATEGORIES = [
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+] as const;
+
+export type StandardizedCommunicationCategory = typeof STANDARDIZED_COMMUNICATION_CATEGORIES[number];
+
+export const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = {
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+} as const;
 

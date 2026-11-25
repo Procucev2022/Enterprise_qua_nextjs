@@ -199,14 +199,32 @@ export default function ActionCenterComposeModal({
 
       // Each token holds only what the user entered or the record supplies. A
       // token without a value renders as an empty string in the template.
+      const normalizedAccountType = entityType.toUpperCase().includes('BUYER')
+        ? 'Buyer'
+        : entityType.toUpperCase().includes('SELLER') || entityType.toUpperCase().includes('VENDOR') || entityType.toUpperCase().includes('SUPPLIER')
+        ? 'Seller'
+        : 'Enterprise';
+
       const tokens: Record<string, string | number | undefined> = {
         contactName: recipientName.trim(),
         companyName: recipientName.trim(),
+        accountType: normalizedAccountType,
+        creditAction: 'Credit Balance Update',
+        creditAmount: '0',
+        availableCredits: '0',
+        demoDate: followupDueDate || new Date().toISOString().split('T')[0],
+        demoTime: '11:00 AM',
+        meetingLink: 'https://meet.google.com/procucev-demo',
+        onboardingLink: 'https://qua.procucev.com/onboarding',
+        activationLink: 'https://qua.procucev.com/activate',
+        referenceId: entityId || 'REF-TASK',
+        customMessage: message || 'Operational task review completed.',
         entityId,
         followupDate: followupDueDate,
+        followupTime: '11:00 AM',
         followupNotes: followupNotes.trim(),
-        assigneeName: assignedMember?.name,
-        senderName: authClient.getSessionUser()?.name,
+        assigneeName: assignedMember?.name || 'Category Management',
+        senderName: authClient.getSessionUser()?.name || 'Category Management',
         dueDate: followupDueDate,
         rfqNumber: entityId,
         notes: message,
@@ -255,6 +273,7 @@ export default function ActionCenterComposeModal({
       followupPriority,
       subject,
       availableDocuments,
+      entityType,
     ]
   );
 
@@ -551,33 +570,31 @@ export default function ActionCenterComposeModal({
             </div>
           </div>
 
-          {/* Customer Conversion Scenario Selector (When Email is active) */}
-          {(channel === 'EMAIL' || channel === 'BOTH') && (
-            <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-lg">
-              <div className="flex items-center justify-between mb-1.5">
-                <label
-                  htmlFor="compose-scenario"
-                  className="text-xs font-semibold text-indigo-950 dark:text-indigo-300 flex items-center gap-1.5"
-                >
-                  <Sparkles size={13} className="text-indigo-600 dark:text-indigo-400" />
-                  <span>Select Conversion Scenario</span>
-                </label>
-              </div>
-              <select
-                id="compose-scenario"
-                value={selectedScenarioId}
-                onChange={(e) => handleScenarioChange(e.target.value)}
-                className="w-full text-xs px-3 py-2 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+          {/* Standardized Communication Category / Scenario Selector */}
+          <div className="p-3 bg-indigo-50/50 dark:bg-indigo-950/20 border border-indigo-100 dark:border-indigo-900/40 rounded-lg">
+            <div className="flex items-center justify-between mb-1.5">
+              <label
+                htmlFor="compose-scenario"
+                className="text-xs font-semibold text-indigo-950 dark:text-indigo-300 flex items-center gap-1.5"
               >
-                <option value="">-- Choose a sales / conversion scenario --</option>
-                {scenarios.map((sc) => (
-                  <option key={sc.id} value={sc.id}>
-                    {sc.name}
-                  </option>
-                ))}
-              </select>
+                <Sparkles size={13} className="text-indigo-600 dark:text-indigo-400" />
+                <span>Select Conversion Scenario</span>
+              </label>
             </div>
-          )}
+            <select
+              id="compose-scenario"
+              value={selectedScenarioId}
+              onChange={(e) => handleScenarioChange(e.target.value)}
+              className="w-full text-xs px-3 py-2 bg-white dark:bg-slate-900 border border-indigo-200 dark:border-indigo-800 rounded-lg text-slate-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
+            >
+              <option value="">-- Choose a sales / conversion scenario --</option>
+              {scenarios.map((sc) => (
+                <option key={sc.id} value={sc.id}>
+                  {sc.name}
+                </option>
+              ))}
+            </select>
+          </div>
 
           {/* Recipient Details */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -815,7 +832,14 @@ export default function ActionCenterComposeModal({
                       required={scheduleFollowup}
                       value={followupDueDate}
                       onChange={(e) => setFollowupDueDate(e.target.value)}
-                      className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      onClick={(e) => {
+                        try {
+                          e.currentTarget.showPicker?.();
+                        } catch {
+                          e.currentTarget.focus();
+                        }
+                      }}
+                      className="w-full text-xs px-2.5 py-1.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
                     />
                   </div>
                   <div>

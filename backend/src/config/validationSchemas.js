@@ -273,27 +273,56 @@ const INTERNAL_TASK_CATEGORY_ENUM = Object.freeze([
 
 const INTERNAL_TASK_TYPE_ENUM = Object.freeze([
   'Phone Call',
+  'Outgoing Call',
+  'Incoming Call',
+  'Follow-up Call',
   'SMS',
+  'SMS Alert',
+  'SMS Follow-up',
   'WhatsApp',
+  'WhatsApp Notification',
   'Email',
+  'Email Follow-up',
   'New Follow-up',
   'Existing Follow-up',
   'Schedule Demo',
+  'Product Demo',
   'Demo Scheduling',
   'Add Credits',
   'Delete Credits',
   'Delete / Deduct Credits',
+  'Credit Approval Request',
   'Send Proposal',
   'Send Corporate Email',
+  'Site Visit',
+  'Client Meeting',
+  'Vendor Facility Inspection',
   'Operational Task',
   'Internal Operations',
+  'Internal Review',
   'Custom Task',
   'Client Onboarding',
   'Onboarding Process',
   'Quotation Review',
+  'General Task',
+  'General',
 ]);
 
 const VALIDATION_SCHEMAS = {
+  categoryManagerDashboardMetrics: {
+    startDate: { type: 'string', required: false, maxLength: 64 },
+    endDate: { type: 'string', required: false, maxLength: 64 },
+    preset: { type: 'string', required: false, maxLength: 32 },
+  },
+  categoryManagerDashboardRecords: {
+    type: { type: 'string', required: true, maxLength: 64 },
+    startDate: { type: 'string', required: false, maxLength: 64 },
+    endDate: { type: 'string', required: false, maxLength: 64 },
+    preset: { type: 'string', required: false, maxLength: 32 },
+    search: { type: 'string', required: false, maxLength: 255 },
+    limit: { type: 'number', required: false },
+    page: { type: 'number', required: false },
+  },
   requestVendorEvaluation: {
     notes: { type: 'string', required: false, maxLength: 1000 },
     vendorEmail: { type: 'string', required: false, maxLength: 320 },
@@ -1451,6 +1480,18 @@ const VALIDATION_SCHEMAS = {
       enum: ['true', 'false', '1', '0'],
       message: 'activeOnly must be true, false, 1, or 0.',
     },
+    subscription: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'subscription must be true, false, 1, or 0.',
+    },
+    subscriptionOnly: {
+      type: 'string',
+      required: false,
+      enum: ['true', 'false', '1', '0'],
+      message: 'subscriptionOnly must be true, false, 1, or 0.',
+    },
   },
 
   transactionalEmailPreview: {
@@ -1662,6 +1703,24 @@ const VALIDATION_SCHEMAS = {
       type: 'string',
       required: false,
       maxLength: 128,
+    },
+    scenarioId: {
+      type: 'string',
+      required: false,
+      maxLength: 128,
+    },
+    category: {
+      type: 'string',
+      required: false,
+      maxLength: 128,
+    },
+    metadata: {
+      type: 'object',
+      required: false,
+    },
+    attachments: {
+      type: 'array',
+      required: false,
     },
     linkUrl: {
       type: 'string',

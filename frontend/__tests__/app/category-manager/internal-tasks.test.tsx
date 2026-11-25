@@ -13,7 +13,29 @@ jest.mock('@/app/category-manager/components/TicketsDashboard', () => ({
   TicketsDashboard: () => <div data-testid="tickets-dashboard">Tickets Dashboard Mock</div>,
 }));
 jest.mock('@/app/category-manager/components/ApprovalsDashboard', () => {
-  const Mock = () => <div data-testid="approvals-dashboard">Approvals Dashboard Mock</div>;
+  const Mock = ({ onApprovalDecision }: { onApprovalDecision?: (id: string, action: 'APPROVE' | 'REJECT', requestNumber?: string) => void }) => (
+    <div data-testid="approvals-dashboard">
+      Approvals Dashboard Mock
+      <button
+        data-testid="mock-approval-decision-btn"
+        onClick={() => onApprovalDecision?.('appr_1', 'APPROVE', 'REQ-860DAC704BE2')}
+      >
+        Trigger Decision
+      </button>
+      <button
+        data-testid="mock-approval-decision-reject-btn"
+        onClick={() => onApprovalDecision?.('appr_2', 'REJECT', 'REQ-REJECT-999')}
+      >
+        Trigger Reject
+      </button>
+      <button
+        data-testid="mock-approval-decision-no-req-btn"
+        onClick={() => onApprovalDecision?.('appr_3', 'APPROVE', undefined)}
+      >
+        Trigger No Req
+      </button>
+    </div>
+  );
   return {
     __esModule: true,
     default: Mock,
@@ -424,20 +446,26 @@ describe('Action Center & Internal Tasks Redesign', () => {
     }
   });
 
-  test('tells the user when a quick status toggle is not saved and leaves the row unchanged', async () => {
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
-
+  test('renders Status as the leftmost column and does not render Done column or row checkboxes', async () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
 
-    fireEvent.click(screen.getAllByRole('checkbox')[0]);
+    // Done column header and row checkboxes must not exist
+    expect(screen.queryByRole('columnheader', { name: /^Done$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/^Done$/i)).not.toBeInTheDocument();
 
-    expect(await screen.findByText(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed)).toBeInTheDocument();
-    expect(screen.queryByText(/marked as Completed/i)).not.toBeInTheDocument();
-    expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
+    // The first column header must be Status
+    const columnHeaders = screen.getAllByRole('columnheader');
+    expect(columnHeaders[0]).toHaveTextContent(/Status/i);
+    expect(columnHeaders[1]).toHaveTextContent(/Task Subject & ID/i);
+
+    // No row checkboxes in the table
+    const table = screen.getByRole('table');
+    const tableCheckboxes = table.querySelectorAll('input[type="checkbox"]');
+    expect(tableCheckboxes.length).toBe(0);
   });
 
   test('keeps the task summary open and says so when the full task record cannot be read', async () => {
@@ -471,40 +499,24 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
   });
 
-  test('quick toggles task status via checkbox', async () => {
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValue({
-      ...mockTasks[0],
-      status: 'Completed',
-    });
-
+  test('renders task status badge in the first column and opens details on row click', async () => {
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Audit Mechanical Spares RFQ Quotes')).toBeInTheDocument();
     });
 
-    const checkboxes = screen.getAllByRole('checkbox');
-    expect(checkboxes.length).toBeGreaterThan(1);
-    fireEvent.click(checkboxes[0]);
+    // Verify status badges render properly in the first column of the rows
+    const firstRow = screen.getByTestId('task-row-tsk_101');
+    expect(within(firstRow).getByText('Pending')).toBeInTheDocument();
 
-    await waitFor(() => {
-      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
-        'tsk_101',
-        expect.objectContaining({ status: 'Closed' })
-      );
-    });
+    const secondRow = screen.getByTestId('task-row-tsk_102');
+    expect(within(secondRow).getByText('Completed')).toBeInTheDocument();
 
-    // Toggle completed task back to open
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
-      ...mockTasks[1],
-      status: 'Open',
-    });
-    fireEvent.click(checkboxes[1]);
+    // Verify row click opens the task details drawer
+    fireEvent.click(firstRow);
     await waitFor(() => {
-      expect(internalTaskClient.updateInternalTask).toHaveBeenCalledWith(
-        'tsk_102',
-        expect.objectContaining({ status: 'Open' })
-      );
+      expect(screen.getByRole('heading', { name: 'Task Details' })).toBeInTheDocument();
     });
   });
 
@@ -1357,24 +1369,6 @@ describe('Action Center & Internal Tasks Redesign', () => {
     act(() => {
       window.dispatchEvent(new CustomEvent('qua_payment_dues_updated', { detail: null }));
     });
-
-    // Quick toggle task with no task_number to test fallback to task.id
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce({
-      ...mockTasks[0],
-      id: 'tsk_no_num_1',
-      task_number: '',
-      status: 'Completed',
-    });
-    const checkboxes = screen.getAllByRole('checkbox');
-    fireEvent.click(checkboxes[0]);
-
-    await waitFor(() => {
-      expect(screen.getByText(/tsk_no_num_1/i)).toBeInTheDocument();
-    });
-
-    // Quick toggle when updateInternalTask returns null
-    (internalTaskClient.updateInternalTask as jest.Mock).mockResolvedValueOnce(null);
-    fireEvent.click(checkboxes[1]);
 
     unmount();
   });
@@ -3226,6 +3220,25 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
+  test('filters out legacy Done column from saved localStorage column settings', async () => {
+    const legacyCols = [
+      { key: 'done', label: 'Done', visible: true, required: true },
+      { key: 'status', label: 'Status', visible: true },
+      { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
+    ];
+    localStorage.setItem('qua_internal_task_col_prefs', JSON.stringify(legacyCols));
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+    });
+
+    expect(screen.queryByRole('columnheader', { name: /^Done$/i })).not.toBeInTheDocument();
+    const headers = screen.getAllByRole('columnheader');
+    expect(headers[0]).toHaveTextContent(/Status/i);
+  });
+
   test('covers offline payments, trial period drawer details, sorting with missing values, and status filtering', async () => {
     const tasksWithDetails = [
       {
@@ -3696,6 +3709,80 @@ describe('Action Center & Internal Tasks Redesign', () => {
 
     await waitFor(() => {
       expect(screen.getByText('Failed to update task in database.')).toBeInTheDocument();
+    });
+  });
+
+  test('refreshes internal tasks and updates linked task status when onApprovalDecision fires', async () => {
+    const linkedTask1: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_1',
+      title: 'Credit Allocation Request: 5 Credits for Veera [REQ-860DAC704BE2]',
+      raw: { approval_request_number: 'REQ-860DAC704BE2' },
+      status: 'Open',
+    };
+    const linkedTask2: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_2',
+      title: 'Email communication task',
+      raw: { approvalRequestNumber: 'REQ-REJECT-999' },
+      completed_at: '2026-11-20T10:00:00Z',
+      status: 'Open',
+    };
+    const linkedTask3: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_3',
+      title: 'Entity linked task',
+      related_entity_id: 'REQ-REJECT-999',
+      status: 'Open',
+    };
+    const linkedTask4: internalTaskClient.InternalTask = {
+      ...mockTasks[0],
+      id: 'tsk_linked_appr_4',
+      title: 'Label linked task',
+      related_entity_label: 'REQ-REJECT-999',
+      status: 'Open',
+    };
+    (internalTaskClient.fetchInternalTasks as jest.Mock).mockResolvedValue({
+      tasks: [linkedTask1, linkedTask2, linkedTask3, linkedTask4],
+      total: 4,
+    });
+    (internalTaskClient.fetchTaskSummary as jest.Mock).mockResolvedValue({
+      summary: { total: 4, newTasks: 0, completed: 4, inProgress: 0, pendingApproval: 0, overdue: 0 },
+      error: undefined,
+    });
+
+    render(<InternalTasksDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText(/REQ-860DAC704BE2/)).toBeInTheDocument();
+    });
+
+    // Switch to Approvals tab
+    const approvalsTab = screen.getByText('Approvals');
+    fireEvent.click(approvalsTab);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('approvals-dashboard')).toBeInTheDocument();
+    });
+
+    // Trigger mock approval decisions: APPROVE, REJECT, and no requestNumber
+    const triggerBtn = screen.getByTestId('mock-approval-decision-btn');
+    const rejectBtn = screen.getByTestId('mock-approval-decision-reject-btn');
+    const noReqBtn = screen.getByTestId('mock-approval-decision-no-req-btn');
+
+    await act(async () => {
+      fireEvent.click(triggerBtn);
+      fireEvent.click(rejectBtn);
+      fireEvent.click(noReqBtn);
+    });
+
+    expect(internalTaskClient.fetchInternalTasks).toHaveBeenCalled();
+    expect(internalTaskClient.fetchTaskSummary).toHaveBeenCalled();
+
+    // Switch back to Internal tasks tab to trigger prevTabRef reload
+    const tasksTab = screen.getByText('Internal tasks');
+    await act(async () => {
+      fireEvent.click(tasksTab);
     });
   });
 });

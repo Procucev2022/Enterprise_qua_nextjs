@@ -114,7 +114,6 @@ import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettings
 
 
 const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
-  { key: 'done', label: 'Done', visible: true, required: true },
   { key: 'status', label: 'Status', visible: true },
   { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
   { key: 'category', label: 'Category & Type', visible: true },
@@ -172,7 +171,8 @@ export default function InternalTasksDashboard() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setTaskColumns(parsed);
+          const cleaned = parsed.filter((c: ColumnDef) => c.key !== 'done');
+          setTaskColumns(cleaned);
         }
       }
     } catch {}
@@ -575,6 +575,36 @@ export default function InternalTasksDashboard() {
     }
     prevTabRef.current = activeTab;
   }, [activeTab, loadTasks, loadSummary]);
+
+  // Handle sync when an approval decision (Approve / Reject) occurs in the Approvals tab
+  const handleApprovalDecision = useCallback(
+    (_approvalId?: string, action?: 'APPROVE' | 'REJECT', requestNumber?: string) => {
+      if (requestNumber) {
+        setTasks((prev) =>
+          prev.map((t) => {
+            const isLinked =
+              t.title?.includes(requestNumber) ||
+              t.raw?.approval_request_number === requestNumber ||
+              t.raw?.approvalRequestNumber === requestNumber ||
+              t.related_entity_id === requestNumber ||
+              t.related_entity_label === requestNumber;
+            if (isLinked) {
+              return {
+                ...t,
+                status: 'Closed',
+                approval_status: action === 'APPROVE' ? 'APPROVED' : 'REJECTED',
+                completed_at: t.completed_at || new Date().toISOString(),
+              };
+            }
+            return t;
+          })
+        );
+      }
+      void loadTasks();
+      void loadSummary();
+    },
+    [loadTasks, loadSummary]
+  );
 
   useEffect(() => {
     loadTasks();
@@ -1052,9 +1082,20 @@ export default function InternalTasksDashboard() {
   };
 
   const handleApplyFilters = () => {
-    setActiveFilters({ ...draftFilters });
+    const nextFilters = { ...draftFilters };
+    setActiveFilters(nextFilters);
     setCurrentPage(1);
     setIsFilterDrawerOpen(false);
+    void fetchInternalTasks({
+      search: searchQuery,
+      ...nextFilters,
+      limit: pageSize,
+      offset: 0,
+    }).then((res) => {
+      setTasks(res.tasks);
+      setTotalTasks(res.total);
+    });
+    void loadSummary(nextFilters.assignedTo, nextFilters.taskCategory);
   };
 
   const handleResetFilters = () => {
@@ -1074,6 +1115,16 @@ export default function InternalTasksDashboard() {
     setActiveFilters(cleared);
     setCurrentPage(1);
     setIsFilterDrawerOpen(false);
+    void fetchInternalTasks({
+      search: searchQuery,
+      ...cleared,
+      limit: pageSize,
+      offset: 0,
+    }).then((res) => {
+      setTasks(res.tasks);
+      setTotalTasks(res.total);
+    });
+    void loadSummary('', 'all');
   };
 
   // Open Create Modal with clean blank values
@@ -1131,28 +1182,6 @@ export default function InternalTasksDashboard() {
     setNewDemoStatus((task.demo_status as DemoStatus) || 'Scheduled');
     setIsCreateModalOpen(true);
   }, []);
-
-  // Handle Quick Status Toggle
-  const handleToggleStatus = async (task: InternalTask) => {
-    const isCompleted = task.status === 'Closed' || task.status === 'Completed';
-    const nextStatus: TaskStatus = isCompleted ? 'Open' : 'Closed';
-    const updated = await updateInternalTask(task.id, {
-      status: nextStatus,
-      activityComment: `Status toggled to ${nextStatus}`,
-      completionConfirmed: true,
-    });
-    if (updated) {
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
-      loadSummary();
-      const msg =
-        nextStatus === 'Closed'
-          ? formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, { taskNumber: task.task_number || task.id })
-          : formatString(UI_STRINGS.actionCenter.tasks.taskReopened, { taskNumber: task.task_number || task.id });
-      showToast(msg);
-    } else {
-      showToast(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed);
-    }
-  };
 
   // Handle Create or Update Task Submission with Category Architecture
   const handleCreateTask = async (e: React.FormEvent) => {
@@ -1356,7 +1385,7 @@ export default function InternalTasksDashboard() {
       {activeTab === 'tickets' && <TicketsDashboard />}
       {activeTab === 'approvals' && (
         <div className="w-full min-w-0 max-w-full overflow-x-hidden">
-          <ApprovalsDashboard />
+          <ApprovalsDashboard onApprovalDecision={handleApprovalDecision} />
         </div>
       )}
       {activeTab === 'scorecard' && <ScorecardDashboard />}
@@ -1767,7 +1796,6 @@ export default function InternalTasksDashboard() {
                 <table className="w-full text-left text-xs min-w-[1020px] border-collapse">
                   <thead className="bg-slate-50/90 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide select-none">
                     <tr>
-                      {isColVisible('done') && <th className="py-2.5 px-3 w-12 min-w-[48px] max-w-[48px] text-center">Done</th>}
                       {isColVisible('status') && (
                         <th
                           className="py-2.5 px-3.5 w-32 min-w-[110px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
@@ -1841,18 +1869,6 @@ export default function InternalTasksDashboard() {
                           className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group h-10"
                           data-testid={`task-row-${task.id}`}
                         >
-                          {/* Checkbox toggle */}
-                          {isColVisible('done') && (
-                            <td className="py-2 px-3 w-12 min-w-[48px] max-w-[48px] text-center align-middle whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                              <input
-                                type="checkbox"
-                                checked={task.status === 'Closed' || task.status === 'Completed'}
-                                onChange={() => handleToggleStatus(task)}
-                                className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer align-middle"
-                              />
-                            </td>
-                          )}
-
                           {/* Status Badge */}
                           {isColVisible('status') && (
                             <td className="py-2 px-3.5 w-32 min-w-[110px] align-middle whitespace-nowrap">
@@ -2078,23 +2094,23 @@ export default function InternalTasksDashboard() {
           {/* RIGHT-SIDE FILTER DRAWER                                       */}
           {/* ============================================================== */}
           {isFilterDrawerOpen && (
-            <div className="fixed inset-0 z-50 overflow-hidden">
+            <div className="fixed inset-0 z-[70] overflow-hidden">
               <div
                 onClick={() => setIsFilterDrawerOpen(false)}
                 className="absolute inset-0 bg-slate-900/40 backdrop-blur-sm transition-opacity"
                 data-testid="filter-drawer-backdrop"
               />
 
-              <div className="fixed inset-y-0 right-0 max-w-full flex pl-10">
-                <div className="w-screen max-w-sm bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200">
-                  <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
+              <div className="fixed top-3 sm:top-4 right-3 sm:right-4 bottom-20 sm:bottom-22 max-w-sm w-[calc(100vw-1.5rem)] flex flex-col pointer-events-none z-[70]">
+                <div className="pointer-events-auto w-full h-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl shadow-2xl flex flex-col justify-between animate-in slide-in-from-right duration-200 overflow-hidden">
+                  <div className="p-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-2">
                       <Filter className="w-4 h-4 text-blue-600" />
                       <h3 className="font-bold text-sm text-slate-900 dark:text-white">Filter Tasks</h3>
                     </div>
                     <button
                       onClick={() => setIsFilterDrawerOpen(false)}
-                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg"
+                      className="p-1 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 rounded-lg cursor-pointer"
                     >
                       <X className="w-4 h-4" />
                     </button>
@@ -2107,7 +2123,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.taskCategory || 'all'}
                         onChange={(e) => setDraftFilters({ ...draftFilters, taskCategory: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-category"
                       >
                         <option value="all">All Categories</option>
@@ -2125,7 +2141,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.status}
                         onChange={(e) => setDraftFilters({ ...draftFilters, status: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-status"
                       >
                         <option value="all">All Statuses</option>
@@ -2141,7 +2157,7 @@ export default function InternalTasksDashboard() {
                       <select
                         value={draftFilters.priority}
                         onChange={(e) => setDraftFilters({ ...draftFilters, priority: e.target.value })}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                         data-testid="drawer-filter-priority"
                       >
                         <option value="all">All Priorities</option>
@@ -2176,8 +2192,15 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={draftFilters.dueFrom}
                             onChange={(e) => setDraftFilters({ ...draftFilters, dueFrom: e.target.value })}
-                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                             data-testid="drawer-filter-due-from"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
                           />
                         </div>
                         <div>
@@ -2186,19 +2209,26 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={draftFilters.dueTo}
                             onChange={(e) => setDraftFilters({ ...draftFilters, dueTo: e.target.value })}
-                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                            className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                             data-testid="drawer-filter-due-to"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
                           />
                         </div>
                       </div>
                     </div>
                   </div>
 
-                  <div className="p-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/50 dark:bg-slate-900/50">
+                  <div className="p-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between gap-3 bg-slate-50/80 dark:bg-slate-900/80 shrink-0 sticky bottom-0">
                     <button
                       type="button"
                       onClick={handleResetFilters}
-                      className="px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
+                      className="px-3.5 py-2 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-semibold text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer"
                       data-testid="drawer-reset-filters-btn"
                     >
                       Reset
@@ -2206,7 +2236,7 @@ export default function InternalTasksDashboard() {
                     <button
                       type="button"
                       onClick={handleApplyFilters}
-                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors text-center"
+                      className="flex-1 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold shadow-sm transition-colors text-center cursor-pointer"
                       data-testid="drawer-apply-filters-btn"
                     >
                       Apply Filters
@@ -2338,7 +2368,7 @@ export default function InternalTasksDashboard() {
                             data-testid="create-credit-account-type-select"
                           >
                             <option value="BUYER">Buyer Account</option>
-                            <option value="SELLER">Seller / Vendor</option>
+                            <option value="SELLER">Vendor</option>
                           </select>
                         </div>
                         <div>
@@ -2400,7 +2430,14 @@ export default function InternalTasksDashboard() {
                             type="date"
                             value={newDemoDate}
                             onChange={(e) => setNewDemoDate(e.target.value)}
-                            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs"
+                            onClick={(e) => {
+                              try {
+                                e.currentTarget.showPicker?.();
+                              } catch {
+                                e.currentTarget.focus();
+                              }
+                            }}
+                            className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs cursor-pointer"
                             data-testid="create-demo-date-input"
                           />
                         </div>
@@ -2526,7 +2563,14 @@ export default function InternalTasksDashboard() {
                         type="date"
                         value={newDueDate}
                         onChange={(e) => setNewDueDate(e.target.value)}
-                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white"
+                        onClick={(e) => {
+                          try {
+                            e.currentTarget.showPicker?.();
+                          } catch {
+                            e.currentTarget.focus();
+                          }
+                        }}
+                        className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs text-slate-900 dark:text-white cursor-pointer"
                       />
                     </div>
                   </div>
@@ -3021,7 +3065,14 @@ export default function InternalTasksDashboard() {
                               type="date"
                               value={rescheduleDate}
                               onChange={(e) => setRescheduleDate(e.target.value)}
-                              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white"
+                              onClick={(e) => {
+                                try {
+                                  e.currentTarget.showPicker?.();
+                                } catch {
+                                  e.currentTarget.focus();
+                                }
+                              }}
+                              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-1.5 text-xs text-slate-900 dark:text-white cursor-pointer"
                               data-testid="drawer-reschedule-date-input"
                             />
                             <input

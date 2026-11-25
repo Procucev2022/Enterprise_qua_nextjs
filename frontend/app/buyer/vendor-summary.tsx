@@ -32,6 +32,7 @@ import {
   type TableColumnOption,
   type TableSortState,
 } from '@/lib/constants';
+import { FEATURE_FLAGS } from '@/lib/featureFlags';
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import ColumnSettingsPopup from '@/app/category-manager/components/ColumnSettingsPopup';
 import {
@@ -81,9 +82,43 @@ import {
   usablePan,
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
+  validateGstin,
+  isGstValid,
 } from '@/lib/validationSchemas';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { logger } from '@/lib/logger';
+
+/**
+ * Feature flag: Controls visibility of "Revise Rating" button in Vendor Directory
+ * @default false - Intentionally disabled to hide vendor rating revision functionality
+ * @see Issue #8 - User requested to hide "Revise Rating" button from production UI
+ * Test suites control this flag via setEnableVendorRating() for coverage
+ */
+export let ENABLE_VENDOR_RATING = true; // Re-enabled: Show Revise Rating button
+
+export let ENABLE_VENDOR_EVALUATION_REQUEST = FEATURE_FLAGS.ENABLE_VENDOR_EVALUATION_REQUEST;
+
+/**
+ * Feature flag: Controls visibility of "Edit Profile" button in Vendor Directory  
+ * @default false - Intentionally disabled to hide vendor profile editing functionality
+ * @see Issue #8 - User requested to hide "Edit Profile" button from production UI
+ * Test suites control this flag via setEnableEditVendorProfile() for coverage
+ */
+export let ENABLE_EDIT_VENDOR_PROFILE = false; // New flag to hide Edit Profile button
+
+export let ENABLE_VENDOR_EVALUATION = false; // Disabled: Hide "Request Vendor Evaluation" button
+export const setEnableVendorRating = (val: boolean) => {
+  ENABLE_VENDOR_RATING = val;
+};
+export const setEnableVendorEvaluationRequest = (val: boolean) => {
+  ENABLE_VENDOR_EVALUATION_REQUEST = val;
+};
+export const setEnableEditVendorProfile = (val: boolean) => {
+  ENABLE_EDIT_VENDOR_PROFILE = val;
+};
+export const setEnableVendorEvaluation = (val: boolean) => {
+  ENABLE_VENDOR_EVALUATION = val;
+};
 
 interface VendorSummaryProps {
   onViewEvaluation: (record: VendorEvaluationRecord) => void;
@@ -249,6 +284,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [formName, setFormName] = useState('');
   const [formBrandName, setFormBrandName] = useState('');
   const [formMajorCategory, setFormMajorCategory] = useState('');
+  const [formMajorCategories, setFormMajorCategories] = useState<string[]>([]); // Multi-select divisions
   const [formMinorCategories, setFormMinorCategories] = useState<string[]>([]);
   const [formMinorInput, setFormMinorInput] = useState('');
   const [showCategorySuggestions, setShowCategorySuggestions] = useState(false);
@@ -339,10 +375,29 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormPincodePostOffices([]);
   }, [formPincode]);
   const [formGst, setFormGst] = useState('');
+  const [formGstError, setFormGstError] = useState<string | null>(null);
   const [formPan, setFormPan] = useState('');
   const [formMsme, setFormMsme] = useState('');
   const [formAnnualTurnover, setFormAnnualTurnover] = useState('');
   // Null until the user enters a rating (1.0 - 5.0). No default rating is assumed.
+
+  // GST validation with comprehensive checksum verification
+  useEffect(() => {
+    const raw = formGst.trim().toUpperCase();
+    if (!raw) {
+      setFormGstError(null);
+      return;
+    }
+    
+    // Use comprehensive validation with checksum
+    const validation = validateGstin(raw);
+    if (!validation.isValid) {
+      setFormGstError(validation.error || 'Invalid GSTIN');
+      return;
+    }
+
+    setFormGstError(null);
+  }, [formGst]);
   const [formRating, setFormRating] = useState<number | null>(null);
 
   // Vendor Upload History State & Handlers
@@ -357,8 +412,17 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
   const loadUploadHistory = useCallback(() => {
-    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
-  }, []);
+    // Load from localStorage - only real CSV uploads by this buyer
+    const localHistory = loadVendorUploadHistoryFromStorage();
+    
+    // Filter localStorage history to only show uploads by current buyer
+    const currentBuyerId = activeBuyerAccount?.id;
+    const filteredHistory = currentBuyerId 
+      ? localHistory.filter((batch: any) => !batch.buyerId || batch.buyerId === currentBuyerId)
+      : localHistory;
+    
+    setUploadHistoryList(filteredHistory);
+  }, [activeBuyerAccount?.id]);
 
   useEffect(() => {
     loadUploadHistory();
@@ -437,7 +501,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
   const allAvailableMinorCategories = useMemo(() => {
     const list: string[] = [];
+    // If divisions are selected, only show categories from those divisions
+    const divisionsToFilter = formMajorCategories.length > 0 ? formMajorCategories : null;
+    
     (categoryTaxonomy || []).forEach((c) => {
+      // If divisions selected, only include categories from those divisions
+      if (divisionsToFilter && !divisionsToFilter.includes(c.majorCategory)) {
+        return;
+      }
       (c.minorCategories || []).forEach((m) => {
         if (m && !list.includes(m)) {
           list.push(m);
@@ -445,7 +516,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       });
     });
     return list.sort((a, b) => a.localeCompare(b));
-  }, [categoryTaxonomy]);
+  }, [categoryTaxonomy, formMajorCategories]);
 
   const filteredCategorySuggestions = useMemo(() => {
     const q = formMinorInput.trim().toLowerCase();
@@ -456,6 +527,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   const clearVendorModalErrors = () => {
     setFormValidationError(null);
     setPhoneFieldError(null);
+    setFormGstError(null);
   };
 
   const reportVendorModalError = (title: string, message: string) => {
@@ -545,26 +617,65 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       <label htmlFor={id} className="block font-semibold text-slate-700 dark:text-gray-300 mb-1">
         {UI_STRINGS.vendorCategorySelect.divisionLabel} <span className="text-rose-500">*</span>
       </label>
+      
+      {/* Display selected divisions as tags */}
+      {formMajorCategories.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-2">
+          {formMajorCategories.map((division) => (
+            <span
+              key={division}
+              className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950/60 text-indigo-700 dark:text-indigo-300 text-[11px] font-semibold border border-indigo-200/50 dark:border-indigo-800"
+            >
+              {division}
+              <button
+                type="button"
+                aria-label={`Remove ${division}`}
+                onClick={() => {
+                  const updated = formMajorCategories.filter((d) => d !== division);
+                  setFormMajorCategories(updated);
+                  if (clearMinorsOnChange && updated.length === 0) {
+                    setFormMinorCategories([]);
+                  }
+                }}
+                className="hover:text-rose-500 ml-0.5"
+              >
+                <X size={10} />
+              </button>
+            </span>
+          ))}
+        </div>
+      )}
+      
+      {/* Dropdown to add divisions */}
       <select
         id={id}
         aria-label={UI_STRINGS.vendorCategorySelect.divisionLabel}
-        required
-        value={formMajorCategory}
+        value=""
         onChange={(e) => {
-          setFormMajorCategory(e.target.value);
-          setFormValidationError(null);
-          if (clearMinorsOnChange) {
-            setFormMinorCategories([]);
+          const selectedDivision = e.target.value;
+          if (selectedDivision && !formMajorCategories.includes(selectedDivision)) {
+            setFormMajorCategories([...formMajorCategories, selectedDivision]);
+            // Keep backward compatibility: set single major category to first selected
+            if (formMajorCategories.length === 0) {
+              setFormMajorCategory(selectedDivision);
+            }
           }
+          setFormValidationError(null);
         }}
         className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900"
       >
-        <option value="">{UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}</option>
-        {availableMajorCategories.map((cat) => (
-          <option key={cat} value={cat}>
-            {cat}
-          </option>
-        ))}
+        <option value="">
+          {formMajorCategories.length > 0 
+            ? 'Add another division...' 
+            : UI_STRINGS.vendorCategorySelect.divisionSelectPlaceholder}
+        </option>
+        {availableMajorCategories
+          .filter((cat) => !formMajorCategories.includes(cat))
+          .map((cat) => (
+            <option key={cat} value={cat}>
+              {cat}
+            </option>
+          ))}
       </select>
     </div>
   );
@@ -691,6 +802,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setFormName('');
     setFormBrandName('');
     setFormMajorCategory('');
+    setFormMajorCategories([]); // Reset multi-select divisions
     setFormMinorCategories([]);
     setFormMinorInput('');
     setShowCategorySuggestions(false);
@@ -712,7 +824,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setAddModalOpen(true);
   };
 
-  const resolveSubmittedCategoryValues = (): { majorCategory: string; minorCategories: string[] } | null => {
+  const resolveSubmittedCategoryValues = (): { majorCategory: string; minorCategories: string[]; majorCategories?: string[] } | null => {
     const pendingTag = formMinorInput.trim();
     if (pendingTag && isPlaceholderVendorCategory(pendingTag) && formMinorCategories.length === 0) {
       reportVendorModalError(
@@ -727,8 +839,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       : formMinorCategories;
     const minorCategories = normalizeVendorCategoryList(combinedMinors);
 
-    const rawMajor = formMajorCategory.trim();
-    if (rawMajor && isPlaceholderVendorCategory(rawMajor)) {
+    // Validate divisions: Use multi-select if available, fallback to single
+    const selectedDivisions = formMajorCategories.length > 0 ? formMajorCategories : [formMajorCategory.trim()];
+    const validDivisions = selectedDivisions.filter((d) => d && !isPlaceholderVendorCategory(d));
+    
+    if (selectedDivisions.some((d) => d && isPlaceholderVendorCategory(d))) {
       reportVendorModalError(
         UI_STRINGS.addVendorModal.categoryRequiredTitle,
         UI_STRINGS.addVendorModal.invalidDivisionError
@@ -736,7 +851,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return null;
     }
 
-    let majorCategory = rawMajor;
+    let majorCategory = validDivisions[0] || '';
     if (!majorCategory && minorCategories.length > 0) {
       majorCategory = getMajorForCategory(minorCategories[0]) || '';
     }
@@ -749,7 +864,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       return null;
     }
 
-    return { majorCategory, minorCategories };
+    // Return first division for backward compatibility, store all divisions in majorCategories
+    return { majorCategory, minorCategories, majorCategories: validDivisions };
   };
 
   // Form Submission: Add Vendor — persists through the real POST /api/vendors
@@ -792,6 +908,11 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
     if (formPincodeError) {
       reportVendorModalError(UI_STRINGS.addVendorModal.invalidPincodeTitle, formPincodeError);
+      return;
+    }
+
+    if (formGstError) {
+      reportVendorModalError('Invalid GSTIN', formGstError);
       return;
     }
 
@@ -999,6 +1120,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const richer =
       mergedVendors.find((v) => (vendor.id && v.id === vendor.id) || (vendor.email && v.email === vendor.email)) ||
       vendor;
+    const resolvedRating =
+      normalizeVendorRating(vendor.rating, vendor.score) ??
+      normalizeVendorRating(richer.rating, richer.score) ??
+      normalizeVendorRating((richer as any).storeRecord?.rating, (richer as any).storeRecord?.overallScore) ??
+      normalizeVendorRating((richer as any).latestRatingRevision?.newRating) ??
+      normalizeVendorRating((vendor as any).latestRatingRevision?.newRating);
     const resolvedGstin = String(
       richer.gstin ||
       richer.gst ||
@@ -1016,12 +1143,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       ? VENDOR_ACTIVE_STATUSES.INACTIVE
       : hasEvalRequest
       ? 'PENDING EVALUATION'
-      : richer.status && richer.status !== 'PENDING EVALUATION'
+      : richer.status && richer.status !== 'PENDING EVALUATION' && richer.status !== 'REGISTERED / NOT EVALUATED'
       ? richer.status
-      : 'REGISTERED / NOT EVALUATED';
+      : 'NOT EVALUATED';
 
     setSelectedVendorForCrud({
       ...richer,
+      ...(resolvedRating !== null ? { rating: resolvedRating } : {}),
       status: resolvedStatus,
       ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
     });
@@ -1184,7 +1312,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   // Confirm Bulk Status Update (Non-destructive Mark Inactive / Activate)
   const resolveBulkTargetVendors = (targetIsActive: boolean): VendorEntry[] => {
     const selectedVendors = mergedVendors.filter(
-      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount)
+      (v) => selectedVendorIds.includes(v.id) && canBuyerManageVendor(v, activeBuyerAccount, currentUserSession)
     );
     const targetedVendors = selectedVendors.filter((v) =>
       targetIsActive ? isVendorInactive(v) : isVendorActive(v)
@@ -1494,14 +1622,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         ? VENDOR_ACTIVE_STATUSES.INACTIVE
         : hasEvaluationRequest
         ? 'PENDING EVALUATION'
-        : bv.status && bv.status !== 'PENDING EVALUATION'
+        : bv.status && bv.status !== 'PENDING EVALUATION' && bv.status !== 'REGISTERED / NOT EVALUATED'
         ? bv.status
-        : 'REGISTERED / NOT EVALUATED';
+        : 'NOT EVALUATED';
 
       return {
         ...bv,
         status: resolvedStatus as VendorEntry['status'],
-        score: null,
+        score: typeof bv.score === 'number' ? bv.score : null,
         evaluated: false,
         hasRecord: false,
         storeRecord: null,
@@ -1630,7 +1758,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       (selectedStatus === 'ACTIVE' && isVendorActive(v)) ||
       (selectedStatus === 'INACTIVE' && isVendorInactive(v)) ||
       (selectedStatus === 'EVALUATED' && v.evaluated) ||
-      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated) ||
+      (selectedStatus === 'NOT_EVALUATED' && !v.evaluated && !v.evaluationRequested && !v.evaluationRequestedAt) ||
+      (selectedStatus === 'PENDING_EVALUATION' && (v.evaluationRequested || v.evaluationRequestedAt)) ||
       (selectedStatus === 'PREFERRED' && v.status === 'PREFERRED ENTERPRISE SUPPLIER') ||
       (selectedStatus === 'CONDITIONAL' && v.status === 'CONDITIONAL / UNDER REVIEW');
 
@@ -1667,20 +1796,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     setSelectedVendorIds([]);
   };
 
-  const getStatusStyle = (status: string) => {
-    if (status === 'PREFERRED ENTERPRISE SUPPLIER') {
-      return 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-800 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800';
-    }
-    if (status === 'CONDITIONAL / UNDER REVIEW') {
-      return 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-300 border-amber-200 dark:border-amber-800';
-    }
-    return 'bg-slate-100 dark:bg-gray-800 text-slate-600 dark:text-gray-400 border-slate-200 dark:border-gray-700';
-  };
-
   // Vendor Card Renderer
   const renderVendorCard = (vendor: any) => {
     const isUploaded = isBuyerUploaded(vendor);
-    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount);
+    const canManage = canBuyerManageVendor(vendor, activeBuyerAccount, currentUserSession);
     const originDetails = getVendorOriginDetails(vendor);
 
     // Check if this vendor has submitted a quote in any RFQ
@@ -1734,7 +1853,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         className={`hover:bg-slate-50/80 dark:hover:bg-gray-800/40 transition-colors border-b border-slate-100 dark:border-gray-800/60 ${isSelected ? 'bg-indigo-50/30 dark:bg-indigo-950/20' : ''} ${vendorInactive ? 'opacity-75 bg-slate-50/60 dark:bg-gray-900/40' : ''}`}
       >
         {/* Selection Checkbox */}
-        <td className="py-1.5 px-2.5 w-10 text-center align-middle">
+        <td className="py-1.5 px-2.5 w-10 min-w-[40px] text-center align-middle">
           <input
             type="checkbox"
             checked={isSelected}
@@ -1746,10 +1865,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 1. Supplier Name */}
-        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[180px] max-w-[240px] align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'name', 'py-1.5 px-2.5 min-w-[260px] max-w-[320px] align-middle')}>
           <div className="space-y-0.5">
             <h3
-              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[220px]"
+              className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-1.5 max-w-[240px]"
               title={vendor.name}
             >
               <span className="truncate block" title={vendor.name}>
@@ -1762,40 +1881,61 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
 
             {/* Performance Rating Revision Badge / History Line */}
             {vendor.latestRatingRevision && (
-              <div className="mt-1 p-1.5 rounded-lg bg-amber-50/60 dark:bg-amber-950/30 border border-amber-200/60 dark:border-amber-900/40 text-[10px] space-y-0.5">
-                <div className="flex items-center justify-between gap-1">
+              <div className="mt-1.5 p-2 rounded-lg bg-amber-50/70 dark:bg-amber-950/30 border border-amber-200/80 dark:border-amber-900/50 text-[10px] space-y-1 w-full max-w-[280px] shadow-xs">
+                <div className="flex items-center justify-between gap-1 flex-wrap">
                   <div className="flex items-center gap-1 font-bold text-amber-900 dark:text-amber-300">
-                    <Star size={11} className="fill-amber-500 text-amber-500" />
-                    <span>
-                      Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★ (
-                      {vendor.latestRatingRevision.newCompositeScore}%)
-                    </span>
-                    <span className="text-[9px] font-normal text-slate-500">
-                      by {vendor.latestRatingRevision.buyerCompany} ({vendor.latestRatingRevision.timestamp.split(' ')[0]})
+                    <Star size={11} className="fill-amber-500 text-amber-500 shrink-0" />
+                    <span>Buyer Rating Revision: {vendor.latestRatingRevision.newRating} ★</span>
+                    <span className="text-[9.5px] font-semibold text-amber-700 dark:text-amber-400">
+                      ({vendor.latestRatingRevision.newCompositeScore}%)
                     </span>
                   </div>
+                  <span
+                    className="text-[9px] font-medium text-slate-500 dark:text-gray-400 truncate max-w-[120px]"
+                    title={vendor.latestRatingRevision.buyerCompany}
+                  >
+                    by {vendor.latestRatingRevision.buyerCompany}
+                  </span>
+                </div>
+
+                <div className="text-[9px] text-slate-500 dark:text-gray-400">
+                  {(() => {
+                    const rawTs = String(vendor.latestRatingRevision.timestamp || '');
+                    const datePart = rawTs.includes('T') ? rawTs.split('T')[0] : rawTs.split(' ')[0];
+                    return datePart || rawTs;
+                  })()}
+                </div>
+
+                {vendor.latestRatingRevision.remarks && (
+                  <p
+                    className="text-slate-600 dark:text-gray-300 italic text-[9.5px] line-clamp-2 leading-tight break-words"
+                    title={vendor.latestRatingRevision.remarks}
+                  >
+                    &ldquo;{vendor.latestRatingRevision.remarks}&rdquo;
+                  </p>
+                )}
+
+                <div className="flex items-center justify-between gap-1 pt-1 border-t border-amber-200/60 dark:border-amber-800/40 text-[9px] flex-wrap">
+                  <span className="text-slate-600 dark:text-gray-400 font-medium">
+                    Quality: {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery: {vendor.latestRatingRevision.deliveryScore}
+                  </span>
                   <button
                     type="button"
                     onClick={() =>
                       vendor.latestRatingRevision && openRatingRevisionEmailModal(vendor.latestRatingRevision)
                     }
-                    className="text-[9px] font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
+                    className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 shrink-0"
                   >
                     <Mail size={10} /> View Dispatched Email Notice
                   </button>
                 </div>
-                <p className="text-slate-600 dark:text-gray-300 italic text-[9.5px]">
-                  &ldquo;{vendor.latestRatingRevision.remarks}&rdquo; (Quality:{' '}
-                  {vendor.latestRatingRevision.qualityScore}, Cost: {vendor.latestRatingRevision.costScore}, Delivery:{' '}
-                  {vendor.latestRatingRevision.deliveryScore})
-                </p>
               </div>
             )}
           </div>
         </td>
 
         {/* 2. Vendor Code */}
-        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
+        <td className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-1.5 px-2.5 min-w-[110px] whitespace-nowrap align-middle font-mono text-[11px] text-slate-600 dark:text-gray-300')}>
           <span className="truncate block max-w-[100px]" title={vendor.vendorCode}>
             {vendor.vendorCode}
           </span>
@@ -1821,7 +1961,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 4. Category (Minor Categories) */}
-        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[150px] align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-1.5 px-2.5 min-w-[160px] align-middle')}>
           {(() => {
             const normalizedRowMinors = normalizeVendorCategoryList(vendor.minorCategories);
             return (
@@ -1873,7 +2013,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 5. Primary Source Badge */}
-        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'source', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle')}>
           {isUploaded ? (
             <span className="px-2 py-0.5 rounded-full text-[9px] font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-700 dark:text-indigo-300 border border-indigo-200 dark:border-indigo-800/60 inline-flex items-center gap-1 shadow-xs">
               <UploadCloud size={10} className="text-indigo-600 dark:text-indigo-400" />
@@ -1888,14 +2028,14 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 6. Secondary Origin Tag */}
-        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'origin', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold border ${originDetails.badgeClass}`}>
             {originDetails.origin}
           </span>
         </td>
 
         {/* 7. RFQ Engagement */}
-        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 whitespace-nowrap align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'engagement', 'py-1.5 px-2.5 min-w-[150px] whitespace-nowrap align-middle')}>
           <div className="flex items-center gap-1 flex-wrap">
             {engagement.isEngaged ? (
               <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-900/50 inline-flex items-center gap-0.5">
@@ -1918,7 +2058,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 8. Contact Person */}
-        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 max-w-[160px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
+        <td className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-1.5 px-2.5 min-w-[150px] max-w-[180px] align-middle text-[11px] text-slate-600 dark:text-gray-300')}>
           <div
             className="truncate font-medium text-slate-700 dark:text-slate-200 max-w-[150px]"
             title={vendor.contactPerson ? `Contact: ${vendor.contactPerson}` : undefined}
@@ -1928,7 +2068,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 9. Email */}
-        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 max-w-[190px] align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'email', 'py-1.5 px-2.5 min-w-[190px] max-w-[220px] align-middle text-[11px]')}>
           <div
             className="truncate text-slate-500 dark:text-gray-400 max-w-[180px]"
             title={vendor.email}
@@ -1938,7 +2078,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 10. Phone */}
-        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 whitespace-nowrap align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'phone', 'py-1.5 px-2.5 min-w-[130px] whitespace-nowrap align-middle text-[11px]')}>
           <div
             className="truncate text-slate-500 dark:text-gray-400 max-w-[140px]"
             title={vendor.phone}
@@ -1948,7 +2088,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 11. Location */}
-        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 max-w-[180px] align-middle text-[11px]')}>
+        <td className={getTableColumnClass(vendorColumns, 'location', 'py-1.5 px-2.5 min-w-[160px] max-w-[200px] align-middle text-[11px]')}>
           {(() => {
             const vendorAddress = vendor.location || `${vendor.city || ''}${vendor.city && vendor.state ? ', ' : ''}${vendor.state || ''}`;
             return (
@@ -1964,7 +2104,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 12. AI Score */}
-        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'score', 'py-1.5 px-2.5 min-w-[120px] whitespace-nowrap text-center align-middle')}>
           {showEvaluation && hasCompletedEvaluation && typeof vendor.score === 'number' ? (
             <div className="space-y-0.5">
               <div className="text-[9px] uppercase font-bold text-slate-400">Mode 3 AI Score</div>
@@ -1989,7 +2129,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
         </td>
 
         {/* 13. Rating */}
-        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        <td className={getTableColumnClass(vendorColumns, 'rating', 'py-1.5 px-2.5 min-w-[120px] whitespace-nowrap text-center align-middle')}>
           {(() => {
             const displayRating = normalizeVendorRating(vendor.rating, vendor.score);
             return displayRating !== null ? (
@@ -2000,8 +2140,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })()}
         </td>
 
-        {/* 14. Status */}
-        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 whitespace-nowrap text-center align-middle')}>
+        {/* 14. Status - Only show ACTIVE or INACTIVE */}
+        <td className={getTableColumnClass(vendorColumns, 'status', 'py-1.5 px-2.5 min-w-[140px] whitespace-nowrap text-center align-middle')}>
           {vendorInactive ? (
             <span
               data-testid={`status-badge-inactive-${vendor.id}`}
@@ -2013,27 +2153,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             </span>
           ) : (
             <span
-              className={`px-2 py-0.5 rounded text-[10px] font-bold border inline-block ${currentMode === 'mode_1' && !isUploaded
-                ? 'bg-slate-100 dark:bg-gray-800 text-slate-500 border-slate-200'
-                : getStatusStyle(vendor.status || '')
-                }`}
+              data-testid={`status-badge-active-${vendor.id}`}
+              title="Active vendor"
+              className="px-2 py-0.5 rounded text-[10px] font-bold border inline-flex items-center gap-1 bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-900/60"
             >
-              {currentMode === 'mode_1' && !isUploaded
-                ? 'UNAVAILABLE IN V1'
-                : isLockedForProcucevV2
-                  ? 'LOCKED (PENDING BID)'
-                  : currentMode === 'mode_2' && isUploaded && !(vendor as any).overlap
-                    ? 'BUYER ROSTER (NO EVAL)'
-                    : vendor.status}
-            </span>
-          )}
-          {vendor.evaluationRequested && (
-            <span className="mt-1 block text-[10px] font-semibold text-emerald-700 dark:text-emerald-300">
-              {vendor.evaluationRequestedAt
-                ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                  date: new Date(vendor.evaluationRequestedAt).toLocaleDateString(),
-                })
-                : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
+              <Power size={10} />
+              {UI_STRINGS.vendorStatusControl.activeBadge}
             </span>
           )}
         </td>
@@ -2051,18 +2176,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               <Eye size={11} className="text-indigo-600 dark:text-indigo-400" /> View Profile
             </button>
 
-            {/* Edit Vendor Button - Only for buyer-owned vendors */}
-            {canManage && (
-              <button
-                type="button"
-                onClick={() => handleOpenEditModal(vendor)}
-                className="btn btn-secondary btn-xs font-semibold flex items-center gap-1 hover:text-indigo-600 dark:hover:text-indigo-400 shadow-xs"
-                title="Edit vendor company information, categories, and contact details"
-              >
-                <Pencil size={11} /> Edit
-              </button>
-            )}
-
             {/* Mark Inactive / Reactivate Button - Only for buyer-owned vendors */}
             {canManage && (
               <button
@@ -2071,8 +2184,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                 onClick={() => handleOpenStatusModal(vendor, vendorInactive)}
                 className={
                   vendorInactive
-                    ? 'btn btn-ghost btn-xs text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1'
-                    : 'btn btn-ghost btn-xs text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1'
+                    ? 'btn btn-secondary btn-xs font-semibold text-emerald-700 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-950/40 flex items-center gap-1 shadow-xs'
+                    : 'btn btn-secondary btn-xs font-semibold text-amber-700 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/40 flex items-center gap-1 shadow-xs'
                 }
                 title={
                   vendorInactive
@@ -2088,14 +2201,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             )}
 
             {/* Rate Vendor / AI Rating Button */}
-            <button
-              type="button"
-              onClick={() => openRevisionModal(vendor)}
-              className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
-              title="Rate supplier manually or request vendor evaluation"
-            >
-              <Star size={11} className="fill-current" /> Revise Rating
-            </button>
+            {ENABLE_VENDOR_RATING && (
+              <button
+                type="button"
+                onClick={() => openRevisionModal(vendor)}
+                className="btn btn-amber btn-xs font-bold flex items-center gap-1 shadow-xs"
+                title="Rate supplier manually or request vendor evaluation"
+              >
+                <Star size={11} className="fill-current" /> Revise Rating
+              </button>
+            )}
 
             {showEvaluation ? (
               <button
@@ -2174,21 +2289,13 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       </div>
 
       {/* Stats Counter Bar */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-2 md:grid-cols-3 gap-2.5">
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
           <div className="text-[10px] uppercase font-bold text-slate-400">
             {UI_STRINGS.vendorSummaryStats.totalVendorLabel}
           </div>
           <div className="text-xl sm:text-2xl font-black text-indigo-600 dark:text-indigo-400 mt-0.5">
             {buyerFilteredVendors.length}
-          </div>
-        </div>
-        <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
-          <div className="text-[10px] uppercase font-bold text-slate-400">
-            {UI_STRINGS.vendorSummaryStats.ocrEvaluatedLabel}
-          </div>
-          <div className="text-xl sm:text-2xl font-black text-emerald-600 dark:text-emerald-400 mt-0.5">
-            {buyerFilteredVendors.filter((v) => v.evaluated).length}
           </div>
         </div>
         <div className="p-2.5 sm:p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 shadow-sm text-center">
@@ -2247,8 +2354,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <option value="ALL">{UI_STRINGS.vendorStatusControl.filterAllStatuses}</option>
             <option value="ACTIVE">{UI_STRINGS.vendorStatusControl.filterActiveOnly}</option>
             <option value="INACTIVE">{UI_STRINGS.vendorStatusControl.filterInactiveOnly}</option>
-            <option value="EVALUATED">Evaluated Only</option>
-            <option value="NOT_EVALUATED">Pending Evaluation</option>
             <option value="PREFERRED">Preferred Status</option>
             <option value="CONDITIONAL">Conditional / Review</option>
           </select>
@@ -2351,25 +2456,31 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       {/* Vendors Display List */}
       <div className="space-y-2.5">
         {buyerFilteredVendors.length > 0 && (
-          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs border-collapse min-w-[1380px]">
-                <thead>
-                  <tr className="bg-slate-50 dark:bg-gray-800/60 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
-                    <th className="py-2 px-2.5 w-10 text-center">
+          <div className="rounded-2xl bg-white dark:bg-gray-900/80 border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden flex flex-col">
+            <div
+              data-testid="vendor-directory-table-container"
+              className="w-full max-w-full overflow-x-auto vendor-directory-table-scroll focus:outline-none"
+              tabIndex={0}
+              role="region"
+              aria-label="Vendor Directory Table"
+            >
+              <table className="w-full text-left text-xs border-collapse min-w-[2260px]">
+                <thead className="sticky top-0 z-10 bg-slate-50 dark:bg-gray-800 shadow-xs">
+                  <tr className="bg-slate-50 dark:bg-gray-800/90 border-b border-slate-200 dark:border-gray-800 text-slate-500 dark:text-gray-400 font-bold uppercase tracking-wider text-[10px]">
+                    <th className="py-2 px-2.5 w-10 min-w-[40px] text-center">
                       <span className="sr-only">Select</span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('name', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'name')}
-                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[180px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'name', 'py-2 px-2.5 min-w-[260px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Supplier Name <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'name')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('vendorCode', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'vendorCode')}
-                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'vendorCode', 'py-2 px-2.5 min-w-[110px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Vendor Code <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'vendorCode')}</span></span>
                     </th>
@@ -2383,77 +2494,77 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <th
                       onClick={createColumnSortClickHandler('minorCategories', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'minorCategories')}
-                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'minorCategories', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">{UI_STRINGS.vendorCategorySelect.categoryHeader} <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'minorCategories')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('source', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'source')}
-                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'source', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Source <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'source')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('origin', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'origin')}
-                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'origin', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Origin <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'origin')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('engagement', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'engagement')}
-                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'engagement', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">RFQ Engagement <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'engagement')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('contactPerson', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'contactPerson')}
-                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'contactPerson', 'py-2 px-2.5 min-w-[150px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Contact Person <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'contactPerson')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('email', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'email')}
-                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'email', 'py-2 px-2.5 min-w-[190px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Email <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'email')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('phone', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'phone')}
-                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'phone', 'py-2 px-2.5 min-w-[130px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Phone <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'phone')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('location', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'location')}
-                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'location', 'py-2 px-2.5 min-w-[160px] cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center gap-1">Location <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'location')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('score', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'score')}
-                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'score', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">AI Score <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'score')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('rating', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'rating')}
-                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'rating', 'py-2 px-2.5 min-w-[120px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Rating <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'rating')}</span></span>
                     </th>
                     <th
                       onClick={createColumnSortClickHandler('status', setVendorTableSort)}
                       aria-sort={getTableAriaSort(vendorTableSort, 'status')}
-                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
+                      className={getTableColumnClass(vendorColumns, 'status', 'py-2 px-2.5 min-w-[140px] text-center cursor-pointer select-none whitespace-nowrap hover:bg-slate-100 dark:hover:bg-gray-800')}
                     >
                       <span className="inline-flex items-center justify-center gap-1">Status <span aria-hidden="true">{getSortIndicatorSymbol(vendorTableSort, 'status')}</span></span>
                     </th>
@@ -2696,12 +2807,16 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   id="add-vendor-gstin"
                   type="text"
                   required
-                  placeholder="15-character GSTIN"
+                  placeholder="15-character GSTIN (e.g., 29ABCDE1234F1Z5)"
                   maxLength={15}
                   value={formGst}
                   onChange={(e) => setFormGst(e.target.value.toUpperCase())}
-                  className="w-full text-xs p-2 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-900 uppercase font-mono"
+                  className={`w-full text-xs p-2 rounded-lg border uppercase font-mono ${formGstError ? 'border-rose-400 dark:border-rose-700' : 'border-slate-200 dark:border-gray-700'
+                    } bg-white dark:bg-gray-900`}
                 />
+                {formGstError && formGst.trim().length > 0 && (
+                  <p className="text-[10px] text-rose-500 mt-0.5 font-medium">{formGstError}</p>
+                )}
               </div>
 
               <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100 dark:border-gray-800">
@@ -3102,68 +3217,35 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Modal Body */}
             <div className="overflow-y-auto my-3 space-y-4 pr-1 text-xs">
               {/* Score & Key Highlights Bar */}
-              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
+              <div className="p-4 rounded-xl bg-gradient-to-r from-indigo-50 to-purple-50/50 dark:from-indigo-950/40 dark:to-purple-950/30 border border-indigo-200/60 dark:border-indigo-800/50 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-center">
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
                   <span className="text-[10px] text-slate-400 uppercase font-bold block">Rating</span>
                   <div className="font-extrabold text-amber-600 text-sm mt-0.5 flex items-center justify-center gap-1">
                     <Star size={13} className="fill-amber-500 text-amber-500" />
-                    {normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) !== null
-                      ? `${normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score)!.toFixed(1)} / 5.0`
-                      : '—'}
-                  </div>
-                </div>
-
-                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Mode 3 AI Score</span>
-                  <div className="font-extrabold font-mono text-indigo-600 text-sm mt-0.5">
                     {(() => {
-                      const hasRecord = Boolean(
-                        (selectedVendorForCrud.storeRecord && typeof selectedVendorForCrud.storeRecord.overallScore === 'number') ||
-                        allEvaluations.some(
-                          (e) =>
-                            ((e.vendorId && e.vendorId === selectedVendorForCrud.id) ||
-                              (e.vendorName && e.vendorName.toLowerCase() === (selectedVendorForCrud.name || '').toLowerCase())) &&
-                            typeof e.overallScore === 'number'
-                        )
-                      );
-                      return hasRecord && typeof selectedVendorForCrud.score === 'number'
-                        ? `${selectedVendorForCrud.score}%`
-                        : '—';
+                      const displayRating =
+                        normalizeVendorRating(selectedVendorForCrud.rating, selectedVendorForCrud.score) ??
+                        normalizeVendorRating(selectedVendorForCrud.latestRatingRevision?.newRating) ??
+                        normalizeVendorRating(selectedVendorForCrud.storeRecord?.rating, selectedVendorForCrud.storeRecord?.overallScore) ??
+                        (typeof (selectedVendorForCrud as any).actualRating === 'number' ? (selectedVendorForCrud as any).actualRating : null);
+                      return displayRating !== null ? `${displayRating.toFixed(1)} / 5.0` : '—';
                     })()}
                   </div>
                 </div>
 
+                {/* Status card - Only show ACTIVE/INACTIVE */}
                 <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">
-                    {UI_STRINGS.vendorStatusControl.evaluationStatusCardHeading}
-                  </span>
+                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Status</span>
                   <div
-                    className={`font-bold text-[10.5px] mt-0.5 truncate ${isVendorInactive(selectedVendorForCrud)
-                      ? 'text-rose-600 dark:text-rose-400'
-                      : 'text-emerald-600 dark:text-emerald-400'
-                      }`}
+                    className={`font-bold text-[10.5px] mt-0.5 truncate ${
+                      isVendorInactive(selectedVendorForCrud)
+                        ? 'text-rose-600 dark:text-rose-400'
+                        : 'text-emerald-600 dark:text-emerald-400'
+                    }`}
                   >
                     {isVendorInactive(selectedVendorForCrud)
                       ? UI_STRINGS.vendorStatusControl.inactiveBadge
-                      : (selectedVendorForCrud.status === 'PENDING EVALUATION' && !selectedVendorForCrud.evaluationRequested && !selectedVendorForCrud.evaluationRequestedAt
-                        ? UI_STRINGS.vendorStatusControl.notEvaluatedStatus
-                        : selectedVendorForCrud.status || '—')}
-                  </div>
-                  {selectedVendorForCrud.evaluationRequested && (
-                    <span className="mt-1 block text-[9px] font-semibold text-emerald-700 dark:text-emerald-300 truncate">
-                      {selectedVendorForCrud.evaluationRequestedAt
-                        ? formatString(UI_STRINGS.vendorEvaluationRequest.requestedOnLabel, {
-                          date: new Date(selectedVendorForCrud.evaluationRequestedAt).toLocaleDateString(),
-                        })
-                        : UI_STRINGS.vendorEvaluationRequest.requestedLabel}
-                    </span>
-                  )}
-                </div>
-
-                <div className="p-2 bg-white dark:bg-gray-900 rounded-lg border border-slate-200 dark:border-gray-800">
-                  <span className="text-[10px] text-slate-400 uppercase font-bold block">Roster Origin</span>
-                  <div className="font-bold text-[10.5px] text-slate-700 dark:text-gray-300 mt-0.5 truncate">
-                    {isBuyerUploaded(selectedVendorForCrud) ? 'Internal Vendor' : 'Procucev Network'}
+                      : UI_STRINGS.vendorStatusControl.activeBadge}
                   </div>
                 </div>
               </div>
@@ -3174,7 +3256,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
                     <Layers size={13} className="text-indigo-600" /> Procurement Taxonomy &amp; Products
                   </span>
-                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                  {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                     <button
                       type="button"
                       data-testid="view-profile-edit-category-button"
@@ -3325,7 +3407,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Actions */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2 flex-wrap">
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                {ENABLE_EDIT_VENDOR_PROFILE && canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     onClick={() => {
@@ -3337,7 +3419,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                     <Pencil size={13} /> Edit Profile
                   </button>
                 )}
-                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount) && (
+                {canBuyerManageVendor(selectedVendorForCrud, activeBuyerAccount, currentUserSession) && (
                   <button
                     type="button"
                     data-testid="view-profile-status-toggle-button"
@@ -3358,24 +3440,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       : UI_STRINGS.vendorStatusControl.markInactiveButton}
                   </button>
                 )}
-                <button
-                  type="button"
-                  onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
-                  disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
-                  className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
-                  title={
-                    isVendorInactive(selectedVendorForCrud)
-                      ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
-                      : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
-                  }
-                >
-                  {isRequestingEvaluation ? (
-                    <Loader2 size={13} className="animate-spin" />
-                  ) : (
-                    <Send size={13} />
-                  )}
-                  {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
-                </button>
+                {ENABLE_VENDOR_EVALUATION && (
+                  <button
+                    type="button"
+                    onClick={() => handleRequestVendorEvaluation(selectedVendorForCrud)}
+                    disabled={isRequestingEvaluation || isVendorInactive(selectedVendorForCrud)}
+                    className="btn btn-secondary btn-sm font-semibold text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/50 flex items-center gap-1.5 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={
+                      isVendorInactive(selectedVendorForCrud)
+                        ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                        : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                    }
+                  >
+                    {isRequestingEvaluation ? (
+                      <Loader2 size={13} className="animate-spin" />
+                    ) : (
+                      <Send size={13} />
+                    )}
+                    {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                  </button>
+                )}
               </div>
 
               <button
@@ -3878,24 +3962,26 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       <span className="text-[11px] font-bold uppercase tracking-wider text-slate-700 dark:text-gray-300">
                         1. Rate Performance (Manual)
                       </span>
-                      <button
-                        type="button"
-                        onClick={() => handleRequestVendorEvaluation(vendor)}
-                        disabled={isRequestingEvaluation || isVendorInactive(vendor)}
-                        className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                        title={
-                          isVendorInactive(vendor)
-                            ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
-                            : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
-                        }
-                      >
-                        {isRequestingEvaluation ? (
-                          <Loader2 size={11} className="animate-spin" />
-                        ) : (
-                          <Send size={11} />
-                        )}
-                        {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
-                      </button>
+                      {ENABLE_VENDOR_EVALUATION_REQUEST && (
+                        <button
+                          type="button"
+                          onClick={() => handleRequestVendorEvaluation(vendor)}
+                          disabled={isRequestingEvaluation || isVendorInactive(vendor)}
+                          className="btn btn-xs font-bold bg-indigo-600 hover:bg-indigo-700 text-white flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                          title={
+                            isVendorInactive(vendor)
+                              ? UI_STRINGS.vendorStatusControl.inactiveVendorEvalBlocked
+                              : UI_STRINGS.vendorEvaluationRequest.buttonTooltip
+                          }
+                        >
+                          {isRequestingEvaluation ? (
+                            <Loader2 size={11} className="animate-spin" />
+                          ) : (
+                            <Send size={11} />
+                          )}
+                          {UI_STRINGS.vendorEvaluationRequest.buttonLabel}
+                        </button>
+                      )}
                     </div>
 
                     {vendor.evaluationRequested && (
@@ -4117,12 +4203,12 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                       {selectedHistoryBatch ? 'Vendor Template Upload Batch Details' : 'Vendor Template Upload History'}
                     </h3>
                     <span className="badge badge-indigo font-bold text-[10px]">
-                      {selectedHistoryBatch ? 'Full Step Audit' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
+                      {selectedHistoryBatch ? 'Batch Records' : `${uploadHistoryList.length} Upload${uploadHistoryList.length === 1 ? '' : 's'} Recorded`}
                     </span>
                   </div>
                   {selectedHistoryBatch && (
                     <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                      Detailed breakdown of ingestion parameters, validation metrics, supplier records, and sourcing activation status.
+                      Overview of uploaded supplier document records and batch ingestion metrics.
                     </p>
                   )}
                 </div>
@@ -4156,7 +4242,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             <div className="overflow-y-auto flex-1 pr-1 space-y-4">
               {selectedHistoryBatch ? (
                 /* ========================================================================= */
-                /* DETAILED 4-STEP BREAKDOWN VIEW FOR A SELECTED BATCH                       */
+                /* DIRECT UPLOADED DOCUMENT RECORDS & ANALYTICS VIEW FOR SELECTED BATCH     */
                 /* ========================================================================= */
                 (() => {
                   const records = selectedHistoryBatch.records || [];
@@ -4164,6 +4250,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                   const totalCount: number | string = selectedHistoryBatch.total ?? selectedHistoryBatch.imported ?? (records.length > 0 ? records.length : '—');
                   const importedCount: number | string = selectedHistoryBatch.imported ?? totalCount;
                   const duplicateCount: number | string = selectedHistoryBatch.duplicates ?? '—';
+                  const uniqueCategories = Array.from(new Set(records.map((r: any) => r.category).filter(Boolean)));
+                  const categoriesCount: number | string = records.length > 0
+                    ? (uniqueCategories.length > 0 ? uniqueCategories.length : 1)
+                    : (selectedHistoryBatch.category ? 1 : '—');
 
                   const filteredRecords = records.filter((r: any) => {
                     if (!batchSearchQuery.trim()) return true;
@@ -4211,81 +4301,52 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                             onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
                             className="btn btn-primary btn-xs font-bold text-xs flex items-center gap-1.5 shadow-sm"
                           >
-                            <Download size={13} /> Export Upload CSV
+                            <Download size={13} /> Download
                           </button>
                         </div>
                       </div>
 
-                      {/* STEP 1: Ingestion & Time Horizon Parameters */}
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                            1
-                          </span>
-                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Step 1: Upload &amp; Time Horizon Configuration
-                          </h4>
+                      {/* Immediate Analytics Cards */}
+                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-center space-y-0.5">
+                          <span className="text-[10px] uppercase font-bold text-slate-400">Total Suppliers</span>
+                          <div className="text-xl font-black text-slate-900 dark:text-white">
+                            {totalCount}
+                          </div>
+                          <span className="text-[10px] text-slate-500 font-medium">Rows Ingested</span>
                         </div>
-                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
-                          <div className="p-3 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 space-y-1">
-                            <span className="text-[10px] font-bold text-slate-400 uppercase">Template File Source</span>
-                            <p className="font-bold text-slate-800 dark:text-white font-mono truncate flex items-center gap-1.5">
-                              <FileText size={13} className="text-indigo-500 shrink-0" />
-                              {selectedHistoryBatch.fileName || '—'}
-                            </p>
-                            <p className="text-[10px] text-slate-500 dark:text-gray-400">Excel / Spreadsheet Dataset</p>
-                          </div>
 
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-0.5 bg-emerald-50/20">
+                          <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Imported &amp; Validated</span>
+                          <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
+                            {importedCount}
+                          </div>
+                          <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">Rows recorded in this batch</span>
                         </div>
-                      </div>
 
-                      {/* STEP 2: Processing & Data Pipeline Metrics */}
-                      <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
-                        <div className="flex items-center gap-2">
-                          <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                            2
-                          </span>
-                          <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                            Step 2: Processing &amp; Data Pipeline Metrics
-                          </h4>
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
+                          <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Duplicates Deduplicated</span>
+                          <div className="text-xl font-black text-amber-600 dark:text-amber-400">
+                            {duplicateCount}
+                          </div>
+                          <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-slate-200/80 dark:border-gray-800 text-center space-y-0.5">
-                            <span className="text-[10px] uppercase font-bold text-slate-400">Total Suppliers</span>
-                            <div className="text-xl font-black text-slate-900 dark:text-white">
-                              {totalCount}
-                            </div>
-                            <span className="text-[10px] text-slate-500 font-medium">Rows Ingested</span>
-                          </div>
 
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-emerald-200 dark:border-emerald-800/60 text-center space-y-0.5 bg-emerald-50/20">
-                            <span className="text-[10px] uppercase font-bold text-emerald-700 dark:text-emerald-400">Imported &amp; Validated</span>
-                            <div className="text-xl font-black text-emerald-600 dark:text-emerald-400">
-                              {importedCount}
-                            </div>
-                            <span className="text-[10px] text-emerald-600/80 dark:text-emerald-400/80 font-medium">Rows recorded in this batch</span>
+                        <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-800/60 text-center space-y-0.5 bg-indigo-50/20">
+                          <span className="text-[10px] uppercase font-bold text-indigo-700 dark:text-indigo-400">Categories</span>
+                          <div className="text-xl font-black text-indigo-600 dark:text-indigo-400">
+                            {categoriesCount}
                           </div>
-
-                          <div className="p-3.5 rounded-xl bg-white dark:bg-gray-900 border border-amber-200 dark:border-amber-800/60 text-center space-y-0.5 bg-amber-50/20">
-                            <span className="text-[10px] uppercase font-bold text-amber-700 dark:text-amber-400">Duplicates Deduplicated</span>
-                            <div className="text-xl font-black text-amber-600 dark:text-amber-400">
-                              {duplicateCount}
-                            </div>
-                            <span className="text-[10px] text-amber-600/80 dark:text-amber-400/80 font-medium">Auto-Merged</span>
-                          </div>
-
+                          <span className="text-[10px] text-indigo-600/80 dark:text-indigo-400/80 font-medium">Identified Categories</span>
                         </div>
                       </div>
 
-                      {/* STEP 3: Supplier Directory Records Table */}
+                      {/* Uploaded Document Records Table */}
                       <div className="p-4 rounded-2xl bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700 space-y-3">
                         <div className="flex items-center justify-between flex-wrap gap-2">
                           <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 rounded-lg bg-indigo-600 text-white font-black text-xs flex items-center justify-center shrink-0">
-                              3
-                            </span>
                             <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 dark:text-slate-200">
-                              Step 3: Uploaded Supplier Coordinates &amp; Directory Records
+                              Uploaded Document Records
                             </h4>
                             <span className="badge badge-indigo font-bold text-[10px]">
                               Showing {filteredRecords.length} of {records.length || totalCount}
@@ -4419,7 +4480,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                               onClick={() => handleDownloadBatchCsv(selectedHistoryBatch)}
                               className="btn btn-primary btn-xs font-bold text-[11px] inline-flex items-center gap-1 mt-2 shadow-sm"
                             >
-                              <Download size={12} /> Re-export Upload CSV
+                              <Download size={12} /> Download
                             </button>
                           </div>
                         )}
@@ -4485,9 +4546,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
                           type="button"
                           onClick={() => handleDownloadBatchCsv(batch)}
                           className="btn btn-secondary btn-xs font-bold text-[11px] flex items-center gap-1"
-                          title="Download uploaded vendor template CSV"
+                          title="Download vendor batch data"
                         >
-                          <Download size={12} /> Download CSV
+                          <Download size={12} /> Download
                         </button>
                       </div>
                     </div>
@@ -4526,7 +4587,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
             {/* Footer */}
             <div className="flex items-center justify-between pt-3 border-t border-slate-100 dark:border-gray-800 shrink-0 text-xs">
               <span className="text-[11px] text-slate-400">
-                This history is stored in this browser only.
+                {/* Message removed - history now shows database vendors */}
               </span>
               <button
                 type="button"

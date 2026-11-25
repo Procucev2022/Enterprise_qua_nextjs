@@ -4,13 +4,14 @@ const pool = require('../src/db/pool');
 const mailerService = require('../src/services/mailerService');
 const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
 const { logger } = require('../src/services/loggerService');
-const { VENDOR_ASSIGNMENT_LIMITS } = require('../src/config/constants');
+const { VENDOR_ASSIGNMENT_LIMITS, EVENT_OUTBOX_MAX_BATCH_SIZE } = require('../src/config/constants');
 
 // An RFQ whose line items name many minor categories must invite the vendors of every one of
 // them. This fixture uses 15 minors of one major, 40 line items, and more network vendors per
-// minor than the per-minor target. The tests pin three things: the vendors assigned for each
-// minor, the order the invitations are queued in and e-mailed in (a partly delivered batch has to
-// reach every minor), and the creation path that leaves the assignment to the database plan.
+// minor than the per-minor target. The tests pin four things: the vendors assigned for each
+// minor, the order the invitations are queued in (the queue's first batch has to reach every
+// minor), that the queue is the only sender of invitation e-mails when a database is configured,
+// and the creation path that leaves the assignment to the database plan.
 
 const MAJOR = 'Civil Works';
 const MINORS = [
@@ -168,6 +169,19 @@ describe('RFQ invitations cover every minor category of a multi-minor RFQ', () =
     return writes[writes.length - 1] || [];
   }
 
+  /**
+   * The request asks the queue to send its first batch at once. That batch is the first queued
+   * invitations, and with the invitations queued in turn across the minors it reaches every minor.
+   */
+  function expectFirstQueueBatchCoversEveryMinor(operation) {
+    expect(storeService._dispatchRFQVendorInviteOutbox).toHaveBeenCalledTimes(1);
+    const [, dispatchedOperation, eventIds] = storeService._dispatchRFQVendorInviteOutbox.mock.calls[0];
+    expect(dispatchedOperation).toBe(operation);
+    const firstBatch = lastQueuedTargets().slice(0, EVENT_OUTBOX_MAX_BATCH_SIZE);
+    expect(eventIds).toEqual(firstBatch.map((target) => `rfq-vendor-invite:${target.key}`));
+    expect(new Set(firstBatch.map((target) => minorOfEmail(target.recipientEmail)))).toEqual(new Set(MINORS));
+  }
+
   function expectEveryMinorCovered(vendors) {
     for (const minor of MINORS) {
       const covered = vendors.filter((vendor) => storeService.vendorCoversMinorCategory(vendor, minor));
@@ -195,13 +209,25 @@ describe('RFQ invitations cover every minor category of a multi-minor RFQ', () =
     expect(new Set(firstBatch)).toEqual(new Set(MINORS));
   });
 
-  test('e-mails the invitations in turn across the minors, so a partly sent batch still covers every minor', async () => {
+  test('sends no invitation e-mail from the request, and the first queue batch it starts reaches every minor', async () => {
+    const created = createFanoutRfq('mode_0');
+
+    await storeService.augmentV0AssignmentsFromDB(created);
+
+    expect(mailerService.sendRfqInviteEmail).not.toHaveBeenCalled();
+    expectFirstQueueBatchCoversEveryMinor('rfq-v0-augmented-vendor-invites');
+  });
+
+  test('without a database there is no queue, so the request e-mails each vendor once, in turn across the minors', async () => {
+    pool.hasStorage.mockReturnValue(false);
+    storeService.vendors = networkVendorRows();
     const created = createFanoutRfq('mode_0');
 
     await storeService.augmentV0AssignmentsFromDB(created);
 
     const sent = mailerService.sendRfqInviteEmail.mock.calls.map(([email]) => email);
     expect(sent).toHaveLength(MINORS.length * TARGET_PER_MINOR);
+    expect(new Set(sent).size).toBe(sent.length);
     expect(new Set(sent.slice(0, MINORS.length).map(minorOfEmail))).toEqual(new Set(MINORS));
   });
 
@@ -226,7 +252,7 @@ describe('RFQ invitations cover every minor category of a multi-minor RFQ', () =
     );
   });
 
-  test('a mode_2 RFQ assigns every minor its target and queues and e-mails the invitations in turn', async () => {
+  test('a mode_2 RFQ assigns every minor its target and leaves the invitation e-mails to the queue', async () => {
     const created = createFanoutRfq('mode_2');
 
     const updated = await storeService.autoAssignVendorsFromDB(created);
@@ -235,8 +261,8 @@ describe('RFQ invitations cover every minor category of a multi-minor RFQ', () =
     expectEveryMinorCovered(updated.assignedVendors);
     const queued = lastQueuedTargets();
     expect(new Set(queued.slice(0, MINORS.length).map((target) => minorOfEmail(target.recipientEmail)))).toEqual(new Set(MINORS));
-    const sent = mailerService.sendRfqInviteEmail.mock.calls.map(([email]) => email);
-    expect(new Set(sent.slice(0, MINORS.length).map(minorOfEmail))).toEqual(new Set(MINORS));
+    expect(mailerService.sendRfqInviteEmail).not.toHaveBeenCalled();
+    expectFirstQueueBatchCoversEveryMinor('rfq-auto-assigned-vendor-invites');
   });
 
   test('a planned RFQ created in the durable path gets its vendors and invitations from the database plan', async () => {

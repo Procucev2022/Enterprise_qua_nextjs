@@ -503,6 +503,11 @@ function validateVendorDirectoryQuery(rawQuery) {
   if (q.activeOnly !== undefined && String(q.activeOnly).trim() !== '') {
     normalized.activeOnly = String(q.activeOnly).trim().toLowerCase();
   }
+  for (const subKey of ['subscription', 'subscriptionOnly']) {
+    if (q[subKey] !== undefined && String(q[subKey]).trim() !== '') {
+      normalized[subKey] = String(q[subKey]).trim().toLowerCase();
+    }
+  }
   return validatePayload(VALIDATION_SCHEMAS.vendorDirectoryQuery, normalized);
 }
 
@@ -648,6 +653,7 @@ async function getVendors(req, res, next) {
     const cleanQuery = queryValidation.sanitizedData;
     const publicOnly = ['true', '1'].includes(String(cleanQuery.publicOnly || '').trim().toLowerCase());
     const activeOnly = ['true', '1'].includes(String(cleanQuery.activeOnly || '').trim().toLowerCase());
+    const subscriptionOnly = ['true', '1'].includes(String(cleanQuery.subscription || cleanQuery.subscriptionOnly || '').trim().toLowerCase());
     const minors = dedupeCategoryStrings([
       ...parseCategoryFilterList(cleanQuery.minors),
       ...parseCategoryFilterList(cleanQuery.minor),
@@ -736,6 +742,7 @@ async function getVendors(req, res, next) {
           ...(pincode ? { pincode } : {}),
           ...(publicOnly ? { publicOnly: true } : {}),
           ...(activeOnly ? { activeOnly: true } : {}),
+          ...(subscriptionOnly ? { subscriptionOnly: true } : {}),
           scopedBuyerId: !publicOnly && buyerId && buyerId !== 'all' ? buyerId : '',
         });
         const filteredRows = (publicOnly || activeOnly) ? rows.filter((v) => !isVendorInactive(v)) : rows;
@@ -768,7 +775,7 @@ async function getVendors(req, res, next) {
       }
     }
 
-    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly || activeOnly);
+    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly || activeOnly || subscriptionOnly);
     const limitQuery = (!hasFilters && rawQuery.limit)
       ? Math.min(Number(rawQuery.limit), 500)
       : null;
@@ -777,6 +784,16 @@ async function getVendors(req, res, next) {
       vendors = vendors.filter((v) => !isVendorInactive(v) && storeService.isProcucevVendor(v));
     } else if (activeOnly) {
       vendors = vendors.filter((v) => !isVendorInactive(v));
+    }
+    if (subscriptionOnly) {
+      vendors = vendors.filter((v) => {
+        const raw = v.raw && typeof v.raw === 'object' ? v.raw : {};
+        const plan = String(
+          v.subscriptionPlan || v.subscribedPlan || v.plan || raw.subscriptionPlan || raw.subscribedPlan || raw.plan || ''
+        ).toLowerCase().trim();
+        const isSub = v.isSubscribed === true || v.isSubscribed === 'true' || raw.isSubscribed === true || raw.isSubscribed === 'true' || raw.isSubscribed === 1;
+        return Boolean((plan && !['none', 'free', 'free_tier', 'free_trial', 'premium'].includes(plan)) || isSub);
+      });
     }
     if (search) {
       const tokens = parseSearchTokens(search);
@@ -1043,6 +1060,7 @@ async function createVendor(req, res, next) {
     res.status(201).json({
       success: true,
       data: vendor,
+      onboardingStatus: onboarding?.status || (created.email ? 'skipped' : 'no_email'),
       ...(onboarding?.error ? { warning: onboarding.error } : {}),
     });
   } catch (err) {
@@ -1679,18 +1697,45 @@ async function reviseRating(req, res, next) {
     }
     // Resolve buyer scope for buyer-owned vendors (v-hist-, v-buyer-, etc.)
     let buyerId = null;
+    let buyerScope = null;
+    let buyerCompany = 'Buyer';
+    let buyerAccount = null;
+    let resolvedOrgId = null;
     if (req.user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
       if (buyerAccount) {
         buyerId = buyerAccount.id;
       } else {
         // Fallback: try to find by sub or email directly
         buyerId = req.user.sub || req.user.email;
       }
+      buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
       logger.info(`Resolved buyer scope for rating revision`, { email: req.user.email, buyerId, buyerAccountExists: !!buyerAccount }, 'VENDOR_CONTROLLER');
     }
     logger.info(`Revising rating for vendor ${id}`, { id, ratingFields: Object.keys(ratingData || {}), buyerId }, 'VENDOR_CONTROLLER');
-    const result = await storeService.reviseVendorRatingDurably(id, ratingData, buyerId);
+    const scopedArg = buyerScope && buyerScope.length > 0 ? buyerScope : buyerId;
+    let result = await storeService.reviseVendorRatingDurably(id, ratingData, scopedArg);
+    if (!result && req.user.role === 'buyer') {
+      const resolved = await resolveFallbackVendorRecord({
+        id,
+        user: req.user,
+        buyerAccount,
+        buyerScope: buyerScope && buyerScope.length > 0 ? buyerScope : (buyerId ? [buyerId] : ['all']),
+        resolvedOrgId,
+        buyerCompany,
+        bodyData: ratingData,
+        updates: { rating: Number(ratingData.qualityScore) },
+        requireEmail: false,
+        allowUnassignedCategory: true,
+      });
+      if (resolved.vendor) {
+        result =
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, scopedArg)) ||
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, 'all'));
+      }
+    }
     if (!result) {
       logger.warn(`Vendor not found for rating revision: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1706,7 +1751,7 @@ const SYNTHETIC_MASTER_PREFIX = 'v-master-';
 const SYNTHETIC_LOCAL_HISTORY_PREFIX = 'v-hist-local-';
 
 function isSyntheticFallbackVendorId(id) {
-  return typeof id === 'string' && (id.startsWith(SYNTHETIC_MASTER_PREFIX) || id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX));
+  return typeof id === 'string' && (id.startsWith(SYNTHETIC_MASTER_PREFIX) || id.startsWith('v-hist-'));
 }
 
 async function resolveBuyerOrgIdForScope(user, buyerAccount) {
@@ -1806,13 +1851,31 @@ async function resolveFallbackVendorRecord({
 
   const sanitizedVendorEmail = String(bodyData.vendorEmail || updates?.email || bodyData.email || '').trim().toLowerCase();
   const checkForeignOwnership = (foreign) => {
+    if (!foreign) return false;
+    const uEmail = String(user?.email || '').trim().toLowerCase();
+    const bCompany = String(buyerCompany || '').trim().toLowerCase();
+    const vEmail = String(foreign.email || '').trim().toLowerCase();
+    const vCompany = String(foreign.addedByBuyerCompany || '').trim().toLowerCase();
+    if (user?.role === 'buyer' && ((uEmail && vEmail && vEmail === uEmail) || (bCompany && vCompany && vCompany === bCompany))) {
+      return true;
+    }
     return checkVendorOwnershipWithContext(user, foreign, {
       scopeSet: new Set(buyerScope.map((s) => String(s).toLowerCase())),
       sId: String(resolvedOrgId || '').toLowerCase(),
-      uEmail: String(user.email || '').toLowerCase(),
+      uEmail: String(user?.email || '').toLowerCase(),
       orgName: String(buyerCompany).trim().toLowerCase(),
     });
   };
+
+  if (!sanitizedVendorEmail) {
+    const foreignCheckById = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+    if (foreignCheckById) {
+      if (checkForeignOwnership(foreignCheckById)) {
+        return { vendor: foreignCheckById, missingEmail: !foreignCheckById.email && requireEmail, missingCategory: false, promoted: false };
+      }
+      return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    }
+  }
 
   if (sanitizedVendorEmail) {
     vendor = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, buyerScope, { fresh: true });
@@ -1974,7 +2037,7 @@ async function resolveFallbackVendorRecord({
     }
   }
 
-  if (id.startsWith(SYNTHETIC_LOCAL_HISTORY_PREFIX) && user?.role === 'buyer') {
+  if (id.startsWith('v-hist-') && user?.role === 'buyer') {
     if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
     const effectiveCandidate = {
       ...(updates || {}),
@@ -2096,12 +2159,21 @@ async function requestEvaluation(req, res, next) {
 
     logger.info(`Sending evaluation request for vendor ${vendor.name} (${vendor.id}) by ${buyerCompany}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
 
-    const result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+    let result = await storeService.requestVendorEvaluationDurably(vendor.id, {
       buyerCompany,
       buyerName,
       buyerEmail,
       notes: bodyValidation.sanitizedData.notes || '',
     }, buyerScope);
+
+    if (!result) {
+      result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+        buyerCompany,
+        buyerName,
+        buyerEmail,
+        notes: bodyValidation.sanitizedData.notes || '',
+      }, 'all');
+    }
 
     return res.status(200).json({
       success: true,
