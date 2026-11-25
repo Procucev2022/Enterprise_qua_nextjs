@@ -114,7 +114,6 @@ import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettings
 
 
 const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
-  { key: 'done', label: 'Done', visible: true, required: true },
   { key: 'status', label: 'Status', visible: true },
   { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
   { key: 'category', label: 'Category & Type', visible: true },
@@ -172,7 +171,8 @@ export default function InternalTasksDashboard() {
       if (saved) {
         const parsed = JSON.parse(saved);
         if (Array.isArray(parsed) && parsed.length > 0) {
-          setTaskColumns(parsed);
+          const cleaned = parsed.filter((c: ColumnDef) => c.key !== 'done');
+          setTaskColumns(cleaned);
         }
       }
     } catch {}
@@ -1183,28 +1183,6 @@ export default function InternalTasksDashboard() {
     setIsCreateModalOpen(true);
   }, []);
 
-  // Handle Quick Status Toggle
-  const handleToggleStatus = async (task: InternalTask) => {
-    const isCompleted = task.status === 'Closed' || task.status === 'Completed';
-    const nextStatus: TaskStatus = isCompleted ? 'Open' : 'Closed';
-    const updated = await updateInternalTask(task.id, {
-      status: nextStatus,
-      activityComment: `Status toggled to ${nextStatus}`,
-      completionConfirmed: true,
-    });
-    if (updated) {
-      setTasks((prev) => prev.map((t) => (t.id === task.id ? updated : t)));
-      loadSummary();
-      const msg =
-        nextStatus === 'Closed'
-          ? formatString(UI_STRINGS.actionCenter.tasks.taskMarkedCompleted, { taskNumber: task.task_number || task.id })
-          : formatString(UI_STRINGS.actionCenter.tasks.taskReopened, { taskNumber: task.task_number || task.id });
-      showToast(msg);
-    } else {
-      showToast(UI_STRINGS.actionCenter.tasks.taskStatusUpdateFailed);
-    }
-  };
-
   // Handle Create or Update Task Submission with Category Architecture
   const handleCreateTask = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1818,7 +1796,6 @@ export default function InternalTasksDashboard() {
                 <table className="w-full text-left text-xs min-w-[1020px] border-collapse">
                   <thead className="bg-slate-50/90 dark:bg-slate-800/80 text-slate-600 dark:text-slate-300 border-b border-slate-200 dark:border-slate-800 font-semibold tracking-wide select-none">
                     <tr>
-                      {isColVisible('done') && <th className="py-2.5 px-3 w-12 min-w-[48px] max-w-[48px] text-center">Done</th>}
                       {isColVisible('status') && (
                         <th
                           className="py-2.5 px-3.5 w-32 min-w-[110px] cursor-pointer select-none hover:text-slate-900 dark:hover:text-white"
@@ -1892,18 +1869,6 @@ export default function InternalTasksDashboard() {
                           className="hover:bg-slate-50/80 dark:hover:bg-slate-800/40 transition-colors cursor-pointer group h-10"
                           data-testid={`task-row-${task.id}`}
                         >
-                          {/* Checkbox toggle */}
-                          {isColVisible('done') && (
-                            <td className="py-2 px-3 w-12 min-w-[48px] max-w-[48px] text-center align-middle whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                              <input
-                                type="checkbox"
-                                checked={task.status === 'Closed' || task.status === 'Completed'}
-                                onChange={() => handleToggleStatus(task)}
-                                className="w-4 h-4 text-emerald-600 rounded border-slate-300 focus:ring-emerald-500 cursor-pointer align-middle"
-                              />
-                            </td>
-                          )}
-
                           {/* Status Badge */}
                           {isColVisible('status') && (
                             <td className="py-2 px-3.5 w-32 min-w-[110px] align-middle whitespace-nowrap">
@@ -2403,7 +2368,7 @@ export default function InternalTasksDashboard() {
                             data-testid="create-credit-account-type-select"
                           >
                             <option value="BUYER">Buyer Account</option>
-                            <option value="SELLER">Seller / Vendor</option>
+                            <option value="SELLER">Vendor</option>
                           </select>
                         </div>
                         <div>

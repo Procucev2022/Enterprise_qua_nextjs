@@ -392,6 +392,8 @@ export async function addSellerQuoteCredits(
 export async function fetchSellerDirectoryKPIStats(): Promise<{
   success: boolean;
   totalSuppliers: number;
+  subscriptionVendors?: number;
+  subscriptionVendorsCount?: number;
   networkSuppliers: number;
   buyerUploaded: number;
   verifiedActive: number;
@@ -408,6 +410,8 @@ export async function fetchSellerDirectoryKPIStats(): Promise<{
       return {
         success: false,
         totalSuppliers: 0,
+        subscriptionVendors: 0,
+        subscriptionVendorsCount: 0,
         networkSuppliers: 0,
         buyerUploaded: 0,
         verifiedActive: 0,
@@ -421,6 +425,8 @@ export async function fetchSellerDirectoryKPIStats(): Promise<{
     return {
       success: false,
       totalSuppliers: 0,
+      subscriptionVendors: 0,
+      subscriptionVendorsCount: 0,
       networkSuppliers: 0,
       buyerUploaded: 0,
       verifiedActive: 0,

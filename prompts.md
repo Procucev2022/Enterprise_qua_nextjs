@@ -9999,3 +9999,13 @@ Compare `categoryManagerDashboardController.js` directly against the live workin
 ```text
 create pr and check all the covergaes and merge directly in test-v3
 ```
+
+---
+
+### Prompt 431
+
+**Timestamp**: 2026-11-25T12:05:39+05:30
+
+```text
+Tell me process of vendor submit the bid/quote only in that format can create the bid or which is madetory and whichh is optional
+```
