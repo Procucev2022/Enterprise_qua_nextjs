@@ -935,6 +935,20 @@ export default function BuyerProfilePage() {
           </div>
         </div>
 
+        {/* Save Profile Button - positioned after profile sections, before category selection */}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            onClick={handleSaveProfile}
+            disabled={isLoading || isSaving}
+            aria-busy={isSaving}
+            className="btn btn-primary btn-md shadow-md font-bold flex items-center gap-2"
+          >
+            {isSaving ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
+            Save Organization Profile
+          </button>
+        </div>
+
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
         <div id="section-categories" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
@@ -1082,19 +1096,6 @@ export default function BuyerProfilePage() {
                 </div>
               );
             })}
-          </div>
-
-          <div className="flex justify-end border-t border-slate-100 dark:border-gray-800 pt-2.5">
-            <button
-              type="submit"
-              onClick={handleSaveProfile}
-              disabled={isLoading || isSaving}
-              aria-busy={isSaving}
-              className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
-            >
-              {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
-              {UI_STRINGS.buyerProfile.saveCategoryButton}
-            </button>
           </div>
         </div>
       </form>
