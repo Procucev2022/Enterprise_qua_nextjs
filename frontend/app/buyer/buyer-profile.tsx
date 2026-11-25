@@ -1193,7 +1193,7 @@ export default function BuyerProfilePage() {
               className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
             >
               {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />}{' '}
-              Save Categories
+              Save Category
             </button>
           </div>
         </div>
