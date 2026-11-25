@@ -446,7 +446,7 @@ describe('Frontend Deep Coverage Booster Test Suite', () => {
     });
 
     // Try saving when not loaded
-    const saveBtn = screen.getByRole('button', { name: /Save Organization Profile/i });
+    const saveBtn = screen.getAllByRole('button', { name: /Save Organization Profile/i })[0];
     fireEvent.click(saveBtn);
   });
 
