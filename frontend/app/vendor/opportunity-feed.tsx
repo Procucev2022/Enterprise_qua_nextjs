@@ -108,6 +108,7 @@ export default function OpportunityFeed({
     typeof process !== 'undefined' && process.env.NODE_ENV === 'test' ? 'opportunities' : 'all'
   );
   const [selectedSubmittedBid, setSelectedSubmittedBid] = React.useState<any | null>(null);
+  const [locallyDownloadedRfqIds, setLocallyDownloadedRfqIds] = React.useState<string[]>([]);
 
   // Compute all successfully submitted bids for this vendor without duplicate RFQs
   const submittedBids = React.useMemo(() => {
@@ -658,6 +659,7 @@ export default function OpportunityFeed({
         // Ignored
       }
 
+      setLocallyDownloadedRfqIds((prev) => (prev.includes(opp.rfqNumber) ? prev : [...prev, opp.rfqNumber]));
       await refreshVendorCredits();
       if (!isDirect) {
         await refreshFromDB();
@@ -1039,6 +1041,20 @@ export default function OpportunityFeed({
     const buyerCompanyName = opp.buyer ?? (rfqRecord as any)?.buyerAccountName ?? (isDirect ? 'Invited Buyer' : 'Procucev Network');
     const buyerCompanyLogo = isDirect ? ((rfqRecord as any)?.buyerLogo ?? null) : null;
     const isSubmitted = submittedBids.some((b) => b.rfqNumber === opp.rfqNumber);
+    const rfqNum = String(opp.rfqNumber || '').toLowerCase().trim();
+    const rfqId = String(opp.id || '').toLowerCase().trim();
+    const isUnlockedInStore = (vendorUnlockedRfqIds || []).some((id) => {
+      const norm = String(id).toLowerCase().trim();
+      return norm === rfqNum || norm === rfqId;
+    });
+    const isUnlockedLocally = locallyDownloadedRfqIds.some((id) => {
+      const norm = String(id).toLowerCase().trim();
+      return norm === rfqNum || norm === rfqId;
+    });
+    const mode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isPublicMode = mode === 'mode_0' || mode === 'v0' || mode === 'version_0' || mode === 'mode_3' || mode === 'v3' || mode === 'version_3' || Boolean((opp as any)?.isPublic) || Boolean((rfqRecord as any)?.isPublic);
+    const isDirectClient = isDirect && !isPublicMode;
+    const isDownloaded = isDirectClient || isUnlockedInStore || isUnlockedLocally || isSubmitted;
     const currP = activeDashboardTab === 'public' ? currentPageNet : currentPage;
     const pSize = activeDashboardTab === 'public' ? pageSizeNet : pageSize;
 
@@ -1175,6 +1191,16 @@ export default function OpportunityFeed({
                 className="btn btn-amber btn-xs font-bold flex items-center gap-1 py-1.5 px-3 text-[11px] rounded-lg shadow-2xs cursor-pointer"
               >
                 <span>🔒 Upgrade</span>
+              </button>
+            ) : !isDownloaded ? (
+              <button
+                type="button"
+                disabled
+                className="btn btn-primary btn-xs font-bold inline-flex items-center justify-center px-2.5 py-1 text-[11px] rounded-lg shadow-2xs opacity-50 cursor-not-allowed bg-slate-300 dark:bg-gray-800 text-slate-500 border-none"
+                title="Download RFQ specification first to unlock quote submission"
+                aria-label="Submit Quote"
+              >
+                <span>Submit Quote</span>
               </button>
             ) : (
               <button

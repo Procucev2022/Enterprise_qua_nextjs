@@ -13,6 +13,16 @@ jest.mock('next/navigation', () => ({
   }),
 }));
 
+beforeAll(() => {
+  if (!global.URL.createObjectURL) {
+    global.URL.createObjectURL = jest.fn(() => 'blob:mock-url');
+  }
+  if (!global.URL.revokeObjectURL) {
+    global.URL.revokeObjectURL = jest.fn();
+  }
+  window.HTMLAnchorElement.prototype.click = jest.fn();
+});
+
 /**
  * The feed is derived from `GET /api/rfqs`, so every test supplies the RFQs whose
  * projection it wants to assert on. Nothing is seeded any more: an empty API means
@@ -1325,6 +1335,54 @@ describe('OpportunityFeed: filter handlers and onboarding source resolution', ()
     const submitBtns = screen.getAllByRole('button', { name: /^Submit Quote$/i });
     fireEvent.click(submitBtns[submitBtns.length - 1]);
     expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq='));
+  });
+
+  test('disables Submit Quote button for undownloaded network/public RFQ until downloaded', async () => {
+    const publicUnquotedRfq: RFQFixture = {
+      id: 'rfq-pub-unquoted-1',
+      rfqNumber: 'RFQ-PUB-UNQUOTED-1',
+      title: 'Precision Machining Package',
+      sourcingMode: 'mode_0',
+      budget: 80000,
+      targetDeliveryDate: '2026-12-15',
+      deliveryLocation: 'Hyderabad',
+      buyerAccountName: 'Industrial Systems Ltd.',
+      extractedEntities: [
+        {
+          id: 'ent-machining',
+          itemName: 'CNC milled aluminum bracket',
+          quantity: 50,
+          unit: 'Nos',
+          category: 'Mechanical Components',
+        } as any,
+      ],
+    };
+
+    serveRFQs([publicUnquotedRfq]);
+    await renderFeed({ subscription: 'select' });
+
+    // Find Submit Quote button for this RFQ - must be disabled initially
+    const submitBtn = screen.getByRole('button', { name: /^Submit Quote$/i });
+    expect(submitBtn).toBeDisabled();
+    expect(submitBtn).toHaveAttribute('title', 'Download RFQ specification first to unlock quote submission');
+
+    // Find Download RFQ button and click it
+    const downloadBtn = screen.getByRole('button', { name: /Download RFQ/i });
+    await act(async () => {
+      fireEvent.click(downloadBtn);
+    });
+
+    // After download, Submit Quote button must be enabled
+    await waitFor(() => {
+      const enabledBtn = screen.getByRole('button', { name: /^Submit Quote$/i });
+      expect(enabledBtn).not.toBeDisabled();
+      expect(enabledBtn).toHaveAttribute('title', 'Submit Detailed Quotation');
+    });
+
+    // Clicking it navigates to quotation form
+    const updatedSubmitBtn = screen.getByRole('button', { name: /^Submit Quote$/i });
+    fireEvent.click(updatedSubmitBtn);
+    expect(mockRouterPush).toHaveBeenCalledWith(expect.stringContaining('/vendor/quotation-form?rfq=RFQ-PUB-UNQUOTED-1'));
   });
 
   test('renders closed badge for closed or expired RFQs in both sections', async () => {

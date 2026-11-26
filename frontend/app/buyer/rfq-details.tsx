@@ -2213,7 +2213,7 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
               {requestedByName}
             </span>
           </Row>
-          {requestedByEmail && (
+          {requestedByEmail && (!isVendor || isDownloaded) && (
             <Row label={DETAILS.userEmailLabel || 'User Email'}>
               <span className="mono text-indigo-600 dark:text-indigo-400">
                 {requestedByEmail}

@@ -188,6 +188,7 @@ describe('vendor subscription pricing and payment reconciliation', () => {
 describe('opportunity feed navigation, matching and access failures', () => {
   test('opens both direct and network RFQ details and quotation forms', async () => {
     mockApp.vendorSubscription = 'select';
+    mockApp.vendorUnlockedRfqIds = ['NETWORK/2'];
     mockApp.vendorOpportunities = [makeOpportunity(), makeOpportunity({ id: 'opp-network', type: 'network_marketplace', rfqNumber: 'NETWORK/2' })];
     render(<OpportunityFeed onNavigateToBidForm={jest.fn()} />);
     const details = screen.getAllByTitle('View RFQ Details');
