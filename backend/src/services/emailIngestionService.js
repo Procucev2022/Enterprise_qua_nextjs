@@ -510,8 +510,34 @@ async function prepareEmailForExtraction({ fileName, content }) {
     !!inlineAttachment ||
     message.attachments.some((attachment) => attachment.role === 'text');
 
+  const buildPreparedMessage = () => ({
+    messageId: message.messageId,
+    subject: message.subject,
+    fromAddress: message.fromAddress,
+    fromName: message.fromName,
+    toAddress: message.toAddress,
+    toAddresses: message.toAddresses || (message.toAddress ? [message.toAddress] : []),
+    deliveredTo: message.deliveredTo || [],
+    originalTo: message.originalTo || [],
+    cc: message.cc || [],
+    sentAt: message.sentAt,
+    bodyText: message.bodyText || '',
+    rawBodyText: message.rawBodyText || message.bodyText || '',
+    bodyHtml: message.bodyHtml || '',
+    attachments: message.attachments || [],
+    attachmentNames: message.attachments.map((attachment) => attachment.fileName),
+    inReplyTo: message.inReplyTo || '',
+    references: message.references || '',
+    automatedReason: message.automatedReason || null,
+  });
+
   if (!hasExtractableContent) {
-    return { status: EMAIL_INGESTION_STATUS.NO_CONTENT, unreadableAttachments };
+    const hasDocumentAttachments = message.attachments.some((attachment) => attachment && attachment.role !== 'signature');
+    return {
+      status: EMAIL_INGESTION_STATUS.NO_CONTENT,
+      unreadableAttachments,
+      ...(hasDocumentAttachments ? { message: buildPreparedMessage() } : {}),
+    };
   }
 
   logger.info(
@@ -528,26 +554,7 @@ async function prepareEmailForExtraction({ fileName, content }) {
 
   return {
     status: EMAIL_INGESTION_STATUS.READY,
-    message: {
-      messageId: message.messageId,
-      subject: message.subject,
-      fromAddress: message.fromAddress,
-      fromName: message.fromName,
-      toAddress: message.toAddress,
-      toAddresses: message.toAddresses || (message.toAddress ? [message.toAddress] : []),
-      deliveredTo: message.deliveredTo || [],
-      originalTo: message.originalTo || [],
-      cc: message.cc || [],
-      sentAt: message.sentAt,
-      bodyText: message.bodyText || '',
-      rawBodyText: message.rawBodyText || message.bodyText || '',
-      bodyHtml: message.bodyHtml || '',
-      attachments: message.attachments || [],
-      attachmentNames: message.attachments.map((attachment) => attachment.fileName),
-      inReplyTo: message.inReplyTo || '',
-      references: message.references || '',
-      automatedReason: message.automatedReason || null,
-    },
+    message: buildPreparedMessage(),
     extractionInput: {
       fileName,
       documentText: documentText || undefined,

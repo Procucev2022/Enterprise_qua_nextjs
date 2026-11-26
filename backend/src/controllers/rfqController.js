@@ -652,7 +652,9 @@ async function inviteVendors(req, res, next) {
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email);
+    const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email, {
+      actorRole: (req.user && req.user.role) || null,
+    });
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }

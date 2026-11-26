@@ -59,6 +59,9 @@ const {
   VENDOR_ACTIVE_STATUSES,
   VENDOR_STATUS_MESSAGES,
   VENDOR_INGESTION_MESSAGES,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_ORIGINS,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
   isVendorInactive,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
@@ -2074,7 +2077,13 @@ class StoreService {
       throw persistError;
     }
 
-    const savedVendor = persistedVendor || newVendor;
+    const savedVendor = persistedVendor
+      ? {
+        ...persistedVendor,
+        ...(newVendor.isCmCreated ? { isCmCreated: true } : {}),
+        ...(newVendor.createdByRole ? { createdByRole: newVendor.createdByRole } : {}),
+      }
+      : newVendor;
     this.vendors.unshift(savedVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
@@ -2114,7 +2123,14 @@ class StoreService {
     }
   }
 
-  async _provisionVendorOnboarding(vendor, actorEmail = null, { skipEmail = false } = {}) {
+  async _provisionVendorOnboarding(vendor, actorEmail = null, { skipEmail = false, isCmCreated = false, mailboxChannel = null } = {}) {
+    const cmCreatedFlag = Boolean(
+      isCmCreated ||
+      vendor?.isCmCreated ||
+      vendor?.createdByCategoryManager ||
+      String(vendor?.createdByRole || '').toLowerCase() === 'category_manager'
+    );
+    const onboardingMailboxChannel = mailboxChannel || (cmCreatedFlag ? VENDOR_MAILBOX_CHANNELS.DIRECT : null);
     // Real, previously-shipped bug found live: identityQueries.insertVendorAccount
     // unconditionally resets password + phone on an *existing* identity
     // account when one is found for the email — correct for the CLI
@@ -2187,6 +2203,8 @@ class StoreService {
           payload: {
             vendorId: vendor.id,
             encryptedTempPassword: encryptedTempPassword.encoded,
+            ...(cmCreatedFlag ? { isCmCreated: true } : {}),
+            ...(onboardingMailboxChannel ? { mailboxChannel: onboardingMailboxChannel } : {}),
           },
         };
       } catch (error) {
@@ -2276,14 +2294,24 @@ class StoreService {
     const emailPayload = mailerService.buildVendorOnboardingEmail({
       to: vendor.email,
       recipientName: vendor.contactPerson || vendor.name,
-      buyerOrganizationName: 'Procucev Enterprise',
+      buyerOrganizationName: cmCreatedFlag
+        ? VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME
+        : (vendor.addedByBuyerCompany || 'Procucev Enterprise'),
       vendorCode: vendor.id,
       tempPassword,
       contactPhone: vendor.phone,
+      isCmCreated: cmCreatedFlag,
+      mailboxChannel: onboardingMailboxChannel,
     });
 
     try {
-      const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+      const delivery = onboardingMailboxChannel
+        ? await mailerService.sendVendorIngestionEmail(
+          emailPayload,
+          'onboarding',
+          { vendorChannel: onboardingMailboxChannel }
+        )
+        : await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       if (delivery.sent) {
         const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'sent');
         logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
@@ -5797,8 +5825,10 @@ class StoreService {
     return publicUpdated;
   }
 
-  _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false } = {}) {
+  _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false, actorRole = null, isCmAssigned = false } = {}) {
     const targetsByEmail = new Map();
+    const normalizedActorRole = actorRole ? String(actorRole).trim().toLowerCase() : '';
+    const cmRoleActor = normalizedActorRole === 'category_manager' || normalizedActorRole === 'admin';
     for (const vendor of Array.isArray(vendors) ? vendors : []) {
       const resolved = vendor && vendor.id ? this.getVendorById(vendor.id, 'all') : null;
       if (isVendorInactive(resolved || vendor)) continue;
@@ -5811,6 +5841,39 @@ class StoreService {
       const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
       const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
       const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+      const cmAssigned = Boolean(isCmAssigned || cmRoleActor || vendor.isCmAssigned || resolvedVendor.isCmAssigned);
+      const cmCreated = Boolean(
+        vendor.isCmCreated ||
+        resolvedVendor.isCmCreated ||
+        resolvedVendor.createdByCategoryManager ||
+        String(resolvedVendor.createdByRole || vendor.createdByRole || '').toLowerCase() === 'category_manager'
+      );
+      const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+        ? mailerService.resolveVendorInviteRouting(
+          resolvedVendor,
+          {
+            isBuyerUploaded,
+            isCmAssigned: cmAssigned,
+            isCmCreated: cmCreated,
+            assignedByRole: actorRole || null,
+            inviteChannel: vendor.inviteChannel,
+            inviteOrigin: vendor.inviteOrigin,
+            replyToQuoteAllowed: vendor.replyToQuoteAllowed,
+          },
+          rfq
+        )
+        : {
+          channel: (isBuyerUploaded || cmAssigned || cmCreated) ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE,
+          origin: cmAssigned
+            ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED
+            : cmCreated
+              ? VENDOR_INVITE_ORIGINS.CM_CREATED
+              : isBuyerUploaded
+                ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED
+                : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK,
+          replyToQuoteAllowed: Boolean(isBuyerUploaded || cmAssigned || cmCreated),
+          replyTo: null,
+        };
       const vendorContext = {
         id: resolvedVendor.id || vendor.id,
         email: recipientEmail,
@@ -5818,6 +5881,11 @@ class StoreService {
         contactPerson: resolvedVendor.contactPerson || vendor.contactPerson,
         source: resolvedVendor.source || vendor.source,
         isBuyerUploaded,
+        isCmAssigned: cmAssigned,
+        isCmCreated: cmCreated,
+        inviteChannel: routing.channel,
+        inviteOrigin: routing.origin,
+        replyToQuoteAllowed: routing.replyToQuoteAllowed,
       };
       const key = crypto.createHash('sha256').update(`${rfq.id}:${emailKey}`).digest('hex');
       const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
@@ -5830,6 +5898,12 @@ class StoreService {
         recipientEmail,
         recipientName: vendorContext.contactPerson || vendorContext.name,
         inviteMessageId,
+        inviteChannel: routing.channel,
+        inviteOrigin: routing.origin,
+        senderMailbox: routing.replyTo || null,
+        replyToQuoteAllowed: routing.replyToQuoteAllowed,
+        isCmAssigned: cmAssigned,
+        isCmCreated: cmCreated,
         freeCreditsRemaining: creditInfo.freeCreditsRemaining,
         isSubscribed: creditInfo.isSubscribed,
         buyerEmail: includeBuyerEmail ? this.resolveBuyerEmailForRFQ(rfq) : null,
@@ -5839,11 +5913,11 @@ class StoreService {
     return Array.from(targetsByEmail.values());
   }
 
-  _resolveDispatchedInviteEventIds(rfq, invitationTargets, additions = [], { includeBuyerEmail = false, maxCount = null } = {}) {
+  _resolveDispatchedInviteEventIds(rfq, invitationTargets, additions = [], { includeBuyerEmail = false, actorRole = null, isCmAssigned = false, maxCount = null } = {}) {
     if (!rfq || !rfq.id) return [];
     const targets = Array.isArray(invitationTargets) && invitationTargets.length > 0
       ? invitationTargets
-      : this._buildRFQVendorInviteTargets(rfq, additions, { includeBuyerEmail });
+      : this._buildRFQVendorInviteTargets(rfq, additions, { includeBuyerEmail, actorRole, isCmAssigned });
     const ids = targets
       .map((target) => (target && target.key ? `rfq-vendor-invite:${target.key}` : ''))
       .filter(Boolean);
@@ -5895,6 +5969,8 @@ class StoreService {
     advanceStatus = false,
     includeBuyerEmailInInvite = false,
     clearVendorPlanPending = false,
+    actorRole = null,
+    isCmAssigned = false,
   } = {}) {
     let committedAdditions = [];
     let invitationTargets = [];
@@ -5931,7 +6007,7 @@ class StoreService {
       invitationTargets = this._buildRFQVendorInviteTargets(
         { ...current, assignedVendors },
         committedAdditions,
-        { includeBuyerEmail: includeBuyerEmailInInvite }
+        { includeBuyerEmail: includeBuyerEmailInInvite, actorRole, isCmAssigned }
       );
       const updates = {
         assignedVendors,
@@ -8796,9 +8872,16 @@ class StoreService {
       // one. The request path sends it only when there is no database, because then there is no queue.
       const sendEmailViaOutboxOnly = pool.hasStorage();
       if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(vendor, { isBuyerUploaded }, updated)
+          : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
         const inviteRecord = this.recordRfqVendorInvite(updated, {
           vendorId: vendor.id,
           vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
         });
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
@@ -8809,6 +8892,9 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor,
             isBuyerUploaded,
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
             messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to DB-augmented vendor',
@@ -9175,9 +9261,16 @@ class StoreService {
           // The queue is the only sender when a database is configured (see augmentV0AssignmentsFromDB).
           const sendEmailViaOutboxOnly = pool.hasStorage();
           if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+            const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+              ? mailerService.resolveVendorInviteRouting(vendor, { isBuyerUploaded }, updated)
+              : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
             const inviteRecord = this.recordRfqVendorInvite(updated, {
               vendorId: vendor.id,
               vendorEmail: vendor.email,
+              inviteChannel: routing.channel,
+              inviteOrigin: routing.origin,
+              senderMailbox: routing.replyTo || null,
+              replyToQuoteAllowed: routing.replyToQuoteAllowed,
             });
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
@@ -9188,6 +9281,9 @@ class StoreService {
                 isSubscribed: creditInfo.isSubscribed,
                 vendor,
                 isBuyerUploaded,
+                inviteChannel: routing.channel,
+                inviteOrigin: routing.origin,
+                replyToQuoteAllowed: routing.replyToQuoteAllowed,
                 messageId: inviteRecord?.inviteMessageId,
               }),
               'Failed to email RFQ invite to DB auto-assigned vendor',
@@ -9447,7 +9543,9 @@ class StoreService {
    * does not automatically match, logging the override and sending normal RFQ
    * invitation emails. Category mismatch emails are disabled.
    */
-  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail, { actorRole = 'category_manager' } = {}) {
+    const normalizedActorRole = String(actorRole || 'category_manager').trim().toLowerCase();
+    const isCmActor = normalizedActorRole === 'category_manager' || normalizedActorRole === 'admin';
     // Load the authoritative row before merging assignments. Isolate-local RFQ
     // state can lag behind another Worker or Node process.
     const rfq = await this.getRFQByIdAsync(rfqId);
@@ -9534,6 +9632,12 @@ class StoreService {
       state: v.state || null,
       location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
       pincode: v.pincode || null,
+      ...(isCmActor ? {
+        isCmAssigned: true,
+        inviteChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+        inviteOrigin: VENDOR_INVITE_ORIGINS.CM_ASSIGNED,
+        replyToQuoteAllowed: true,
+      } : {}),
     }));
     // Persist the assignment before emitting any invitation side effects or
     // acknowledging the request. A configured database failure must not leave
@@ -9543,6 +9647,8 @@ class StoreService {
       clearCategoryNotAvailable: true,
       advanceStatus: true,
       includeBuyerEmailInInvite: true,
+      actorRole: normalizedActorRole,
+      isCmAssigned: isCmActor,
     });
     if (!updatedRFQ) return null;
     const committedIds = new Set(committedAdditions.map((vendor) => vendor.id));
@@ -9587,7 +9693,10 @@ class StoreService {
               { vendorId: vendor.id, rfqNumber: rfq.rfqNumber },
               'STORE_SERVICE'
             );
-            const onboarding = await this._provisionVendorOnboarding(vendor, actorEmail);
+            const onboardingVendorPayload = isCmActor
+              ? { ...vendor, isCmCreated: true, createdByRole: normalizedActorRole }
+              : vendor;
+            const onboarding = await this._provisionVendorOnboarding(onboardingVendorPayload, actorEmail);
             if (onboarding?.status === 'sent' || onboarding?.status === 'pending') {
               newlyProvisioned.push({ id: vendor.id, email: vendorEmail, status: onboarding.status });
             } else if (onboarding?.status === 'failed') {
@@ -9622,9 +9731,15 @@ class StoreService {
 
       // Real invite email
       if (vendorEmail && !pool.hasStorage()) {
+        const directReply = isCmActor ? true : undefined;
         const inviteRecord = this.recordRfqVendorInvite(updatedRFQ, {
           vendorId: vendor.id,
           vendorEmail,
+          ...(isCmActor ? {
+            inviteChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+            inviteOrigin: VENDOR_INVITE_ORIGINS.CM_ASSIGNED,
+            replyToQuoteAllowed: true,
+          } : {}),
         });
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
@@ -9643,6 +9758,11 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded: resolvedIsBuyerUploaded,
+            isCmAssigned: isCmActor,
+            assignedByRole: normalizedActorRole,
+            inviteChannel: isCmActor ? VENDOR_MAILBOX_CHANNELS.DIRECT : inviteRecord?.inviteChannel,
+            inviteOrigin: isCmActor ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED : inviteRecord?.inviteOrigin,
+            replyToQuoteAllowed: directReply,
             buyerEmail,
             messageId: inviteRecord?.inviteMessageId,
           }),
@@ -9667,7 +9787,7 @@ class StoreService {
         updatedRFQ,
         invitationTargets,
         dispatchedInvites,
-        { includeBuyerEmail: true }
+        { includeBuyerEmail: true, actorRole: normalizedActorRole, isCmAssigned: isCmActor }
       );
       this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment', targetEventIds);
     }
@@ -10099,12 +10219,18 @@ class StoreService {
       if (emailKey && !emailedKeys.has(emailKey)) {
         emailedKeys.add(emailKey);
         const isBuyerUploaded = this.isBuyerUploaded(vendor);
+        const trackedInvite = this._rfqVendorInvites && rfq.rfqNumber
+          ? this._rfqVendorInvites.get(`${rfq.rfqNumber}:${emailKey}`)
+          : null;
         this._background(
           mailerService.sendRfqClosedVendorEmail(email, {
             rfq,
             recipientName: vendor.contactPerson || vendor.name,
             vendor,
             isBuyerUploaded,
+            isCmAssigned: Boolean(vendor.isCmAssigned || trackedInvite?.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_ASSIGNED),
+            inviteChannel: vendor.inviteChannel || trackedInvite?.inviteChannel || null,
+            inviteOrigin: vendor.inviteOrigin || trackedInvite?.inviteOrigin || null,
           }),
           'Failed to send RFQ closed notification email to invited vendor',
           {
@@ -10351,9 +10477,16 @@ class StoreService {
         const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(resolvedVendor, { isBuyerUploaded }, rfq)
+          : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
         const inviteRecord = this.recordRfqVendorInvite(rfq, {
           vendorId: vendor.id,
           vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
         });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -10363,6 +10496,9 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
             messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to matched vendor',
@@ -10384,9 +10520,22 @@ class StoreService {
         allEmails.add(vendor.email.toLowerCase());
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(resolvedVendor, {
+            isBuyerUploaded,
+            isCmAssigned: Boolean(vendor.isCmAssigned),
+            inviteChannel: vendor.inviteChannel,
+            inviteOrigin: vendor.inviteOrigin,
+            replyToQuoteAllowed: vendor.replyToQuoteAllowed,
+          }, rfq)
+          : { channel: (isBuyerUploaded || vendor.isCmAssigned) ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: vendor.isCmAssigned ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED : (isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK), replyToQuoteAllowed: Boolean(isBuyerUploaded || vendor.isCmAssigned), replyTo: null };
         const inviteRecord = this.recordRfqVendorInvite(rfq, {
           vendorId: vendor.id,
           vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
         });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -10396,6 +10545,10 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            isCmAssigned: Boolean(vendor.isCmAssigned),
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
             messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to assigned vendor',
@@ -11858,7 +12011,13 @@ class StoreService {
       throw persistError;
     }
 
-    const savedVendor = persistedVendor || newVendor;
+    const savedVendor = persistedVendor
+      ? {
+        ...persistedVendor,
+        ...(newVendor.isCmCreated ? { isCmCreated: true } : {}),
+        ...(newVendor.createdByRole ? { createdByRole: newVendor.createdByRole } : {}),
+      }
+      : newVendor;
     this.vendors.unshift(savedVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
@@ -12694,6 +12853,14 @@ class StoreService {
     );
 
     const existing = this._rfqVendorInvites.get(key);
+    const resolvedChannel = invite.inviteChannel || invite.channel || existing?.inviteChannel || null;
+    const resolvedOrigin = invite.inviteOrigin || invite.origin || existing?.inviteOrigin || null;
+    const resolvedSenderMailbox = invite.senderMailbox || existing?.senderMailbox || null;
+    const resolvedReplyAllowed = invite.replyToQuoteAllowed !== undefined
+      ? invite.replyToQuoteAllowed
+      : existing?.replyToQuoteAllowed !== undefined
+        ? existing.replyToQuoteAllowed
+        : null;
     const record = {
       id: `invite:${rfqNumber}:${vendorEmail}`,
       rfqId: (rfq && rfq.id) || invite.rfqId || existing?.rfqId || null,
@@ -12702,6 +12869,10 @@ class StoreService {
       vendorEmail,
       inviteMessageId: existing?.inviteMessageId || inviteMessageId,
       invitedAt: existing?.invitedAt && existing.invitedAt < invitedAt ? existing.invitedAt : invitedAt,
+      ...(resolvedChannel ? { inviteChannel: resolvedChannel } : {}),
+      ...(resolvedOrigin ? { inviteOrigin: resolvedOrigin } : {}),
+      ...(resolvedSenderMailbox ? { senderMailbox: resolvedSenderMailbox } : {}),
+      ...(resolvedReplyAllowed !== null ? { replyToQuoteAllowed: resolvedReplyAllowed } : {}),
     };
     this._rfqVendorInvites.set(key, record);
 
@@ -12721,6 +12892,10 @@ class StoreService {
           inviteMessageId: record.inviteMessageId,
           invitedAt: record.invitedAt,
           quotesDispatchDueAt: dueIso,
+          ...(resolvedChannel ? { inviteChannel: resolvedChannel } : {}),
+          ...(resolvedOrigin ? { inviteOrigin: resolvedOrigin } : {}),
+          ...(resolvedSenderMailbox ? { senderMailbox: resolvedSenderMailbox } : {}),
+          ...(resolvedReplyAllowed !== null ? { replyToQuoteAllowed: resolvedReplyAllowed } : {}),
         }),
         'Failed to persist RFQ vendor invite metadata',
         { rfqNumber: record.rfqNumber, vendorEmail: record.vendorEmail }
@@ -12746,6 +12921,14 @@ class StoreService {
         vendorEmail: email,
         inviteMessageId: item.inviteMessageId || null,
         invitedAt: item.invitedAt || null,
+        ...(item.inviteChannel || vendorObj.inviteChannel ? { inviteChannel: item.inviteChannel || vendorObj.inviteChannel } : {}),
+        ...(item.inviteOrigin || vendorObj.inviteOrigin ? { inviteOrigin: item.inviteOrigin || vendorObj.inviteOrigin } : {}),
+        ...(item.senderMailbox ? { senderMailbox: item.senderMailbox } : {}),
+        ...(item.replyToQuoteAllowed !== undefined
+          ? { replyToQuoteAllowed: item.replyToQuoteAllowed }
+          : vendorObj.replyToQuoteAllowed !== undefined
+            ? { replyToQuoteAllowed: vendorObj.replyToQuoteAllowed }
+            : {}),
       });
       if (recorded) results.push(recorded);
     }
@@ -12847,6 +13030,7 @@ class StoreService {
     const vendorId = vendorRecord?.id ? String(vendorRecord.id).trim() : null;
     const emailDomain = normEmail.includes('@') ? normEmail.split('@')[1] : null;
     const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const followUpVendors = Array.isArray(rfq.followUpData?.vendors) ? rfq.followUpData.vendors : [];
     const trackedInMem = [];
     if (this._rfqVendorInvites && rfq.rfqNumber) {
       for (const rec of this._rfqVendorInvites.values()) {
@@ -12858,7 +13042,7 @@ class StoreService {
       trackedInDb = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
     }
 
-    const totalTrackedCount = assigned.length + trackedInMem.length + trackedInDb.length;
+    const totalTrackedCount = assigned.length + followUpVendors.length + trackedInMem.length + trackedInDb.length;
     if (totalTrackedCount === 0) return true;
 
     const matchesEntry = (entryId, entryEmail) => {
@@ -12870,6 +13054,7 @@ class StoreService {
     };
 
     if (assigned.some((av) => av && matchesEntry(av.id || av.vendorId, av.email || av.corporateEmail))) return true;
+    if (followUpVendors.some((fv) => fv && matchesEntry(fv.id || fv.vendorId, fv.email || fv.corporateEmail))) return true;
     if (trackedInMem.some((rec) => rec && matchesEntry(rec.vendorId, rec.vendorEmail))) return true;
     if (trackedInDb.some((row) => row && matchesEntry(row.vendor_id, row.vendor_email))) return true;
     if (vendorRecord && Array.isArray(vendorRecord.unlockedRfqIds) &&
