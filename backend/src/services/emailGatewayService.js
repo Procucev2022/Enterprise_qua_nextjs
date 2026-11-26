@@ -42,6 +42,7 @@ const {
   EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
+  VENDOR_MAILBOX_CHANNELS,
   STRICT_BUYER_RFQ_MAILBOX,
   STRICT_VENDOR_INVITATION_MAILBOX,
   NON_BUYER_MAILBOX_BLOCKLIST,
@@ -124,8 +125,23 @@ const runtime = {
   ingestedThisRun: 0,
 };
 
-/** Live state for the dedicated vendor quotation mailbox watcher. */
+/** Live state for the dedicated vendor quotation (direct / GMT RFQ) mailbox watcher. */
 const vendorRuntime = {
+  pollTimer: null,
+  isPolling: false,
+  pollStartedAt: 0,
+  watchingSince: new Date().toISOString(),
+  lastPollAt: null,
+  lastPollDurationMs: null,
+  lastError: null,
+  recentErrors: [],
+  lastConnectedAt: null,
+  consideredThisRun: 0,
+  ingestedThisRun: 0,
+};
+
+/** Live state for the network invite-only vendor mailbox watcher. */
+const vendorInviteRuntime = {
   pollTimer: null,
   isPolling: false,
   pollStartedAt: 0,
@@ -282,25 +298,31 @@ function resolveVendorConfig(env = process.env) {
 
   return {
     enabled: String(
-      env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
-        ? env.VENDOR_EMAIL_GATEWAY_ENABLED
-        : env.EMAIL_GATEWAY_ENABLED || 'true'
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED !== undefined
+        ? env.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED
+        : (env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
+          ? env.VENDOR_EMAIL_GATEWAY_ENABLED
+          : env.EMAIL_GATEWAY_ENABLED || 'true')
     ).toLowerCase() === 'true',
     // IMAP support was removed — see resolveConfig()'s comment. The vendor
     // mailbox is read exclusively via the vendor Gmail REST API identity
-    // (VENDOR_GMAIL_* in mailerService).
+    // (VENDOR_DIRECT_RFQ_GMAIL_* / VENDOR_GMAIL_* in mailerService).
     user: (
+      env.VENDOR_DIRECT_RFQ_GATEWAY_USER ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
+      env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
       ''
     ).trim(),
     address: (
+      env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
       env.VENDOR_EMAIL_GATEWAY_USER ||
       ''
     ).trim(),
-    mailbox: (env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    mailbox: (env.VENDOR_DIRECT_RFQ_GATEWAY_MAILBOX || env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
     pollIntervalMs: Math.max(
       Number(
+        env.VENDOR_DIRECT_RFQ_GATEWAY_POLL_MS ||
         env.VENDOR_EMAIL_GATEWAY_POLL_MS ||
         env.EMAIL_GATEWAY_POLL_MS ||
         EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS
@@ -309,33 +331,140 @@ function resolveVendorConfig(env = process.env) {
     ),
     maxPerPoll: Math.max(
       Number(
+        env.VENDOR_DIRECT_RFQ_GATEWAY_MAX_PER_POLL ||
         env.VENDOR_EMAIL_GATEWAY_MAX_PER_POLL ||
         env.EMAIL_GATEWAY_MAX_PER_POLL ||
         EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL
       ),
       1
     ),
-    allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
-    allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
+    allowedSenders: splitList(
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ALLOWED_SENDERS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS ||
+      env.EMAIL_GATEWAY_ALLOWED_SENDERS
+    ),
+    allowedDomains: splitList(
+      env.VENDOR_DIRECT_RFQ_GATEWAY_ALLOWED_DOMAINS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS ||
+      env.EMAIL_GATEWAY_ALLOWED_DOMAINS
+    ),
     // Hole 2 fix: vendor mailbox must NEVER inherit EMAIL_GATEWAY_AUTO_REGISTER or
     // auto-register unregistered senders as buyers.
     autoRegisterUnregisteredBuyers: false,
     isVendorMailbox: true,
-    labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
-    labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
+    mailboxChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+    isInviteOnlyMailbox: false,
+    labelProcessed: (
+      env.VENDOR_DIRECT_RFQ_GMAIL_LABEL_PROCESSED ||
+      env.VENDOR_GMAIL_LABEL_PROCESSED ||
+      env.GMAIL_LABEL_PROCESSED ||
+      EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED
+    ).trim(),
+    labelError: (
+      env.VENDOR_DIRECT_RFQ_GMAIL_LABEL_ERROR ||
+      env.VENDOR_GMAIL_LABEL_ERROR ||
+      env.GMAIL_LABEL_ERROR ||
+      EMAIL_GATEWAY_CONFIG.LABEL_ERROR
+    ).trim(),
   };
+}
+
+/**
+ * Configuration for the network invite-only vendor mailbox (VENDOR_INVITE_EMAIL_ADDRESS).
+ * Replies received here never create quotations; instead they redirect vendors to the portal.
+ */
+function resolveVendorInviteConfig(env = process.env) {
+  const splitList = (value) =>
+    String(value || '')
+      .split(',')
+      .map((entry) => entry.trim().toLowerCase())
+      .filter(Boolean);
+
+  return {
+    enabled: String(
+      env.VENDOR_INVITE_GATEWAY_ENABLED !== undefined
+        ? env.VENDOR_INVITE_GATEWAY_ENABLED
+        : (env.VENDOR_EMAIL_GATEWAY_ENABLED !== undefined
+          ? env.VENDOR_EMAIL_GATEWAY_ENABLED
+          : env.EMAIL_GATEWAY_ENABLED || 'true')
+    ).toLowerCase() === 'true',
+    user: (
+      env.VENDOR_INVITE_GATEWAY_USER ||
+      env.VENDOR_INVITE_EMAIL_ADDRESS ||
+      env.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+      ''
+    ).trim(),
+    address: (
+      env.VENDOR_INVITE_EMAIL_ADDRESS ||
+      env.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+      ''
+    ).trim(),
+    mailbox: (env.VENDOR_INVITE_GATEWAY_MAILBOX || env.VENDOR_EMAIL_GATEWAY_MAILBOX || 'INBOX').trim(),
+    pollIntervalMs: Math.max(
+      Number(
+        env.VENDOR_INVITE_GATEWAY_POLL_MS ||
+        env.VENDOR_EMAIL_GATEWAY_POLL_MS ||
+        env.EMAIL_GATEWAY_POLL_MS ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_POLL_MS
+      ),
+      EMAIL_GATEWAY_CONFIG.MIN_POLL_MS
+    ),
+    maxPerPoll: Math.max(
+      Number(
+        env.VENDOR_INVITE_GATEWAY_MAX_PER_POLL ||
+        env.VENDOR_EMAIL_GATEWAY_MAX_PER_POLL ||
+        env.EMAIL_GATEWAY_MAX_PER_POLL ||
+        EMAIL_GATEWAY_CONFIG.DEFAULT_MAX_PER_POLL
+      ),
+      1
+    ),
+    allowedSenders: splitList(
+      env.VENDOR_INVITE_GATEWAY_ALLOWED_SENDERS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS ||
+      env.EMAIL_GATEWAY_ALLOWED_SENDERS
+    ),
+    allowedDomains: splitList(
+      env.VENDOR_INVITE_GATEWAY_ALLOWED_DOMAINS ||
+      env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS ||
+      env.EMAIL_GATEWAY_ALLOWED_DOMAINS
+    ),
+    autoRegisterUnregisteredBuyers: false,
+    isVendorMailbox: true,
+    mailboxChannel: VENDOR_MAILBOX_CHANNELS.INVITE,
+    isInviteOnlyMailbox: true,
+    labelProcessed: (
+      env.VENDOR_INVITE_GMAIL_LABEL_PROCESSED ||
+      env.VENDOR_GMAIL_LABEL_PROCESSED ||
+      env.GMAIL_LABEL_PROCESSED ||
+      EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED
+    ).trim(),
+    labelError: (
+      env.VENDOR_INVITE_GMAIL_LABEL_ERROR ||
+      env.VENDOR_GMAIL_LABEL_ERROR ||
+      env.GMAIL_LABEL_ERROR ||
+      EMAIL_GATEWAY_CONFIG.LABEL_ERROR
+    ).trim(),
+  };
+}
+
+function resolveVendorConfigs(env = process.env) {
+  return [resolveVendorConfig(env), resolveVendorInviteConfig(env)];
 }
 
 /** True when enough is configured to attempt a connection. */
 function isConfigured(config = resolveConfig()) {
-  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor:
-  // VENDOR_GMAIL_*) — checking the wrong one would report the vendor
-  // gateway as configured just because the buyer's Gmail API happens to be
-  // set up, or vice versa. The Gmail REST API is the only transport now
-  // (IMAP support removed — see resolveConfig()'s comment).
-  return config.isVendorMailbox
-    ? mailerService.isVendorGmailApiConfigured()
-    : mailerService.isGmailApiConfigured();
+  // Each mailbox has its own Gmail API identity (buyer: GMAIL_*, vendor direct:
+  // VENDOR_GMAIL_*, vendor invite: VENDOR_INVITE_GMAIL_*) — checking the wrong one
+  // would misreport readiness.
+  if (!config.isVendorMailbox) {
+    return mailerService.isGmailApiConfigured();
+  }
+  if (config.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE || config.isInviteOnlyMailbox === true) {
+    return typeof mailerService.isVendorInviteGmailApiConfigured === 'function'
+      ? mailerService.isVendorInviteGmailApiConfigured()
+      : false;
+  }
+  return mailerService.isVendorGmailApiConfigured(VENDOR_MAILBOX_CHANNELS.DIRECT);
 }
 
 /**
@@ -458,6 +587,12 @@ function isStrictBuyerRfqMailbox(message, config = {}) {
   const blockedMailboxes = new Set([
     ...NON_BUYER_MAILBOX_BLOCKLIST.map(normalizeSingleMailbox),
     normalizeSingleMailbox(STRICT_VENDOR_INVITATION_MAILBOX),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_EMAIL_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL),
+    normalizeSingleMailbox(process.env.VENDOR_INVITE_GATEWAY_USER),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL),
+    normalizeSingleMailbox(process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER),
     normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS),
     normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_USER),
   ].filter(Boolean));
@@ -481,6 +616,12 @@ function isGatewayOrSystemEmail(email, config = {}) {
     process.env.SMTP_USER,
     process.env.SMTP_FROM,
     process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
     process.env.VENDOR_SMTP_USER,
@@ -1535,6 +1676,12 @@ function isOutgoingSystemMessage(message, config = {}) {
     process.env.SMTP_USER,
     process.env.SMTP_FROM,
     process.env.GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_USER,
     process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
     process.env.VENDOR_SMTP_USER,
@@ -1580,6 +1727,7 @@ const AUTO_REPLY_KIND = {
   VENDOR_ISSUE: 'VENDOR_ISSUE',
   CREDITS_EXHAUSTED: 'CREDITS_EXHAUSTED',
   PORTAL_REDIRECT: 'PORTAL_REDIRECT',
+  VENDOR_INVITE_PORTAL_REDIRECT: 'VENDOR_INVITE_PORTAL_REDIRECT',
   QUOTE_ACK: 'QUOTE_ACK',
   RFQ_ACK: 'RFQ_ACK',
   RFQ_NOT_CREATED: 'RFQ_NOT_CREATED',
@@ -1603,6 +1751,7 @@ const AUTO_REPLY_COOLDOWN = {
   [AUTO_REPLY_KIND.VENDOR_ISSUE]: { statuses: [INGESTION_OUTCOME.QUOTE_VALIDATION_FAILED], ...VENDOR_NOTICE_LIMIT },
   [AUTO_REPLY_KIND.CREDITS_EXHAUSTED]: { statuses: [INGESTION_OUTCOME.CREDITS_EXHAUSTED], ...VENDOR_NOTICE_LIMIT },
   [AUTO_REPLY_KIND.PORTAL_REDIRECT]: { statuses: [INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED], ...VENDOR_NOTICE_LIMIT },
+  [AUTO_REPLY_KIND.VENDOR_INVITE_PORTAL_REDIRECT]: { statuses: [INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED], ...VENDOR_NOTICE_LIMIT },
   // A registered buyer is told each time an email of theirs did not become an
   // RFQ, up to a few an hour — enough for someone correcting and resending,
   // not enough for a machine loop.
@@ -2077,6 +2226,15 @@ async function retryPendingAcknowledgements({
           itemCount: Number(saved.itemCount) || 0,
           cc: saved.cc,
         }), 'Vendor portal redirect notice retry');
+      } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT) {
+        ensureMailDeliveryAccepted(await mailerService.sendVendorInvitePortalRedirectEmail(row.from_address, {
+          rfq: { id: row.rfq_id || row.rfq_number, rfqNumber: row.rfq_number, title: saved.rfqTitle || row.subject },
+          rfqId: row.rfq_id || row.rfq_number,
+          rfqNumber: row.rfq_number,
+          vendorName: saved.vendorName || null,
+          isRegisteredVendor: Boolean(saved.isRegisteredVendor),
+          cc: saved.cc,
+        }), 'Vendor invite portal redirect notice retry');
       } else if (saved.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK) {
         const rfq = row.rfq_id ? await domainQueries.getRFQByIdFromDB(row.rfq_id) : null;
         const quote = Array.isArray(rfq?.quotes)
@@ -2417,16 +2575,28 @@ async function resolveVendorFromEmail(fromAddress, targetRfq = null) {
   const email = String(fromAddress).trim().toLowerCase();
 
   // Only configured gateway addresses are excluded. No personal mailbox is assumed when they are unset.
-  const vendorGatewayAddr = (process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim().toLowerCase();
-  const buyerGatewayAddr = (process.env.EMAIL_GATEWAY_ADDRESS || process.env.EMAIL_GATEWAY_USER || '').trim().toLowerCase();
-  const gmailApiAddr = String(process.env.GMAIL_SENDER_EMAIL || '').trim().toLowerCase();
+  const excludedAddresses = [
+    process.env.VENDOR_INVITE_EMAIL_ADDRESS,
+    process.env.VENDOR_INVITE_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_INVITE_GATEWAY_USER,
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS,
+    process.env.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL,
+    process.env.VENDOR_DIRECT_RFQ_GATEWAY_USER,
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS,
+    process.env.VENDOR_EMAIL_GATEWAY_USER,
+    process.env.VENDOR_GMAIL_SENDER_EMAIL,
+    process.env.EMAIL_GATEWAY_ADDRESS,
+    process.env.EMAIL_GATEWAY_USER,
+    process.env.GMAIL_SENDER_EMAIL,
+  ]
+    .filter(Boolean)
+    .map((addr) => {
+      const m = String(addr).match(/<\s*([^<>]+)\s*>/);
+      return (m ? m[1] : String(addr)).trim().toLowerCase();
+    });
 
   // Internal gateway accounts can NEVER be a vendor
-  if (
-    (vendorGatewayAddr && email === vendorGatewayAddr) ||
-    (buyerGatewayAddr && email === buyerGatewayAddr) ||
-    (gmailApiAddr && email === gmailApiAddr)
-  ) {
+  if (excludedAddresses.includes(email)) {
     return null;
   }
 
@@ -3096,6 +3266,91 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   };
 }
 
+function isInviteOnlyMailboxMessage(message, config = {}) {
+  if (config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE || config?.isInviteOnlyMailbox === true) {
+    return true;
+  }
+  const configuredInviteMailbox = normalizeSingleMailbox(process.env.VENDOR_INVITE_EMAIL_ADDRESS);
+  if (!configuredInviteMailbox) return false;
+  const configuredDirectMailbox = normalizeSingleMailbox(
+    process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    process.env.VENDOR_EMAIL_GATEWAY_USER
+  );
+  const recipients = collectRecipientAddresses(message);
+  return (
+    recipients.includes(configuredInviteMailbox) &&
+    (!configuredDirectMailbox || configuredDirectMailbox === configuredInviteMailbox || !recipients.includes(configuredDirectMailbox))
+  );
+}
+
+/**
+ * Handles replies landing on the portal-only Network Invite mailbox (VENDOR_INVITE_EMAIL_ADDRESS).
+ * Never creates quotations/bids or deducts credits; identifies the RFQ and sends a portal redirect.
+ */
+async function processVendorInviteReply(message, config, { targetRfq, referencedNumber, vendorRecord } = {}) {
+  if (!targetRfq) {
+    const detail = referencedNumber
+      ? EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber)
+      : EMAIL_GATEWAY_MESSAGES.VENDOR_INVITE_NO_RFQ;
+    logger.info('Invite-only mailbox message dropped without resolvable RFQ reference', {
+      fromAddress: message.fromAddress,
+      referencedNumber: referencedNumber || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.INVALID_RFQ,
+      detail,
+      message,
+    };
+  }
+
+  let isRegisteredVendor = false;
+  if (message.fromAddress) {
+    if (pool.hasStorage() && typeof identityQueries.findUserByEmail === 'function') {
+      const existingUser = await identityQueries.findUserByEmail(message.fromAddress).catch(() => null);
+      isRegisteredVendor = Boolean(existingUser);
+    } else if (vendorRecord) {
+      isRegisteredVendor = vendorRecord.hasIdentity !== false && vendorRecord.isRegistered !== false;
+    }
+  }
+
+  await sendAutoReply(
+    message,
+    AUTO_REPLY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
+    () =>
+      mailerService.sendVendorInvitePortalRedirectEmail(message.fromAddress, {
+        rfq: targetRfq,
+        rfqId: targetRfq.id || targetRfq.rfqNumber,
+        rfqNumber: targetRfq.rfqNumber,
+        vendorName: vendorRecord?.name || message.fromName || null,
+        isRegisteredVendor,
+      }),
+    {
+      config,
+      rfqNumber: targetRfq.rfqNumber,
+      failureLog: 'Failed to send invite-only mailbox portal submission redirect email',
+      retryDelivery: {
+        deliveryKind: EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
+        rfqId: targetRfq.id || null,
+        rfqNumber: targetRfq.rfqNumber,
+        payload: {
+          rfqTitle: targetRfq.title || null,
+          vendorName: vendorRecord?.name || message.fromName || null,
+          isRegisteredVendor,
+        },
+      },
+    }
+  );
+
+  return {
+    status: INGESTION_OUTCOME.PORTAL_SUBMISSION_REQUIRED,
+    detail: EMAIL_GATEWAY_MESSAGES.VENDOR_INVITE_PORTAL_REDIRECT_DETAIL
+      .replace('{rfqNumber}', targetRfq.rfqNumber || 'unknown'),
+    message,
+    rfq: targetRfq,
+  };
+}
+
 /**
  * Turn one raw message into an RFQ or vendor quote.
  *
@@ -3164,6 +3419,21 @@ async function processMessage(rawSource, config = resolveConfig()) {
     };
   }
 
+  if (
+    isInviteOnlyMailboxMessage(message, config) &&
+    (isSystemOrAutomatedSender(message.fromAddress) || Boolean(message.automatedReason))
+  ) {
+    logger.info(`Silently dropping automated/bot message on invite mailbox from ${message.fromAddress}`, {
+      subject: message.subject,
+      automatedReason: message.automatedReason || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_OUTBOUND,
+      detail: 'Skipped automated/bot message on invite-only vendor mailbox',
+      message,
+    };
+  }
+
 
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
@@ -3177,6 +3447,16 @@ async function processMessage(rawSource, config = resolveConfig()) {
   const vendorRecord = targetRfq
     ? ((await resolveVendorFromEmail(message.fromAddress, targetRfq)) || initialVendorRecord)
     : initialVendorRecord;
+
+  // Network Invite mailbox (`VENDOR_INVITE_EMAIL_ADDRESS`) is strictly portal-only:
+  // never create bids/quotations or fall through to buyer RFQ creation.
+  if (isInviteOnlyMailboxMessage(message, config)) {
+    return await processVendorInviteReply(message, config, {
+      targetRfq,
+      referencedNumber,
+      vendorRecord,
+    });
+  }
 
   // If sender is both buyer and vendor, but is the owner/creator of the target RFQ,
   // they are managing their RFQ as a buyer, not quoting on their own requirement.
@@ -3776,7 +4056,11 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
 
   const providerKey = options.providerKey || (
     typeof mailerService.getGmailProviderKey === 'function'
-      ? mailerService.getGmailProviderKey(config.isVendorMailbox ? 'vendor' : 'buyer')
+      ? mailerService.getGmailProviderKey(
+        config.isVendorMailbox
+          ? (config.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE ? 'vendor_invite' : 'vendor')
+          : 'buyer'
+      )
       : null
   );
   if (providerKey && typeof mailTransport.loadPersistedCooldowns === 'function') {
@@ -4167,6 +4451,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -4177,6 +4462,7 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_CREDITS_EXHAUSTED,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_FAILURE,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT,
+            EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INVITE_PORTAL_REDIRECT,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_UNAUTHORIZED_SENDER,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_QUOTE_ACK,
             EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_INQUIRY_ACK,
@@ -4218,12 +4504,27 @@ async function pollViaGmailApi(config = resolveConfig(), options = {}) {
   }
 }
 
-// Vendor replies arrive in the vendor identity's Gmail inbox, read with the
-// vendor token. Messages go through the same processMessage path as buyer mail.
+// Direct vendor quote replies arrive in VENDOR_DIRECT_RFQ_EMAIL_ADDRESS;
+// Network invite replies arrive in VENDOR_INVITE_EMAIL_ADDRESS and are redirected to the portal.
 async function pollVendorViaGmailApi(config = resolveVendorConfig(), options = {}) {
   return pollViaGmailApi(config, {
-    auth: mailerService.getVendorGmailOAuthClient(),
-    state: vendorRuntime,
+    auth: mailerService.getVendorGmailOAuthClient(
+      config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE
+        ? VENDOR_MAILBOX_CHANNELS.INVITE
+        : VENDOR_MAILBOX_CHANNELS.DIRECT
+    ),
+    state: config?.mailboxChannel === VENDOR_MAILBOX_CHANNELS.INVITE ? vendorInviteRuntime : vendorRuntime,
+    ...options,
+  });
+}
+
+async function pollVendorInviteViaGmailApi(config = resolveVendorInviteConfig(), options = {}) {
+  const auth = typeof mailerService.getVendorInviteGmailOAuthClient === 'function'
+    ? mailerService.getVendorInviteGmailOAuthClient()
+    : mailerService.getVendorGmailOAuthClient(VENDOR_MAILBOX_CHANNELS.INVITE);
+  return pollViaGmailApi(config, {
+    auth,
+    state: vendorInviteRuntime,
     ...options,
   });
 }
@@ -4241,11 +4542,15 @@ async function pollOnce(config = resolveConfig(), options = {}) {
 }
 
 /**
- * Read the vendor mailbox once and ingest vendor quote replies, via the
+ * Read the vendor direct RFQ mailbox once and ingest vendor quote replies, via the
  * vendor Gmail REST API identity. Same reasoning as pollOnce() above.
  */
 async function pollVendorOnce(config = resolveVendorConfig()) {
   return emailGateway.pollVendorViaGmailApi(config);
+}
+
+async function pollVendorInviteOnce(config = resolveVendorInviteConfig()) {
+  return emailGateway.pollVendorInviteViaGmailApi(config);
 }
 
 /**
@@ -4281,7 +4586,7 @@ function startBuyerPolling(config = resolveConfig()) {
 /**
  * Start background watching for vendor quotation mailbox.
  */
-function startVendorPolling(config = resolveVendorConfig()) {
+function startVendorPolling(config = resolveVendorConfig(), inviteConfig = resolveVendorInviteConfig()) {
   if (vendorRuntime.pollTimer) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.ALREADY_STARTED };
   if (!config.enabled) return { started: false, reason: EMAIL_GATEWAY_MESSAGES.DISABLED };
   if (!emailGateway.isConfigured(config)) return { started: false, status: 'not_configured', reason: EMAIL_GATEWAY_MESSAGES.NOT_CONFIGURED };
@@ -4300,35 +4605,74 @@ function startVendorPolling(config = resolveVendorConfig()) {
   }, config.pollIntervalMs);
   if (typeof vendorRuntime.pollTimer.unref === 'function') vendorRuntime.pollTimer.unref();
 
+  const directAddr = normalizeSingleMailbox(config.address || config.user);
+  const inviteAddr = normalizeSingleMailbox(inviteConfig?.address || inviteConfig?.user);
+  let inviteStarted = false;
+  if (
+    inviteConfig &&
+    inviteConfig.enabled &&
+    inviteAddr &&
+    inviteAddr !== directAddr &&
+    !vendorInviteRuntime.pollTimer &&
+    emailGateway.isConfigured(inviteConfig)
+  ) {
+    vendorInviteRuntime.watchingSince = new Date().toISOString();
+    vendorInviteRuntime.pollTimer = setInterval(() => {
+      emailGateway.pollVendorInviteOnce(resolveVendorInviteConfig()).catch((err) => {
+        logger.error('Vendor invite-only gateway interval poll threw', err, 'EMAIL_GATEWAY');
+      });
+    }, inviteConfig.pollIntervalMs);
+    if (typeof vendorInviteRuntime.pollTimer.unref === 'function') vendorInviteRuntime.pollTimer.unref();
+    inviteStarted = true;
+  }
+
   logger.info(
     `Vendor quotation gateway watching ${config.user} every ${Math.round(config.pollIntervalMs / 1000)}s`,
-    { mailbox: config.mailbox },
+    { mailbox: config.mailbox, inviteMailboxStarted: inviteStarted },
     'EMAIL_GATEWAY'
   );
-  return { started: true, pollIntervalMs: config.pollIntervalMs };
+  return { started: true, pollIntervalMs: config.pollIntervalMs, inviteMailboxStarted: inviteStarted };
 }
 
 /**
- * Run one polling pass across both monitored inboxes:
- *   1. Buyer Requisitions Mailbox (e.g. rfq@procucev.com)
- *   2. Vendor Quotations Mailbox (VENDOR_EMAIL_GATEWAY_ADDRESS)
- *
- * Executes both in parallel using Promise.allSettled so an error in one inbox
- * never blocks or disrupts the other.
+ * Run one polling pass across monitored inboxes:
+ *   1. Buyer Requisitions Mailbox (rfq@procucev.com)
+ *   2. Direct Vendor Quotations Mailbox (VENDOR_DIRECT_RFQ_EMAIL_ADDRESS / legacy VENDOR_EMAIL_GATEWAY_ADDRESS)
+ *   3. Network Invite Portal-Only Mailbox (VENDOR_INVITE_EMAIL_ADDRESS, when distinct and configured)
  */
 async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig = resolveVendorConfig(), options = {}) {
   logger.info('Executing scheduled dual-inbox email poll cycle', {}, 'EMAIL_GATEWAY');
   const pollOptions = typeof options?.ensureHydrated === 'function'
     ? { ensureHydrated: options.ensureHydrated }
     : null;
-  const [buyerSettled, vendorSettled] = await Promise.allSettled([
+  const vendorInviteConfig = options?.vendorInviteConfig || resolveVendorInviteConfig();
+  const directAddr = normalizeSingleMailbox(vendorConfig?.address || vendorConfig?.user);
+  const inviteAddr = normalizeSingleMailbox(vendorInviteConfig?.address || vendorInviteConfig?.user);
+  const shouldPollInviteMailbox = Boolean(
+    inviteAddr &&
+    inviteAddr !== directAddr &&
+    typeof emailGateway.pollVendorInviteViaGmailApi === 'function' &&
+    emailGateway.isConfigured(vendorInviteConfig)
+  );
+
+  const tasks = [
     pollOptions ? emailGateway.pollOnce(buyerConfig, pollOptions) : emailGateway.pollOnce(buyerConfig),
-    // Vendor replies are read through the vendor Gmail identity only. The IMAP
-    // path cannot connect from a Worker, so it is not used here.
     pollOptions
       ? emailGateway.pollVendorViaGmailApi(vendorConfig, pollOptions)
       : emailGateway.pollVendorViaGmailApi(vendorConfig),
-  ]);
+  ];
+  if (shouldPollInviteMailbox) {
+    tasks.push(
+      pollOptions
+        ? emailGateway.pollVendorInviteViaGmailApi(vendorInviteConfig, pollOptions)
+        : emailGateway.pollVendorInviteViaGmailApi(vendorInviteConfig)
+    );
+  }
+
+  const settled = await Promise.allSettled(tasks);
+  const buyerSettled = settled[0];
+  const vendorSettled = settled[1];
+  const vendorInviteSettled = shouldPollInviteMailbox ? settled[2] : null;
 
   const buyer = buyerSettled.status === 'fulfilled'
     ? buyerSettled.value
@@ -4337,6 +4681,12 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
   const vendor = vendorSettled.status === 'fulfilled'
     ? vendorSettled.value
     : { skipped: false, error: (vendorSettled.reason && vendorSettled.reason.message) || 'Vendor poll failed' };
+
+  const vendorInvite = vendorInviteSettled
+    ? (vendorInviteSettled.status === 'fulfilled'
+      ? vendorInviteSettled.value
+      : { skipped: false, error: (vendorInviteSettled.reason && vendorInviteSettled.reason.message) || 'Vendor invite poll failed' })
+    : null;
 
   const result = {
     executedAt: new Date().toISOString(),
@@ -4348,17 +4698,25 @@ async function pollBothInboxesOnce(buyerConfig = resolveConfig(), vendorConfig =
       address: vendorConfig.address || vendorConfig.user || null,
       ...vendor,
     },
-    totalConsidered: (buyer.considered || 0) + (vendor.considered || 0),
-    totalIngested: (buyer.ingested || 0) + (vendor.ingested || 0),
+    ...(vendorInvite ? {
+      vendorInviteMailbox: {
+        address: vendorInviteConfig.address || vendorInviteConfig.user || null,
+        ...vendorInvite,
+      },
+    } : {}),
+    totalConsidered: (buyer.considered || 0) + (vendor.considered || 0) + (vendorInvite?.considered || 0),
+    totalIngested: (buyer.ingested || 0) + (vendor.ingested || 0) + (vendorInvite?.ingested || 0),
   };
 
   logger.info(
-    `Dual-inbox poll completed: ${result.totalIngested} ingested of ${result.totalConsidered} considered across both inboxes`,
+    `Dual-inbox poll completed: ${result.totalIngested} ingested of ${result.totalConsidered} considered across mailboxes`,
     {
       buyerIngested: buyer.ingested || 0,
       vendorIngested: vendor.ingested || 0,
+      vendorInviteIngested: vendorInvite?.ingested || 0,
       buyerConsidered: buyer.considered || 0,
       vendorConsidered: vendor.considered || 0,
+      vendorInviteConsidered: vendorInvite?.considered || 0,
     },
     'EMAIL_GATEWAY'
   );
@@ -4408,25 +4766,35 @@ function stopPolling() {
     clearInterval(vendorRuntime.pollTimer);
     vendorRuntime.pollTimer = null;
   }
+  if (vendorInviteRuntime.pollTimer) {
+    clearInterval(vendorInviteRuntime.pollTimer);
+    vendorInviteRuntime.pollTimer = null;
+  }
   runtime.isPolling = false;
   vendorRuntime.isPolling = false;
+  vendorInviteRuntime.isPolling = false;
   return buyerWasRunning;
 }
 
 /**
- * Everything the gateway panel needs for both buyer and vendor channels.
+ * Everything the gateway panel needs for buyer and vendor channels.
  */
 async function getStatus() {
   const config = emailGateway.resolveConfig();
   const configured = isConfigured(config);
   const vendorConfig = emailGateway.resolveVendorConfig();
   const vendorConfigured = isConfigured(vendorConfig);
+  const vendorInviteConfig = resolveVendorInviteConfig();
+  const vendorInviteConfigured = isConfigured(vendorInviteConfig);
 
   const configurationFault = configured ? describeConfigurationFault(config) : null;
   const lastError = configurationFault || runtime.lastError;
 
   const vendorFault = vendorConfigured ? describeConfigurationFault(vendorConfig) : null;
   const vendorLastError = vendorFault || vendorRuntime.lastError;
+
+  const vendorInviteFault = vendorInviteConfigured ? describeConfigurationFault(vendorInviteConfig) : null;
+  const vendorInviteLastError = vendorInviteFault || vendorInviteRuntime.lastError;
 
   return {
     enabled: config.enabled,
@@ -4463,6 +4831,7 @@ async function getStatus() {
       gatewayAddress: vendorConfig.address || null,
       mailboxUser: vendorConfig.user || null,
       mailbox: vendorConfig.mailbox,
+      mailboxChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
       pollIntervalMs: vendorConfig.pollIntervalMs,
       watchingSince: vendorRuntime.watchingSince,
       lastPollAt: vendorRuntime.lastPollAt,
@@ -4476,6 +4845,27 @@ async function getStatus() {
         error: vendorConfig.labelError,
       },
     },
+    vendorInviteGateway: {
+      enabled: vendorInviteConfig.enabled,
+      configured: vendorInviteConfigured,
+      watching: !!vendorInviteRuntime.pollTimer,
+      gatewayAddress: vendorInviteConfig.address || null,
+      mailboxUser: vendorInviteConfig.user || null,
+      mailbox: vendorInviteConfig.mailbox,
+      mailboxChannel: VENDOR_MAILBOX_CHANNELS.INVITE,
+      pollIntervalMs: vendorInviteConfig.pollIntervalMs,
+      watchingSince: vendorInviteRuntime.watchingSince,
+      lastPollAt: vendorInviteRuntime.lastPollAt,
+      lastPollDurationMs: vendorInviteRuntime.lastPollDurationMs,
+      lastConnectedAt: vendorInviteRuntime.lastConnectedAt,
+      lastError: vendorInviteLastError,
+      recentErrors: vendorInviteRuntime.recentErrors,
+      isPolling: vendorInviteRuntime.isPolling,
+      labels: {
+        processed: vendorInviteConfig.labelProcessed,
+        error: vendorInviteConfig.labelError,
+      },
+    },
   };
 }
 
@@ -4484,9 +4874,12 @@ async function getStatus() {
 const emailGateway = {
   runtime,
   vendorRuntime,
+  vendorInviteRuntime,
   INGESTION_OUTCOME,
   resolveConfig,
   resolveVendorConfig,
+  resolveVendorInviteConfig,
+  resolveVendorConfigs,
   isConfigured,
   describeConfigurationFault,
   resolveConnectionState,
@@ -4521,7 +4914,11 @@ const emailGateway = {
   pollViaGmailApi,
   pollVendorOnce,
   pollVendorViaGmailApi,
+  pollVendorInviteOnce,
+  pollVendorInviteViaGmailApi,
   pollBothInboxesOnce,
+  isInviteOnlyMailboxMessage,
+  processVendorInviteReply,
   startPolling,
   startBuyerPolling,
   startVendorPolling,

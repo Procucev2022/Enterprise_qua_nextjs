@@ -303,17 +303,34 @@ async function dispatchEvent(job, options = {}) {
         throw error;
       }
 
+      const isCmCreated = Boolean(
+        job.raw?.isCmCreated ||
+        vendor.isCmCreated ||
+        vendor.createdByCategoryManager ||
+        String(vendor.createdByRole || '').toLowerCase() === 'category_manager'
+      );
+      const mailboxChannel = job.raw?.mailboxChannel || (isCmCreated ? 'direct' : null);
       const emailPayload = mailerService.buildVendorOnboardingEmail({
         to: recipient,
         recipientName: vendor.contactPerson || vendor.name,
-        buyerOrganizationName: 'Procucev Enterprise',
+        buyerOrganizationName: isCmCreated
+          ? VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME
+          : (vendor.addedByBuyerCompany || 'Procucev Enterprise'),
         vendorCode: vendor.id,
         tempPassword,
         contactPhone: vendor.phone,
+        ...(isCmCreated ? { isCmCreated: true } : {}),
+        ...(mailboxChannel ? { mailboxChannel } : {}),
       });
       let delivery;
       try {
-        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+        delivery = mailboxChannel
+          ? await mailerService.sendVendorIngestionEmail(
+            emailPayload,
+            'onboarding',
+            { vendorChannel: mailboxChannel }
+          )
+          : await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       } catch {
         const error = new Error('Vendor onboarding email provider request failed.');
         error.code = 'VENDOR_ONBOARDING_EMAIL_FAILED';
@@ -782,6 +799,16 @@ async function dispatchEvent(job, options = {}) {
       );
       const invitedAt = new Date().toISOString();
       const quotesDispatchDueAt = new Date(Date.parse(invitedAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString();
+      const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+        ? mailerService.resolveVendorInviteRouting(target.vendor, target, rfq)
+        : null;
+      const inviteChannel = target.inviteChannel || routing?.channel || null;
+      const inviteOrigin = target.inviteOrigin || routing?.origin || null;
+      const senderMailbox = target.senderMailbox || routing?.replyTo || null;
+      const replyToQuoteAllowed = typeof target.replyToQuoteAllowed === 'boolean'
+        ? target.replyToQuoteAllowed
+        : (typeof routing?.replyToQuoteAllowed === 'boolean' ? routing.replyToQuoteAllowed : null);
+
       const delivery = await mailerService.sendRfqInviteEmail(target.recipientEmail, {
         rfq,
         recipientName: target.recipientName,
@@ -789,6 +816,12 @@ async function dispatchEvent(job, options = {}) {
         freeCreditsRemaining: target.freeCreditsRemaining,
         isSubscribed: target.isSubscribed,
         isBuyerUploaded: target.isBuyerUploaded,
+        ...(typeof target.isCmAssigned === 'boolean' ? { isCmAssigned: target.isCmAssigned } : {}),
+        ...(typeof target.isCmCreated === 'boolean' ? { isCmCreated: target.isCmCreated } : {}),
+        ...(inviteChannel ? { inviteChannel, mailboxChannel: inviteChannel } : {}),
+        ...(inviteOrigin ? { inviteOrigin } : {}),
+        ...(senderMailbox ? { senderMailbox } : {}),
+        ...(typeof replyToQuoteAllowed === 'boolean' ? { replyToQuoteAllowed } : {}),
         vendor: target.vendor,
         messageId: inviteMessageId,
       });
@@ -805,6 +838,10 @@ async function dispatchEvent(job, options = {}) {
         inviteMessageId: delivery.inviteMessageId || inviteMessageId || delivery.messageId || null,
         invitedAt,
         quotesDispatchDueAt,
+        inviteChannel,
+        inviteOrigin,
+        senderMailbox,
+        replyToQuoteAllowed,
       }).catch((err) => {
         logger.warn('Failed to persist RFQ vendor invite metadata after outbox dispatch', {
           rfqId,

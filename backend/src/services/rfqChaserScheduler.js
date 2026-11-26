@@ -44,6 +44,7 @@ const whatsAppService = require('./whatsAppService');
 const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const rfqComparisonQueueQueries = require('../db/rfqComparisonQueueQueries');
 const { getD1Binding, getWaitUntil } = require('../db/d1Bridge');
 
@@ -563,7 +564,8 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
 /**
  * Fire-and-forget 24h reminder email for one vendor.
  * Uses the same sendRfqInviteEmail used on creation — vendors receive the full
- * RFQ detail email again as a formal reminder, labelled as a follow-up.
+ * RFQ detail email again as a formal reminder, labelled as a follow-up, sent
+ * from the exact mailbox channel originally assigned to this vendor/RFQ invite.
  */
 async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
@@ -573,20 +575,69 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
     return { channel: 'email', skipped: true };
   }
   try {
+    const normEmail = String(vendor.email || '').trim().toLowerCase();
+    const vendorIdStr = vendor.id ? String(vendor.id) : null;
+    const assignedMatch = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).find((entry) =>
+      entry && (
+        (vendorIdStr && (String(entry.id || '') === vendorIdStr || String(entry.vendorId || '') === vendorIdStr)) ||
+        (normEmail && String(entry.email || entry.corporateEmail || '').trim().toLowerCase() === normEmail)
+      )
+    ) || null;
+    let trackedInvite = null;
+    if (
+      pool.hasStorage() &&
+      typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function' &&
+      rfq.rfqNumber
+    ) {
+      const dbInvites = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+      trackedInvite = (Array.isArray(dbInvites) ? dbInvites : []).find((row) =>
+        row && (
+          (vendorIdStr && String(row.vendor_id || '') === vendorIdStr) ||
+          (normEmail && String(row.vendor_email || '').trim().toLowerCase() === normEmail)
+        )
+      ) || null;
+    }
+
+    const mergedVendor = assignedMatch ? { ...assignedMatch, ...vendor } : vendor;
     const isBuyerUploaded = mailerService.isBuyerUploadedVendor
-      ? mailerService.isBuyerUploadedVendor(vendor)
+      ? mailerService.isBuyerUploadedVendor(mergedVendor, {}, rfq)
       : false;
+    const inviteChannel =
+      trackedInvite?.invite_channel ||
+      mergedVendor.inviteChannel ||
+      null;
+    const inviteOrigin =
+      trackedInvite?.invite_origin ||
+      mergedVendor.inviteOrigin ||
+      null;
+    const senderMailbox =
+      trackedInvite?.sender_mailbox ||
+      mergedVendor.senderMailbox ||
+      null;
+    const replyToQuoteAllowed =
+      typeof trackedInvite?.reply_to_quote_allowed === 'boolean'
+        ? trackedInvite.reply_to_quote_allowed
+        : (trackedInvite?.reply_to_quote_allowed === 1 || trackedInvite?.reply_to_quote_allowed === 0
+          ? trackedInvite.reply_to_quote_allowed === 1
+          : mergedVendor.replyToQuoteAllowed);
+
     const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
       ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, vendor.id || 'vendor')
       : undefined;
     const result = await mailerService.sendRfqInviteEmail(vendor.email, {
       rfq,
-      recipientName: vendor.contactPerson || vendor.name,
+      recipientName: mergedVendor.contactPerson || mergedVendor.name,
       freeCreditsRemaining: creditInfo.freeCreditsRemaining ?? null,
       isSubscribed: creditInfo.isSubscribed ?? false,
       isReminder: true,
-      vendor,
+      vendor: mergedVendor,
       isBuyerUploaded,
+      isCmAssigned: Boolean(mergedVendor.isCmAssigned || inviteOrigin === 'cm_assigned'),
+      isCmCreated: Boolean(mergedVendor.isCmCreated || mergedVendor.createdByRole === 'category_manager' || inviteOrigin === 'cm_created'),
+      ...(inviteChannel ? { inviteChannel, mailboxChannel: inviteChannel } : {}),
+      ...(inviteOrigin ? { inviteOrigin } : {}),
+      ...(senderMailbox ? { senderMailbox } : {}),
+      ...(typeof replyToQuoteAllowed === 'boolean' ? { replyToQuoteAllowed } : {}),
       ...(inviteMessageId ? { messageId: inviteMessageId } : {}),
     });
     logger.info(

@@ -2569,8 +2569,8 @@ async function deleteRFQInDB(id) {
 }
 
 /**
- * Persist an outbound RFQ vendor invitation (Message-ID + invitedAt) and stamp
- * the 48-hour V0 quotation dispatch deadline on the RFQ when not already set.
+ * Persist an outbound RFQ vendor invitation (Message-ID, invitedAt, mailbox routing)
+ * and stamp the 48-hour V0 quotation dispatch deadline on the RFQ when not already set.
  */
 async function recordRfqVendorInviteInDB({
   rfqId = null,
@@ -2580,36 +2580,83 @@ async function recordRfqVendorInviteInDB({
   inviteMessageId = null,
   invitedAt = new Date().toISOString(),
   quotesDispatchDueAt = null,
+  inviteChannel = null,
+  inviteOrigin = null,
+  senderMailbox = null,
+  replyToQuoteAllowed = null,
 }) {
   if (!pool.hasStorage() || !rfqNumber || !vendorEmail) return null;
   const cleanRfqNumber = String(rfqNumber).trim();
   const cleanEmail = String(vendorEmail).trim().toLowerCase();
   if (!cleanRfqNumber || !cleanEmail) return null;
   const inviteId = `invite:${cleanRfqNumber}:${cleanEmail}`.slice(0, 128);
+  const cleanChannel = inviteChannel ? String(inviteChannel).trim().toLowerCase() : null;
+  const cleanOrigin = inviteOrigin ? String(inviteOrigin).trim().toLowerCase() : null;
+  const cleanMailbox = senderMailbox ? String(senderMailbox).trim().toLowerCase() : null;
+  const normalizedReplyAllowed = typeof replyToQuoteAllowed === 'boolean' ? replyToQuoteAllowed : null;
 
   await pool.query(
-    `INSERT INTO rfq_vendor_invites (id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at, updated_at)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+    `INSERT INTO rfq_vendor_invites (
+       id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+       invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed, updated_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
      ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
        rfq_id = COALESCE(EXCLUDED.rfq_id, rfq_vendor_invites.rfq_id),
        vendor_id = COALESCE(EXCLUDED.vendor_id, rfq_vendor_invites.vendor_id),
        invite_message_id = COALESCE(EXCLUDED.invite_message_id, rfq_vendor_invites.invite_message_id),
+       invite_channel = COALESCE(EXCLUDED.invite_channel, rfq_vendor_invites.invite_channel),
+       invite_origin = COALESCE(EXCLUDED.invite_origin, rfq_vendor_invites.invite_origin),
+       sender_mailbox = COALESCE(EXCLUDED.sender_mailbox, rfq_vendor_invites.sender_mailbox),
+       reply_to_quote_allowed = COALESCE(EXCLUDED.reply_to_quote_allowed, rfq_vendor_invites.reply_to_quote_allowed),
        invited_at = LEAST(rfq_vendor_invites.invited_at, EXCLUDED.invited_at),
        updated_at = now()`,
-    [inviteId, rfqId || null, cleanRfqNumber, vendorId || null, cleanEmail, inviteMessageId || null, invitedAt],
+    [
+      inviteId,
+      rfqId || null,
+      cleanRfqNumber,
+      vendorId || null,
+      cleanEmail,
+      inviteMessageId || null,
+      invitedAt,
+      cleanChannel,
+      cleanOrigin,
+      cleanMailbox,
+      normalizedReplyAllowed,
+    ],
     {
       d1: true,
-      d1Text: `INSERT INTO rfq_vendor_invites (id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+      d1Text: `INSERT INTO rfq_vendor_invites (
+         id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+         invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
        ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
          rfq_id = COALESCE(excluded.rfq_id, rfq_vendor_invites.rfq_id),
          vendor_id = COALESCE(excluded.vendor_id, rfq_vendor_invites.vendor_id),
          invite_message_id = COALESCE(excluded.invite_message_id, rfq_vendor_invites.invite_message_id),
+         invite_channel = COALESCE(excluded.invite_channel, rfq_vendor_invites.invite_channel),
+         invite_origin = COALESCE(excluded.invite_origin, rfq_vendor_invites.invite_origin),
+         sender_mailbox = COALESCE(excluded.sender_mailbox, rfq_vendor_invites.sender_mailbox),
+         reply_to_quote_allowed = COALESCE(excluded.reply_to_quote_allowed, rfq_vendor_invites.reply_to_quote_allowed),
          invited_at = CASE
            WHEN excluded.invited_at < rfq_vendor_invites.invited_at THEN excluded.invited_at
            ELSE rfq_vendor_invites.invited_at
          END,
          updated_at = CURRENT_TIMESTAMP`,
+      d1Params: [
+        inviteId,
+        rfqId || null,
+        cleanRfqNumber,
+        vendorId || null,
+        cleanEmail,
+        inviteMessageId || null,
+        invitedAt,
+        cleanChannel,
+        cleanOrigin,
+        cleanMailbox,
+        normalizedReplyAllowed === null ? null : (normalizedReplyAllowed ? 1 : 0),
+      ],
     }
   );
 
@@ -2649,6 +2696,10 @@ async function recordRfqVendorInviteInDB({
     inviteMessageId,
     invitedAt,
     quotesDispatchDueAt,
+    inviteChannel: cleanChannel,
+    inviteOrigin: cleanOrigin,
+    senderMailbox: cleanMailbox,
+    replyToQuoteAllowed: normalizedReplyAllowed,
   };
 }
 
@@ -2659,7 +2710,8 @@ async function findRfqVendorInviteByMessageIdsFromDB(messageIds = []) {
   if (cleanIds.length === 0) return null;
 
   const result = await pool.query(
-    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+            invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
      FROM rfq_vendor_invites
      WHERE invite_message_id = ANY($1::text[])
      ORDER BY invited_at DESC
@@ -2667,7 +2719,8 @@ async function findRfqVendorInviteByMessageIdsFromDB(messageIds = []) {
     [cleanIds],
     {
       d1: true,
-      d1Text: `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+      d1Text: `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+              invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
        FROM rfq_vendor_invites
        WHERE invite_message_id IN (SELECT value FROM json_each($1))
        ORDER BY invited_at DESC
@@ -2684,7 +2737,8 @@ async function findOpenVendorInvitesWithinWindowFromDB({ vendorId = null, vendor
   const cleanEmail = vendorEmail ? String(vendorEmail).trim().toLowerCase() : null;
   const cleanVendorId = vendorId ? String(vendorId).trim() : null;
   const result = await pool.query(
-    `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at
+    `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at,
+            i.invite_channel, i.invite_origin, i.sender_mailbox, i.reply_to_quote_allowed
      FROM rfq_vendor_invites i
      LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
      WHERE ((($1::text IS NOT NULL) AND lower(i.vendor_email) = $1)
@@ -2696,7 +2750,8 @@ async function findOpenVendorInvitesWithinWindowFromDB({ vendorId = null, vendor
     [cleanEmail, cleanVendorId, cutoffIso],
     {
       d1: true,
-      d1Text: `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at
+      d1Text: `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at,
+              i.invite_channel, i.invite_origin, i.sender_mailbox, i.reply_to_quote_allowed
        FROM rfq_vendor_invites i
        LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
        WHERE ((($1 IS NOT NULL) AND lower(i.vendor_email) = $1)
@@ -2716,7 +2771,8 @@ async function findRfqVendorInvitesByRfqNumberFromDB(rfqNumber) {
   const cleanNumber = String(rfqNumber).trim();
   if (!cleanNumber) return [];
   const result = await pool.query(
-    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+            invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
      FROM rfq_vendor_invites
      WHERE rfq_number = $1
      ORDER BY invited_at ASC`,

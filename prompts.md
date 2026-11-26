@@ -10332,3 +10332,125 @@ Now no changes are done for this issue am i right?
 ```text
 continue
 ```
+
+---
+
+### Prompt 453
+
+**Timestamp**: 2026-11-26T16:50:41+05:30
+
+```text
+# Task: Implement Dual-Mailbox Vendor Email Architecture & CM Vendor Credential Dispatch
+
+## Strict Constraints
+1. **Buyer-Side Unchanged:** Do NOT modify any buyer-side RFQ creation, buyer email templates (Emails 1, 2, 5, 6, 7, 8), buyer mailbox (`rfq@procucev.com`), or buyer quote visibility/sealing logic.
+2. **Strict Codebase Reuse:** Reuse existing services, DB queries, email dispatch helpers (`sendTransactionalEmail`), Gmail API polling logic (`emailGatewayService.js`), and existing temp-password / auth utilities wherever possible. Do not duplicate services or create parallel tables if existing columns/flags suffice.
+3. **No Hardcoded Emails:** Both vendor email addresses MUST be loaded from environment variables (with config bindings in `backend/src/config/constants.js` and `emailGatewayService.js`).
+
+---
+
+## 1. Environment Configuration (Dual Vendor Mailboxes)
+Replace the single vendor email address with two env-configured mailboxes:
+* **`VENDOR_INVITE_EMAIL_ADDRESS`** (e.g., `invitations@procucev.store`) — Network Invite Mailbox (portal-only quoting).
+* **`VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`** (e.g., `gmtrfq@procucev.com`) — Direct / GMT RFQ Mailbox (email reply-to-quote enabled).
+
+Update `backend/src/config/constants.js`, `.env.example`, and `vendorFromAddress()` / `resolveVendorConfig()` so outbound routing selects the sender address dynamically based on vendor source and assignment context.
+
+---
+
+## 2. Outbound Email Routing Rules (Vendor Side)
+
+Route all vendor-facing RFQ emails (Emails 3, 4, 9, 12, 13, etc.) using the following sender matrix:
+
+| Scenario / Vendor Type | Sender Mailbox (Env Var) | Reply-to-Quote Allowed? |
+| :--- | :--- | :--- |
+| **Auto-matched Procucev Network vendors** (category-matched on V0, V2, V3) | `VENDOR_INVITE_EMAIL_ADDRESS` | **No** |
+| **Buyer-uploaded vendors** (`is_buyer_uploaded = true` on V1, V2, V3) | `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` | **Yes** |
+| **Category Manager-invited / CM-assigned vendors** (across **all** versions, including **V0**) | `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` | **Yes** |
+| **Category Manager-created new vendors** (credentials + RFQ invites) | `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` | **Yes** |
+
+* Ensure `Reply-To` and `From` headers match the selected mailbox so vendor replies land in the correct inbox.
+* Store/track which mailbox (or invite channel/origin) was used on the RFQ-vendor invite record if not already persisted, so inbound processing and chasers (`rfqChaserScheduler.js`) stay consistent.
+
+---
+
+## 3. Inbound Email Gateway Behavior (`emailGatewayService.js`)
+
+Configure the Gmail API poller to handle both vendor mailboxes with distinct behavior:
+
+### A. `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` (e.g., `gmtrfq@procucev.com`)
+* **Behavior:** Full existing email-to-quote ingestion pipeline.
+* When a vendor replies with RFQ details/pricing (including CM-assigned vendors on V0, buyer-uploaded vendors on V1–V3, and CM-invited/created vendors):
+  1. Run existing 3-tier RFQ matching (`In-Reply-To`/`References` → RFQ ID regex → 48h fallback).
+  2. Validate vendor eligibility (ensure CM-assigned V0 vendors pass the V0 `isVendorInvitedToRfq` guard).
+  3. Parse body/attachments (`quoteAttachmentService.js`), create the quotation/bid in DB, and send **Email 11 (Quote Submitted ACK)** from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`.
+
+### B. `VENDOR_INVITE_EMAIL_ADDRESS` (e.g., `invitations@procucev.store`)
+* **Behavior:** **Do NOT create a quotation/bid** from replies to this mailbox.
+* When a vendor replies to an email in this mailbox:
+  1. Keep existing bot/loop guards (silently drop `noreply@`, `mailer-daemon@`, `auto-submitted`, and enforce the 3 notices/hour/RFQ cooldown).
+  2. Identify the RFQ (using the existing 3-tier lookup) to generate the direct portal link.
+  3. Send an auto-reply instructing the vendor to **download the RFQ and submit their quote directly in the Procucev portal**, including the direct portal RFQ link (`/vendor/rfqs/[RFQ-ID]` or `/vendor/register?rfq=[RFQ-ID]` if unregistered).
+  4. Do not deduct credits or invoke quote creation/parsing.
+
+---
+
+## 4. Category Manager New Vendor Creation — Immediate Credentials
+
+Update the Category Manager vendor creation/ingestion flow (`vendorIngestionService.js` and any single-add CM vendor controller):
+* **Trigger:** When a Category Manager adds a **new vendor for the first time** (vendor account does not already exist in the system).
+* **Action:**
+  1. Auto-create the vendor account and generate a **temporary password** (reusing the existing temp-password generation & hashing helper used in buyer auto-registration).
+  2. Flag the account so the vendor can/is prompted to **change their password after login** (reuse existing password-reset / change-password endpoint and UI flow).
+  3. Send a **Welcome + Login Credentials** email immediately from **`VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`** containing:
+     * Login email
+     * Temporary password
+     * Portal login link + note to change password after logging in
+* **Idempotency:** Do NOT resend credentials if the vendor already has an existing account in the database.
+
+---
+
+## 5. Files to Inspect & Update
+* `backend/src/config/constants.js` — Env var bindings for both vendor mailboxes.
+* `emailGatewayService.js` — Dual-mailbox polling (`resolveVendorConfig()`), portal-redirect auto-reply for `VENDOR_INVITE_EMAIL_ADDRESS`, and bid creation for `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` (including V0 CM-assigned vendors).
+* `transactionalEmailTemplates.js` — Dynamic `from` routing via `vendorFromAddress()`, new/updated portal-redirect auto-reply template, and CM new-vendor temp-password credential email template.
+* `vendorIngestionService.js` (and CM manual vendor add route) — Generate temp password and dispatch credentials from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` on first-time CM vendor creation.
+* `rfqChaserScheduler.js` — Ensure reminder emails (Emails 9, 13) use the same sender mailbox originally assigned to that vendor/RFQ invite.
+
+---
+
+## 6. Verification Checklist
+Before finishing, verify:
+1. Zero changes were made to buyer-side email templates, `rfq@procucev.com`, or buyer RFQ creation.
+2. No email addresses are hardcoded anywhere in the diff.
+3. Auto-matched network vendor receives invite from `VENDOR_INVITE_EMAIL_ADDRESS`; replying does NOT create a quote and triggers the "download RFQ & submit quote in portal" auto-reply.
+4. Buyer-uploaded vendor (V1/V2/V3) receives invite from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`; replying creates a quote and sends Email 11.
+5. CM-assigned vendor on V0 (and V1–V3) receives invite from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS`; replying creates a quote/bid.
+6. First-time CM-added vendor receives temp password credentials from `VENDOR_DIRECT_RFQ_EMAIL_ADDRESS` and can log in and change their password.
+
+
+
+create the code and not merge in test-v3 not raise the pr after this giive me the architecture of this new design and description?
+```
+
+
+---
+
+### Prompt 454
+
+**Timestamp**: 2026-11-26T21:50:28+05:30
+
+```text
+ continue fast it is runnin from 5 hrs
+```
+
+
+---
+
+### Prompt 455
+
+**Timestamp**: 2026-11-26T22:17:08+05:30
+
+```text
+ raise the pr and pass all the coverages and ready to merge the pr i can verify and merge
+```
