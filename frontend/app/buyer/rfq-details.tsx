@@ -851,6 +851,9 @@ export default function RFQDetails({ rfq, onBack, onEdit, onDelete, onUpdate, is
     });
   }, [activeRfq, vendorUnlockedRfqIds, locallyDownloaded, currentUserSession]);
 
+  // For direct RFQs (not public), no download is required. For public RFQs, download is required.
+  // isPublic returns false for direct_invitation RFQs, so direct RFQs automatically don't require download.
+  // However, V0 and V3 modes always require download regardless of whether assigned directly.
   const isPublicOpportunity = isPublic || isV0 || isV3 || Boolean((activeRfq as any)?.isPublic);
   const requiresDownload = isPublicOpportunity && !isDownloaded;
   const isClosedOrExpired = activeRfq ? (activeRfq.status === 'Closed' || activeRfq.status === 'Expired') : false;
