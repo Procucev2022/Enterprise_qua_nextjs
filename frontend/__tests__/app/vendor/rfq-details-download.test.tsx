@@ -666,4 +666,58 @@ describe('Vendor RFQ Details download and submit quote interaction', () => {
       'warning'
     );
   });
+
+  test('hides buyer email when vendor has not downloaded the RFQ, and shows it once downloaded or on buyer side', async () => {
+    const rfqWithBuyerEmail: RFQItem = {
+      ...publicRfq,
+      raisedByEmail: 'buyer.procurement@example.com',
+    };
+
+    // 1. Vendor view, not downloaded: Buyer email must NOT be shown
+    const { unmount: unmount1 } = render(<RFQDetails rfq={rfqWithBuyerEmail} onBack={jest.fn()} isVendorView={true} />);
+    expect(screen.queryByText('buyer.procurement@example.com')).not.toBeInTheDocument();
+    expect(screen.queryByText('User Email')).not.toBeInTheDocument();
+    unmount1();
+
+    // 2. Buyer view (isVendorView = false and buyer role): Buyer email MUST be shown
+    (useApp as jest.Mock).mockReturnValue({
+      currentRole: 'buyer',
+      showToast: mockShowToast,
+      refreshFromDB: jest.fn(),
+      refreshRFQs: jest.fn(),
+      syncRFQRecord: jest.fn(),
+      buyerVendors: [],
+      currentUserSession: { role: 'buyer', email: 'buyer.procurement@example.com' },
+      vendorUnlockedRfqIds: [],
+      unlockRFQForVendor: mockUnlockRFQForVendor,
+      refreshVendorCredits: mockRefreshVendorCredits,
+      vendorOpportunities: [],
+      rfqs: [rfqWithBuyerEmail],
+    });
+    const { unmount: unmount2 } = render(<RFQDetails rfq={rfqWithBuyerEmail} onBack={jest.fn()} isVendorView={false} />);
+    expect(screen.getByText('buyer.procurement@example.com')).toBeInTheDocument();
+    expect(screen.getByText('User Email')).toBeInTheDocument();
+    unmount2();
+
+    // 3. Vendor view, after RFQ is downloaded: Buyer email MUST be shown
+    (useApp as jest.Mock).mockReturnValue({
+      currentRole: 'vendor',
+      showToast: mockShowToast,
+      refreshFromDB: jest.fn(),
+      refreshRFQs: jest.fn(),
+      syncRFQRecord: jest.fn(),
+      buyerVendors: [],
+      currentUserSession: { role: 'vendor', email: 'vendor@example.com' },
+      vendorUnlockedRfqIds: ['RFQ261811804439'],
+      unlockRFQForVendor: mockUnlockRFQForVendor,
+      refreshVendorCredits: mockRefreshVendorCredits,
+      vendorOpportunities: [{ rfqNumber: 'RFQ261811804439', type: 'marketplace', sourcingMode: 'mode_0' }],
+      rfqs: [rfqWithBuyerEmail],
+    });
+
+    const { unmount: unmount3 } = render(<RFQDetails rfq={rfqWithBuyerEmail} onBack={jest.fn()} isVendorView={true} />);
+    expect(screen.getByText('buyer.procurement@example.com')).toBeInTheDocument();
+    expect(screen.getByText('User Email')).toBeInTheDocument();
+    unmount3();
+  });
 });
