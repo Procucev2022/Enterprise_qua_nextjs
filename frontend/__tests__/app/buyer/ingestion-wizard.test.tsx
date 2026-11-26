@@ -1025,6 +1025,33 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(qtyInput).toHaveValue(null);
   });
 
+  it('supports multi-digit budget, comma-formatted paste, and handles currency key intercept', () => {
+    renderWizard();
+
+    const budgetInput = screen.getByPlaceholderText('e.g. 500000');
+    // Multi-digit entry
+    fireEvent.change(budgetInput, { target: { value: '5000000' } });
+    expect(budgetInput).toHaveValue(5000000);
+
+    // Paste with formatted Indian currency (commas and currency symbol)
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => '₹ 25,00,000' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Paste with non-numeric text
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => 'N/A' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Keydown for comma, rupee, and dollar
+    expect(fireEvent.keyDown(budgetInput, { key: ',' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '₹' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '$' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '5' })).toBe(true);
+  });
+
   it('adds the first line item from the empty-state button', () => {
     renderWizard();
 

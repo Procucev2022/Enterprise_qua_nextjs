@@ -1168,11 +1168,26 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <input
                 id="manual-rfq-budget"
                 type="number"
+                step="any"
                 min={0}
+                inputMode="numeric"
                 value={form.estimatedBudget ?? ''}
                 onChange={(e) =>
                   patchForm('estimatedBudget', e.target.value === '' ? null : Number(e.target.value))
                 }
+                onPaste={(e) => {
+                  const paste = e.clipboardData?.getData('text') || '';
+                  const cleaned = paste.replace(/[^0-9.]/g, '');
+                  if (cleaned !== '') {
+                    e.preventDefault();
+                    patchForm('estimatedBudget', Number(cleaned));
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                    e.preventDefault();
+                  }
+                }}
                 placeholder={MODAL.budgetPlaceholder}
                 className="mono font-semibold"
               />

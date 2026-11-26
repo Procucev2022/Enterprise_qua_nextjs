@@ -49,12 +49,20 @@ import {
 } from 'lucide-react';
 
 interface POLineItem {
+  id?: string;
   description: string;
   quantity: number;
   unit: string;
   unitPrice?: number;
   totalPrice?: number;
   technicalSpecs?: string;
+  discountPercent?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
+  taxRate?: number;
+  gstPercent?: number;
+  taxAmount?: number;
+  gstAmount?: number;
 }
 
 interface POModalProps {
@@ -318,12 +326,19 @@ export function PurchaseOrderModal({
   const knownLineTotals = itemsWithPricing
     .map((item) => item.totalPrice)
     .filter((total): total is number => total !== null);
-  const subTotal: number | null = totalAmount || (knownLineTotals.length > 0 ? knownLineTotals.reduce((sum, total) => sum + total, 0) : null);
-  // GST is shown only when the quote records a tax amount. No rate is assumed, so the
-  // rate, the grand total and its wording stay null when no tax was recorded.
-  const gstAmount: number | null = quote?.taxes && quote.taxes > 0 ? quote.taxes : null;
-  const gstRate: number | null = gstAmount !== null && subTotal !== null && subTotal > 0 ? Math.round((gstAmount / subTotal) * 100) : null;
-  const grandTotal: number | null = gstAmount === null || subTotal === null ? null : subTotal + gstAmount;
+  const subTotal: number | null = quote?.subtotal || totalAmount || (knownLineTotals.length > 0 ? knownLineTotals.reduce((sum, total) => sum + total, 0) : null);
+
+  const discountPercent: number | null = quote?.discountPercent || null;
+  const discountAmount: number | null = quote?.discountAmount || (discountPercent && subTotal ? (subTotal * discountPercent) / 100 : null);
+  const taxableBase: number | null = quote?.taxableAmount || (subTotal && discountAmount ? subTotal - discountAmount : subTotal);
+
+  const rawTaxRate = quote?.taxRate || quote?.gstPercent || null;
+  const rawTaxAmount = quote?.taxes || (quote as any)?.taxAmount || null;
+
+  const gstRate: number | null = rawTaxRate || (rawTaxAmount && taxableBase ? Math.round((rawTaxAmount / taxableBase) * 100) : null);
+  const gstAmount: number | null = rawTaxAmount || (gstRate && taxableBase ? (taxableBase * gstRate) / 100 : null);
+  const grandTotal: number | null = gstAmount && taxableBase ? taxableBase + gstAmount : (totalAmount || null);
+
   const grandTotalInWords = grandTotal === null ? '' : numberToIndianWords(grandTotal);
 
   if (!isOpen) return null;
@@ -339,7 +354,8 @@ export function PurchaseOrderModal({
       return;
     }
     setApproving(true);
-    const result = await approvePO(rfqNumber, vendorId, vendorName, totalAmount, approverNotes);
+    const poTotal = grandTotal || totalAmount;
+    const result = await approvePO(rfqNumber, vendorId, vendorName, poTotal, approverNotes);
     setApproving(false);
     if (result.success) {
       setPoSigned(true);
@@ -473,6 +489,15 @@ export function PurchaseOrderModal({
       <td style="color: #64748b;">Subtotal (Base Value):</td>
       <td class="right font-mono" style="font-weight: 600;">${formatPoAmount(subTotal)}</td>
     </tr>
+    ${discountAmount ? `
+    <tr>
+      <td style="color: #64748b;">Discount (${discountPercent ? `${discountPercent}%` : ''}):</td>
+      <td class="right font-mono" style="font-weight: 600; color: #d97706;">-₹${discountAmount.toLocaleString('en-IN')}</td>
+    </tr>
+    <tr>
+      <td style="color: #64748b;">Final Quote Price (Taxable Base):</td>
+      <td class="right font-mono" style="font-weight: 600;">₹${taxableBase?.toLocaleString('en-IN')}</td>
+    </tr>` : ''}
     <tr>
       <td style="color: #64748b;">GST / Taxes (${gstRate !== null ? `${gstRate}%` : UI_STRINGS.recordPlaceholders.notAvailable}):</td>
       <td class="right font-mono" style="font-weight: 600;">${gstAmount !== null ? `₹${gstAmount.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</td>
@@ -662,6 +687,18 @@ export function PurchaseOrderModal({
                 <span>Subtotal (Base):</span>
                 <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">{formatPoAmount(subTotal)}</span>
               </div>
+              {Boolean(discountAmount) && (
+                <>
+                  <div className="flex justify-between w-64 text-amber-600 dark:text-amber-400">
+                    <span>Discount {discountPercent ? `(${discountPercent}%)` : ''}:</span>
+                    <span className="font-mono font-semibold">-₹{discountAmount?.toLocaleString('en-IN')}</span>
+                  </div>
+                  <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
+                    <span>Final Quote Price (Taxable Base):</span>
+                    <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">₹{taxableBase?.toLocaleString('en-IN')}</span>
+                  </div>
+                </>
+              )}
               <div className="flex justify-between w-64 text-slate-500 dark:text-gray-400">
                 <span>GST / Taxes ({gstRate !== null ? `${gstRate}%` : UI_STRINGS.recordPlaceholders.notAvailable}):</span>
                 <span className="font-mono font-semibold text-slate-800 dark:text-gray-200">{gstAmount !== null ? `+₹${gstAmount.toLocaleString('en-IN')}` : UI_STRINGS.recordPlaceholders.notAvailable}</span>

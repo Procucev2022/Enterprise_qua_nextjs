@@ -429,6 +429,69 @@ describe('Modals.tsx', () => {
       );
       expect(screen.queryByText(/Rupees/)).not.toBeInTheDocument();
     });
+
+    it('renders Discount, Final Taxable Base, GST / Taxes, and Grand Total on PO matching user example', () => {
+      const mockQuoteWithDiscAndGst = {
+        vendorId: 'v-po-gst',
+        vendorName: 'Apex Electronics',
+        unitPrice: 100,
+        subtotal: 100,
+        discountPercent: 20,
+        discountAmount: 20,
+        taxableAmount: 80,
+        taxRate: 18,
+        taxAmount: 14.4,
+        totalPrice: 94.4,
+        leadTimeDays: 5,
+        warrantyYears: 1,
+        paymentTerms: '30 Days Net',
+        remarks: 'Standard bid',
+        vendorCategory: 'Client List' as const,
+        aiMatchScore: 90,
+        complianceStatus: 'Fully Compliant' as const,
+        lineItemQuotes: [
+          {
+            lineItemId: 'li-1',
+            itemName: 'Laptops',
+            quantity: 1,
+            unitPrice: 100,
+            discountPercent: 20,
+            discountAmount: 20,
+            taxableAmount: 80,
+            taxRate: 18,
+            taxAmount: 14.4,
+            totalPrice: 94.4,
+          },
+        ],
+      };
+
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={jest.fn()}
+          rfqNumber="RFQ-PO-GST-01"
+          vendorId="v-po-gst"
+          vendorName="Apex Electronics"
+          totalAmount={94.4}
+          unitPrice={100}
+          quote={mockQuoteWithDiscAndGst}
+          leadTime={5}
+          deliveryDate="2026-12-01"
+          lineItems={[{ description: 'Laptops', quantity: 1, unit: 'Nos', unitPrice: 100, totalPrice: 94.4 }]}
+        />
+      );
+
+      expect(screen.getByText('Subtotal (Base):')).toBeInTheDocument();
+      expect(screen.getAllByText('₹100').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText('Discount (20%):')).toBeInTheDocument();
+      expect(screen.getByText('-₹20')).toBeInTheDocument();
+      expect(screen.getByText('Final Quote Price (Taxable Base):')).toBeInTheDocument();
+      expect(screen.getByText('₹80')).toBeInTheDocument();
+      expect(screen.getByText('GST / Taxes (18%):')).toBeInTheDocument();
+      expect(screen.getByText('+₹14.4')).toBeInTheDocument();
+      expect(screen.getByText('Grand Total:')).toBeInTheDocument();
+      expect(screen.getAllByText('₹94.4').length).toBeGreaterThanOrEqual(1);
+    });
   });
 
   describe('MultiChannelChaserModal & WhatsAppChaserModal', () => {

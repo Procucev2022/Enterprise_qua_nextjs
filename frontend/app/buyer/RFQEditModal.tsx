@@ -723,9 +723,24 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 <input
                   id="rfq-edit-budget"
                   type="number"
+                  step="any"
                   min={0}
+                  inputMode="numeric"
                   value={form.budget ?? ''}
                   onChange={(e) => patch('budget', e.target.value === '' ? null : Number(e.target.value))}
+                  onPaste={(e) => {
+                    const paste = e.clipboardData?.getData('text') || '';
+                    const cleaned = paste.replace(/[^0-9.]/g, '');
+                    if (cleaned !== '') {
+                      e.preventDefault();
+                      patch('budget', Number(cleaned));
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                      e.preventDefault();
+                    }
+                  }}
                   aria-invalid={!!errors.budget}
                   className="mono font-semibold"
                 />

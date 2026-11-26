@@ -10,7 +10,7 @@ import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import type { LineItemBid, QuoteComparison, RFQItem, RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import type { LineItemBid, LineItemQuote, QuoteComparison, RFQItem, RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import {
   getPaidVendorPlanPrice,
   getPaidVendorPlanRfqQuota,
@@ -90,6 +90,10 @@ function mapEntitiesToLineItems(entities: RawLineEntity[], fallbackTitle: string
   }));
 }
 
+function round2(val: number): number {
+  return Math.round((val + Number.EPSILON) * 100) / 100;
+}
+
 /** Ensures an opportunity carries line items from its backing RFQ record when available. */
 function resolveOpportunityForBid(opp: VendorOpportunity, rfqs: RFQItem[]): VendorOpportunity {
   if (Array.isArray(opp.lineItems) && opp.lineItems.length > 0) {
@@ -144,6 +148,46 @@ function buildInitialLineItemPrices(
     itemPrices[lineItems[0].id] = String(existingQuote.unitPrice);
   }
   return itemPrices;
+}
+
+/** Pre-fills per-line-item discounts when reopening an existing quotation for resubmission. */
+function buildInitialLineItemDiscounts(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemDiscounts: Record<string, string> = {};
+  if (!existingQuote) return itemDiscounts;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    if (lq.lineItemId && (lq as any).discountPercent != null) {
+      itemDiscounts[lq.lineItemId] = String((lq as any).discountPercent);
+    }
+  });
+  if (lineItems.length === 1 && itemDiscounts[lineItems[0].id] == null && existingQuote.discountPercent != null) {
+    itemDiscounts[lineItems[0].id] = String(existingQuote.discountPercent);
+  }
+  return itemDiscounts;
+}
+
+/** Pre-fills per-line-item GST rates when reopening an existing quotation for resubmission. */
+function buildInitialLineItemGst(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemGst: Record<string, string> = {};
+  if (!existingQuote) return itemGst;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    const rate = (lq as any).taxRate ?? (lq as any).gstPercent;
+    if (lq.lineItemId && rate != null) {
+      itemGst[lq.lineItemId] = String(rate);
+    }
+  });
+  const fallbackRate = existingQuote.taxRate ?? existingQuote.gstPercent;
+  if (lineItems.length === 1 && itemGst[lineItems[0].id] == null && fallbackRate != null) {
+    itemGst[lineItems[0].id] = String(fallbackRate);
+  }
+  return itemGst;
 }
 
 interface QuotationFormProps {
@@ -723,10 +767,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
+  const [bidDiscountPercent, setBidDiscountPercent] = useState('');
+  const [bidGstPercent, setBidGstPercent] = useState('');
   // One unit price per RFQ line item, keyed by line item id — rendered and
   // required whenever the RFQ has one or more line items. Only RFQs without
   // any line item details fall back to bidUnitPrice above.
   const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
+  const [bidLineItemDiscounts, setBidLineItemDiscounts] = useState<Record<string, string>>({});
+  const [bidLineItemGst, setBidLineItemGst] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
   // Blank until the vendor states terms. A default here would be submitted as the vendor's own commercial term.
@@ -763,12 +811,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
         const newPrices: Record<string, string> = { ...bidLineItemPrices };
+        const newDiscounts: Record<string, string> = { ...bidLineItemDiscounts };
+        const newGst: Record<string, string> = { ...bidLineItemGst };
         let matchedCount = 0;
 
         jsonRows.forEach((row) => {
           const rawItem = String(row['Item'] || row['Item Name'] || row['Description'] || row['Item Description'] || '').trim().toLowerCase();
           const rawRate = row['Rate (INR)'] ?? row['Rate'] ?? row['Unit Price (INR)'] ?? row['Unit Price'] ?? row['Price'];
           const rateVal = Number(rawRate);
+          const rawDisc = row['Discount (%)'] ?? row['Discount'] ?? row['Discount %'];
+          const discVal = Number(rawDisc);
+          const rawGstRate = row['GST (%)'] ?? row['GST'] ?? row['GST %'] ?? row['Tax (%)'];
+          const gstVal = Number(rawGstRate);
 
           if (rawItem && Number.isFinite(rateVal) && rateVal > 0) {
             const matched = (biddingOn.lineItems || []).find(
@@ -776,12 +830,20 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             );
             if (matched) {
               newPrices[matched.id] = String(rateVal);
+              if (Number.isFinite(discVal) && discVal >= 0 && discVal <= 100) {
+                newDiscounts[matched.id] = String(discVal);
+              }
+              if (Number.isFinite(gstVal) && gstVal >= 0 && gstVal <= 100) {
+                newGst[matched.id] = String(gstVal);
+              }
               matchedCount++;
             }
           }
         });
 
         setBidLineItemPrices(newPrices);
+        setBidLineItemDiscounts(newDiscounts);
+        setBidLineItemGst(newGst);
         showToast('Excel Imported', `Successfully imported pricing for ${matchedCount} item(s).`, 'success');
       } catch (err: unknown) {
         showToast(
@@ -803,14 +865,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     const existingQuote = submittedQuotes.find((q) => q.rfqNumber === resolvedOpp.rfqNumber) as any;
     if (existingQuote) {
       setBidUnitPrice(existingQuote.unitPrice != null ? String(existingQuote.unitPrice) : (existingQuote.totalPrice != null ? String(existingQuote.totalPrice) : ''));
+      setBidDiscountPercent(existingQuote.discountPercent != null ? String(existingQuote.discountPercent) : '');
+      setBidGstPercent(existingQuote.taxRate != null ? String(existingQuote.taxRate) : (existingQuote.gstPercent != null ? String(existingQuote.gstPercent) : ''));
       setBidLineItemPrices(buildInitialLineItemPrices(resolvedOpp.lineItems || [], existingQuote));
+      setBidLineItemDiscounts(buildInitialLineItemDiscounts(resolvedOpp.lineItems || [], existingQuote));
+      setBidLineItemGst(buildInitialLineItemGst(resolvedOpp.lineItems || [], existingQuote));
       setBidLeadTimeDays(existingQuote.leadTimeDays != null ? String(existingQuote.leadTimeDays) : '');
       setBidWarrantyYears(existingQuote.warrantyYears != null ? String(existingQuote.warrantyYears) : '');
       setBidPaymentTerms(existingQuote.paymentTerms || '');
       setBidRemarks(existingQuote.remarks || '');
     } else {
       setBidUnitPrice('');
+      setBidDiscountPercent('');
+      setBidGstPercent('');
       setBidLineItemPrices({});
+      setBidLineItemDiscounts({});
+      setBidLineItemGst({});
       setBidLeadTimeDays('');
       setBidWarrantyYears('');
       setBidPaymentTerms('');
@@ -827,7 +897,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (isSubmittingQuote) return;
     setBiddingOn(null);
     setBidUnitPrice('');
+    setBidDiscountPercent('');
+    setBidGstPercent('');
     setBidLineItemPrices({});
+    setBidLineItemDiscounts({});
+    setBidLineItemGst({});
     setBidLeadTimeDays('');
     setBidWarrantyYears('');
     setBidPaymentTerms('');
@@ -910,13 +984,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     // pricing UI; only line-item-less RFQs fall back to a blanket unit price.
     let unitPrice: number;
     let totalPrice: number;
-    let lineItemQuotes: Array<{
-      lineItemId?: string;
-      itemName: string;
-      quantity: number;
-      unitPrice: number;
-      totalPrice: number;
-    }> | undefined;
+    let subtotal: number;
+    let discountPercent: number;
+    let discountAmount: number;
+    let taxableAmount: number;
+    let taxRate: number;
+    let gstPercent: number;
+    let taxAmount: number;
+    let gstAmount: number;
+    let lineItemQuotes: LineItemQuote[] | undefined;
 
     if (hasLineItems) {
       const missing = rfqLineItems.some((li) => {
@@ -930,31 +1006,64 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       }
       lineItemQuotes = rfqLineItems.map((li) => {
         const price = Number(bidLineItemPrices[li.id]);
+        const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+        const gst = Number(bidLineItemGst[li.id]) || 0;
+        const baseAmt = round2(price * li.quantity);
+        const discAmt = round2(baseAmt * (disc / 100));
+        const taxableAmt = round2(baseAmt - discAmt);
+        const gstAmt = round2(taxableAmt * (gst / 100));
+        const liTotal = round2(taxableAmt + gstAmt);
         return {
           lineItemId: li.id,
           itemName: li.description,
           quantity: li.quantity,
           unitPrice: price,
-          totalPrice: price * li.quantity,
+          totalPrice: liTotal,
+          ...(disc > 0 ? { discountPercent: disc, discountAmount: discAmt } : {}),
+          ...(taxableAmt !== baseAmt ? { taxableAmount: taxableAmt } : {}),
+          ...(gst > 0 ? { taxRate: gst, gstPercent: gst, taxAmount: gstAmt, gstAmount: gstAmt } : {}),
         };
       });
-      totalPrice = lineItemQuotes.reduce((sum, li) => sum + li.totalPrice, 0);
+      subtotal = round2(lineItemQuotes.reduce((sum, li) => sum + (li.unitPrice * li.quantity), 0));
+      discountAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.discountAmount || 0), 0));
+      taxableAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.taxableAmount || 0), 0));
+      taxAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.taxAmount || 0), 0));
+      gstAmount = taxAmount;
+      totalPrice = round2(lineItemQuotes.reduce((sum, li) => sum + li.totalPrice, 0));
+      discountPercent = subtotal > 0 ? round2((discountAmount / subtotal) * 100) : 0;
+      taxRate = taxableAmount > 0 ? round2((taxAmount / taxableAmount) * 100) : 0;
+      gstPercent = taxRate;
       const totalQty = rfqLineItems.reduce((sum, li) => sum + (li.quantity || 0), 0);
-      unitPrice = totalQty > 0 ? totalPrice / totalQty : totalPrice;
+      unitPrice = totalQty > 0 ? round2(totalPrice / totalQty) : totalPrice;
       if (!Number.isFinite(unitPrice) || !Number.isFinite(totalPrice)) {
         setSubmitModalError('The entered line-item rates produce an invalid quotation total.');
         showToast('Validation Error', 'Check the line-item quantities and rates.', 'warning');
         return;
       }
     } else {
-      unitPrice = Number(bidUnitPrice);
-      if (!unitPrice || unitPrice <= 0) {
+      const price = Number(bidUnitPrice);
+      if (!price || price <= 0) {
         setSubmitModalError('Please enter a valid unit price greater than 0.');
         showToast('Validation Error', 'Enter a valid unit price.', 'warning');
         return;
       }
+      const disc = Number(bidDiscountPercent) || 0;
+      const gst = Number(bidGstPercent) || 0;
       const quantity = rfqLineItems[0]?.quantity || 1;
-      totalPrice = unitPrice * quantity;
+      const baseTotal = round2(price * quantity);
+      const discAmt = round2(baseTotal * (disc / 100));
+      const taxableAmt = round2(baseTotal - discAmt);
+      const gstAmt = round2(taxableAmt * (gst / 100));
+      totalPrice = round2(taxableAmt + gstAmt);
+      unitPrice = price;
+      subtotal = baseTotal;
+      discountPercent = disc;
+      discountAmount = discAmt;
+      taxableAmount = taxableAmt;
+      taxRate = gst;
+      gstPercent = gst;
+      taxAmount = gstAmt;
+      gstAmount = gstAmt;
       if (!Number.isFinite(totalPrice)) {
         setSubmitModalError('The entered rate produces an invalid quotation total.');
         showToast('Validation Error', 'Check the rate and quantity.', 'warning');
@@ -1009,6 +1118,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         body: JSON.stringify({
           unitPrice,
           totalPrice,
+          ...(subtotal !== undefined && subtotal > 0 && (discountPercent > 0 || taxRate > 0) ? { subtotal } : {}),
+          ...(discountPercent > 0 ? { discountPercent, discountAmount } : {}),
+          ...(taxableAmount !== undefined && taxableAmount > 0 && taxableAmount !== subtotal ? { taxableAmount } : {}),
+          ...(taxRate > 0 ? { taxRate, gstPercent, taxAmount, gstAmount, taxes: taxAmount } : {}),
           ...(lineItemQuotes ? { lineItemQuotes } : {}),
           leadTimeDays: Number(leadTimeText),
           // Omitted when the vendor leaves warranty blank, rather than sent as zero years.
@@ -2277,17 +2390,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
-                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[10rem]">Rate (₹)</th>
-                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[10rem]">Amount (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[8rem]">Rate (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[6rem]">Discount (%)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[6rem]">GST (%)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[8rem]">Amount (₹)</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
                             {(biddingOn.lineItems || []).map((li) => {
                               const rate = Number(bidLineItemPrices[li.id]) || 0;
-                              const amount = rate * li.quantity;
+                              const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                              const gst = Number(bidLineItemGst[li.id]) || 0;
+                              const baseAmt = rate * li.quantity;
+                              const discAmt = baseAmt * (disc / 100);
+                              const taxableAmt = baseAmt - discAmt;
+                              const gstAmt = taxableAmt * (gst / 100);
+                              const lineTotal = taxableAmt + gstAmt;
                               return (
                                 <tr key={li.id}>
-                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
+                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[200px] truncate" title={li.description}>
                                     {li.description}
                                   </td>
                                   <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
@@ -2303,46 +2424,219 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                       }
                                       disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                                       placeholder="0"
-                                      className="w-36 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                      className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      aria-label={`Discount for ${li.description}`}
+                                      value={bidLineItemDiscounts[li.id] || ''}
+                                      onChange={(e) =>
+                                        setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: e.target.value.replace(/[^0-9.]/g, '') }))
+                                      }
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="0"
+                                      className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      aria-label={`GST for ${li.description}`}
+                                      value={bidLineItemGst[li.id] || ''}
+                                      onChange={(e) =>
+                                        setBidLineItemGst((prev) => ({ ...prev, [li.id]: e.target.value.replace(/[^0-9.]/g, '') }))
+                                      }
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="18"
+                                      className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
                                     />
                                   </td>
                                   <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
-                                    {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                                    {lineTotal > 0 ? (
+                                      <div>
+                                        <div>{lineTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
+                                        {(disc > 0 || gst > 0) && (
+                                          <div className="text-[9px] text-slate-400 font-normal">
+                                            {disc > 0 && <span className="text-amber-600 dark:text-amber-400">-{disc}%</span>}
+                                            {disc > 0 && gst > 0 && <span> </span>}
+                                            {gst > 0 && <span className="text-indigo-600 dark:text-indigo-400">+{gst}% GST</span>}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      '—'
+                                    )}
                                   </td>
                                 </tr>
                               );
                             })}
                           </tbody>
                           <tfoot>
-                            <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
-                              <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
-                                Total
-                              </td>
-                              <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
-                                {(biddingOn.lineItems || [])
-                                  .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
-                                  .toLocaleString('en-IN')}
-                              </td>
-                            </tr>
+                            {(() => {
+                              const lineItems = biddingOn.lineItems || [];
+                              const subtotal = lineItems.reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0);
+                              const totalDisc = lineItems.reduce((sum, li) => {
+                                const rate = Number(bidLineItemPrices[li.id]) || 0;
+                                const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                                return sum + (rate * li.quantity * (disc / 100));
+                              }, 0);
+                              const taxable = subtotal - totalDisc;
+                              const totalGst = lineItems.reduce((sum, li) => {
+                                const rate = Number(bidLineItemPrices[li.id]) || 0;
+                                const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                                const gst = Number(bidLineItemGst[li.id]) || 0;
+                                const lineTaxable = (rate * li.quantity) * (1 - disc / 100);
+                                return sum + (lineTaxable * (gst / 100));
+                              }, 0);
+                              const grandTotal = taxable + totalGst;
+                              const hasDiscOrGst = totalDisc > 0 || totalGst > 0;
+
+                              return (
+                                <>
+                                  {hasDiscOrGst && (
+                                    <>
+                                      <tr className="border-t border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/40 text-slate-600 dark:text-gray-400">
+                                        <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                          Subtotal (Base):
+                                        </td>
+                                        <td className="px-2.5 py-1 text-right mono font-semibold text-slate-800 dark:text-gray-200">
+                                          ₹{subtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                        </td>
+                                      </tr>
+                                      {totalDisc > 0 && (
+                                        <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-amber-600 dark:text-amber-400">
+                                          <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                            Discount:
+                                          </td>
+                                          <td className="px-2.5 py-1 text-right mono font-semibold">
+                                            -₹{totalDisc.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-slate-600 dark:text-gray-400">
+                                        <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                          Final Quote Price (Taxable Base):
+                                        </td>
+                                        <td className="px-2.5 py-1 text-right mono font-semibold text-slate-800 dark:text-gray-200">
+                                          ₹{taxable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                        </td>
+                                      </tr>
+                                      {totalGst > 0 && (
+                                        <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-indigo-600 dark:text-indigo-400">
+                                          <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                            GST Amount:
+                                          </td>
+                                          <td className="px-2.5 py-1 text-right mono font-semibold">
+                                            +₹{totalGst.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </>
+                                  )}
+                                  <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
+                                    <td colSpan={6} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
+                                      Total
+                                    </td>
+                                    <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
+                                      {grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                    </td>
+                                  </tr>
+                                </>
+                              );
+                            })()}
                           </tfoot>
                         </table>
                       </div>
                     </div>
                   ) : (
                     <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
-                      <div className="relative">
-                        <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
-                        <input
-                          type="number"
-                          min={0}
-                          value={bidUnitPrice}
-                          onChange={(e) => setBidUnitPrice(e.target.value)}
-                          disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                          placeholder="e.g. 25000"
-                          className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Quote Price (₹) *</label>
+                          <div className="relative">
+                            <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                            <input
+                              type="number"
+                              min={0}
+                              value={bidUnitPrice}
+                              onChange={(e) => setBidUnitPrice(e.target.value)}
+                              disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                              placeholder="e.g. 25000"
+                              className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Discount (%)</label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={bidDiscountPercent}
+                            onChange={(e) => setBidDiscountPercent(e.target.value.replace(/[^0-9.]/g, ''))}
+                            disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                            placeholder="0"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">GST (%)</label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={bidGstPercent}
+                            onChange={(e) => setBidGstPercent(e.target.value.replace(/[^0-9.]/g, ''))}
+                            disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                            placeholder="18"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                          />
+                        </div>
                       </div>
+                      {Number(bidUnitPrice) > 0 && (Number(bidDiscountPercent) > 0 || Number(bidGstPercent) > 0) && (
+                        <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 text-xs space-y-1">
+                          <div className="flex justify-between text-slate-500 dark:text-gray-400">
+                            <span>Quote Price:</span>
+                            <span className="mono font-semibold">₹{Number(bidUnitPrice).toLocaleString('en-IN')}</span>
+                          </div>
+                          {Number(bidDiscountPercent) > 0 && (
+                            <div className="flex justify-between text-amber-600 dark:text-amber-400">
+                              <span>Discount ({bidDiscountPercent}%):</span>
+                              <span className="mono font-semibold">-₹{((Number(bidUnitPrice) * Number(bidDiscountPercent)) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between text-slate-600 dark:text-gray-300">
+                            <span>Final Quote Price (Taxable):</span>
+                            <span className="mono font-semibold">
+                              ₹{(Number(bidUnitPrice) * (1 - (Number(bidDiscountPercent) || 0) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          {Number(bidGstPercent) > 0 && (
+                            <div className="flex justify-between text-slate-600 dark:text-gray-300">
+                              <span>GST ({bidGstPercent}%):</span>
+                              <span className="mono font-semibold">
+                                +₹{(
+                                  Number(bidUnitPrice) *
+                                  (1 - (Number(bidDiscountPercent) || 0) / 100) *
+                                  ((Number(bidGstPercent) || 0) / 100)
+                                ).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex justify-between font-bold text-indigo-700 dark:text-indigo-300 pt-1 border-t border-slate-200 dark:border-gray-800">
+                            <span>Total Price:</span>
+                            <span className="mono text-sm">
+                              ₹{(
+                                Number(bidUnitPrice) *
+                                (1 - (Number(bidDiscountPercent) || 0) / 100) *
+                                (1 + (Number(bidGstPercent) || 0) / 100)
+                              ).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">
