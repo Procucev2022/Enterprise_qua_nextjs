@@ -54,9 +54,6 @@ import {
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
   isVendorActive,
-  loadVendorUploadHistoryFromStorage,
-  reconcileBuyerVendorsWithUploadHistory,
-  subscribeVendorUploadHistory,
 } from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
@@ -82,7 +79,6 @@ import type {
   RFQItem,
   SourcingMode,
   VendorEntry,
-  VendorUploadHistoryBatch,
 } from '@/lib/types';
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
@@ -152,7 +148,6 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   );
   const ensureVendors = store?.ensureVendors;
   const activeBuyerAccount = store?.activeBuyerAccount ?? null;
-  const [uploadHistoryList, setUploadHistoryList] = useState<VendorUploadHistoryBatch[]>([]);
   const hasRequestedVendorsRef = useRef(false);
 
   useEffect(() => {
@@ -160,22 +155,14 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
       hasRequestedVendorsRef.current = false;
       return;
     }
-    const nextHistory = loadVendorUploadHistoryFromStorage();
-    setUploadHistoryList((prev) => (prev.length === 0 && nextHistory.length === 0 ? prev : nextHistory));
-    return subscribeVendorUploadHistory(setUploadHistoryList);
-  }, [isOpen]);
-
-  useEffect(() => {
-    if (isOpen && !hasRequestedVendorsRef.current && buyerVendors.length === 0 && typeof ensureVendors === 'function') {
+    if (!hasRequestedVendorsRef.current && buyerVendors.length === 0 && typeof ensureVendors === 'function') {
       hasRequestedVendorsRef.current = true;
       void ensureVendors();
     }
   }, [isOpen, buyerVendors.length, ensureVendors]);
 
-  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
-    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors, uploadHistoryList, activeBuyerAccount),
-    [buyerVendors, uploadHistoryList, activeBuyerAccount]
-  );
+  // All buyer vendors come exclusively from backend API state (never localStorage).
+  const reconciledBuyerVendors = buyerVendors;
 
   // Exclude inactive/disabled suppliers from all future RFQ creation and invitation flows
   const activeReconciledVendors = useMemo<VendorEntry[]>(

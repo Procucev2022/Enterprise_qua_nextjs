@@ -2555,6 +2555,49 @@ export const REGISTRATION_CLIENT_TYPES = [
 
 export const REGISTRATION_COLUMN_PREF_KEY = 'registration_columns_pref';
 
+export const USER_PREFERENCE_KEYS = Object.freeze({
+  THEME: 'theme',
+  BUYER_CONSOLE_COLUMNS: 'buyer_console_table_columns_v1',
+  BUYER_DIRECTORY_COLUMNS: 'buyer_directory_columns_pref',
+  SELLER_DIRECTORY_COLUMNS: 'seller_directory_columns_pref',
+  APPROVALS_COLUMNS: 'qua_approvals_columns',
+  DOC_VAULT_COLUMNS: 'qua_doc_vault_col_prefs',
+  LOGIN_LOGS_COLUMNS: 'qua_login_logs_col_prefs',
+  PAYMENT_DUES_COLUMNS: 'qua_payment_dues_column_prefs',
+  REGISTRATION_COLUMNS: 'registration_columns_pref',
+  SCORECARD_COLUMNS: 'qua_scorecard_col_prefs',
+  TICKETS_COLUMNS: 'qua_tickets_col_prefs',
+  INTERNAL_TASK_COLUMNS: 'qua_internal_task_col_prefs',
+} as const);
+
+export const LEGACY_LOCAL_STORAGE_KEYS: ReadonlyArray<string> = [
+  'procucev_vendor_upload_history',
+  'procucev_theme',
+  'procucev_session_expires_at',
+  'procucev_session_role',
+  'buyer_console_table_columns_v1',
+  'buyer_directory_columns_pref',
+  'seller_directory_columns_pref',
+  'qua_doc_vault_col_prefs',
+  'qua_login_logs_col_prefs',
+  'qua_payment_dues_column_prefs',
+  'registration_columns_pref',
+  'qua_scorecard_col_prefs',
+  'qua_tickets_col_prefs',
+  'qua_internal_task_col_prefs',
+];
+
+export const LEGACY_SESSION_STORAGE_KEYS: ReadonlyArray<string> = [
+  'procucev_cache_vendors',
+  'procucev_cache_evaluations',
+  'procucev_cache_rfqs',
+  'procucev_cache_activeBuyerAccount',
+  'procucev_cache_aiFeed',
+  'procucev_cache_taxonomy',
+  'buyer_directory_state',
+  'procucev_buyer_profile_reminder_dismissed',
+];
+
 export const DEFAULT_REGISTRATION_COLUMNS: RegistrationColumnConfig[] = [
   { key: 'userName', label: 'User Name', visible: true, required: true },
   { key: 'clientType', label: 'Client View', visible: true },

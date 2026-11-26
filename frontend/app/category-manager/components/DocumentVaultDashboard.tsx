@@ -24,7 +24,8 @@ import {
   X,
 } from 'lucide-react';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
+import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG, USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 import {
@@ -45,7 +46,7 @@ const DOC_VAULT_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'status', label: 'Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const DOC_VAULT_COL_PREF_KEY = 'qua_doc_vault_col_prefs';
+const DOC_VAULT_COL_PREF_KEY = USER_PREFERENCE_KEYS.DOC_VAULT_COLUMNS;
 
 export default function DocumentVaultDashboard() {
   const strings = UI_STRINGS.actionCenter.documentVault;
@@ -82,18 +83,17 @@ export default function DocumentVaultDashboard() {
   const [docSortField, setDocSortField] = useState<string>('uploadedAt');
   const [docSortOrder, setDocSortOrder] = useState<'asc' | 'desc'>('desc');
 
-  // Hydrate doc column preferences safely after mount to prevent SSR mismatch
+  // Hydrate doc column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(DOC_VAULT_COL_PREF_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved) as unknown;
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setDocColumns(parsed as ColumnDef[]);
-        }
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(DOC_VAULT_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setDocColumns(saved);
       }
-    } catch { /* ignore */ }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Close modals on Escape key
@@ -895,11 +895,11 @@ export default function DocumentVaultDashboard() {
         columns={docColumns}
         onSave={(newCols) => {
           setDocColumns(newCols);
-          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(newCols)); } catch { /* ignore */ }
+          void saveUserPreference(DOC_VAULT_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setDocColumns(DOC_VAULT_DEFAULT_COLUMNS);
-          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(DOC_VAULT_DEFAULT_COLUMNS)); } catch { /* ignore */ }
+          void deleteUserPreference(DOC_VAULT_COL_PREF_KEY);
         }}
         title="Document Vault Columns"
       />

@@ -3,8 +3,18 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import BuyerConsole, { DEFAULT_BUYER_CONSOLE_COLUMNS } from '@/app/category-manager/buyer-console';
 import { AppProvider } from '@/lib/store';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
 import { fetchBuyerDirectoryKPIStats } from '@/lib/buyerProfileClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
+import { getUserPreference, saveUserPreference, deleteUserPreference } from '@/lib/userPreferencesClient';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+  clearUserPreferencesCache: jest.fn(),
+  purgeLegacyClientStorage: jest.fn(),
+}));
 
 jest.mock('@/lib/reportsClient', () => ({
   exportReportToCsv: jest.fn(),
@@ -153,7 +163,10 @@ describe('BuyerConsole Table & Features', () => {
     });
     fireEvent.drop(headers[1]);
 
-    expect(localStorage.getItem('buyer_console_table_columns_v1')).toBeTruthy();
+    expect(saveUserPreference).toHaveBeenCalledWith(
+      USER_PREFERENCE_KEYS.BUYER_CONSOLE_COLUMNS,
+      expect.any(Array)
+    );
 
     // Drop on same header (noop)
     fireEvent.dragStart(headers[0], {
@@ -180,7 +193,10 @@ describe('BuyerConsole Table & Features', () => {
 
     const doneBtn = screen.getByRole('button', { name: /Done/i });
     fireEvent.click(doneBtn);
-    expect(localStorage.getItem('buyer_console_table_columns_v1')).toBeTruthy();
+    expect(saveUserPreference).toHaveBeenCalledWith(
+      USER_PREFERENCE_KEYS.BUYER_CONSOLE_COLUMNS,
+      expect.any(Array)
+    );
   });
 
   test('opens gear icon popup and closes via close button', async () => {
@@ -201,7 +217,7 @@ describe('BuyerConsole Table & Features', () => {
   });
 
   test('opens gear icon popup and resets columns to default', async () => {
-    localStorage.setItem('buyer_console_table_columns_v1', JSON.stringify([{ key: 'name', label: 'Buyer Name', visible: true }]));
+    (getUserPreference as jest.Mock).mockResolvedValueOnce([{ key: 'name', label: 'Buyer Name', visible: true }]);
     renderBuyerConsole();
 
     await waitFor(() => {
@@ -213,7 +229,7 @@ describe('BuyerConsole Table & Features', () => {
 
     const resetBtn = screen.getByRole('button', { name: /Reset to Default/i });
     fireEvent.click(resetBtn);
-    expect(localStorage.getItem('buyer_console_table_columns_v1')).toBeNull();
+    expect(deleteUserPreference).toHaveBeenCalledWith(USER_PREFERENCE_KEYS.BUYER_CONSOLE_COLUMNS);
     await waitFor(() => {
       expect(screen.queryByText('Column Settings')).not.toBeInTheDocument();
     });
@@ -337,21 +353,18 @@ describe('BuyerConsole Table & Features', () => {
     expect(screen.getByText(UI_STRINGS.buyerConsole.showingEmptyPagination)).toBeInTheDocument();
   });
 
-  test('loads persisted column order from localStorage with corrupt JSON fallback and fills missing defaults', async () => {
-    localStorage.setItem(
-      'buyer_console_table_columns_v1',
-      JSON.stringify([
-        { key: 'company', label: 'Company Name', visible: true },
-        { key: 'name', label: 'Buyer Name', visible: true, required: true },
-      ])
-    );
+  test('loads persisted column order from backend user preferences with invalid fallback and fills missing defaults', async () => {
+    (getUserPreference as jest.Mock).mockResolvedValueOnce([
+      { key: 'company', label: 'Company Name', visible: true },
+      { key: 'name', label: 'Buyer Name', visible: true, required: true },
+    ]);
 
     renderBuyerConsole();
     await waitFor(() => {
       expect(screen.getByText('Company Name')).toBeInTheDocument();
     });
 
-    localStorage.setItem('buyer_console_table_columns_v1', 'invalid-json{{{');
+    (getUserPreference as jest.Mock).mockResolvedValueOnce('invalid-payload');
     renderBuyerConsole();
     await waitFor(() => {
       expect(screen.getAllByText('Buyer Name').length).toBeGreaterThan(0);

@@ -774,7 +774,7 @@ describe('buyer evaluation summary: vendor code, overall score and submitted lin
   });
 });
 
-describe('buyer evaluation summary: reconciles uploaded vendor batches with directory', () => {
+describe('buyer evaluation summary: backend vendor roster with directory', () => {
   beforeEach(() => {
     localStorage.clear();
   });
@@ -783,7 +783,7 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     localStorage.clear();
   });
 
-  it('includes all uploaded suppliers alongside manual store vendors and supports search by name, email, or contact', () => {
+  it('includes all backend uploaded suppliers alongside manual store vendors and supports search by name, email, or contact', () => {
     const manualVendor = buildVendor({
       id: 'v-manual-1',
       name: 'rtger',
@@ -793,21 +793,16 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
       source: 'buyer_manual',
     });
 
-    const uploadedRecords = Array.from({ length: 10 }, (_, idx) => ({
-      vendorCode: `VC-${idx + 1}`,
-      name: idx === 0 ? 'Veera Solutions Pvt LTD' : `Uploaded Supplier ${idx + 1}`,
-      contactPerson: idx === 0 ? 'Veerababu' : `Contact ${idx + 1}`,
-      email: idx === 0 ? 'veerababu@procucev.com' : `supplier${idx + 1}@example.com`,
-      phone: '9381877013',
-      category: 'Vendor Master',
-      city: 'Bengaluru',
-      state: 'Karnataka',
-      pincode: '560037',
-    }));
-
-    localStorage.setItem(
-      'procucev_vendor_upload_history',
-      JSON.stringify([{ id: 'batch-csv-1', fileName: 'Testing data.csv', records: uploadedRecords }])
+    const uploadedVendors = Array.from({ length: 10 }, (_, idx) =>
+      buildVendor({
+        id: `v-uploaded-${idx + 1}`,
+        name: idx === 0 ? 'Veera Solutions Pvt LTD' : `Uploaded Supplier ${idx + 1}`,
+        contactPerson: idx === 0 ? 'Veerababu' : `Contact ${idx + 1}`,
+        email: idx === 0 ? 'veerababu@procucev.com' : `supplier${idx + 1}@example.com`,
+        phone: '9381877013',
+        majorCategory: 'Vendor Master',
+        source: 'buyer_uploaded',
+      })
     );
 
     const veeraEvaluation = buildRecord({
@@ -821,7 +816,7 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     });
 
     const store = mockStore({
-      buyerVendors: [manualVendor],
+      buyerVendors: [manualVendor, ...uploadedVendors],
       vendorEvaluations: [veeraEvaluation],
     });
 
@@ -848,24 +843,32 @@ describe('buyer evaluation summary: reconciles uploaded vendor batches with dire
     expect(screen.getByRole('button', { name: /Uploaded Supplier 7/ })).toBeInTheDocument();
   });
 
-  it('refreshes uploaded vendors on storage updates and skips buyer-local upload history for category managers', () => {
+  it('ignores stale localStorage upload history and reflects backend buyerVendors updates consistently across browsers', () => {
     const manualVendor = buildVendor({
       id: 'v-manual-1',
       name: 'rtger',
       source: 'buyer_manual',
     });
+    const syncedVendor = buildVendor({
+      id: 'v-synced-later',
+      name: 'Synced Later Co',
+      email: 'later@co.test',
+      source: 'buyer_uploaded',
+    });
+
+    localStorage.setItem(
+      'procucev_vendor_upload_history',
+      JSON.stringify([{ id: 'batch-stale', records: [{ name: 'Stale Local Vendor', email: 'stale@co.test' }] }])
+    );
 
     mockStore({ buyerVendors: [manualVendor], currentRole: 'buyer' });
     const { rerender } = render(<VendorEvaluationSummary />);
 
-    localStorage.setItem(
-      'procucev_vendor_upload_history',
-      JSON.stringify([{ id: 'batch-live', records: [{ name: 'Synced Later Co', email: 'later@co.test' }] }])
-    );
-    fireEvent(window, new StorageEvent('storage', { key: 'unrelated_key' }));
-    fireEvent(window, new StorageEvent('storage', { key: 'procucev_vendor_upload_history' }));
-
     fireEvent.click(screen.getByLabelText(PICKER_LABEL));
+    expect(screen.queryByRole('button', { name: /Stale Local Vendor/ })).not.toBeInTheDocument();
+
+    mockStore({ buyerVendors: [manualVendor, syncedVendor], currentRole: 'buyer' });
+    rerender(<VendorEvaluationSummary />);
     expect(screen.getByRole('button', { name: /Synced Later Co/ })).toBeInTheDocument();
 
     mockStore({ buyerVendors: [manualVendor], currentRole: 'category_manager' });

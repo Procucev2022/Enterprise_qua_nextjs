@@ -137,14 +137,13 @@ export default function Header() {
     ? 3 * 60 * 60
     : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
+  const sessionExpiresAtRef = useRef<number>(0);
+  const sessionRoleRef = useRef<UserRole>(currentRole);
 
   const handleLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
     clearSessionCache();
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('procucev_session_expires_at');
-      localStorage.removeItem('procucev_session_role');
-    }
+    sessionExpiresAtRef.current = 0;
     // The server stamps the actor from the signed-in session, so no email is sent.
     addAuditLog('User logged out of session');
     setIsLoggedIn(false);
@@ -158,10 +157,7 @@ export default function Header() {
   const handleAutoLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
     clearSessionCache();
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('procucev_session_expires_at');
-      localStorage.removeItem('procucev_session_role');
-    }
+    sessionExpiresAtRef.current = 0;
     addAuditLog('Session expired - automatic logout');
     setIsLoggedIn(false);
     setCurrentUserSession(null);
@@ -175,11 +171,8 @@ export default function Header() {
   // exists for this, so the handler makes no "extended" claim: the timer itself shows
   // the new remaining time.
   const handleExtendSession = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      const newExpiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
-      localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
-      localStorage.setItem('procucev_session_role', currentRole);
-    }
+    sessionExpiresAtRef.current = Date.now() + SESSION_DURATION_SECONDS * 1000;
+    sessionRoleRef.current = currentRole;
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
   }, [SESSION_DURATION_SECONDS, currentRole]);
 
@@ -192,11 +185,8 @@ export default function Header() {
       const now = Date.now();
       if (now - lastThrottle > 1000) {
         lastThrottle = now;
-        const newExpiresAt = now + INACTIVITY_LIMIT_SECONDS * 1000;
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
-          localStorage.setItem('procucev_session_role', currentRole);
-        }
+        sessionExpiresAtRef.current = now + INACTIVITY_LIMIT_SECONDS * 1000;
+        sessionRoleRef.current = currentRole;
         setSessionSecondsLeft(INACTIVITY_LIMIT_SECONDS);
       }
     };
@@ -212,26 +202,17 @@ export default function Header() {
   useEffect(() => {
     if (!isLoggedIn) return;
 
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('procucev_session_expires_at');
-      const storedRole = localStorage.getItem('procucev_session_role');
-      const now = Date.now();
-      let expiresAt = stored ? Number(stored) : NaN;
-      const roleChanged = Boolean(storedRole && storedRole !== currentRole);
-      if (!expiresAt || isNaN(expiresAt) || expiresAt <= now || roleChanged) {
-        expiresAt = now + SESSION_DURATION_SECONDS * 1000;
-        localStorage.setItem('procucev_session_expires_at', String(expiresAt));
-        localStorage.setItem('procucev_session_role', currentRole);
-      }
-      setSessionSecondsLeft(Math.max(0, Math.floor((expiresAt - now) / 1000)));
+    const now = Date.now();
+    const roleChanged = sessionRoleRef.current !== currentRole;
+    if (!sessionExpiresAtRef.current || sessionExpiresAtRef.current <= now || roleChanged) {
+      sessionExpiresAtRef.current = now + SESSION_DURATION_SECONDS * 1000;
+      sessionRoleRef.current = currentRole;
     }
+    setSessionSecondsLeft(Math.max(0, Math.ceil((sessionExpiresAtRef.current - now) / 1000)));
 
     const interval = setInterval(() => {
-      if (typeof window === 'undefined') return;
-      const now = Date.now();
-      const stored = localStorage.getItem('procucev_session_expires_at');
-      const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
-      const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+      const currentNow = Date.now();
+      const remaining = Math.max(0, Math.ceil((sessionExpiresAtRef.current - currentNow) / 1000));
       setSessionSecondsLeft(remaining);
 
       if (remaining <= 0) {

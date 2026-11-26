@@ -775,13 +775,20 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(data.vendorsTotal).toBeGreaterThanOrEqual(2);
     });
 
-    test('getBootstrapData with pool.hasStorage and isHydratedFromDB uses cached vendors', async () => {
+    test('getBootstrapData with pool.hasStorage and isHydratedFromDB reads fresh vendors from DB instead of stale RAM cache', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       storeService.isHydratedFromDB = true;
-      storeService.vendors = [{ id: 'v-cached-1', name: 'Cached Vendor' }];
+      storeService.vendors = [{ id: 'v-stale-ram', name: 'Stale RAM Vendor' }];
       storeService.vendorsTotal = 1;
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValueOnce({
+        rows: [{ id: 'v-fresh-db-1', name: 'Fresh DB Vendor' }],
+        total: 1,
+      });
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getEvaluationsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getAuditLogsFromDB').mockResolvedValueOnce([]);
       const data = await storeService.getBootstrapData();
-      expect(data.vendors).toEqual([{ id: 'v-cached-1', name: 'Cached Vendor' }]);
+      expect(data.vendors).toEqual([{ id: 'v-fresh-db-1', name: 'Fresh DB Vendor' }]);
       expect(data.vendorsTotal).toBe(1);
       storeService.isHydratedFromDB = false;
     });

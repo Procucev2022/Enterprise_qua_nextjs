@@ -28,8 +28,6 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 
-const SESSION_DISMISSAL_STORAGE_KEY = 'procucev_buyer_profile_reminder_dismissed';
-
 interface BuyerProfileCompletionModalProps {
   /** Optional override for controlled display (useful for unit testing) */
   forceOpen?: boolean;
@@ -118,18 +116,6 @@ export default function BuyerProfileCompletionModal({
     };
   }, [loadProfileForAssessment]);
 
-  // Check session dismissal flag
-  useEffect(() => {
-    try {
-      const sessionDismissed = sessionStorage.getItem(SESSION_DISMISSAL_STORAGE_KEY);
-      if (sessionDismissed === 'true') {
-        setHasDismissed(true);
-      }
-    } catch {
-      // Storage access disabled / ignored
-    }
-  }, []);
-
   // Determine visibility
   useEffect(() => {
     // If explicitly forced open (e.g. test)
@@ -156,16 +142,13 @@ export default function BuyerProfileCompletionModal({
       return;
     }
 
-    // If profile is already complete, do not show and clean dismissal flag
+    // If profile is already complete, do not show
     if (completion.isComplete) {
       setIsOpen(false);
-      try {
-        sessionStorage.removeItem(SESSION_DISMISSAL_STORAGE_KEY);
-      } catch {}
       return;
     }
 
-    // If dismissed in this session, keep closed
+    // If dismissed in this in-memory session, keep closed
     if (hasDismissed) {
       setIsOpen(false);
       return;
@@ -180,9 +163,6 @@ export default function BuyerProfileCompletionModal({
   const handleDismiss = useCallback(() => {
     setIsOpen(false);
     setHasDismissed(true);
-    try {
-      sessionStorage.setItem(SESSION_DISMISSAL_STORAGE_KEY, 'true');
-    } catch {}
     if (onClose) onClose();
   }, [onClose]);
 

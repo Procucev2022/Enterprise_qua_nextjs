@@ -12431,7 +12431,8 @@ class StoreService {
    * present even if it falls outside the cap, since several screens resolve
    * "my own vendor" purely from this list (billing, opportunity feed).
    */
-  async getBootstrapData(scopedBuyerId = null, sessionEmail = null) {
+  async getBootstrapData(scopedBuyerId = null, sessionEmail = null, options = {}) {
+    const includeManagementCollections = options.includeManagementCollections !== false;
     const MAX_BOOTSTRAP_VENDORS = 500;
     let vendors;
     let vendorsTotal;
@@ -12454,28 +12455,16 @@ class StoreService {
       }
     };
 
-    // The common case (no buyer scoping — anonymous, vendor, CM, or admin
-    // bootstrap) is answered straight from Postgres with LIMIT, the same way
-    // the paginated vendors endpoint is: this used to call this.getVendors(),
-    // which re-syncs (fetches + re-serializes) every row in the table on
-    // every call. At 500 vendors that was unnoticeable; once the table
-    // reached 80k+ (a bulk Vendor Master import), it meant every single page
-    // load / login / refreshFromDB() call across the whole app re-fetched
-    // the entire vendor table just to keep the first 500 — the same
-    // performance disaster the CM's "Load more" pagination hit, just
-    // triggered by something as ordinary as loading the app.
+    // Always read bounded vendor pages from configured storage rather than returning
+    // stale boot-time isolate memory (`this.vendors`), so all browsers/isolates see
+    // consistent live vendor data.
     if (!scopedBuyerId && pool.hasStorage()) {
-      if (this.isHydratedFromDB && Array.isArray(this.vendors) && this.vendors.length > 0) {
-        vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
-        vendorsTotal = this.vendorsTotal || vendors.length;
-      } else {
-        const page = await readBootstrapVendors(
-          'public-vendor-page',
-          () => domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true })
-        );
-        vendors = page.rows;
-        vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
-      }
+      const page = await readBootstrapVendors(
+        'public-vendor-page',
+        () => domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true })
+      );
+      vendors = page.rows;
+      vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
@@ -12565,34 +12554,34 @@ class StoreService {
 
     let buyerAccounts = this.buyerAccounts;
     let activeBuyerAccount = this.activeBuyerAccount;
-    if ((!Array.isArray(buyerAccounts) || buyerAccounts.length === 0) && pool.hasStorage()) {
+    if (includeManagementCollections && pool.hasStorage()) {
       try {
         const buyerAccountsResult = await domainQueries.getBuyerAccountsFromDB(500);
         buyerAccounts = buyerAccountsResult.accounts || [];
         activeBuyerAccount = buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || buyerAccounts[0] || null;
         this.buyerAccounts = buyerAccounts;
         this.activeBuyerAccount = activeBuyerAccount;
-      } catch (err) {
+      } catch {
         buyerAccounts = this.buyerAccounts || [];
       }
     }
 
     let evaluations = this.evaluations;
-    if ((!Array.isArray(evaluations) || evaluations.length === 0) && pool.hasStorage()) {
+    if (pool.hasStorage()) {
       try {
         evaluations = await domainQueries.getEvaluationsFromDB(50);
         this.evaluations = evaluations || [];
-      } catch (err) {
+      } catch {
         evaluations = this.evaluations || [];
       }
     }
 
     let auditLogs = this.auditLogs;
-    if ((!Array.isArray(auditLogs) || auditLogs.length === 0) && pool.hasStorage()) {
+    if (includeManagementCollections && pool.hasStorage()) {
       try {
         auditLogs = await domainQueries.getAuditLogsFromDB(100);
         this.auditLogs = auditLogs || [];
-      } catch (err) {
+      } catch {
         auditLogs = this.auditLogs || [];
       }
     }

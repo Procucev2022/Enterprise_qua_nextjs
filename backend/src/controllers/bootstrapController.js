@@ -233,9 +233,12 @@ async function getBootstrap(req, res, next) {
     }
 
     const scopedBuyerArg = candidateBuyerIds.length > 0 ? candidateBuyerIds : buyerId;
+    const isManagementUser = Boolean(user && (user.role === 'admin' || user.role === 'category_manager'));
     let data;
     try {
-      data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email);
+      data = await storeService.getBootstrapData(scopedBuyerArg, user && user.email, {
+        includeManagementCollections: isManagementUser,
+      });
     } catch (error) {
       if (!isRetryableD1Error(error)) throw error;
       logger.warn('D1 unavailable during bootstrap; serving a capped in-memory fallback payload', {
@@ -256,7 +259,6 @@ async function getBootstrap(req, res, next) {
       };
     }
 
-    const isManagementUser = Boolean(user && (user.role === 'admin' || user.role === 'category_manager'));
     const isBuyer = Boolean(user && user.role === 'buyer');
     const sessionEmail = user && String(user.email || '').toLowerCase();
     const existingVendors = Array.isArray(data.vendors) ? data.vendors : [];

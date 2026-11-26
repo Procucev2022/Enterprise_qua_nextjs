@@ -13,13 +13,10 @@ import {
   VENDOR_EVALUATION_DOCUMENT_LIST_LIMIT,
   VENDOR_EVALUATION_GATE_SCORE,
   VENDOR_EVALUATION_PILLARS,
-  VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
   isBuyerUploadedVendor,
   isProcucevNetworkVendor,
   isRfqOrPoSummaryEntity,
   isVendorActive,
-  loadVendorUploadHistoryFromStorage,
-  reconcileBuyerVendorsWithUploadHistory,
   type TableColumnOption,
   type TableSortState,
 } from '@/lib/constants';
@@ -34,7 +31,6 @@ import type {
   VendorEvaluationSelectOption,
   VendorEvaluationSummaryProps,
   VendorEvaluationSummaryView,
-  VendorUploadHistoryBatch,
 } from '@/lib/types';
 import {
   ArrowLeft,
@@ -255,34 +251,10 @@ export default function VendorEvaluationSummary({
     currentRole,
   } = useApp();
 
-  const shouldIncludeBuyerUploadHistory = currentRole !== 'category_manager' && currentRole !== 'admin';
-  const [uploadHistoryList, setUploadHistoryList] = useState<VendorUploadHistoryBatch[]>(() =>
-    shouldIncludeBuyerUploadHistory ? loadVendorUploadHistoryFromStorage() : []
-  );
-
-  useEffect(() => {
-    if (!shouldIncludeBuyerUploadHistory) {
-      setUploadHistoryList([]);
-      return;
-    }
-    setUploadHistoryList(loadVendorUploadHistoryFromStorage());
-    const handleStorage = (event: StorageEvent) => {
-      if (!event.key || event.key === VENDOR_UPLOAD_HISTORY_STORAGE_KEY) {
-        setUploadHistoryList(loadVendorUploadHistoryFromStorage());
-      }
-    };
-    window.addEventListener('storage', handleStorage);
-    return () => window.removeEventListener('storage', handleStorage);
-  }, [shouldIncludeBuyerUploadHistory, buyerVendors]);
-
+  // All buyer vendors come exclusively from backend API state (never localStorage).
   const reconciledBuyerVendors = useMemo<VendorEntry[]>(
-    () =>
-      reconcileBuyerVendorsWithUploadHistory(
-        buyerVendors || [],
-        shouldIncludeBuyerUploadHistory ? uploadHistoryList : [],
-        activeBuyerAccount
-      ),
-    [buyerVendors, shouldIncludeBuyerUploadHistory, uploadHistoryList, activeBuyerAccount]
+    () => buyerVendors || [],
+    [buyerVendors]
   );
 
   // The reference load that carries the suppliers and their evaluations has finished and failed. An empty list then

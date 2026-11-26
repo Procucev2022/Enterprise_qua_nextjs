@@ -4,7 +4,14 @@ import TicketsDashboard from '@/app/category-manager/components/TicketsDashboard
 import * as ticketClient from '@/lib/ticketClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
 import type { InternalTeamMember } from '@/lib/types';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
 
 jest.mock('@/lib/internalTaskClient', () => ({
   fetchInternalAssignees: jest.fn(),
@@ -943,20 +950,19 @@ describe('TicketsDashboard', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('loads saved column settings from localStorage on initial render', async () => {
+  it('loads saved column settings from backend user preferences on initial render', async () => {
     const customCols = [
       { key: 'status', label: 'Status', visible: true, required: true },
       { key: 'category', label: 'Category', visible: false },
     ];
-    localStorage.setItem('qua_tickets_col_prefs', JSON.stringify(customCols));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(customCols);
 
     render(<TicketsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
     });
-
-    expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
   });
 
   it('handles backdrop click and escape key for create and escalate modals', async () => {

@@ -163,7 +163,7 @@ describe('BuyerProfileCompletionModal', () => {
     expect(mockPush).toHaveBeenCalledWith(expect.stringContaining('/buyer/profile#section-'));
   });
 
-  it('dismisses the modal and sets session storage when "Remind Me Later" is clicked', async () => {
+  it('dismisses the modal in declarative state without writing session storage when "Remind Me Later" is clicked', async () => {
     const mockClose = jest.fn();
     render(<BuyerProfileCompletionModal initialProfile={incompleteProfile} onClose={mockClose} />);
 
@@ -174,7 +174,7 @@ describe('BuyerProfileCompletionModal', () => {
     fireEvent.click(screen.getByTestId('buyer-profile-reminder-dismiss-btn'));
 
     expect(mockClose).toHaveBeenCalledTimes(1);
-    expect(sessionStorage.getItem('procucev_buyer_profile_reminder_dismissed')).toBe('true');
+    expect(sessionStorage.getItem('procucev_buyer_profile_reminder_dismissed')).toBeNull();
     expect(screen.queryByTestId('buyer-profile-completion-modal')).not.toBeInTheDocument();
   });
 
@@ -195,13 +195,13 @@ describe('BuyerProfileCompletionModal', () => {
     });
   });
 
-  it('does not display if previously dismissed in the current session', async () => {
+  it('ignores stale sessionStorage dismissal flags so reminder behaves consistently across browsers', async () => {
     sessionStorage.setItem('procucev_buyer_profile_reminder_dismissed', 'true');
 
-    const { container } = render(<BuyerProfileCompletionModal initialProfile={incompleteProfile} />);
+    render(<BuyerProfileCompletionModal initialProfile={incompleteProfile} />);
 
     await waitFor(() => {
-      expect(container.firstChild).toBeNull();
+      expect(screen.getByTestId('buyer-profile-completion-modal')).toBeInTheDocument();
     });
   });
 

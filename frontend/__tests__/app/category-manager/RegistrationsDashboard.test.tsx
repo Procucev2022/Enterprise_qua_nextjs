@@ -5,6 +5,12 @@ import { UI_STRINGS } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
 
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
+
 jest.mock('@/lib/reportsClient', () => {
   const actual = jest.requireActual('@/lib/reportsClient');
   return {

@@ -13,9 +13,6 @@ import {
   VENDOR_ASSIGNMENT_LIMITS,
   entitledSourcingModes,
   isVendorActive,
-  loadVendorUploadHistoryFromStorage,
-  reconcileBuyerVendorsWithUploadHistory,
-  subscribeVendorUploadHistory,
   createBackdropClickHandler,
 } from '@/lib/constants';
 import { FEATURE_FLAGS } from '@/lib/featureFlags';
@@ -64,7 +61,6 @@ import type {
   SourcingMode,
   VendorEntry,
   VendorPageMeta,
-  VendorUploadHistoryBatch,
 } from '@/lib/types';
 import {
   UploadCloud,
@@ -334,17 +330,10 @@ export default function IngestionWizard({
     activeBuyerAccount,
   } = useApp();
 
-  const [uploadHistoryList, setUploadHistoryList] = useState<VendorUploadHistoryBatch[]>([]);
-
-  useEffect(() => {
-    const nextHistory = loadVendorUploadHistoryFromStorage();
-    setUploadHistoryList((prev) => (prev.length === 0 && nextHistory.length === 0 ? prev : nextHistory));
-    return subscribeVendorUploadHistory(setUploadHistoryList);
-  }, []);
-
+  // All buyer vendors come exclusively from backend API state (never localStorage).
   const reconciledBuyerVendors = useMemo<VendorEntry[]>(
-    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors || [], uploadHistoryList, activeBuyerAccount),
-    [buyerVendors, uploadHistoryList, activeBuyerAccount]
+    () => buyerVendors || [],
+    [buyerVendors]
   );
 
   // Exclude inactive/disabled vendors from all future RFQ creation and invitation flows
@@ -1600,8 +1589,8 @@ export default function IngestionWizard({
             if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
           }}
           className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${isDraggingDoc
-              ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-              : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
+            ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+            : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
             }`}
         >
           {isExtracting ? (
@@ -2227,10 +2216,10 @@ export default function IngestionWizard({
                       patchForm('sourcingMode', mode.id as SourcingMode);
                     }}
                     className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${isSelected
-                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
-                        : !isEntitled
-                          ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
-                          : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
+                      : !isEntitled
+                        ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
+                        : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
                       }`}
                   >
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
@@ -2323,25 +2312,25 @@ export default function IngestionWizard({
                 const { signals: mode1Signals, rawSignals: mode1RawSignals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
                 const matchingVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
                   ? allMyVendors.filter((v) =>
-                      checkVendorRfqCategoryMatch(v, {
-                        signals: mode1Signals,
-                        rawSignals: mode1RawSignals,
-                        minorOnly: mode1MinorOnly,
-                        majorCategory: form.majorCategory,
-                        minorCategory: form.minorCategory,
-                      }).isMatch
-                    )
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: mode1Signals,
+                      rawSignals: mode1RawSignals,
+                      minorOnly: mode1MinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : allMyVendors;
                 const mismatchedVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
                   ? allMyVendors.filter((v) =>
-                      !checkVendorRfqCategoryMatch(v, {
-                        signals: mode1Signals,
-                        rawSignals: mode1RawSignals,
-                        minorOnly: mode1MinorOnly,
-                        majorCategory: form.majorCategory,
-                        minorCategory: form.minorCategory,
-                      }).isMatch
-                    )
+                    !checkVendorRfqCategoryMatch(v, {
+                      signals: mode1Signals,
+                      rawSignals: mode1RawSignals,
+                      minorOnly: mode1MinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : [];
 
                 let pool = allMyVendors;
@@ -2372,8 +2361,8 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => setVendorCategoryFilterTab('all')}
                             className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'all'
-                                ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
-                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                               }`}
                           >
                             All ({allMyVendors.length})
@@ -2382,8 +2371,8 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => setVendorCategoryFilterTab('matched')}
                             className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'matched'
-                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                               }`}
                           >
                             Matched ({matchingVendors.length})
@@ -2393,8 +2382,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setVendorCategoryFilterTab('mismatched')}
                               className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${vendorCategoryFilterTab === 'mismatched'
-                                  ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
@@ -2478,12 +2467,12 @@ export default function IngestionWizard({
 
                           const matchResult = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
                             ? checkVendorRfqCategoryMatch(vendor, {
-                                signals: mode1Signals,
-                                rawSignals: mode1RawSignals,
-                                minorOnly: mode1MinorOnly,
-                                majorCategory: form.majorCategory,
-                                minorCategory: form.minorCategory,
-                              })
+                              signals: mode1Signals,
+                              rawSignals: mode1RawSignals,
+                              minorOnly: mode1MinorOnly,
+                              majorCategory: form.majorCategory,
+                              minorCategory: form.minorCategory,
+                            })
                             : { isMatch: true };
                           const isCategoryMismatch = (mode1Signals.length > 0 || mode1RawSignals.length > 0) && !matchResult.isMatch;
 
@@ -2504,19 +2493,19 @@ export default function IngestionWizard({
                                 });
                               }}
                               className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
-                                  ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                  : isSelected
-                                    ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
-                                    : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                                : isSelected
+                                  ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
+                                  : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                                 }`}
                             >
                               <div className="flex items-start justify-between gap-1.5">
                                 <div className="flex items-center gap-2 min-w-0">
                                   <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                      ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                      : isSelected
-                                        ? 'bg-blue-600 border-blue-600 text-white'
-                                        : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                    ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                    : isSelected
+                                      ? 'bg-blue-600 border-blue-600 text-white'
+                                      : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
                                     }`}>
                                     {isCategoryMismatch ? (
                                       <AlertCircle size={12} strokeWidth={2.5} />
@@ -2664,25 +2653,25 @@ export default function IngestionWizard({
                 const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
                 const matchingVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
                   ? allMyVendors.filter((v) =>
-                      checkVendorRfqCategoryMatch(v, {
-                        signals: rfqSignals,
-                        rawSignals: rfqRawSignals,
-                        minorOnly: rfqMinorOnly,
-                        majorCategory: form.majorCategory,
-                        minorCategory: form.minorCategory,
-                      }).isMatch
-                    )
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : allMyVendors;
                 const mismatchedVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
                   ? allMyVendors.filter((v) =>
-                      !checkVendorRfqCategoryMatch(v, {
-                        signals: rfqSignals,
-                        rawSignals: rfqRawSignals,
-                        minorOnly: rfqMinorOnly,
-                        majorCategory: form.majorCategory,
-                        minorCategory: form.minorCategory,
-                      }).isMatch
-                    )
+                    !checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : [];
 
                 let pool = allMyVendors;
@@ -2782,8 +2771,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setMode2VendorCategoryFilterTab('all')}
                               className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'all'
-                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               All ({allMyVendors.length})
@@ -2792,8 +2781,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setMode2VendorCategoryFilterTab('matched')}
                               className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'matched'
-                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               Matched ({matchingVendors.length})
@@ -2803,8 +2792,8 @@ export default function IngestionWizard({
                                 type="button"
                                 onClick={() => setMode2VendorCategoryFilterTab('mismatched')}
                                 className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${mode2VendorCategoryFilterTab === 'mismatched'
-                                    ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
-                                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                  ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                   }`}
                               >
                                 <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
@@ -2881,12 +2870,12 @@ export default function IngestionWizard({
 
                             const matchResult = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
                               ? checkVendorRfqCategoryMatch(vendor, {
-                                  signals: rfqSignals,
-                                  rawSignals: rfqRawSignals,
-                                  minorOnly: rfqMinorOnly,
-                                  majorCategory: form.majorCategory,
-                                  minorCategory: form.minorCategory,
-                                })
+                                signals: rfqSignals,
+                                rawSignals: rfqRawSignals,
+                                minorOnly: rfqMinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              })
                               : { isMatch: true };
                             const isCategoryMismatch = (rfqSignals.length > 0 || rfqRawSignals.length > 0) && !matchResult.isMatch;
 
@@ -2907,19 +2896,19 @@ export default function IngestionWizard({
                                   });
                                 }}
                                 className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
-                                    ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                    : isSelected
-                                      ? 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
-                                      : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
+                                  ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
+                                  : isSelected
+                                    ? 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
+                                    : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
                                   }`}
                               >
                                 <div className="flex items-start justify-between gap-1.5">
                                   <div className="flex items-center gap-2 min-w-0">
                                     <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                        ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                        : isSelected
-                                          ? 'bg-emerald-600 border-emerald-600 text-white'
-                                          : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
+                                      ? 'bg-amber-500 border-amber-500 text-white opacity-80'
+                                      : isSelected
+                                        ? 'bg-emerald-600 border-emerald-600 text-white'
+                                        : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
                                       }`}>
                                       {isCategoryMismatch ? (
                                         <AlertCircle size={12} strokeWidth={2.5} />
@@ -3335,8 +3324,8 @@ export default function IngestionWizard({
                                 aria-pressed={isSelected}
                                 onClick={() => toggleProcucevV3(r.vendor.id)}
                                 className={`text-left p-3 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${isSelected
-                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
-                                    : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
+                                  : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
                                   }`}
                               >
                                 <div className="flex items-center justify-between gap-2">

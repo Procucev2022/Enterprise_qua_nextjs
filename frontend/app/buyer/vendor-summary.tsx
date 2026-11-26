@@ -4,6 +4,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useApp } from '@/lib/store';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchBuyerProfile } from '@/lib/buyerProfileClient';
+import { fetchVendorUploadHistory } from '@/lib/vendorUploadHistoryClient';
 import { VendorEvaluationRecord, VendorEntry, VendorPageMeta } from '@/lib/types';
 import { getMinorCategories, findMajorForMinor, resolveMinorCategory } from '@/lib/categoryTaxonomy';
 import {
@@ -21,10 +22,7 @@ import {
   isVendorActive,
   isVendorInactive,
   resolveVendorDisplayName,
-  loadVendorUploadHistoryFromStorage,
-  setVendorsActiveStateInStorage,
   normalizeVendorCategoryList,
-  reconcileBuyerVendorsWithUploadHistory,
   resolveVendorLocationFields,
   sortTableRows,
   normalizeVendorRating,
@@ -411,30 +409,24 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
   );
   const [showVendorColumnSettings, setShowVendorColumnSettings] = useState(false);
 
-  const loadUploadHistory = useCallback(() => {
-    // Load from localStorage - only real CSV uploads by this buyer
-    const localHistory = loadVendorUploadHistoryFromStorage();
-    
-    // Filter localStorage history to only show uploads by current buyer
-    const currentBuyerId = activeBuyerAccount?.id;
-    const filteredHistory = currentBuyerId 
-      ? localHistory.filter((batch: any) => !batch.buyerId || batch.buyerId === currentBuyerId)
-      : localHistory;
-    
-    setUploadHistoryList(filteredHistory);
-  }, [activeBuyerAccount?.id]);
+  const loadUploadHistory = useCallback(async () => {
+    try {
+      const batches = await fetchVendorUploadHistory();
+      setUploadHistoryList(Array.isArray(batches) ? batches : []);
+    } catch {
+      setUploadHistoryList([]);
+    }
+  }, []);
 
   useEffect(() => {
-    loadUploadHistory();
-    const handleStorageUpdate = () => {
-      loadUploadHistory();
+    void loadUploadHistory();
+    const handleHistoryUpdate = () => {
+      void loadUploadHistory();
     };
     if (typeof window !== 'undefined') {
-      window.addEventListener('vendor_upload_history_updated', handleStorageUpdate);
-      window.addEventListener('storage', handleStorageUpdate);
+      window.addEventListener('vendor_upload_history_updated', handleHistoryUpdate);
       return () => {
-        window.removeEventListener('vendor_upload_history_updated', handleStorageUpdate);
-        window.removeEventListener('storage', handleStorageUpdate);
+        window.removeEventListener('vendor_upload_history_updated', handleHistoryUpdate);
       };
     }
   }, [loadUploadHistory]);
@@ -1282,15 +1274,9 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
     const vendorId = selectedVendorForCrud.id;
     setIsUpdatingSingleStatus(true);
     try {
-      const identifiers = [
-        selectedVendorForCrud.id,
-        selectedVendorForCrud.email,
-        selectedVendorForCrud.name,
-      ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()));
       const res = await updateSingleVendorStatus(selectedVendorForCrud, targetStatusIsActive);
       if (res !== false) {
-        setVendorsActiveStateInStorage(identifiers, targetStatusIsActive);
-        loadUploadHistory();
+        void loadUploadHistory();
         setStatusModalOpen(false);
         setSelectedVendorForCrud(null);
       }
@@ -1328,15 +1314,6 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       const idsToUpdate = effectiveVendors.length > 0
         ? effectiveVendors.map((v) => v.id)
         : [...selectedVendorIds];
-      const identifiers = Array.from(
-        new Set(
-          [
-            ...idsToUpdate,
-            ...effectiveVendors.map((v) => v.email || ''),
-            ...effectiveVendors.map((v) => v.name || ''),
-          ].filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
-        )
-      );
 
       let updated = false;
       if (typeof setMultipleBuyerVendorsActiveStatus === 'function') {
@@ -1349,13 +1326,10 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
           })
         );
         updated = results.every((r) => r !== false);
-        if (updated) {
-          setVendorsActiveStateInStorage(identifiers, bulkTargetIsActive);
-        }
       }
 
       if (updated !== false) {
-        loadUploadHistory();
+        void loadUploadHistory();
         setSelectedVendorIds([]);
         setBulkStatusModalOpen(false);
       }
@@ -1636,10 +1610,8 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
       };
     });
 
-  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
-    () => reconcileBuyerVendorsWithUploadHistory(buyerVendors, uploadHistoryList, activeBuyerAccount),
-    [buyerVendors, uploadHistoryList, activeBuyerAccount]
-  );
+  // All buyer vendors come exclusively from backend API state (never localStorage).
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(() => buyerVendors, [buyerVendors]);
 
   const normalizeBuyerVendorEntry = (vendor: VendorEntry): VendorEntry => {
     const loc = resolveVendorLocationFields({

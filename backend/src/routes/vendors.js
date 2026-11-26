@@ -1,11 +1,15 @@
 const express = require('express');
 const router = express.Router();
 const vendorController = require('../controllers/vendorController');
+const vendorUploadHistoryController = require('../controllers/vendorUploadHistoryController');
 const accountDocumentController = require('../controllers/accountDocumentController');
 const { authenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
 
 router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
+router.get('/upload-history', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.getUploadHistory);
+router.post('/upload-history', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.createUploadHistory);
+router.delete('/upload-history/:id', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.deleteUploadHistory);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
 router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkImportInvitations);
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);

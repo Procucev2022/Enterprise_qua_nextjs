@@ -511,12 +511,14 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/pincode',
     '/api/subscriptions',
     '/api/tickets',
+    '/api/user-preferences',
     '/api/vendor-ingestion',
     '/api/vendors/heartbeat',
     '/api/vendors/presence',
     '/api/vendors/public',
     '/api/vendors/rfq-credits',
     '/api/vendors/subscription-pricing',
+    '/api/vendors/upload-history',
     '/api/zoho',
   ]),
   DIRECT_GET_PATH_PATTERNS: Object.freeze([
@@ -4420,7 +4422,40 @@ function resolveStandardizedCommunicationCategory(scenarioIdOrCategory) {
   return 'Follow-up / New';
 }
 
+const USER_PREFERENCE_CONFIG = Object.freeze({
+  MAX_KEY_LENGTH: 128,
+  MAX_VALUE_BYTES: 32768,
+  KEY_PATTERN: /^[a-z0-9][a-z0-9._:-]{0,127}$/i,
+  MESSAGES: Object.freeze({
+    INVALID_KEY: 'Preference key must be 1–128 alphanumeric, underscore, dot, colon, or hyphen characters.',
+    VALUE_REQUIRED: 'Preference value is required.',
+    VALUE_TOO_LARGE: 'Preference value exceeds the 32 KB limit.',
+    UNAVAILABLE: 'User preferences storage is currently unavailable. Please retry in a moment.',
+  }),
+});
+
+const VENDOR_UPLOAD_HISTORY_CONFIG = Object.freeze({
+  DEFAULT_LIMIT: 30,
+  MAX_LIMIT: 50,
+  MAX_RECORDS_PER_BATCH: 100,
+  MAX_FILENAME_LENGTH: 512,
+  MESSAGES: Object.freeze({
+    FILENAME_REQUIRED: 'Upload fileName is required.',
+    INVALID_ID: 'Upload history batch ID is invalid.',
+    UNAVAILABLE: 'Vendor upload history storage is currently unavailable. Please retry in a moment.',
+  }),
+});
+
+const API_NO_STORE_HEADERS = Object.freeze({
+  CACHE_CONTROL: 'private, no-cache, no-store, must-revalidate',
+  PRAGMA: 'no-cache',
+  EXPIRES: '0',
+});
+
 module.exports = {
+  USER_PREFERENCE_CONFIG,
+  VENDOR_UPLOAD_HISTORY_CONFIG,
+  API_NO_STORE_HEADERS,
   normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,

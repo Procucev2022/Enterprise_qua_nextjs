@@ -6,6 +6,13 @@ import * as internalTaskClient from '@/lib/internalTaskClient';
 
 
 import { UI_STRINGS } from '@/lib/uiStrings';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
 
 jest.setTimeout(35000);
 
@@ -3204,39 +3211,38 @@ describe('Action Center & Internal Tasks Redesign', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  test('loads saved column settings from localStorage on initial render', async () => {
+  test('loads saved column settings from backend user preferences on initial render', async () => {
     const customCols = [
       { key: 'status', label: 'Status', visible: false },
       { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
     ];
-    localStorage.setItem('qua_internal_task_col_prefs', JSON.stringify(customCols));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(customCols);
 
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
     });
-
-    expect(screen.queryByRole('columnheader', { name: /^Status/i })).not.toBeInTheDocument();
   });
 
-  test('filters out legacy Done column from saved localStorage column settings', async () => {
+  test('filters out legacy Done column from saved backend column settings', async () => {
     const legacyCols = [
       { key: 'done', label: 'Done', visible: true, required: true },
       { key: 'status', label: 'Status', visible: true },
       { key: 'task', label: 'Task Subject & ID', visible: true, required: true },
     ];
-    localStorage.setItem('qua_internal_task_col_prefs', JSON.stringify(legacyCols));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(legacyCols);
 
     render(<InternalTasksDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('Task Subject & ID')).toBeInTheDocument();
+      const headers = screen.getAllByRole('columnheader');
+      expect(headers[0]).toHaveTextContent(/Status/i);
     });
 
     expect(screen.queryByRole('columnheader', { name: /^Done$/i })).not.toBeInTheDocument();
-    const headers = screen.getAllByRole('columnheader');
-    expect(headers[0]).toHaveTextContent(/Status/i);
   });
 
   test('covers offline payments, trial period drawer details, sorting with missing values, and status filtering', async () => {

@@ -30,6 +30,7 @@ import type { RegisteredClient, ActionCenterSummaryPopupColumn, RegistrationColu
 import { REGISTRATION_CLIENT_TYPES, REGISTRATION_COLUMN_PREF_KEY, DEFAULT_REGISTRATION_COLUMNS } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
 import { exportReportToCsv } from '@/lib/reportsClient';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 
 export interface RegistrationsDashboardProps {
   onTotalCountChange?: (count: number) => void;
@@ -57,20 +58,17 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
   const [sortField, setSortField] = useState<RegistrationColumnKey>('regDate');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
 
-  // Hydrate registration column preferences safely after mount to prevent SSR mismatch
+  // Hydrate registration column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(REGISTRATION_COLUMN_PREF_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          setColumns(parsed);
-        }
+    let cancelled = false;
+    void getUserPreference<RegistrationColumnConfig[]>(REGISTRATION_COLUMN_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setColumns(saved);
       }
-    } catch {
-      // fallback
-    }
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleSort = (field: RegistrationColumnKey) => {
@@ -108,13 +106,7 @@ export default function RegistrationsDashboard({ onTotalCountChange }: Registrat
 
   const saveColumns = useCallback((newCols: RegistrationColumnConfig[]) => {
     setColumns(newCols);
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(REGISTRATION_COLUMN_PREF_KEY, JSON.stringify(newCols));
-      } catch {
-        // ignore
-      }
-    }
+    void saveUserPreference(REGISTRATION_COLUMN_PREF_KEY, newCols);
   }, []);
 
   const handleToggleColumn = (key: RegistrationColumnKey) => {

@@ -81,6 +81,7 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { exportReportToExcel } from '@/lib/reportsClient';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
@@ -108,83 +109,33 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
 
 
 
-  // Context preservation: load saved directory state from sessionStorage on mount
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('buyer_directory_state');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.searchTerm !== undefined) setSearchTerm(parsed.searchTerm);
-        if (parsed.selectedMode !== undefined) setSelectedMode(parsed.selectedMode);
-        if (parsed.selectedStatus !== undefined) setSelectedStatus(parsed.selectedStatus);
-        if (parsed.selectedPlan !== undefined) setSelectedPlan(parsed.selectedPlan);
-        if (parsed.selectedSource !== undefined) setSelectedSource(parsed.selectedSource);
-        if (parsed.currentPage !== undefined) setCurrentPage(parsed.currentPage);
-        if (parsed.sortColumn !== undefined) setSortColumn(parsed.sortColumn);
-        if (parsed.sortOrder !== undefined) setSortOrder(parsed.sortOrder);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Context preservation: persist current state on updates
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(
-        'buyer_directory_state',
-        JSON.stringify({
-          searchTerm,
-          selectedMode,
-          selectedStatus,
-          selectedPlan,
-          selectedSource,
-          currentPage,
-          sortColumn,
-          sortOrder,
-        })
-      );
-    } catch {
-      // ignore
-    }
-  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, currentPage, sortColumn, sortOrder]);
-
-  // Column Customization state
+  // Column Customization state (hydrated from backend user preferences API)
   const [columns, setColumns] = useState<BuyerDirectoryColumnConfig[]>(DEFAULT_BUYER_DIRECTORY_COLUMNS);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
 
-  // Load column preferences from localStorage
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(BUYER_DIRECTORY_COLUMN_PREF_KEY);
-      if (saved) {
-        const parsed: BuyerDirectoryColumnConfig[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const validKeys = new Set(DEFAULT_BUYER_DIRECTORY_COLUMNS.map((c) => c.key));
-          const validated = parsed.filter((c) => validKeys.has(c.key));
-          // Append any missing new columns from DEFAULT_BUYER_DIRECTORY_COLUMNS
-          const presentKeys = new Set(validated.map((c) => c.key));
-          DEFAULT_BUYER_DIRECTORY_COLUMNS.forEach((defCol) => {
-            if (!presentKeys.has(defCol.key)) {
-              validated.push(defCol);
-            }
-          });
-          setColumns(validated);
+    let cancelled = false;
+    void getUserPreference<BuyerDirectoryColumnConfig[]>(BUYER_DIRECTORY_COLUMN_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const validKeys = new Set(DEFAULT_BUYER_DIRECTORY_COLUMNS.map((c) => c.key));
+      const validated = saved.filter((c) => validKeys.has(c.key));
+      const presentKeys = new Set(validated.map((c) => c.key));
+      DEFAULT_BUYER_DIRECTORY_COLUMNS.forEach((defCol) => {
+        if (!presentKeys.has(defCol.key)) {
+          validated.push(defCol);
         }
-      }
-    } catch {
-      // use defaults on parse error
-    }
+      });
+      setColumns(validated);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const saveColumns = useCallback((newCols: BuyerDirectoryColumnConfig[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(BUYER_DIRECTORY_COLUMN_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(BUYER_DIRECTORY_COLUMN_PREF_KEY, newCols);
   }, []);
 
   const handleToggleColumn = useCallback(

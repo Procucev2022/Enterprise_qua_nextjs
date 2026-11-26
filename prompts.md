@@ -10009,3 +10009,68 @@ create pr and check all the covergaes and merge directly in test-v3
 ```text
 Tell me process of vendor submit the bid/quote only in that format can create the bid or which is madetory and whichh is optional
 ```
+
+
+---
+
+### Prompt 432
+
+**Timestamp**: 2026-11-25T16:18:48+05:30
+
+```text
+Email invitations are being sent after RFQ creation, what is the issue here?
+```
+
+---
+
+### Prompt 433
+
+**Timestamp**: 2026-11-25T16:19:38+05:30
+
+```text
+Email invitations are not being sent after RFQ creation, what could be the issue here? or it is being sent in batches? if yes, what is the overall flow
+```
+
+
+---
+
+### Prompt 434
+
+**Timestamp**: 2026-11-25T19:18:33+05:30
+
+```text
+Push the current changes, & check the below issue.
+
+
+
+
+
+
+
+A lot of values in the application are getting fetched from localstorage, Can you review the entire application & fix it. The application is behaving differently in different different browsers, different PC's. Can you please review the complete application & fix it. The data should be fetched from backend API's
+```
+
+
+---
+
+### Prompt 435
+
+**Timestamp**: 2026-11-25T21:16:31+05:30
+
+```text
+Please check the current branch for syncing with origin. Please sync the current branch with main then please fix the below issue.
+
+A lot of data inconsistency issues in the complete application, 
+
+application is differently in different different browsers or different different PC's. The data is changing in different different browsers / PC's. Seems a lot of values are getting saved in localstorage, all data should  come from backend API's so that application is consistent everywhere.
+```
+
+---
+
+### Prompt 436
+
+**Timestamp**: 2026-11-26T00:53:28+05:30
+
+```text
+Keep commiting & pushing the changes
+```

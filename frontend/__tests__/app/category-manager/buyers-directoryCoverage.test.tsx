@@ -1,8 +1,9 @@
 import React from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import BuyersDirectory, { isPendingBuyer } from '@/app/category-manager/buyers-directory';
 import { useApp } from '@/lib/store';
 import { exportReportToExcel } from '@/lib/reportsClient';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
 import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import type { AuditLogEntry, BuyerAccount, RFQItem } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
@@ -35,6 +36,12 @@ jest.mock('@/lib/reportsClient', () => ({
 
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
 }));
 
 type Fields = Record<string, unknown>;
@@ -538,9 +545,9 @@ describe('BuyersDirectory dossier credits', () => {
 });
 
 describe('BuyersDirectory dossier communications and payments', () => {
-  test('restores saved plan filters and treats a missing buyer as not pending', () => {
+  test('ignores stale sessionStorage filters and treats a missing buyer as not pending', () => {
     window.sessionStorage.setItem('buyer_directory_state', JSON.stringify({
-      searchTerm: '',
+      searchTerm: 'StaleFilter',
       selectedMode: 'all',
       selectedStatus: 'all',
       selectedPlan: 'growth_tier',
@@ -559,7 +566,7 @@ describe('BuyersDirectory dossier communications and payments', () => {
     render(<BuyersDirectory />);
 
     expect(screen.getByText('Growth Plan Buyer')).toBeInTheDocument();
-    expect(screen.queryByText('Custom Plan Buyer')).not.toBeInTheDocument();
+    expect(screen.getByText('Custom Plan Buyer')).toBeInTheDocument();
     expect(isPendingBuyer(null)).toBe(false);
   });
 
@@ -849,7 +856,7 @@ describe('BuyersDirectory pagination', () => {
   });
 });
 describe('BuyersDirectory Additional Branch Coverage', () => {
-  test('exercises sorting with undefined / empty fields across all columns', () => {
+  test('exercises sorting with undefined / empty fields across all columns', async () => {
     const allColsVisible = [
       { key: 'organizationName', label: 'Buyer', visible: true, required: true },
       { key: 'contactPerson', label: 'Contact Person', visible: true },
@@ -865,7 +872,7 @@ describe('BuyersDirectory Additional Branch Coverage', () => {
       { key: 'createdDate', label: 'Registration Date', visible: true },
       { key: 'actions', label: 'Actions', visible: true, required: true },
     ];
-    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(allColsVisible);
 
     const b1 = makeBuyer({
       id: 'b-empty-1',
@@ -915,6 +922,9 @@ describe('BuyersDirectory Additional Branch Coverage', () => {
 
     mockStore({ buyerAccounts: [b1, b2, b3], rfqs: [] });
     render(<BuyersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: /Registration Date/i })).toBeInTheDocument();
+    });
 
     const columnHeaders = [
       'Buyer',

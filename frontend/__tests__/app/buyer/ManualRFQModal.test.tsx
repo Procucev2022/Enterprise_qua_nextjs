@@ -2589,41 +2589,62 @@ describe('ManualRFQModal: mandatory fields', () => {
   });
 });
 
-describe('ManualRFQModal: upload history vendor reconciliation & ensureVendors', () => {
-  it('reconciles upload history vendors across Mode 1, Mode 2, Mode 3 and calls ensureVendors when buyerVendors is empty', async () => {
+describe('ManualRFQModal: backend buyerVendors sourcing & ensureVendors', () => {
+  it('displays backend buyerVendors across Mode 1, Mode 2, Mode 3, ignores stale localStorage, and calls ensureVendors when empty', async () => {
     const mockEnsureVendors = jest.fn().mockResolvedValue(undefined);
+    const backendVendors = [
+      {
+        id: 'v-manual-backend-1',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
+        source: 'buyer_uploaded',
+      },
+      {
+        id: 'v-manual-backend-2',
+        name: 'Veera Local Vendor',
+        email: 'veera-local@test.com',
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+        source: 'buyer_uploaded',
+      },
+    ];
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],
       ensureVendors: mockEnsureVendors,
     });
 
-    const uploadBatches = [
-      {
-        id: 'batch-manual-1',
-        records: [
-          {
-            vendorName: 'Govardhan Solutions pvt LTD',
-            email: 'govardhan.kilari@procucev.com',
-            majorCategory: categoriesData[0].majorCategory,
-            minorCategories: [categoriesData[0].minorCategories[0]],
-          },
-          {
-            vendorName: 'Veera Local Vendor',
-            email: 'veera-local@test.com',
-            majorCategory: 'Vendor Master',
-            minorCategories: [],
-          },
-        ],
-      },
-    ];
-    localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(uploadBatches));
+    // Stale localStorage upload history must NOT leak synthetic vendors into RFQ matching
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-stale-1',
+          records: [{ vendorName: 'Stale Browser Only Vendor', email: 'stale@browser.test', majorCategory: categoriesData[0].majorCategory }],
+        },
+      ])
+    );
 
     try {
-      renderModal();
-
+      const { rerender } = renderModal();
       expect(mockEnsureVendors).toHaveBeenCalledTimes(1);
 
       chooseMode('mode_1');
+      expect(screen.queryByText(/Stale Browser Only Vendor/)).not.toBeInTheDocument();
+
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: backendVendors,
+        ensureVendors: mockEnsureVendors,
+      });
+      rerender(
+        <ManualRFQModal
+          isOpen
+          onClose={onClose}
+          onCreated={onCreated}
+        />
+      );
+
       expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
       expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
       expect(screen.getByText(/Veera Local Vendor/)).toBeInTheDocument();
@@ -2635,19 +2656,6 @@ describe('ManualRFQModal: upload history vendor reconciliation & ensureVendors',
       chooseMode('mode_3');
       expect(await screen.findByText(/2 Verified Suppliers/i)).toBeInTheDocument();
       expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
-
-      localStorage.setItem(
-        VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
-        JSON.stringify([
-          ...uploadBatches,
-          {
-            id: 'batch-manual-2',
-            records: [{ vendorName: 'Synced Modal Vendor', email: 'synced@modal.test', majorCategory: categoriesData[0].majorCategory }],
-          },
-        ])
-      );
-      fireEvent(window, new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
-      expect(await screen.findByText(/Synced Modal Vendor/)).toBeInTheDocument();
     } finally {
       localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     }

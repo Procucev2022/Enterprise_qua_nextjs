@@ -11,6 +11,7 @@ import VendorSummary, {
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
 import { logger } from '@/lib/logger';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import type { VendorEntry } from '@/lib/types';
@@ -49,6 +50,11 @@ jest.mock('@/lib/rfqClient', () => ({
 }));
 jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerProfile: jest.fn(),
+}));
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn(),
+  deleteVendorUploadHistoryBatch: jest.fn(),
 }));
 jest.mock('@/lib/validationSchemas', () => {
   const actual = jest.requireActual('@/lib/validationSchemas');
@@ -268,6 +274,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   beforeEach(() => {
     jest.clearAllMocks();
     localStorage.removeItem('procucev_vendor_upload_history');
+    (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue([]);
     logger.isRemoteSyncEnabled = false;
     logger.clearLogs();
     mockUpdateBuyerVendor.mockResolvedValue(true);
@@ -1269,15 +1276,6 @@ describe('app/buyer/vendor-summary.tsx', () => {
         false,
         expect.objectContaining({ id: 'v-1', name: 'Apex Supplies Ltd.' })
       );
-
-      // Upload history record is preserved (not deleted) and marked inactive in storage
-      const persistedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(persistedHistory).toHaveLength(1);
-      expect(persistedHistory[0].records[0]).toMatchObject({
-        email: 'rajesh@apex.in',
-        isActive: false,
-        status: 'INACTIVE',
-      });
     });
 
     it('keeps Mark Inactive modal open when setBuyerVendorActiveStatus returns false', async () => {
@@ -2888,8 +2886,8 @@ describe('app/buyer/vendor-summary.tsx', () => {
       unmount();
     });
 
-    it('safely handles corrupted localStorage JSON and close button', () => {
-      localStorage.setItem('procucev_vendor_upload_history', 'corrupted-json{[');
+    it('safely handles upload history fetch error and close button', async () => {
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockRejectedValueOnce(new Error('history error'));
 
       render(
         <VendorSummary
@@ -2900,14 +2898,14 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
-      expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
+      expect(await screen.findByText('No Upload History Found')).toBeInTheDocument();
 
       // Close modal
       fireEvent.click(screen.getByRole('button', { name: 'Close' }));
       expect(screen.queryByText('Vendor Template Upload History')).not.toBeInTheDocument();
     });
 
-    it('renders batches, downloads batch CSV, filters batch records, and re-exports', () => {
+    it('renders batches, downloads batch CSV, filters batch records, and re-exports', async () => {
       const mockBatches = [
         {
           id: 'batch-101',
@@ -2958,7 +2956,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         },
       ];
 
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(mockBatches));
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue(mockBatches);
 
       render(
         <VendorSummary
@@ -2969,7 +2967,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
-      expect(screen.getByText('Procurement_Vendors_Q1.xlsx')).toBeInTheDocument();
+      expect(await screen.findByText('Procurement_Vendors_Q1.xlsx')).toBeInTheDocument();
       expect(screen.getByText('Empty_Upload_Batch.xlsx')).toBeInTheDocument();
 
       // Download CSV on batch with records
@@ -3043,7 +3041,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       expect(screen.queryByText('Vendor Template Upload History')).not.toBeInTheDocument();
     });
 
-    it('renders empty records message with Re-export button when a batch with 0 records is viewed', () => {
+    it('renders empty records message with Re-export button when a batch with 0 records is viewed', async () => {
       const mockBatches = [
         {
           id: 'batch-no-rec',
@@ -3056,7 +3054,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         },
       ];
 
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(mockBatches));
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue(mockBatches);
 
       render(
         <VendorSummary
@@ -3066,7 +3064,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      fireEvent.click(screen.getByRole('button', { name: /View Records/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /View Records/i }));
 
       expect(screen.getByText(/Summary record maintained for Summary_Only_Batch.xlsx/i)).toBeInTheDocument();
 
@@ -3079,7 +3077,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
     });
 
-    it('covers sparse-record branch fallbacks in CSV download, table rendering, and batch search filters', () => {
+    it('covers sparse-record branch fallbacks in CSV download, table rendering, and batch search filters', async () => {
       const mockBatches = [
         {
           id: 'batch-sparse',
@@ -3141,7 +3139,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         },
       ];
 
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(mockBatches));
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue(mockBatches);
 
       render(
         <VendorSummary
@@ -3151,6 +3149,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
+      expect(await screen.findByText('Sparse_Vendor_Batch.xlsx')).toBeInTheDocument();
 
       // Batch 2 has no recorded file name or timestamp. No name or date is invented for it, so the
       // card shows a dash instead of a stand-in file name or 'Recent'.
@@ -3472,55 +3471,40 @@ describe('app/buyer/vendor-summary.tsx', () => {
     });
 
     it('forwards vendor details and closes popup when requesting evaluation for a reconciled upload-history vendor', async () => {
-      const localOnlyBatch = [
-        {
-          id: 'batch-eval-req',
-          fileName: 'vendors.xlsx',
-          total: 1,
-          imported: 1,
-          records: [
-            {
-              name: 'Govardhan Solutions pvt LTD',
-              email: 'govardhan.kilari@procucev.com',
-              contactPerson: 'Govardhan',
-              city: 'Bengaluru',
-              state: 'Karnataka',
-              rating: 0,
-            },
-          ],
-        },
-      ];
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify(localOnlyBatch));
+      const uploadedBackendVendor = {
+        id: 'v-backend-eval-req-0',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        contactPerson: 'Govardhan',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        source: 'buyer_uploaded',
+        rating: 0,
+      };
+      const baseStore = (useApp as jest.Mock)();
+      (useApp as jest.Mock).mockReturnValue({
+        ...baseStore,
+        buyerVendors: [...(baseStore.buyerVendors || []), uploadedBackendVendor],
+      });
       mockRequestVendorEvaluation.mockResolvedValueOnce({ success: true, message: 'Evaluation request sent' });
 
-      try {
-        render(
-          <VendorSummary
-            onViewEvaluation={mockOnViewEvaluation}
-            onNavigateToWizard={mockOnNavigateToWizard}
-          />
-        );
+      render(
+        <VendorSummary
+          onViewEvaluation={mockOnViewEvaluation}
+          onNavigateToWizard={mockOnNavigateToWizard}
+        />
+      );
 
-        const reviseBtns = screen.getAllByText(/Revise Rating/i);
-        fireEvent.click(reviseBtns[reviseBtns.length - 1]);
-        expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
+      const reviseBtns = screen.getAllByText(/Revise Rating/i);
+      fireEvent.click(reviseBtns[reviseBtns.length - 1]);
+      expect(screen.getByText('Revise Supplier Performance Rating')).toBeInTheDocument();
 
-        fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
+      fireEvent.click(screen.getByRole('button', { name: /Request Vendor Evaluation/i }));
 
-        await waitFor(() => {
-          expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
-        });
-        expect(mockRequestVendorEvaluation).toHaveBeenCalledWith(
-          'v-hist-local-batch-eval-req-0',
-          undefined,
-          expect.objectContaining({
-            name: 'Govardhan Solutions pvt LTD',
-            email: 'govardhan.kilari@procucev.com',
-          })
-        );
-      } finally {
-        localStorage.removeItem('procucev_vendor_upload_history');
-      }
+      await waitFor(() => {
+        expect(screen.queryByText('Revise Supplier Performance Rating')).not.toBeInTheDocument();
+      });
+      expect(mockRequestVendorEvaluation).toHaveBeenCalledWith('v-backend-eval-req-0');
     });
 
     it('handles vendor evaluation request returning success false or failure without error message', async () => {
@@ -3873,9 +3857,9 @@ describe('app/buyer/vendor-summary.tsx', () => {
     });
   });
 
-  describe('Upload history non-array JSON branch', () => {
-    it('handles non-array parsed JSON from localStorage (line 250)', () => {
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify({ notAnArray: true }));
+  describe('Upload history empty API response branch', () => {
+    it('handles empty backend upload history gracefully', async () => {
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue([]);
 
       render(
         <VendorSummary
@@ -3885,19 +3869,19 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      expect(screen.getByText('No Upload History Found')).toBeInTheDocument();
+      expect(await screen.findByText('No Upload History Found')).toBeInTheDocument();
     });
   });
 
   describe('Batch download fallbacks', () => {
-    it('downloads CSV with empty records and empty fileName (lines 268 & 274)', () => {
+    it('downloads CSV with empty records and empty fileName (lines 268 & 274)', async () => {
       const emptyBatch = {
         id: 'batch-empty',
         fileName: '',
         records: [],
         timestamp: '2026-10-25 10:00',
       };
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify([emptyBatch]));
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue([emptyBatch]);
 
       render(
         <VendorSummary
@@ -3907,12 +3891,11 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      const downloadCsvBtns = screen.getAllByRole('button', { name: /^Download$/i });
+      const downloadCsvBtns = await screen.findAllByRole('button', { name: /^Download$/i });
       fireEvent.click(downloadCsvBtns[0]);
 
       expect(URL.createObjectURL).toHaveBeenCalled();
       fireEvent.click(screen.getByTitle('Close upload history'));
-      localStorage.removeItem('procucev_vendor_upload_history');
     });
   });
 
@@ -4330,7 +4313,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('Batch record brandName and contactDesignation rendering', () => {
-    it('renders brandName and contactDesignation in batch records table (lines 2784, 2794)', () => {
+    it('renders brandName and contactDesignation in batch records table (lines 2784, 2794)', async () => {
       const batchWithBrand = {
         id: 'batch-brand-1',
         fileName: 'brand_test.xlsx',
@@ -4356,7 +4339,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
         ],
       };
 
-      localStorage.setItem('procucev_vendor_upload_history', JSON.stringify([batchWithBrand]));
+      (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValue([batchWithBrand]);
 
       render(
         <VendorSummary
@@ -4366,7 +4349,7 @@ describe('app/buyer/vendor-summary.tsx', () => {
       );
 
       fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
-      fireEvent.click(screen.getByRole('button', { name: /View Records/i }));
+      fireEvent.click(await screen.findByRole('button', { name: /View Records/i }));
 
       expect(screen.getByText('Brand: MegaBrand')).toBeInTheDocument();
       expect(screen.getByText('Chief Engineer')).toBeInTheDocument();
@@ -4719,37 +4702,27 @@ describe('app/buyer/vendor-summary.tsx', () => {
   });
 
   describe('Reconciled & uploaded vendor location field population', () => {
-    it('extracts City, State, and Pincode into Edit Vendor Profile when upload history stored full address inside city', () => {
-      localStorage.setItem(
-        'procucev_vendor_upload_history',
-        JSON.stringify([
-          {
-            id: 'batch-loc-fix-1',
-            fileName: 'Testing data.csv',
-            uploadedAt: '2026-11-16T10:00:00Z',
-            records: [
-              {
-                vendorCode: 'VC-VEERA-01',
-                name: 'Veera Solutions Pvt LTD',
-                contactPerson: 'veerababu',
-                email: 'veerababu.v@procucev.com',
-                phone: '9381877013',
-                gstin: '27AAACK3921P1Z9',
-                category: 'Vendor Master',
-                city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
-                rating: 0,
-              },
-            ],
-          },
-        ])
-      );
-
+    it('extracts City, State, and Pincode into Edit Vendor Profile when backend vendor stored full address inside city', () => {
       (useApp as jest.Mock).mockReturnValue({
         vendorEvaluations: [],
         currentMode: 'mode_3',
         rfqs: [],
         showToast: mockShowToast,
-        buyerVendors: [],
+        buyerVendors: [
+          {
+            id: 'v-loc-fix-1',
+            vendorCode: 'VC-VEERA-01',
+            name: 'Veera Solutions Pvt LTD',
+            contactPerson: 'veerababu',
+            email: 'veerababu.v@procucev.com',
+            phone: '9381877013',
+            gstin: '27AAACK3921P1Z9',
+            majorCategory: 'Vendor Master',
+            city: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+            source: 'buyer_uploaded',
+            rating: 0,
+          },
+        ],
         addBuyerVendor: mockAddBuyerVendor,
         updateBuyerVendor: mockUpdateBuyerVendor,
         deleteBuyerVendor: mockDeleteBuyerVendor,

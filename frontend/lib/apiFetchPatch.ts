@@ -23,16 +23,18 @@
 export function installApiFetchPatch(): void {
   if (typeof window === 'undefined') return;
   const backendUrl = process.env.NEXT_PUBLIC_BACKEND_URL;
-  if (!backendUrl) return;
+  if (!backendUrl && process.env.NODE_ENV === 'test') return;
   const win = window as unknown as { __apiFetchPatched?: boolean };
   if (win.__apiFetchPatched) return;
   win.__apiFetchPatched = true;
 
   const originalFetch = window.fetch;
-  const normalizedUrl = backendUrl.replace(/\/+$/, '');
+  const normalizedUrl = backendUrl ? backendUrl.replace(/\/+$/, '') : '';
   const patchedFetch = (input: RequestInfo | URL, init?: RequestInit) => {
     if (typeof input === 'string' && input.startsWith('/api/')) {
-      return originalFetch(`${normalizedUrl}${input}`, init);
+      const targetUrl = normalizedUrl ? `${normalizedUrl}${input}` : input;
+      const nextInit: RequestInit = init?.cache ? init : { ...init, cache: 'no-store' };
+      return originalFetch(targetUrl, nextInit);
     }
     return originalFetch(input, init);
   };

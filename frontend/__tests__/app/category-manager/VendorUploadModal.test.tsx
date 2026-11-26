@@ -3,11 +3,21 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import { useApp } from '@/lib/store';
 import * as vendorUploadClient from '@/lib/vendorUploadClient';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorBulkInvitationResponse, VendorUploadRow } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
+}));
+
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn().mockImplementation(async (batch) => ({
+    id: `hist-saved-${Date.now()}`,
+    ...batch,
+  })),
+  deleteVendorUploadHistoryBatch: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('@/lib/vendorUploadClient', () => ({
@@ -673,32 +683,29 @@ describe('VendorUploadModal', () => {
     HTMLAnchorElement.prototype.click = originalClick;
   });
 
-  test('toggles upload history panel and covers localStorage parse error branch', async () => {
-    // Simulate localStorage.getItem throwing
-    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('storage error');
-    });
+  test('toggles upload history panel and covers upload history fetch error branch', async () => {
+    (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockRejectedValueOnce(
+      new Error('history fetch error')
+    );
 
     render(<VendorUploadModal isOpen onClose={onClose} />);
-    // Should survive localStorage error (renders without crash)
+    // Should survive fetch rejection (renders without crash)
     const historyBtns = screen.getAllByRole('button', { name: /Upload History/i });
     expect(historyBtns.length).toBeGreaterThan(0);
 
     // Toggle History panel open
     fireEvent.click(historyBtns[0]);
-    expect(screen.getByText('Previous Vendor Upload History')).toBeInTheDocument();
+    expect(await screen.findByText('Previous Vendor Upload History')).toBeInTheDocument();
     expect(screen.getByText('No previous uploads recorded on this browser.')).toBeInTheDocument();
 
     // Toggle History panel closed
     const hideBtn = screen.getAllByRole('button', { name: /Hide History/i });
     fireEvent.click(hideBtn[0]);
     expect(screen.queryByText('Previous Vendor Upload History')).not.toBeInTheDocument();
-
-    getItemSpy.mockRestore();
   });
 
-  test('shows skipped credential invitations in saved upload history', () => {
-    localStorage.setItem('procucev_vendor_upload_history', JSON.stringify([{
+  test('shows skipped credential invitations in saved upload history', async () => {
+    (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValueOnce([{
       id: 'history-with-skipped-invite',
       fileName: 'vendors.xlsx',
       timestamp: '2026-11-08 10:00',
@@ -707,13 +714,15 @@ describe('VendorUploadModal', () => {
       duplicates: 1,
       failed: 1,
       onboardingSkipped: 2,
-    }]));
+    }]);
 
     render(<VendorUploadModal isOpen onClose={onClose} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
-    expect(screen.getByText(formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: 2 }))).toBeInTheDocument();
+    expect(
+      await screen.findByText(formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: 2 }))
+    ).toBeInTheDocument();
     expect(screen.getByText('1 Duplicates')).toBeInTheDocument();
     expect(screen.getByText('1 Failed')).toBeInTheDocument();
   });
@@ -836,14 +845,20 @@ describe('VendorUploadModal', () => {
     fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText(/Upload Completed/);
 
-    const savedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-    expect(savedHistory[0].records[0]).toMatchObject({
-      name: 'Veera Solutions Pvt LTD',
-      city: 'Bengaluru',
-      state: 'Karnataka',
-      pincode: '560037',
-      category: '',
-    });
+    expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'loc-vendors.xlsx',
+        records: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'Veera Solutions Pvt LTD',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560037',
+            category: '',
+          }),
+        ]),
+      })
+    );
   });
 
   test('omits requireCategory when uploaded by a non-buyer category manager session', async () => {
@@ -930,11 +945,12 @@ describe('VendorUploadModal', () => {
       fireEvent.click(screen.getByText('Import 1 Vendor'));
       await screen.findByText(/Upload Completed/);
 
-      const savedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(savedHistory[0]).toMatchObject({
-        buyerId: 'ba-bulk-1',
-        buyerEmail: 'buyer@bulkcorp.test',
-      });
+      expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buyerId: 'ba-bulk-1',
+          buyerEmail: 'buyer@bulkcorp.test',
+        })
+      );
     } finally {
       sessionSpy.mockRestore();
     }
@@ -1082,5 +1098,52 @@ describe('VendorUploadModal', () => {
       URL.revokeObjectURL = originalRevokeObjectURL;
       clickSpy.mockRestore();
     }
+  });
+
+  test('closes modal on Escape key press, ignores non-Escape keys, and reports invitation progress callback', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      onboardingSkipped: 1,
+      results: [{ rowNumber: 2, status: 'imported', vendorId: 'v-prog-1', onboardingEmailStatus: 'skipped' }],
+    });
+    (vendorUploadClient.sendBulkVendorInvitations as jest.Mock).mockImplementation(
+      async (_ids: string[], onProgress?: (completed: number, total: number) => void) => {
+        onProgress?.(1, 1);
+        return { sentCount: 1, queuedCount: 0, failedCount: 0, results: [{ vendorId: 'v-prog-1', status: 'sent' }] };
+      }
+    );
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    pickFile(new File(['x'], 'prog.xlsx'));
+    await screen.findByText('prog.xlsx');
+
+    // Bottom "Choose Another File" button resets to select step
+    const chooseBtns = screen.getAllByText('Choose Another File');
+    fireEvent.click(chooseBtns[chooseBtns.length - 1]);
+    expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
+
+    pickFile(new File(['x'], 'prog2.xlsx'));
+    await screen.findByText('prog2.xlsx');
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: formatString(UI_STRINGS.vendorBulkImport.sendInvitationsButton, { count: 1 }),
+      })
+    );
+    await screen.findByText(formatString(UI_STRINGS.vendorBulkImport.invitationSummary, { sent: 1, queued: 0, failed: 0 }));
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

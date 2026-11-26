@@ -56,12 +56,14 @@ class AuthClient {
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       } else {
         localStorage.removeItem(SESSION_KEY);
+        sessionStorage.removeItem(SESSION_KEY);
       }
 
       if (token) {
         localStorage.setItem(TOKEN_KEY, token);
       } else {
         localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
       }
     }
   }
@@ -168,7 +170,7 @@ class AuthClient {
       if (res.ok) {
         const data = (await res.json()) as AuthResponse;
         if (data.success && data.user) {
-          this.currentSession = data.user;
+          this.setSession(data.user, this.token);
           return data.user;
         }
       }

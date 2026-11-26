@@ -646,13 +646,13 @@ describe('Header Session Timer and Auto Logout', () => {
 
   it('triggers auto logout when session timer expires', () => {
     jest.useFakeTimers();
-    // Set localStorage expiration to 1 second in the future
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 1000));
+    const start = Date.now();
     render(<Header />);
 
-    // Fast-forward time past expiration
+    // Fast-forward past the 5-minute buyer inactivity window
+    jest.setSystemTime(start + 5 * 60 * 1000 - 1000);
     act(() => {
-      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(1000);
     });
 
     expect(mockSetIsLoggedIn).toHaveBeenCalledWith(false);
@@ -767,15 +767,19 @@ describe('Header Session Timer and Auto Logout', () => {
       addAuditLog: mockAddAuditLog,
     });
     jest.useFakeTimers();
-    // 2 minutes left (amber)
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 120_000));
-    const { rerender } = render(<Header />);
+    const start = Date.now();
+    render(<Header />);
+
+    // Advance to 2 minutes left (amber warning interval <= 300s)
+    jest.setSystemTime(start + (3 * 60 * 60 - 121) * 1000);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
     let timer = screen.getByTestId('header-session-timer');
     expect(timer.className).toContain('text-amber');
 
-    // 30 seconds left (rose)
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 30_000));
-    rerender(<Header />);
+    // Advance to 30 seconds left (rose critical interval <= 60s)
+    jest.setSystemTime(start + (3 * 60 * 60 - 31) * 1000);
     act(() => {
       jest.advanceTimersByTime(1000);
     });
@@ -795,9 +799,9 @@ describe('Header Session Timer and Auto Logout', () => {
 
     // Auto logout where logout rejects to cover catch callback (func 13)
     (authClient.logout as jest.Mock).mockRejectedValueOnce(new Error('Logout network error'));
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() - 1000));
+    jest.setSystemTime(Date.now() + 3 * 60 * 60 * 1000);
     act(() => {
-      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(1000);
     });
 
     jest.useRealTimers();

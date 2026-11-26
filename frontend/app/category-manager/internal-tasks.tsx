@@ -80,6 +80,7 @@ import {
   CALL_OUTCOMES,
   PROPOSAL_STATUSES,
   ONBOARDING_STAGES,
+  USER_PREFERENCE_KEYS,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { authClient } from '@/lib/authClient';
@@ -111,6 +112,7 @@ import DocumentVaultDashboard from './components/DocumentVaultDashboard';
 import LoginLogsDashboard from './components/LoginLogsDashboard';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 import ColumnSettingsPopup, { type ColumnDef } from './components/ColumnSettingsPopup';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 
 
 const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
@@ -123,7 +125,7 @@ const DEFAULT_TASK_TABLE_COLUMNS: ColumnDef[] = [
   { key: 'dueDate', label: 'Due Date & Time', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const TASK_COL_PREF_KEY = 'qua_internal_task_col_prefs';
+const TASK_COL_PREF_KEY = USER_PREFERENCE_KEYS.INTERNAL_TASK_COLUMNS;
 
 export default function InternalTasksDashboard() {
   // Data state
@@ -163,19 +165,18 @@ export default function InternalTasksDashboard() {
   const [taskSortField, setTaskSortField] = useState<string>('');
   const [taskSortOrder, setTaskSortOrder] = useState<'asc' | 'desc'>('asc');
 
-  // Hydrate task column preferences safely after mount to prevent SSR mismatch
+  // Hydrate task column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window === 'undefined') return;
-    try {
-      const saved = localStorage.getItem(TASK_COL_PREF_KEY);
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const cleaned = parsed.filter((c: ColumnDef) => c.key !== 'done');
-          setTaskColumns(cleaned);
-        }
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(TASK_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        const cleaned = saved.filter((c) => c.key !== 'done');
+        if (cleaned.length > 0) setTaskColumns(cleaned);
       }
-    } catch {}
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const handleTaskSort = useCallback((field: string) => {
@@ -3654,15 +3655,11 @@ export default function InternalTasksDashboard() {
         columns={taskColumns}
         onSave={(newCols) => {
           setTaskColumns(newCols);
-          try {
-            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(newCols));
-          } catch {}
+          void saveUserPreference(TASK_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setTaskColumns(DEFAULT_TASK_TABLE_COLUMNS);
-          try {
-            localStorage.setItem(TASK_COL_PREF_KEY, JSON.stringify(DEFAULT_TASK_TABLE_COLUMNS));
-          } catch {}
+          void deleteUserPreference(TASK_COL_PREF_KEY);
         }}
         title="Internal Tasks Columns"
       />

@@ -1667,6 +1667,16 @@ export interface VendorUploadHistoryBatch {
   id?: string | number;
   fileName?: string;
   uploadedAt?: string;
+  timestamp?: string;
+  createdAt?: string;
+  total?: number;
+  imported?: number;
+  duplicates?: number;
+  failed?: number;
+  onboardingFailed?: number;
+  onboardingSkipped?: number;
+  status?: string;
+  role?: string;
   buyerId?: string;
   buyerEmail?: string;
   records?: Array<Record<string, unknown>> | null;

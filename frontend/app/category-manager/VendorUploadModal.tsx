@@ -31,6 +31,10 @@ import {
   parseVendorUploadFile,
   sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
+import {
+  fetchVendorUploadHistory,
+  saveVendorUploadHistoryBatch,
+} from '@/lib/vendorUploadHistoryClient';
 import type { SkippedDuplicateVendorRecord, VendorUploadImportResponse, VendorUploadRow } from '@/lib/types';
 
 interface VendorUploadModalProps {
@@ -69,7 +73,6 @@ interface UploadHistoryEntry {
 }
 
 const PREVIEW_PAGE_SIZE = 50;
-const HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
 export default function VendorUploadModal({ isOpen, onClose, onImportComplete }: VendorUploadModalProps) {
   const { showToast, refreshFromDB, activeBuyerAccount, buyerVendors } = useApp();
@@ -94,14 +97,22 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
   const [invitationProgress, setInvitationProgress] = useState({ completed: 0, total: 0 });
 
   useEffect(() => {
-    try {
-      const raw = localStorage.getItem(HISTORY_STORAGE_KEY);
-      if (raw) {
-        setHistoryList(JSON.parse(raw));
-      }
-    } catch {
-      setHistoryList([]);
-    }
+    if (!isOpen) return;
+    let cancelled = false;
+    void fetchVendorUploadHistory()
+      .then((batches) => {
+        if (!cancelled) {
+          setHistoryList(batches as UploadHistoryEntry[]);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHistoryList([]);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [isOpen]);
 
   const validRows = useMemo(() => rows.filter((r) => r.isValid), [rows]);
@@ -340,14 +351,10 @@ export default function VendorUploadModal({ isOpen, onClose, onImportComplete }:
         };
       }),
     };
-    try {
-      const nextHistory = [historyEntry, ...historyList].slice(0, 30);
-      setHistoryList(nextHistory);
-      localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(nextHistory));
-      if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
-        window.dispatchEvent(new Event('vendor_upload_history_updated'));
-      }
-    } catch {}
+    // Persist batch history in backend database API (consistent across browsers and PCs)
+    const savedBatch = await saveVendorUploadHistoryBatch(historyEntry);
+    const persistedEntry = (savedBatch || historyEntry) as UploadHistoryEntry;
+    setHistoryList((prev) => [persistedEntry, ...prev.filter((item) => item.id !== persistedEntry.id)].slice(0, 30));
 
     if (result.imported > 0) {
       await refreshFromDB();
