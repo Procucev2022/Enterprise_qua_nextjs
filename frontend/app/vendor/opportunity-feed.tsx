@@ -1054,7 +1054,11 @@ export default function OpportunityFeed({
     const mode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
     const isPublicMode = mode === 'mode_0' || mode === 'v0' || mode === 'version_0' || mode === 'mode_3' || mode === 'v3' || mode === 'version_3' || Boolean((opp as any)?.isPublic) || Boolean((rfqRecord as any)?.isPublic);
     const isDirectClient = isDirect && !isPublicMode;
+    // For public RFQs, require download. For direct RFQs, download is not required.
+    // isDownloaded should only be true if: (1) it's direct (no download needed), (2) it's already unlocked, or (3) already submitted
     const isDownloaded = isDirectClient || isUnlockedInStore || isUnlockedLocally || isSubmitted;
+    // requiresDownload gate: Public RFQs need download, direct RFQs don't require it
+    const requiresDownload = isPublicMode && !isUnlockedInStore && !isUnlockedLocally && !isSubmitted;
     const currP = activeDashboardTab === 'public' ? currentPageNet : currentPage;
     const pSize = activeDashboardTab === 'public' ? pageSizeNet : pageSize;
 
@@ -1192,7 +1196,7 @@ export default function OpportunityFeed({
               >
                 <span>🔒 Upgrade</span>
               </button>
-            ) : !isDownloaded ? (
+            ) : requiresDownload ? (
               <button
                 type="button"
                 disabled
