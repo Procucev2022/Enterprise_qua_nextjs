@@ -2435,9 +2435,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                       inputMode="numeric"
                                       aria-label={`Discount for ${li.description}`}
                                       value={bidLineItemDiscounts[li.id] || ''}
-                                      onChange={(e) =>
-                                        setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: e.target.value.replace(/[^0-9.]/g, '') }))
-                                      }
+                                      onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (val === '' || pattern.test(val)) {
+                                          setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: val }));
+                                        }
+                                      }}
+                                      onPaste={(e) => {
+                                        e.preventDefault();
+                                        const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (pastedText === '' || pattern.test(pastedText)) {
+                                          setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: pastedText }));
+                                        }
+                                      }}
                                       disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                                       placeholder="0"
                                       className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -2449,9 +2461,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                       inputMode="numeric"
                                       aria-label={`GST for ${li.description}`}
                                       value={bidLineItemGst[li.id] || ''}
-                                      onChange={(e) =>
-                                        setBidLineItemGst((prev) => ({ ...prev, [li.id]: e.target.value.replace(/[^0-9.]/g, '') }))
-                                      }
+                                      onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (val === '' || pattern.test(val)) {
+                                          setBidLineItemGst((prev) => ({ ...prev, [li.id]: val }));
+                                        }
+                                      }}
+                                      onPaste={(e) => {
+                                        e.preventDefault();
+                                        const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (pastedText === '' || pattern.test(pastedText)) {
+                                          setBidLineItemGst((prev) => ({ ...prev, [li.id]: pastedText }));
+                                        }
+                                      }}
                                       disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                                       placeholder="18"
                                       className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -2586,6 +2610,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                 setBidDiscountPercent(val);
                               }
                             }}
+                            onPaste={(e) => {
+                              e.preventDefault();
+                              const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (pastedText === '' || pattern.test(pastedText)) {
+                                setBidDiscountPercent(pastedText);
+                              }
+                            }}
                             disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                             placeholder="0"
                             className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -2603,6 +2635,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                               const pattern = /^\d{0,2}(\.\d{0,2})?$/;
                               if (val === '' || pattern.test(val)) {
                                 setBidGstPercent(val);
+                              }
+                            }}
+                            onPaste={(e) => {
+                              e.preventDefault();
+                              const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (pastedText === '' || pattern.test(pastedText)) {
+                                setBidGstPercent(pastedText);
                               }
                             }}
                             disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
