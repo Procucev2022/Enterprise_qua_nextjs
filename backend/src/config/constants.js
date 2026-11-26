@@ -4303,9 +4303,24 @@ const RFQ_ATTACHMENT_EXTENSION_MIME_MAP = Object.freeze({
   '.tsv': 'text/tab-separated-values',
   '.json': 'application/json',
   '.doc': 'application/msword',
+  '.docm': 'application/vnd.ms-word.document.macroenabled.12',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xls': 'application/vnd.ms-excel',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroenabled.12',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+});
+
+const QUOTE_DOCUMENT_EXTRACTOR_CONFIG = Object.freeze({
+  MAX_ATTACHMENTS: 10,
+  MAX_INLINE_PARTS: 3,
+  MAX_ZIP_ENTRIES: 80,
+  MAX_UNCOMPRESSED_ENTRY_BYTES: 8 * 1024 * 1024,
+  MAX_TOTAL_UNCOMPRESSED_BYTES: 20 * 1024 * 1024,
+  MAX_TEXT_CHARS: Number(process.env.QUOTE_ATTACHMENT_MAX_TEXT_CHARS || 60000),
+  MAX_PDF_STREAM_BYTES: 2 * 1024 * 1024,
+  MAX_OLE2_STREAM_BYTES: 12 * 1024 * 1024,
+  MAX_OLE2_SECTORS: 32768,
+  OLE2_MAX_CHAIN_STEPS: 65536,
 });
 
 /**
@@ -4668,6 +4683,7 @@ module.exports = {
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
   RFQ_ATTACHMENT_EXTENSION_MIME_MAP,
+  QUOTE_DOCUMENT_EXTRACTOR_CONFIG,
   resolveAttachmentContentType,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,

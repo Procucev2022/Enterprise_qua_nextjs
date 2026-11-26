@@ -10454,3 +10454,14 @@ create the code and not merge in test-v3 not raise the pr after this giive me th
 ```text
  raise the pr and pass all the coverages and ready to merge the pr i can verify and merge
 ```
+
+
+---
+
+### Prompt 456
+
+**Timestamp**: 2026-11-26T22:19:09+05:30
+
+```text
+now check the quotation via emai flow it should take pdf , doc , execl and create the quotation ex:gmtrfa@procucev.com if they reply with attachment it should create the quotation
+```

@@ -28,6 +28,8 @@ const geminiService = require('./geminiService');
 const rfqIngestionService = require('./rfqIngestionService');
 const storeService = require('./storeService');
 const rfqAttachmentService = require('./rfqAttachmentService');
+const quoteAttachmentService = require('./quoteAttachmentService');
+const quoteDocumentExtractor = require('./quoteDocumentExtractor');
 const domainQueries = require('../db/domainQueries');
 const mailerService = require('./mailerService');
 const mailTransport = require('./mailTransport');
@@ -62,6 +64,7 @@ const {
   EMAIL_REGEX,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   PLACEHOLDER_MOBILE_NUMBER,
+  resolveAttachmentContentType,
 } = require('../config/constants');
 
 const { INGESTION_OUTCOME } = emailGatewayQueries;
@@ -1598,7 +1601,10 @@ async function extractRfqReferenceFromEmail(message, { vendorRecord = null, allo
     }
   }
 
-  // Priority 2a: Subject, stripped bodyText, and headers
+  // Priority 2a: Subject, stripped bodyText, attachment filenames, and headers
+  const attachmentFileNames = Array.isArray(message.attachments)
+    ? message.attachments.map((att) => att && (att.fileName || att.filename)).filter(Boolean)
+    : [];
   const primarySources = [
     message.subject || '',
     message.bodyText || '',
@@ -1606,6 +1612,7 @@ async function extractRfqReferenceFromEmail(message, { vendorRecord = null, allo
     message.text || '',
     message.inReplyTo || '',
     message.references || '',
+    ...attachmentFileNames,
   ].join(' ');
   const primaryCandidates = extractRfqCandidatesFromText(primarySources);
   for (const cand of primaryCandidates) {
@@ -1613,14 +1620,24 @@ async function extractRfqReferenceFromEmail(message, { vendorRecord = null, allo
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
 
-  // Priority 2b: Fall back to unstripped rawBodyText and bodyHtml (e.g. when vendor changed subject to "Offer" and quoted invite is below marker)
+  // Priority 2b: Fall back to unstripped rawBodyText, bodyHtml, and attachment document text
+  // (e.g. when vendor changed subject to "Offer" and quoted invite or put RFQ number in the attached PDF/Word/Excel)
   const htmlFlattened = message.bodyHtml && typeof emailIngestionService.flattenHtmlBody === 'function'
     ? emailIngestionService.flattenHtmlBody(message.bodyHtml)
     : '';
+  let attachmentText = '';
+  if (Array.isArray(message.attachments) && message.attachments.length > 0 && typeof quoteDocumentExtractor.extractVendorQuoteAttachments === 'function') {
+    try {
+      attachmentText = quoteDocumentExtractor.extractVendorQuoteAttachments(message.attachments).extractedText || '';
+    } catch {
+      attachmentText = '';
+    }
+  }
   const fallbackSources = [
     message.rawBodyText || '',
     htmlFlattened,
     message.bodyHtml || '',
+    attachmentText,
   ].filter(Boolean).join(' ');
   const fallbackCandidates = extractRfqCandidatesFromText(fallbackSources);
   for (const cand of fallbackCandidates) {
@@ -2517,48 +2534,53 @@ function checkRfqCredits(buyerAccount, sourcingMode, needed) {
  * portal upload is stored. Best-effort: a file that is the wrong type, too large,
  * or cannot be written is logged and left off — it never stops the RFQ.
  */
-async function storeEmailAttachments(message) {
+async function storeEmailAttachments(message, { saveFn = null, contextLabel = 'RFQ' } = {}) {
   const saved = [];
+  const persist = typeof saveFn === 'function' ? saveFn : (input) => rfqAttachmentService.saveAttachment(input);
   for (const attachment of (message && message.attachments) || []) {
-    // Every role is kept ('inline' means "sent to Gemini inline", which is what
-    // a PDF requisition is); saveAttachment's MIME allow-list decides what is
-    // storable, exactly as for a portal upload.
+    // Every role is kept; saveAttachment's MIME allow-list decides what is
+    // storable, resolving generic octet-stream uploads via filename extension.
     if (!attachment || !attachment.content) continue;
+    const attachmentName = attachment.fileName || attachment.filename;
     // Signature graphics, company logos, social icons, and tracking pixels are never RFQ documents.
     const isSig = attachment.isSignature || attachment.role === 'signature' || (typeof emailIngestionService.isSignatureAttachment === 'function' && emailIngestionService.isSignatureAttachment(attachment));
     if (isSig) {
       logger.info(
-        `Skipped email signature graphic from RFQ attachments: ${attachment.fileName || attachment.filename || 'unnamed'}`,
-        { fileName: attachment.fileName || attachment.filename, contentType: attachment.contentType, size: attachment.size },
+        `Skipped email signature graphic from ${contextLabel} attachments: ${attachmentName || 'unnamed'}`,
+        { fileName: attachmentName, contentType: attachment.contentType, size: attachment.size },
         'EMAIL_GATEWAY'
       );
       continue;
     }
+    const resolvedMime = resolveAttachmentContentType(
+      attachment.contentType || attachment.mimeType,
+      attachmentName
+    );
     try {
       const result = await withTimeout(
-        rfqAttachmentService.saveAttachment({
-          fileName: attachment.fileName,
-          mimeType: attachment.contentType,
+        persist({
+          fileName: attachmentName,
+          mimeType: resolvedMime,
           content: Buffer.isBuffer(attachment.content)
             ? attachment.content.toString('base64')
             : String(attachment.content),
         }),
         POLL_CALL_TIMEOUT_MS,
-        'RFQ attachment upload'
+        `${contextLabel} attachment upload`
       );
-      if (result.status === rfqAttachmentService.ATTACHMENT_STATUS.SAVED) {
+      if (result && result.status === rfqAttachmentService.ATTACHMENT_STATUS.SAVED) {
         saved.push(result.attachment);
-      } else {
+      } else if (result) {
         logger.warn(
-          `Email attachment ${attachment.fileName} not stored on the RFQ (${result.status})`,
-          { fileName: attachment.fileName, contentType: attachment.contentType },
+          `Email attachment ${attachmentName} not stored on the ${contextLabel} (${result.status})`,
+          { fileName: attachmentName, contentType: resolvedMime },
           'EMAIL_GATEWAY'
         );
       }
     } catch (err) {
       logger.warn(
-        `Email attachment ${attachment.fileName} not stored on the RFQ: ${err.message}`,
-        { fileName: attachment.fileName },
+        `Email attachment ${attachmentName} not stored on the ${contextLabel}: ${err.message}`,
+        { fileName: attachmentName },
         'EMAIL_GATEWAY'
       );
     }
@@ -3042,6 +3064,14 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     };
   }
 
+  const savedQuoteAttachments =
+    Array.isArray(message.attachments) && message.attachments.length > 0 && typeof quoteAttachmentService.saveQuoteAttachment === 'function'
+      ? await storeEmailAttachments(message, {
+          saveFn: (input) => quoteAttachmentService.saveQuoteAttachment(input, { rfqId: targetRfq.id, vendorId: vendorRecord.id }),
+          contextLabel: 'quote',
+        })
+      : [];
+
   const quote = {
     vendorId: vendorRecord.id,
     vendorName: vendorRecord.name,
@@ -3064,6 +3094,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     deliveryCharges: extraction.deliveryCharges ?? null,
     deliveryDate: extraction.deliveryDate || null,
     quotationValidity: extraction.quotationValidity || null,
+    ...(savedQuoteAttachments.length > 0 ? { attachments: savedQuoteAttachments } : {}),
   };
 
   const isV0Target = Boolean(
@@ -3365,7 +3396,13 @@ async function processMessage(rawSource, config = resolveConfig()) {
     content: Buffer.isBuffer(rawSource) ? rawSource.toString('base64') : String(rawSource || ''),
   });
 
-  if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
+  const hasVendorReadableAttachments =
+    prepared.status === EMAIL_INGESTION_STATUS.NO_CONTENT &&
+    prepared.message &&
+    Array.isArray(prepared.message.attachments) &&
+    prepared.message.attachments.some((att) => att && att.role !== 'signature');
+
+  if (prepared.status !== EMAIL_INGESTION_STATUS.READY && !hasVendorReadableAttachments) {
     return {
       status: INGESTION_OUTCOME.UNREADABLE,
       detail: EMAIL_GATEWAY_MESSAGES.PREPARE_REFUSED.replace('{status}', prepared.status),
@@ -3586,6 +3623,14 @@ async function processMessage(rawSource, config = resolveConfig()) {
     return {
       status: INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX,
       detail: EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+      message,
+    };
+  }
+
+  if (prepared.status !== EMAIL_INGESTION_STATUS.READY) {
+    return {
+      status: INGESTION_OUTCOME.UNREADABLE,
+      detail: EMAIL_GATEWAY_MESSAGES.PREPARE_REFUSED.replace('{status}', prepared.status),
       message,
     };
   }
