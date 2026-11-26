@@ -830,10 +830,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             );
             if (matched) {
               newPrices[matched.id] = String(rateVal);
-              if (Number.isFinite(discVal) && discVal >= 0 && discVal <= 100) {
+              // Validate: max 99.99 (2 digits before decimal, 2 after)
+              if (Number.isFinite(discVal) && discVal >= 0 && discVal <= 99.99) {
                 newDiscounts[matched.id] = String(discVal);
               }
-              if (Number.isFinite(gstVal) && gstVal >= 0 && gstVal <= 100) {
+              // Validate: max 99.99 (2 digits before decimal, 2 after)
+              if (Number.isFinite(gstVal) && gstVal >= 0 && gstVal <= 99.99) {
                 newGst[matched.id] = String(gstVal);
               }
               matchedCount++;
@@ -2576,7 +2578,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             type="text"
                             inputMode="numeric"
                             value={bidDiscountPercent}
-                            onChange={(e) => setBidDiscountPercent(e.target.value.replace(/[^0-9.]/g, ''))}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              // Allow max 2 digits before decimal, max 2 after
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (val === '' || pattern.test(val)) {
+                                setBidDiscountPercent(val);
+                              }
+                            }}
                             disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                             placeholder="0"
                             className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
@@ -2588,7 +2597,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                             type="text"
                             inputMode="numeric"
                             value={bidGstPercent}
-                            onChange={(e) => setBidGstPercent(e.target.value.replace(/[^0-9.]/g, ''))}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              // Allow max 2 digits before decimal, max 2 after
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (val === '' || pattern.test(val)) {
+                                setBidGstPercent(val);
+                              }
+                            }}
                             disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                             placeholder="18"
                             className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
