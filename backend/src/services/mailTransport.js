@@ -148,7 +148,7 @@ function withMimeAttachments(lines, contentHeaders, body, attachments) {
   return parts.join('\r\n');
 }
 
-function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, inReplyTo, references, headers, attachments }) {
+function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, messageId, inReplyTo, references, headers, attachments }) {
   const ccList = toAddressList(cc);
   const bccList = toAddressList(bcc);
   const toList = toAddressList(to);
@@ -160,6 +160,7 @@ function buildRawMimeMessage({ from, to, cc, bcc, subject, html, text, replyTo, 
     replyTo ? `Reply-To: ${replyTo}` : null,
     `Subject: =?UTF-8?B?${Buffer.from(subject || '', 'utf8').toString('base64')}?=`,
     `Date: ${new Date().toUTCString()}`,
+    messageId ? `Message-ID: ${messageId}` : null,
     inReplyTo ? `In-Reply-To: ${inReplyTo}` : null,
     references ? `References: ${references}` : null,
     ...Object.entries(headers || {}).map(([name, value]) => `${name}: ${value}`),

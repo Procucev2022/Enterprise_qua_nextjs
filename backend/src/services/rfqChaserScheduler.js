@@ -576,6 +576,9 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
     const isBuyerUploaded = mailerService.isBuyerUploadedVendor
       ? mailerService.isBuyerUploadedVendor(vendor)
       : false;
+    const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+      ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, vendor.id || 'vendor')
+      : undefined;
     const result = await mailerService.sendRfqInviteEmail(vendor.email, {
       rfq,
       recipientName: vendor.contactPerson || vendor.name,
@@ -584,6 +587,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
       isReminder: true,
       vendor,
       isBuyerUploaded,
+      ...(inviteMessageId ? { messageId: inviteMessageId } : {}),
     });
     logger.info(
       `[CHASER] Reminder email → ${vendor.email} for ${rfq.rfqNumber}: ${result.sent ? 'sent' : `not sent — ${result.reason || 'unknown'}`}`,
@@ -988,6 +992,12 @@ async function dispatchDueChaserJobs(limit = 25) {
   return { claimed: jobs.length, sent, failed, skipped };
 }
 
+/** Dispatch compiled V0 quotations to buyers whose 48-hour window elapsed. */
+async function dispatchDueV0BuyerQuotationJobs(limit = 25, options = {}) {
+  const storeService = require('./storeService');
+  return storeService.dispatchDueV0BuyerQuotations(limit, options);
+}
+
 /**
  * Schedule chasers for every vendor assigned to an RFQ in one call.
  * Convenience wrapper used by storeService.createRFQ.
@@ -1100,6 +1110,7 @@ module.exports = {
   clearScheduledChasers,
   recoverChasersOnBoot,
   dispatchDueChaserJobs,
+  dispatchDueV0BuyerQuotationJobs,
   buildBuyerComparisonJobIntent,
   scheduleBuyerComparison,
   schedulePersistedBuyerComparison,

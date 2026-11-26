@@ -550,6 +550,7 @@ async function sendViaGmailIdentity(identity, message) {
     html: message.html,
     text: message.text,
     replyTo: message.replyTo,
+    messageId: message.messageId,
     inReplyTo: message.inReplyTo,
     references: message.references,
     headers: message.headers,
@@ -971,6 +972,18 @@ function isBuyerUploadedVendor(vendor, context = {}, rfq = {}) {
   return false;
 }
 
+/**
+ * Build a deterministic/traceable RFC2822 Message-ID embedding the RFQ number
+ * and vendor identifier so reply threading preserves the RFQ even when a vendor
+ * changes the subject line (e.g. "Offer").
+ */
+function buildRfqInviteMessageId(rfqNumber, vendorId = 'vendor', timestamp = Date.now()) {
+  const safeRfq = String(rfqNumber || 'UNKNOWN').trim().replace(/[^A-Za-z0-9._-]/g, '-');
+  const safeVendor = String(vendorId || 'vendor').trim().replace(/[^A-Za-z0-9._-]/g, '-');
+  const safeTs = Number.isFinite(Number(timestamp)) ? Math.trunc(Number(timestamp)) : Date.now();
+  return `<rfq-${safeRfq}-v${safeVendor}-${safeTs}@procucev.com>`;
+}
+
 function buildRfqInviteEmail(to, context = {}) {
   const {
     rfq = {},
@@ -1118,11 +1131,17 @@ function buildRfqInviteEmail(to, context = {}) {
     </p>
   `;
 
+  const resolvedVendorId = (vendor && vendor.id) || context.vendorId || 'vendor';
+  const messageId = context.messageId || (rfq && rfq.rfqNumber
+    ? buildRfqInviteMessageId(rfq.rfqNumber, resolvedVendorId)
+    : undefined);
+
   return {
     from: vendorFromAddress(),
     to,
     replyTo: gatewayEmail,
     cc: inviteCc,
+    ...(messageId ? { messageId } : {}),
     subject,
     html: wrapEmail('PROCUCEV ENTERPRISE', isReminder ? 'RFQ Reminder' : 'New Sourcing Enquiry', inner),
   };
@@ -2942,6 +2961,7 @@ module.exports = {
   deliverVendor,
   sendOtpEmail,
   sendRfqInviteEmail,
+  buildRfqInviteMessageId,
   sendQuoteReceivedEmail,
   buildRfqInviteEmail,
   buildRfqMinorShortfallEmail,

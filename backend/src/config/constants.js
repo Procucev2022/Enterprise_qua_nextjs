@@ -2013,6 +2013,14 @@ const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
 
+const STRICT_BUYER_RFQ_MAILBOX = 'rfq@procucev.com';
+const STRICT_VENDOR_INVITATION_MAILBOX = 'invitations@procucev.com';
+const NON_BUYER_MAILBOX_BLOCKLIST = Object.freeze([
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  'gmtrfq@procucev.com',
+]);
+const V0_QUOTES_DISPATCH_WINDOW_MS = 48 * 60 * 60 * 1000;
+
 // ==============================================================================
 // RFQ MULTI-CHANNEL CHASER TIMING (Version 1 / mode_1 flow)
 // ==============================================================================
@@ -2421,6 +2429,10 @@ const EMAIL_GATEWAY_MESSAGES = {
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
+  SKIPPED_NON_BUYER_MAILBOX: 'Email was not addressed directly to the buyer RFQ mailbox and was skipped.',
+  VENDOR_MISSING_RFQ_REFERENCE: 'Email from registered vendor {address} did not include a resolvable RFQ reference; buyer RFQ creation was blocked.',
+  VENDOR_NOT_INVITED_TO_RFQ: 'Vendor {address} was not invited to RFQ {rfqNumber}.',
+  EXISTING_VENDOR_BLOCKED: 'This sender address belongs to a vendor account and cannot create buyer RFQs.',
   CREDITS_EXHAUSTED_DETAIL: 'Quotation email from {vendorName} for RFQ {rfqNumber} acknowledged: 5 free quotation credits exhausted. Subscription upgrade email sent.',
   CREDITS_EXHAUSTED_SUBJECT: 'Action Required – Upgrade Plan to Submit Quotation for RFQ {rfqNumber}',
   // Gemini being rate-limited, erroring or unconfigured says nothing about the
@@ -4705,6 +4717,10 @@ module.exports = {
   isRfqConcluded,
   resolveRfqBiddingWindowEndMs,
   RFQ_CLOSURE_MESSAGES,
+  STRICT_BUYER_RFQ_MAILBOX,
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  NON_BUYER_MAILBOX_BLOCKLIST,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,

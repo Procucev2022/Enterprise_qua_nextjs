@@ -1856,7 +1856,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockRejectedValue(new Error('Identity DB down'));
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-storage@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-storage@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });
@@ -1866,7 +1866,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ user: null });
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-nouser@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-nouser@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });
@@ -1879,7 +1879,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       });
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(false);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('vendor-sender@example.com')).rejects.toThrow(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('vendor-sender@example.com', { isStrictBuyerMailbox: true })).rejects.toThrow(
         'This sender address belongs to a vendor account and cannot create buyer RFQs.'
       );
     });
@@ -1893,7 +1893,7 @@ describe('emailGatewayQueries pending acknowledgement claims', () => {
       jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(new Error('Buyer account store write failed'));
       jest.spyOn(dbPool, 'hasStorage').mockReturnValue(true);
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-stfail@example.com')).rejects.toBeInstanceOf(
+      await expect(emailGatewayService.getOrCreateBuyerAccount('newbuyer-stfail@example.com', { isStrictBuyerMailbox: true })).rejects.toBeInstanceOf(
         emailGatewayService.RetryableIngestionError
       );
     });

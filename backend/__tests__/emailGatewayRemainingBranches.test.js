@@ -333,7 +333,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         password: 'saved-password-xyz',
       });
 
-      const res1 = await emailGatewayService.getOrCreateBuyerAccount('exist1@buyer.com');
+      const res1 = await emailGatewayService.getOrCreateBuyerAccount('exist1@buyer.com', { isStrictBuyerMailbox: true });
       expect(res1.isNew).toBe(false);
       expect(res1.isOnboardingPending).toBe(true);
       expect(res1.tempPassword).toBe('saved-password-xyz');
@@ -347,7 +347,7 @@ describe('emailGatewayService remaining branch coverage', () => {
       jest.spyOn(storeService, '_generateTempPassword').mockReturnValueOnce('new-pw-123');
       jest.spyOn(identityQueries, 'updateUserPassword').mockRejectedValueOnce(new Error('Update failed'));
 
-      const res2 = await emailGatewayService.getOrCreateBuyerAccount('exist2@buyer.com');
+      const res2 = await emailGatewayService.getOrCreateBuyerAccount('exist2@buyer.com', { isStrictBuyerMailbox: true });
       expect(res2.isNew).toBe(false);
       expect(res2.isOnboardingPending).toBe(true);
       expect(res2.tempPassword).toBe('new-pw-123');
@@ -357,7 +357,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         id: 'b-exist-3',
         status: 'ACTIVE',
       });
-      const res3 = await emailGatewayService.getOrCreateBuyerAccount('exist3@buyer.com');
+      const res3 = await emailGatewayService.getOrCreateBuyerAccount('exist3@buyer.com', { isStrictBuyerMailbox: true });
       expect(res3.isNew).toBe(false);
       expect(res3.isOnboardingPending).toBe(false);
       expect(res3.tempPassword).toBeNull();
@@ -371,14 +371,14 @@ describe('emailGatewayService remaining branch coverage', () => {
       });
       jest.spyOn(storeService, 'addBuyerAccount').mockImplementation((data) => data);
 
-      const res1 = await emailGatewayService.getOrCreateBuyerAccount('newuser@brandcorp.com');
+      const res1 = await emailGatewayService.getOrCreateBuyerAccount('newuser@brandcorp.com', { isStrictBuyerMailbox: true });
       expect(res1.isNew).toBe(true);
       expect(res1.buyerAccount.id).toBe('created-user-1');
       expect(res1.buyerAccount.organizationId).toBe('created-org-1');
 
       // 2. Identity user creation throws DB error
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockRejectedValueOnce(new Error('Duplicate identity user'));
-      const res2 = await emailGatewayService.getOrCreateBuyerAccount('newuser2@brandcorp.com');
+      const res2 = await emailGatewayService.getOrCreateBuyerAccount('newuser2@brandcorp.com', { isStrictBuyerMailbox: true });
       expect(res2.isNew).toBe(true);
       expect(res2.buyerAccount.id).toMatch(/^buyer-user-/);
     });
@@ -1056,7 +1056,7 @@ describe('emailGatewayService remaining branch coverage', () => {
         if (callCount === 1) return null;
         return { id: 'concurrent-buyer-1', status: 'ACTIVE' };
       });
-      const res = await emailGatewayService.getOrCreateBuyerAccount('concurrent@corp.com');
+      const res = await emailGatewayService.getOrCreateBuyerAccount('concurrent@corp.com', { isStrictBuyerMailbox: true });
       expect(res.isNew).toBe(false);
       expect(res.buyerAccount.id).toBe('concurrent-buyer-1');
     });

@@ -42,6 +42,10 @@ const {
   EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
+  STRICT_BUYER_RFQ_MAILBOX,
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  NON_BUYER_MAILBOX_BLOCKLIST,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_DELIVERY_KIND,
   EMAIL_GATEWAY_STATE,
@@ -313,11 +317,9 @@ function resolveVendorConfig(env = process.env) {
     ),
     allowedSenders: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_SENDERS || env.EMAIL_GATEWAY_ALLOWED_SENDERS),
     allowedDomains: splitList(env.VENDOR_EMAIL_GATEWAY_ALLOWED_DOMAINS || env.EMAIL_GATEWAY_ALLOWED_DOMAINS),
-    autoRegisterUnregisteredBuyers: String(
-      env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER !== undefined
-        ? env.VENDOR_EMAIL_GATEWAY_AUTO_REGISTER
-        : env.EMAIL_GATEWAY_AUTO_REGISTER || 'true'
-    ).toLowerCase() !== 'false',
+    // Hole 2 fix: vendor mailbox must NEVER inherit EMAIL_GATEWAY_AUTO_REGISTER or
+    // auto-register unregistered senders as buyers.
+    autoRegisterUnregisteredBuyers: false,
     isVendorMailbox: true,
     labelProcessed: (env.VENDOR_GMAIL_LABEL_PROCESSED || env.GMAIL_LABEL_PROCESSED || EMAIL_GATEWAY_CONFIG.LABEL_PROCESSED).trim(),
     labelError: (env.VENDOR_GMAIL_LABEL_ERROR || env.GMAIL_LABEL_ERROR || EMAIL_GATEWAY_CONFIG.LABEL_ERROR).trim(),
@@ -409,6 +411,63 @@ function normalizeRecipientList(input) {
     }
   }
   return result;
+}
+
+function normalizeSingleMailbox(value) {
+  if (!value) return '';
+  const bracketMatch = String(value).match(/<\s*([^<>]+)\s*>/);
+  return (bracketMatch ? bracketMatch[1] : String(value)).trim().toLowerCase();
+}
+
+function collectRecipientAddresses(message) {
+  if (!message || typeof message !== 'object') return [];
+  const fields = [
+    message.toAddresses,
+    message.toAddress,
+    message.to,
+    message.deliveredTo,
+    message.originalTo,
+    message.headers?.['delivered-to'],
+    message.headers?.['x-original-to'],
+  ];
+  const flattened = [];
+  for (const val of fields) {
+    if (Array.isArray(val)) flattened.push(...val);
+    else if (val) flattened.push(val);
+  }
+  return normalizeRecipientList(flattened);
+}
+
+/**
+ * Strict buyer mailbox allowlist: ONLY mail addressed explicitly to the buyer
+ * requisition intake address (rfq@procucev.com) and NOT originating from the
+ * vendor poller or targeting non-buyer mailboxes (invitations@procucev.com,
+ * gmtrfq@procucev.com) is permitted to create a Buyer RFQ or auto-register.
+ */
+function isStrictBuyerRfqMailbox(message, config = {}) {
+  if (config?.isVendorMailbox === true) {
+    return false;
+  }
+
+  const recipients = collectRecipientAddresses(message);
+
+  const allowedBuyerMailbox =
+    normalizeSingleMailbox(process.env.EMAIL_GATEWAY_ADDRESS || STRICT_BUYER_RFQ_MAILBOX) ||
+    STRICT_BUYER_RFQ_MAILBOX;
+
+  const blockedMailboxes = new Set([
+    ...NON_BUYER_MAILBOX_BLOCKLIST.map(normalizeSingleMailbox),
+    normalizeSingleMailbox(STRICT_VENDOR_INVITATION_MAILBOX),
+    normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS),
+    normalizeSingleMailbox(process.env.VENDOR_EMAIL_GATEWAY_USER),
+  ].filter(Boolean));
+  blockedMailboxes.delete(allowedBuyerMailbox);
+
+  if (recipients.some((addr) => blockedMailboxes.has(addr))) {
+    return false;
+  }
+
+  return recipients.includes(allowedBuyerMailbox);
 }
 
 function isGatewayOrSystemEmail(email, config = {}) {
@@ -632,17 +691,25 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       (allowedDomains.length > 0 && !allowedDomains.includes((senderAddress.split('@')[1] || '').toLowerCase())) ||
       !senderAddress;
 
+    const senderVendorRecord = senderAddress
+      ? await emailGateway.resolveVendorFromEmail(senderAddress, null).catch(() => null)
+      : null;
+
     const isUnregisteredSender =
+      isStrictBuyerRfqMailbox(message, config) &&
       !isDomainOrSenderRestricted &&
       !message?.automatedReason &&
       !isSystemOrAutomatedSender(senderAddress) &&
-      (!config?.isVendorMailbox || config?.autoRegisterUnregisteredBuyers !== false) &&
+      !senderVendorRecord &&
+      !config?.isVendorMailbox &&
       config?.autoRegisterUnregisteredBuyers !== false;
 
     if (!isUnregisteredSender) {
       return {
         allowed: false,
-        reason: EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', senderAddress),
+        reason: senderVendorRecord
+          ? EMAIL_GATEWAY_MESSAGES.EXISTING_VENDOR_BLOCKED
+          : EMAIL_GATEWAY_MESSAGES.SENDER_NO_ACCOUNT.replace('{address}', senderAddress),
         scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
         primaryBuyerAccount: null,
         sharedBuyerAccounts: [],
@@ -652,7 +719,25 @@ async function resolveMultiBuyerAttribution(message, config = resolveConfig(), p
       };
     }
 
-    const onboardResult = await emailGateway.getOrCreateBuyerAccount(senderAddress);
+    const onboardResult = await emailGateway.getOrCreateBuyerAccount(senderAddress, {
+      isStrictBuyerMailbox: true,
+    });
+    if (onboardResult?.blocked) {
+      return {
+        allowed: false,
+        reason: onboardResult.reason === 'existing_vendor'
+          ? EMAIL_GATEWAY_MESSAGES.EXISTING_VENDOR_BLOCKED
+          : EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+        scenario: EMAIL_RFQ_SCENARIOS.UNREGISTERED_TO_UNREGISTERED_CC,
+        primaryBuyerAccount: null,
+        sharedBuyerAccounts: [],
+        sharedBuyerAccountIds: [],
+        sharedBuyerEmails: [],
+        shouldAutoRegisterSender: false,
+        blocked: true,
+        blockReason: onboardResult.reason,
+      };
+    }
     return {
       allowed: true,
       reason: null,
@@ -848,11 +933,39 @@ const inFlightBuyerRegistrations = new Map();
 /**
  * Concurrency-safe retrieval or autonomous creation of a buyer account for an unregistered sender.
  */
-async function getOrCreateBuyerAccount(email) {
+async function getOrCreateBuyerAccount(email, { isStrictBuyerMailbox = false } = {}) {
   const normEmail = String(email || '').trim().toLowerCase();
   if (!normEmail) {
     throw new Error('Email address is required for buyer onboarding.');
   }
+
+  // Hole 3 defense-in-depth: never auto-create buyer accounts outside rfq@procucev.com
+  if (isStrictBuyerMailbox !== true) {
+    logger.warn('Blocked buyer account creation from non-buyer mailbox path', {
+      email: normEmail,
+      isStrictBuyerMailbox,
+    }, 'EMAIL_GATEWAY');
+    return {
+      blocked: true,
+      reason: 'non_buyer_mailbox',
+      buyerAccount: null,
+      isNew: false,
+      isOnboardingPending: false,
+      tempPassword: null,
+    };
+  }
+
+  // Hole 3 guard: check vendors table BEFORE buyer creation (covers CM-added/bulk/GraphQL
+  // vendors that have a `vendors` row even when the identity `"user"` row is missing).
+  const checkExistingVendor = async () => {
+    const inMemoryVendor = storeService.getVendorById(normEmail, 'all');
+    if (inMemoryVendor) return inMemoryVendor;
+    if (typeof domainQueries.getVendorByEmailFromDB === 'function') {
+      const dbVendor = await domainQueries.getVendorByEmailFromDB(normEmail).catch(() => null);
+      if (dbVendor) return dbVendor;
+    }
+    return null;
+  };
 
   const resolvePendingTempPassword = async (account) => {
     const isPending = Boolean(
@@ -891,20 +1004,53 @@ async function getOrCreateBuyerAccount(email) {
     return { isPending, tempPassword };
   };
 
-  // 1. Check if already exists in storeService
+  // 1. Check if sender already exists in vendors (block before buyer lookup/creation)
+  const existingVendorBeforeLock = await checkExistingVendor();
+  if (existingVendorBeforeLock) {
+    logger.warn('Blocked vendor email from getOrCreateBuyerAccount (vendors match)', {
+      email: normEmail,
+      vendorId: existingVendorBeforeLock.id || null,
+    }, 'EMAIL_GATEWAY');
+    return {
+      blocked: true,
+      reason: 'existing_vendor',
+      buyerAccount: null,
+      isNew: false,
+      isOnboardingPending: false,
+      tempPassword: null,
+    };
+  }
+
+  // 2. Check if already exists in storeService
   let existing = await storeService.getBuyerAccountByEmail(normEmail);
   if (existing) {
     const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
     return { buyerAccount: existing, isNew: false, isOnboardingPending: isPending, tempPassword };
   }
 
-  // 2. Concurrency lock per email
+  // 3. Concurrency lock per email
   if (inFlightBuyerRegistrations.has(normEmail)) {
     return await inFlightBuyerRegistrations.get(normEmail);
   }
 
   const creationPromise = (async () => {
-    // Re-check after acquiring promise
+    // Re-check vendors and existing buyer account after acquiring promise
+    const vendorDuringLock = await checkExistingVendor();
+    if (vendorDuringLock) {
+      logger.warn('Blocked vendor email inside getOrCreateBuyerAccount lock (vendors match)', {
+        email: normEmail,
+        vendorId: vendorDuringLock.id || null,
+      }, 'EMAIL_GATEWAY');
+      return {
+        blocked: true,
+        reason: 'existing_vendor',
+        buyerAccount: null,
+        isNew: false,
+        isOnboardingPending: false,
+        tempPassword: null,
+      };
+    }
+
     existing = await storeService.getBuyerAccountByEmail(normEmail);
     if (existing) {
       const { isPending, tempPassword } = await resolvePendingTempPassword(existing);
@@ -1229,28 +1375,14 @@ function isBounceOrAutoReplyMessage(message) {
   return false;
 }
 
-/**
- * Extract referenced RFQ number and lookup target RFQ from subject, body, or thread references.
- */
-async function extractRfqReferenceFromEmail(message) {
-  if (!message) return { targetRfq: null, referencedNumber: null };
-  const sources = [
-    message.subject || '',
-    message.bodyText || '',
-    message.textBody || '',
-    message.text || '',
-    message.inReplyTo || '',
-    message.references || '',
-  ].join(' ');
-
+function extractRfqCandidatesFromText(text) {
+  if (!text) return [];
   const rfqRegex = /#?(RFQ[-\w\d]+)/gi;
   const rawMatches = [];
-  let m;
-  while ((m = rfqRegex.exec(sources)) !== null) {
-    rawMatches.push(m[1]);
+  let match;
+  while ((match = rfqRegex.exec(String(text))) !== null) {
+    rawMatches.push(match[1]);
   }
-  if (rawMatches.length === 0) return { targetRfq: null, referencedNumber: null };
-
   const candidates = [];
   for (const raw of rawMatches) {
     const trimmed = raw.trim();
@@ -1266,20 +1398,122 @@ async function extractRfqReferenceFromEmail(message) {
     candidates.push(stripped.toUpperCase());
     candidates.push(trimmed.toUpperCase());
   }
+  return Array.from(new Set(candidates));
+}
 
-  if (candidates.length === 0) return { targetRfq: null, referencedNumber: null };
+function extractThreadMessageIdTokens(message) {
+  const combined = [message?.inReplyTo || '', message?.references || ''].filter(Boolean).join(' ');
+  const tokens = [];
+  const bracketRegex = /<[^>]+>/g;
+  let m;
+  while ((m = bracketRegex.exec(combined)) !== null) {
+    tokens.push(m[0].trim());
+  }
+  if (tokens.length === 0 && combined.trim()) {
+    combined.split(/\s+/).filter(Boolean).forEach((tok) => tokens.push(tok.trim()));
+  }
+  return Array.from(new Set(tokens));
+}
 
-  // getRFQByIdAsync, not the plain in-memory getRFQById — the same Workers
-  // isolate-cache-staleness bug fixed in rfqController.addQuote applies here
-  // too: confirmed live, a vendor's quote-reply email referencing a real,
-  // currently-open RFQ number came back INVALID_RFQ ("was not found in the
-  // system") on whichever isolate the cron tick happened to run on, purely
-  // because that isolate hadn't hydrated that particular RFQ.
-  for (const cand of candidates) {
+function extractRfqFromThreadMessageIds(tokens) {
+  const results = [];
+  for (const token of tokens) {
+    const inviteIdMatch = token.match(/^<rfq-([^-@\s]+(?:-[^-@\s]+)*?)-v[A-Za-z0-9._-]+-\d+@/i);
+    if (inviteIdMatch && inviteIdMatch[1]) {
+      results.push(inviteIdMatch[1].toUpperCase());
+    }
+    extractRfqCandidatesFromText(token).forEach((cand) => results.push(cand));
+  }
+  return Array.from(new Set(results));
+}
+
+/**
+ * Extract referenced RFQ number and lookup target RFQ in priority order:
+ * 1. Thread headers (In-Reply-To / References -> stored invite_message_id or rfq-<RFQNUMBER>- pattern)
+ * 2. Subject & stripped body text, falling back to unstripped rawBodyText & bodyHtml
+ * 3. Single unambiguous open invite within the last 48 hours for the vendor
+ */
+async function extractRfqReferenceFromEmail(message, { vendorRecord = null, allowInviteFallback = false } = {}) {
+  if (!message) return { targetRfq: null, referencedNumber: null };
+
+  // Priority 1: Thread headers -> DB/memory invite lookup & embedded Message-ID pattern
+  const threadTokens = extractThreadMessageIdTokens(message);
+  if (threadTokens.length > 0) {
+    let trackedInvite = storeService.findVendorInviteByMessageId(threadTokens);
+    if (!trackedInvite && pool.hasStorage() && typeof domainQueries.findRfqVendorInviteByMessageIdsFromDB === 'function') {
+      trackedInvite = await domainQueries.findRfqVendorInviteByMessageIdsFromDB(threadTokens).catch(() => null);
+    }
+    const trackedRfqNumber = trackedInvite && (trackedInvite.rfq_number || trackedInvite.rfqNumber || trackedInvite.rfq_id || trackedInvite.rfqId);
+    if (trackedRfqNumber) {
+      const foundViaInvite = await storeService.getRFQByIdAsync(trackedRfqNumber);
+      if (foundViaInvite) {
+        return { targetRfq: foundViaInvite, referencedNumber: foundViaInvite.rfqNumber || trackedRfqNumber };
+      }
+    }
+    const threadCandidates = extractRfqFromThreadMessageIds(threadTokens);
+    for (const cand of threadCandidates) {
+      const foundRfq = await storeService.getRFQByIdAsync(cand);
+      if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
+    }
+  }
+
+  // Priority 2a: Subject, stripped bodyText, and headers
+  const primarySources = [
+    message.subject || '',
+    message.bodyText || '',
+    message.textBody || '',
+    message.text || '',
+    message.inReplyTo || '',
+    message.references || '',
+  ].join(' ');
+  const primaryCandidates = extractRfqCandidatesFromText(primarySources);
+  for (const cand of primaryCandidates) {
     const foundRfq = await storeService.getRFQByIdAsync(cand);
     if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
   }
-  return { targetRfq: null, referencedNumber: (candidates[0] || rawMatches[0].trim()).toUpperCase() };
+
+  // Priority 2b: Fall back to unstripped rawBodyText and bodyHtml (e.g. when vendor changed subject to "Offer" and quoted invite is below marker)
+  const htmlFlattened = message.bodyHtml && typeof emailIngestionService.flattenHtmlBody === 'function'
+    ? emailIngestionService.flattenHtmlBody(message.bodyHtml)
+    : '';
+  const fallbackSources = [
+    message.rawBodyText || '',
+    htmlFlattened,
+    message.bodyHtml || '',
+  ].filter(Boolean).join(' ');
+  const fallbackCandidates = extractRfqCandidatesFromText(fallbackSources);
+  for (const cand of fallbackCandidates) {
+    const foundRfq = await storeService.getRFQByIdAsync(cand);
+    if (foundRfq) return { targetRfq: foundRfq, referencedNumber: foundRfq.rfqNumber || cand };
+  }
+
+  const firstReferencedNumber = primaryCandidates[0] || fallbackCandidates[0] || null;
+
+  // Priority 3: Unambiguous single active open invite within the last 48h
+  if (!firstReferencedNumber && allowInviteFallback) {
+    const resolvedVendor = vendorRecord || (message.fromAddress ? await emailGateway.resolveVendorFromEmail(message.fromAddress, null) : null);
+    if (resolvedVendor || message.fromAddress) {
+      const openInvites = await storeService.getOpenVendorInvitesWithinWindow(
+        resolvedVendor,
+        message.fromAddress,
+        V0_QUOTES_DISPATCH_WINDOW_MS
+      );
+      if (openInvites.length === 1) {
+        const singleInvite = openInvites[0];
+        const fallbackRfq = await storeService.getRFQByIdAsync(singleInvite.rfqId || singleInvite.rfqNumber);
+        if (fallbackRfq) {
+          return {
+            targetRfq: fallbackRfq,
+            referencedNumber: fallbackRfq.rfqNumber || singleInvite.rfqNumber,
+            resolutionMethod: 'single_open_invite_fallback',
+          };
+        }
+      }
+    }
+  }
+
+  if (!firstReferencedNumber) return { targetRfq: null, referencedNumber: null };
+  return { targetRfq: null, referencedNumber: firstReferencedNumber };
 }
 
 /**
@@ -2446,7 +2680,22 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     : 0;
 
   const emailText = [message.bodyText, message.textBody, message.text, message.subject].filter(Boolean).join('\n');
-  const isIssueOrQuery = isVendorIssueOrQueryMessage(message) || Boolean(extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry));
+  const hasExplicitExtractionIssue = Boolean(
+    extraction && (extraction.isQuery || extraction.hasIssue || extraction.isInquiry)
+  );
+  const extractedLineItemQuotes = extraction && Array.isArray(extraction.lineItemQuotes)
+    ? extraction.lineItemQuotes
+    : [];
+  const hasExtractedQuotePrice = Boolean(
+    extraction && (
+      Number(extraction.unitPrice) > 0 ||
+      (Number(extraction.totalPrice) > 0 && rfqQty > 0) ||
+      extractedLineItemQuotes.some((lq) => Number(lq && lq.unitPrice) > 0)
+    )
+  );
+  // Genuine clarification queries lack extracted pricing or are flagged by AI; courtesy sign-offs
+  // ("feel free to call for any doubt or query") below a valid priced quotation must still ingest.
+  const isIssueOrQuery = hasExplicitExtractionIssue || (!hasExtractedQuotePrice && isVendorIssueOrQueryMessage(message));
 
   if (isIssueOrQuery) {
     logger.warn(
@@ -2470,8 +2719,6 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
         }
       } catch (inqErr) {
         logger.error('Failed to log vendor inquiry to RFQ', inqErr, 'EMAIL_GATEWAY');
-        // Leave this inbound message retryable instead of acknowledging and
-        // marking it processed while its clarification is missing from the RFQ.
         throw inqErr;
       }
     }
@@ -2649,6 +2896,13 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     quotationValidity: extraction.quotationValidity || null,
   };
 
+  const isV0Target = Boolean(
+    targetRfq &&
+    (targetRfq.sourcingMode === RFQ_MODES.MODE_0 ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'v0' ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'version_0')
+  );
+
   const quoteAckDecision = await emailGateway.shouldSendAutoReply(
     message,
     AUTO_REPLY_KIND.QUOTE_ACK,
@@ -2656,6 +2910,7 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
   );
   const quoteSubmission = await storeService.submitVendorQuoteDurably(targetRfq.id, quote, {
     includeDeliveryState: true,
+    deferV0BuyerDispatch: isV0Target,
     ...(quoteAckDecision.allowed ? {
       vendorQuoteAcknowledgement: {
         idempotencyKey: emailGatewayNoticeKey(message, 'VENDOR_QUOTE_ACK'),
@@ -2730,7 +2985,20 @@ async function processVendorQuoteMessage(message, targetRfq, vendorRecord) {
     );
   }
 
-  if (buyerEmail) {
+  if (isV0Target) {
+    try {
+      await storeService.checkAndDispatchBuyerQuotations(targetRfq.rfqNumber, {
+        trigger: 'vendor_quote_email',
+      });
+    } catch (dispatchErr) {
+      logger.error('Failed to evaluate V0 buyer quotation dispatch after email quote ingestion', {
+        error: dispatchErr,
+        rfqId: targetRfq.id,
+        rfqNumber: targetRfq.rfqNumber,
+        vendorId: vendorRecord.id,
+      }, 'EMAIL_GATEWAY');
+    }
+  } else if (buyerEmail) {
     try {
       const buyerAcc = await storeService.getBuyerAccountByEmail(buyerEmail);
       const isPendingVerification = storeService.isBuyerProfileUpdateRequired(buyerAcc, targetRfq);
@@ -2899,10 +3167,16 @@ async function processMessage(rawSource, config = resolveConfig()) {
 
 
   // 1. Check if this message is a vendor quotation reply for an existing RFQ
-  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message);
-  const vendorRecord = await resolveVendorFromEmail(message.fromAddress, targetRfq);
   const buyerAccount = await storeService.getBuyerAccountByEmail(message.fromAddress);
   const isRegisteredBuyer = Boolean(buyerAccount);
+  const initialVendorRecord = await resolveVendorFromEmail(message.fromAddress, null);
+  const { targetRfq, referencedNumber } = await extractRfqReferenceFromEmail(message, {
+    vendorRecord: initialVendorRecord,
+    allowInviteFallback: Boolean((initialVendorRecord && !isRegisteredBuyer) || config?.isVendorMailbox),
+  });
+  const vendorRecord = targetRfq
+    ? ((await resolveVendorFromEmail(message.fromAddress, targetRfq)) || initialVendorRecord)
+    : initialVendorRecord;
 
   // If sender is both buyer and vendor, but is the owner/creator of the target RFQ,
   // they are managing their RFQ as a buyer, not quoting on their own requirement.
@@ -2914,14 +3188,43 @@ async function processMessage(rawSource, config = resolveConfig()) {
   );
 
   if (targetRfq && vendorRecord && !isOwnerOfTargetRfq) {
+    const isV0TargetRfq =
+      targetRfq.sourcingMode === RFQ_MODES.MODE_0 ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'v0' ||
+      String(targetRfq.sourcingMode || '').toLowerCase() === 'version_0';
+    if (isV0TargetRfq) {
+      const invited = await storeService.isVendorInvitedToRfq(targetRfq, vendorRecord, message.fromAddress);
+      if (!invited) {
+        return {
+          status: INGESTION_OUTCOME.SENDER_NOT_ALLOWED,
+          detail: EMAIL_GATEWAY_MESSAGES.VENDOR_NOT_INVITED_TO_RFQ
+            .replace('{address}', message.fromAddress || 'unknown')
+            .replace('{rfqNumber}', targetRfq.rfqNumber || 'unknown'),
+          message,
+          rfq: targetRfq,
+        };
+      }
+    }
     return await processVendorQuoteMessage(message, targetRfq, vendorRecord);
   }
 
-  // If RFQ is not found, but a vendor (who is not a registered buyer) referenced an RFQ number:
-  if (!targetRfq && referencedNumber && vendorRecord && !isRegisteredBuyer) {
+  // Hole 1 guard: a registered vendor (without a buyer account) whose message did not
+  // resolve to any existing RFQ must NEVER fall through to Buyer RFQ creation or onboarding.
+  if (!targetRfq && vendorRecord && !isRegisteredBuyer) {
+    const detail = referencedNumber
+      ? EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber)
+      : (config?.isVendorMailbox
+        ? EMAIL_GATEWAY_MESSAGES.VENDOR_GATEWAY_REQUIRES_RFQ
+        : EMAIL_GATEWAY_MESSAGES.VENDOR_MISSING_RFQ_REFERENCE.replace('{address}', message.fromAddress || 'unknown'));
+    logger.warn('Blocked vendor email without resolvable RFQ reference from Buyer RFQ creation', {
+      fromAddress: message.fromAddress,
+      vendorId: vendorRecord.id,
+      referencedNumber: referencedNumber || null,
+      isVendorMailbox: Boolean(config?.isVendorMailbox),
+    }, 'EMAIL_GATEWAY');
     return {
       status: INGESTION_OUTCOME.INVALID_RFQ,
-      detail: EMAIL_GATEWAY_MESSAGES.INVALID_RFQ_REFERENCED.replace('{rfqNumber}', referencedNumber),
+      detail,
       message,
     };
   }
@@ -2935,12 +3238,23 @@ async function processMessage(rawSource, config = resolveConfig()) {
   }
 
   // If message arrived on the vendor quotation mailbox, vendor submissions require an RFQ.
-  // When an email represents a new RFQ/request (from a registered buyer or an RFQ enquiry),
-  // it is processed through the RFQ creation pipeline as per dual-inbox requirements.
   if (config && config.isVendorMailbox) {
+    const incomingRecipients = collectRecipientAddresses(message);
+    const isBlockedNonBuyerAlias = incomingRecipients.some((addr) =>
+      addr === normalizeSingleMailbox(STRICT_VENDOR_INVITATION_MAILBOX) ||
+      NON_BUYER_MAILBOX_BLOCKLIST.map(normalizeSingleMailbox).includes(addr)
+    );
     const isRfqSubjectOrContent = /rfq|requisition|purchase|material|indent|tender|quot|boq|requirement/i.test(
       `${message.subject || ''} ${message.bodyText || ''}`
     );
+
+    if (isBlockedNonBuyerAlias && !targetRfq) {
+      return {
+        status: INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX,
+        detail: EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+        message,
+      };
+    }
 
     if (!isRegisteredBuyer && isRfqSubjectOrContent && config.autoRegisterUnregisteredBuyers === false) {
       await sendAutoReply(
@@ -2978,6 +3292,22 @@ async function processMessage(rawSource, config = resolveConfig()) {
         message,
       };
     }
+  }
+
+  // Hole 2 strict mailbox gate immediately before Buyer RFQ creation & onboarding
+  if (!isStrictBuyerRfqMailbox(message, config)) {
+    logger.warn('Skipped non-buyer mailbox email before Buyer RFQ creation', {
+      fromAddress: message.fromAddress,
+      toAddresses: message.toAddresses,
+      deliveredTo: message.deliveredTo,
+      originalTo: message.originalTo,
+      isVendorMailbox: Boolean(config?.isVendorMailbox),
+    }, 'EMAIL_GATEWAY');
+    return {
+      status: INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX,
+      detail: EMAIL_GATEWAY_MESSAGES.SKIPPED_NON_BUYER_MAILBOX,
+      message,
+    };
   }
 
   // 2. Otherwise process as Inbound Buyer RFQ Requisition
@@ -4198,6 +4528,7 @@ const emailGateway = {
   stopPolling,
   getStatus,
   getOrCreateBuyerAccount,
+  isStrictBuyerRfqMailbox,
   normalizeRecipientList,
   resolveRegisteredBuyerAccount,
   resolveMultiBuyerAttribution,

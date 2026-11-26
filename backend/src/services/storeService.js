@@ -26,6 +26,7 @@ const {
   isRfqConcluded,
   resolveRfqBiddingWindowEndMs,
   RFQ_CLOSURE_MESSAGES,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   RFQ_NOTIFICATION_MESSAGES,
@@ -391,6 +392,8 @@ class StoreService {
     this._lastRfqSyncMap = new Map();
     this._lastRfqSyncTime = 0;
     this._auditWriteQueue = Promise.resolve();
+    this._rfqVendorInvites = new Map();
+    this._v0DispatchClaimedRfqs = new Set();
   }
 
   reset() {
@@ -410,6 +413,8 @@ class StoreService {
     this._lastRfqSyncMap = new Map();
     this._lastRfqSyncTime = 0;
     this._auditWriteQueue = Promise.resolve();
+    this._rfqVendorInvites = new Map();
+    this._v0DispatchClaimedRfqs = new Set();
     this._pendingQuoteNotifications = new Map();
     this._rfqQuoteAckSent = new Set();
     if (this._delayedQuoteTimers) {
@@ -5815,12 +5820,16 @@ class StoreService {
         isBuyerUploaded,
       };
       const key = crypto.createHash('sha256').update(`${rfq.id}:${emailKey}`).digest('hex');
+      const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+        ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, vendorContext.id)
+        : null;
 
       targetsByEmail.set(emailKey, {
         key,
         vendorId: vendorContext.id,
         recipientEmail,
         recipientName: vendorContext.contactPerson || vendorContext.name,
+        inviteMessageId,
         freeCreditsRemaining: creditInfo.freeCreditsRemaining,
         isSubscribed: creditInfo.isSubscribed,
         buyerEmail: includeBuyerEmail ? this.resolveBuyerEmailForRFQ(rfq) : null,
@@ -6255,11 +6264,15 @@ class StoreService {
   async submitVendorQuoteDurably(rfqId, quote, {
     includeDeliveryState = false,
     vendorQuoteAcknowledgement = null,
+    deferV0BuyerDispatch = false,
   } = {}) {
     const durableQuoteId = quote.id || crypto.randomUUID();
     if (!pool.hasStorage()) {
       const existingRfq = this.getRFQById(rfqId);
-      const updated = this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
+      const isV0NoStorage = existingRfq && this.isV0SourcingMode(existingRfq.sourcingMode);
+      const updated = isV0NoStorage && deferV0BuyerDispatch
+        ? this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId }, { notify: false })
+        : this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
       if (!updated) {
         return includeDeliveryState
           ? { rfq: null, quoteId: durableQuoteId, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
@@ -6268,12 +6281,17 @@ class StoreService {
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
       const autoClosedByQuote = updated.status === 'Closed' && existingRfq?.status !== 'Closed';
       const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(updated);
+      if (isV0NoStorage && !deferV0BuyerDispatch && updated.rfqNumber) {
+        await this.checkAndDispatchBuyerQuotations(updated.rfqNumber, { trigger: 'vendor_quote_portal' }).catch((err) => {
+          logger.warn('Deferred V0 buyer quote dispatch check failed', { rfqNumber: updated.rfqNumber, error: err?.message }, 'STORE_SERVICE');
+        });
+      }
       return includeDeliveryState
         ? {
           rfq: updated,
           quoteId: durableQuoteId,
-          buyerQuoteNotificationQueued: Boolean(buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion && !autoClosedByQuote),
-          buyerProfileReminderQueued: Boolean(buyerEmailPlan?.requiresProfileCompletion && !autoClosedByQuote),
+          buyerQuoteNotificationQueued: isV0NoStorage ? false : Boolean(buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion && !autoClosedByQuote),
+          buyerProfileReminderQueued: isV0NoStorage ? false : Boolean(buyerEmailPlan?.requiresProfileCompletion && !autoClosedByQuote),
           vendorQuoteAcknowledgementQueued: false,
           autoClosureEmailQueued: autoClosedByQuote,
           autoClosedByQuote,
@@ -6348,15 +6366,16 @@ class StoreService {
       else this.rfqs[cachedIndex] = previousCached;
       if (!updatedRFQ) return null;
 
+      const isV0Durable = this.isV0SourcingMode(rfq.sourcingMode);
       const autoClosedByQuote = updatedRFQ.status === 'Closed' && rfq.status !== 'Closed';
       const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(rfq);
-      const quoteNotificationEventId = !autoClosedByQuote && buyerEmailPlan
+      const quoteNotificationEventId = !isV0Durable && !autoClosedByQuote && buyerEmailPlan
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
           `${rfq.id}:${durableQuoteId}`
         )
         : null;
-      const buyerProfileReminderEventId = buyerEmailPlan?.requiresProfileCompletion
+      const buyerProfileReminderEventId = !isV0Durable && buyerEmailPlan?.requiresProfileCompletion
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL,
           rfq.id
@@ -6484,8 +6503,17 @@ class StoreService {
           ...(autoClosureEmailEventId ? { skipAutoClosureEmail: true } : {}),
           ...(autoClosureComparisonIntent ? { comparisonJob: autoClosureComparisonIntent } : {}),
         });
-      } else {
+      } else if (!isV0Durable) {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
+      } else {
+        this.notifyBuyerOfQuote(rfq, durableQuote);
+      }
+      if (isV0Durable && !deferV0BuyerDispatch && savedRFQ.rfqNumber) {
+        this._background(
+          this.checkAndDispatchBuyerQuotations(savedRFQ.rfqNumber, { trigger: 'vendor_quote_portal' }),
+          'Failed to evaluate V0 buyer quotation dispatch after quote commit',
+          { rfqId: savedRFQ.id, rfqNumber: savedRFQ.rfqNumber, vendorId: vendor.id }
+        );
       }
       if (quoteNotificationEventId && buyerEmailPlan.requiresProfileCompletion) {
         try {
@@ -8768,6 +8796,10 @@ class StoreService {
       // one. The request path sends it only when there is no database, because then there is no queue.
       const sendEmailViaOutboxOnly = pool.hasStorage();
       if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+        const inviteRecord = this.recordRfqVendorInvite(updated, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+        });
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8777,6 +8809,7 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor,
             isBuyerUploaded,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to DB-augmented vendor',
           {
@@ -8830,6 +8863,10 @@ class StoreService {
     }
 
     this._persistRFQ(updated);
+    this.recordRfqVendorInvites(
+      updated,
+      Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : committedAdditions
+    );
     this._dispatchRFQVendorInviteOutbox(
       updated,
       'rfq-v0-augmented-vendor-invites',
@@ -9138,6 +9175,10 @@ class StoreService {
           // The queue is the only sender when a database is configured (see augmentV0AssignmentsFromDB).
           const sendEmailViaOutboxOnly = pool.hasStorage();
           if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+            const inviteRecord = this.recordRfqVendorInvite(updated, {
+              vendorId: vendor.id,
+              vendorEmail: vendor.email,
+            });
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
               mailerService.sendRfqInviteEmail(vendor.email, {
@@ -9147,6 +9188,7 @@ class StoreService {
                 isSubscribed: creditInfo.isSubscribed,
                 vendor,
                 isBuyerUploaded,
+                messageId: inviteRecord?.inviteMessageId,
               }),
               'Failed to email RFQ invite to DB auto-assigned vendor',
               {
@@ -9227,6 +9269,10 @@ class StoreService {
     }
 
     this._persistRFQ(preserveVendorPlanPending ? { ...updated, vendorPlanPending: true } : updated);
+    this.recordRfqVendorInvites(
+      updated,
+      Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : committedAdditions
+    );
     this._dispatchRFQVendorInviteOutbox(
       updated,
       'rfq-auto-assigned-vendor-invites',
@@ -9576,6 +9622,10 @@ class StoreService {
 
       // Real invite email
       if (vendorEmail && !pool.hasStorage()) {
+        const inviteRecord = this.recordRfqVendorInvite(updatedRFQ, {
+          vendorId: vendor.id,
+          vendorEmail,
+        });
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         logger.info(
@@ -9594,6 +9644,7 @@ class StoreService {
             vendor: resolvedVendor,
             isBuyerUploaded: resolvedIsBuyerUploaded,
             buyerEmail,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to vendor',
           {
@@ -9608,6 +9659,10 @@ class StoreService {
     }
 
     if (pool.hasStorage()) {
+      this.recordRfqVendorInvites(
+        updatedRFQ,
+        Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : dispatchedInvites
+      );
       const targetEventIds = this._resolveDispatchedInviteEventIds(
         updatedRFQ,
         invitationTargets,
@@ -10284,6 +10339,7 @@ class StoreService {
 
     if (pool.hasStorage()) {
       if (Array.isArray(rfq.vendorInvitationTargets) && rfq.vendorInvitationTargets.length > 0) {
+        this.recordRfqVendorInvites(rfq, rfq.vendorInvitationTargets);
         this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
       }
       return Array.isArray(rfq.vendorInvitationTargets) ? rfq.vendorInvitationTargets.length : 0;
@@ -10295,6 +10351,10 @@ class StoreService {
         const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const inviteRecord = this.recordRfqVendorInvite(rfq, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+        });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
@@ -10303,6 +10363,7 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to matched vendor',
           {
@@ -10323,6 +10384,10 @@ class StoreService {
         allEmails.add(vendor.email.toLowerCase());
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const inviteRecord = this.recordRfqVendorInvite(rfq, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+        });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
@@ -10331,6 +10396,7 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to assigned vendor',
           {
@@ -12602,6 +12668,455 @@ class StoreService {
 
   minorSearchTerms(minors) {
     return minorSearchTerms(Array.isArray(minors) ? minors : []);
+  }
+
+  /**
+   * Track an outbound RFQ vendor invitation (Message-ID + invitedAt) both in memory
+   * and durably in PostgreSQL/D1, stamping the 48-hour V0 quotation dispatch due date.
+   */
+  recordRfqVendorInvite(rfq, invite = {}) {
+    const rfqNumber = rfq && rfq.rfqNumber ? String(rfq.rfqNumber).trim() : String(invite.rfqNumber || '').trim();
+    const vendorEmail = String(invite.vendorEmail || invite.recipientEmail || invite.email || '').trim().toLowerCase();
+    if (!rfqNumber || !vendorEmail) return null;
+
+    this._rfqVendorInvites = this._rfqVendorInvites || new Map();
+    const key = `${rfqNumber}:${vendorEmail}`;
+    const invitedAt = invite.invitedAt || new Date().toISOString();
+    const invitedAtMs = Date.parse(invitedAt);
+    const dueIso = new Date(
+      (Number.isFinite(invitedAtMs) ? invitedAtMs : Date.now()) + V0_QUOTES_DISPATCH_WINDOW_MS
+    ).toISOString();
+    const vendorId = invite.vendorId || invite.id || null;
+    const inviteMessageId = invite.inviteMessageId || (
+      typeof mailerService.buildRfqInviteMessageId === 'function'
+        ? mailerService.buildRfqInviteMessageId(rfqNumber, vendorId || 'vendor', invitedAtMs || Date.now())
+        : null
+    );
+
+    const existing = this._rfqVendorInvites.get(key);
+    const record = {
+      id: `invite:${rfqNumber}:${vendorEmail}`,
+      rfqId: (rfq && rfq.id) || invite.rfqId || existing?.rfqId || null,
+      rfqNumber,
+      vendorId: vendorId || existing?.vendorId || null,
+      vendorEmail,
+      inviteMessageId: existing?.inviteMessageId || inviteMessageId,
+      invitedAt: existing?.invitedAt && existing.invitedAt < invitedAt ? existing.invitedAt : invitedAt,
+    };
+    this._rfqVendorInvites.set(key, record);
+
+    const memRfq = (rfq && rfq.rfqNumber === rfqNumber ? rfq : null) ||
+      this.rfqs.find((r) => r && r.rfqNumber === rfqNumber);
+    if (memRfq && !memRfq.quotesDispatchDueAt) {
+      memRfq.quotesDispatchDueAt = dueIso;
+    }
+
+    if (pool.hasStorage() && typeof domainQueries.recordRfqVendorInviteInDB === 'function') {
+      this._background(
+        domainQueries.recordRfqVendorInviteInDB({
+          rfqId: record.rfqId,
+          rfqNumber: record.rfqNumber,
+          vendorId: record.vendorId,
+          vendorEmail: record.vendorEmail,
+          inviteMessageId: record.inviteMessageId,
+          invitedAt: record.invitedAt,
+          quotesDispatchDueAt: dueIso,
+        }),
+        'Failed to persist RFQ vendor invite metadata',
+        { rfqNumber: record.rfqNumber, vendorEmail: record.vendorEmail }
+      );
+    }
+
+    return record;
+  }
+
+  /** Record multiple outbound vendor invites for one RFQ. */
+  recordRfqVendorInvites(rfq, vendors = []) {
+    if (!rfq || !rfq.rfqNumber || !Array.isArray(vendors)) return [];
+    const results = [];
+    for (const item of vendors) {
+      if (!item) continue;
+      const vendorObj = item.vendor && typeof item.vendor === 'object' ? item.vendor : item;
+      const email = resolveVendorEmail(vendorObj) || item.recipientEmail || item.vendorEmail || null;
+      if (!email) continue;
+      const recorded = this.recordRfqVendorInvite(rfq, {
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: item.vendorId || vendorObj.id || null,
+        vendorEmail: email,
+        inviteMessageId: item.inviteMessageId || null,
+        invitedAt: item.invitedAt || null,
+      });
+      if (recorded) results.push(recorded);
+    }
+    return results;
+  }
+
+  /** Find an invite record in local memory matching any RFC2822 Message-ID token. */
+  findVendorInviteByMessageId(messageIds = []) {
+    if (!this._rfqVendorInvites || !Array.isArray(messageIds) || messageIds.length === 0) return null;
+    const targetSet = new Set(messageIds.map((m) => String(m || '').trim().toLowerCase()).filter(Boolean));
+    if (targetSet.size === 0) return null;
+    for (const rec of this._rfqVendorInvites.values()) {
+      const msgId = String(rec.inviteMessageId || '').trim().toLowerCase();
+      if (msgId && targetSet.has(msgId)) return rec;
+    }
+    return null;
+  }
+
+  /** Return open RFQ invites for a vendor within the active window from memory/DB. */
+  async getOpenVendorInvitesWithinWindow(vendorRecord, senderEmail, windowMs = V0_QUOTES_DISPATCH_WINDOW_MS) {
+    const cutoffIso = new Date(Date.now() - windowMs).toISOString();
+    const normEmail = String(senderEmail || vendorRecord?.email || vendorRecord?.corporateEmail || '').trim().toLowerCase();
+    const vendorId = vendorRecord?.id ? String(vendorRecord.id).trim() : null;
+    const matchesByRfqNumber = new Map();
+
+    if (pool.hasStorage() && typeof domainQueries.findOpenVendorInvitesWithinWindowFromDB === 'function') {
+      try {
+        const dbRows = await domainQueries.findOpenVendorInvitesWithinWindowFromDB({
+          vendorId,
+          vendorEmail: normEmail || null,
+          cutoffIso,
+        });
+        for (const row of Array.isArray(dbRows) ? dbRows : []) {
+          if (row && row.rfq_number) {
+            matchesByRfqNumber.set(row.rfq_number, {
+              rfqId: row.rfq_id || null,
+              rfqNumber: row.rfq_number,
+              vendorId: row.vendor_id || null,
+              vendorEmail: row.vendor_email || normEmail,
+              inviteMessageId: row.invite_message_id || null,
+              invitedAt: row.invited_at || null,
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to query open vendor invites from DB', { error: err?.message, vendorId, senderEmail: normEmail }, 'STORE_SERVICE');
+      }
+    }
+
+    if (this._rfqVendorInvites) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        const emailMatch = normEmail && rec.vendorEmail === normEmail;
+        const idMatch = vendorId && rec.vendorId && String(rec.vendorId) === vendorId;
+        if ((!emailMatch && !idMatch) || (rec.invitedAt && rec.invitedAt < cutoffIso)) continue;
+        const memRfq = this.rfqs.find((r) => r && r.rfqNumber === rec.rfqNumber);
+        if (memRfq && ['Closed', 'Expired', 'PO Generated'].includes(memRfq.status)) continue;
+        if (!matchesByRfqNumber.has(rec.rfqNumber)) {
+          matchesByRfqNumber.set(rec.rfqNumber, rec);
+        }
+      }
+    }
+
+    // Also inspect open in-memory RFQs created/assigned within the 48h window
+    for (const rfq of Array.isArray(this.rfqs) ? this.rfqs : []) {
+      if (!rfq || !rfq.rfqNumber || ['Closed', 'Expired', 'PO Generated'].includes(rfq.status)) continue;
+      const createdIso = rfq.createdAt || null;
+      const dueIso = rfq.quotesDispatchDueAt || null;
+      const withinWindow = (dueIso && dueIso >= new Date().toISOString()) ||
+        (createdIso && Date.parse(createdIso) >= Date.parse(cutoffIso));
+      if (!withinWindow) continue;
+      const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+      const isAssigned = assigned.some((av) => {
+        if (!av) return false;
+        const avId = av.id || av.vendorId;
+        const avEmail = String(av.email || av.corporateEmail || '').trim().toLowerCase();
+        return (vendorId && avId && String(avId) === vendorId) || (normEmail && avEmail === normEmail);
+      });
+      if (isAssigned && !matchesByRfqNumber.has(rfq.rfqNumber)) {
+        matchesByRfqNumber.set(rfq.rfqNumber, {
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          vendorId,
+          vendorEmail: normEmail,
+          invitedAt: createdIso,
+        });
+      }
+    }
+
+    return Array.from(matchesByRfqNumber.values());
+  }
+
+  /**
+   * Check whether a vendor was invited to a specific RFQ when explicit invitations
+   * exist on assignedVendors or rfq_vendor_invites.
+   */
+  async isVendorInvitedToRfq(rfq, vendorRecord, senderEmail = null) {
+    if (!rfq) return false;
+    const normEmail = String(senderEmail || vendorRecord?.email || vendorRecord?.corporateEmail || '').trim().toLowerCase();
+    const vendorId = vendorRecord?.id ? String(vendorRecord.id).trim() : null;
+    const emailDomain = normEmail.includes('@') ? normEmail.split('@')[1] : null;
+    const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const trackedInMem = [];
+    if (this._rfqVendorInvites && rfq.rfqNumber) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        if (rec && rec.rfqNumber === rfq.rfqNumber) trackedInMem.push(rec);
+      }
+    }
+    let trackedInDb = [];
+    if (pool.hasStorage() && rfq.rfqNumber && typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function') {
+      trackedInDb = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+    }
+
+    const totalTrackedCount = assigned.length + trackedInMem.length + trackedInDb.length;
+    if (totalTrackedCount === 0) return true;
+
+    const matchesEntry = (entryId, entryEmail) => {
+      if (vendorId && entryId && String(entryId) === vendorId) return true;
+      const eLower = String(entryEmail || '').trim().toLowerCase();
+      if (normEmail && eLower && eLower === normEmail) return true;
+      if (emailDomain && eLower && eLower.endsWith(`@${emailDomain}`)) return true;
+      return false;
+    };
+
+    if (assigned.some((av) => av && matchesEntry(av.id || av.vendorId, av.email || av.corporateEmail))) return true;
+    if (trackedInMem.some((rec) => rec && matchesEntry(rec.vendorId, rec.vendorEmail))) return true;
+    if (trackedInDb.some((row) => row && matchesEntry(row.vendor_id, row.vendor_email))) return true;
+    if (vendorRecord && Array.isArray(vendorRecord.unlockedRfqIds) &&
+      (vendorRecord.unlockedRfqIds.includes(rfq.id) || vendorRecord.unlockedRfqIds.includes(rfq.rfqNumber))) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Idempotent Dual-Trigger Buyer Quotation Dispatch for V0 RFQs:
+   * - Exits immediately if buyer_quotes_sent_at is already stamped.
+   * - Trigger A (Immediate): All invited vendors have submitted quotes (receivedBids >= totalInvited > 0).
+   * - Trigger B (48-Hour Timeout): NOW() >= quotes_dispatch_due_at and >= 1 quote exists.
+   * Atomically claims dispatch, resolves buyer email strictly from the RFQ's owner,
+   * and invokes mailerService.sendRfqFinalComparisonEmail.
+   */
+  async checkAndDispatchBuyerQuotations(rfqNumber, { trigger = 'auto', now = new Date() } = {}) {
+    if (!rfqNumber) return { dispatched: false, reason: 'missing_rfq_number' };
+    const cleanNumber = String(rfqNumber).trim();
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const nowMs = nowDate.getTime();
+
+    const rfq = pool.hasStorage()
+      ? (await domainQueries.getRFQByNumberFromDB(cleanNumber).catch(() => null)) || this.getRFQById(cleanNumber)
+      : this.getRFQById(cleanNumber);
+    if (!rfq) return { dispatched: false, reason: 'not_found' };
+    if (
+      rfq.buyerQuotesSentAt ||
+      rfq.buyer_quotes_sent_at ||
+      (!pool.hasStorage() && this._v0DispatchClaimedRfqs?.has(rfq.rfqNumber))
+    ) {
+      return { dispatched: false, reason: 'already_sent', rfqNumber: rfq.rfqNumber };
+    }
+
+    const resolveCanonicalVendorKey = (entry, { isInviteRow = false, fallbackIndex = null } = {}) => {
+      if (!entry) return fallbackIndex !== null ? `idx:${fallbackIndex}` : null;
+      const rawId = isInviteRow
+        ? (entry.vendorId || entry.vendor_id || null)
+        : (entry.vendorId || entry.vendor_id || entry.id || null);
+      const rawEmail = entry.vendorEmail || entry.vendor_email || entry.email || entry.corporateEmail || '';
+      const normEmail = String(rawEmail).trim().toLowerCase();
+      const knownVendor =
+        (rawId && Array.isArray(this.vendors) && this.vendors.find((v) => v && String(v.id) === String(rawId))) ||
+        (normEmail && Array.isArray(this.vendors) && this.vendors.find((v) => v && String(v.email || v.corporateEmail || '').trim().toLowerCase() === normEmail)) ||
+        null;
+      const canonicalId = (knownVendor && knownVendor.id) || rawId;
+      if (canonicalId) return `id:${String(canonicalId)}`;
+      if (normEmail) return `email:${normEmail}`;
+      if (entry.vendorName) return `name:${String(entry.vendorName).trim().toLowerCase()}`;
+      return fallbackIndex !== null ? `idx:${fallbackIndex}` : null;
+    };
+
+    const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
+    const uniqueBidderKeys = new Set();
+    quotes.forEach((q, idx) => {
+      const key = resolveCanonicalVendorKey(q, { isInviteRow: true, fallbackIndex: idx });
+      if (key) uniqueBidderKeys.add(key);
+    });
+    const receivedBids = uniqueBidderKeys.size;
+
+    const invitedKeys = new Set();
+    const addInvitedKey = (entry, options = {}) => {
+      const key = resolveCanonicalVendorKey(entry, options);
+      if (key) invitedKeys.add(key);
+    };
+    (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).forEach((entry) => addInvitedKey(entry, { isInviteRow: false }));
+    (Array.isArray(rfq.followUpData?.vendors) ? rfq.followUpData.vendors : []).forEach((entry) => addInvitedKey(entry, { isInviteRow: false }));
+    let earliestInviteAt = null;
+    if (this._rfqVendorInvites) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        if (rec && rec.rfqNumber === rfq.rfqNumber) {
+          addInvitedKey(rec, { isInviteRow: true });
+          if (rec.invitedAt && (!earliestInviteAt || rec.invitedAt < earliestInviteAt)) earliestInviteAt = rec.invitedAt;
+        }
+      }
+    }
+    if (pool.hasStorage() && typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function') {
+      const dbInvites = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+      dbInvites.forEach((row) => {
+        addInvitedKey(row, { isInviteRow: true });
+        if (row?.invited_at && (!earliestInviteAt || row.invited_at < earliestInviteAt)) earliestInviteAt = row.invited_at;
+      });
+    }
+
+    const totalInvited = Math.max(invitedKeys.size, Number(rfq.followUpData?.totalInvited) || 0);
+    const dueAtIso = rfq.quotesDispatchDueAt ||
+      rfq.quotes_dispatch_due_at ||
+      (earliestInviteAt && Number.isFinite(Date.parse(earliestInviteAt))
+        ? new Date(Date.parse(earliestInviteAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString()
+        : (rfq.createdAt && Number.isFinite(Date.parse(rfq.createdAt))
+          ? new Date(Date.parse(rfq.createdAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString()
+          : null));
+    const dueMs = dueAtIso ? Date.parse(dueAtIso) : NaN;
+
+    const triggerAllReplied = totalInvited > 0 && receivedBids >= totalInvited && quotes.length > 0;
+    const triggerTimeout = Number.isFinite(dueMs) && nowMs >= dueMs && quotes.length > 0;
+    if (!triggerAllReplied && !triggerTimeout) {
+      return {
+        dispatched: false,
+        reason: 'conditions_not_met',
+        rfqNumber: rfq.rfqNumber,
+        receivedBids,
+        totalInvited,
+        quotesDispatchDueAt: dueAtIso,
+      };
+    }
+
+    const sentAtIso = nowDate.toISOString();
+    let claimedRfq = null;
+    if (pool.hasStorage() && typeof domainQueries.claimRfqBuyerQuotesDispatchInDB === 'function') {
+      claimedRfq = await domainQueries.claimRfqBuyerQuotesDispatchInDB(rfq.rfqNumber, sentAtIso);
+      if (!claimedRfq) {
+        return { dispatched: false, reason: 'already_claimed', rfqNumber: rfq.rfqNumber };
+      }
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      if (idx >= 0) this.rfqs[idx] = { ...this.rfqs[idx], ...claimedRfq, buyerQuotesSentAt: sentAtIso };
+    } else {
+      // Atomic synchronous claim before any await for in-memory execution
+      if (!this._v0DispatchClaimedRfqs) this._v0DispatchClaimedRfqs = new Set();
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      const liveRfq = idx >= 0 ? this.rfqs[idx] : null;
+      if (this._v0DispatchClaimedRfqs.has(rfq.rfqNumber) || liveRfq?.buyerQuotesSentAt || rfq.buyerQuotesSentAt) {
+        return { dispatched: false, reason: 'already_claimed', rfqNumber: rfq.rfqNumber };
+      }
+      this._v0DispatchClaimedRfqs.add(rfq.rfqNumber);
+      if (liveRfq) liveRfq.buyerQuotesSentAt = sentAtIso;
+      rfq.buyerQuotesSentAt = sentAtIso;
+      claimedRfq = liveRfq || rfq;
+    }
+
+    const releaseClaim = async () => {
+      if (pool.hasStorage() && typeof domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB === 'function') {
+        await domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB(rfq.rfqNumber).catch(() => false);
+      }
+      if (this._v0DispatchClaimedRfqs) this._v0DispatchClaimedRfqs.delete(rfq.rfqNumber);
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      if (idx >= 0 && this.rfqs[idx]) delete this.rfqs[idx].buyerQuotesSentAt;
+      if (rfq) delete rfq.buyerQuotesSentAt;
+    };
+
+    // Resolve buyer email strictly from the RFQ's own buyer account record
+    let ownerBuyer = null;
+    if (claimedRfq.buyerAccountId) {
+      ownerBuyer = this.buyerAccounts.find((b) => b && b.id === claimedRfq.buyerAccountId) || null;
+      if (!ownerBuyer && pool.hasStorage() && typeof domainQueries.getBuyerAccountByIdFromDB === 'function') {
+        ownerBuyer = await domainQueries.getBuyerAccountByIdFromDB(claimedRfq.buyerAccountId).catch(() => null);
+      }
+    }
+    const buyerEmail = (ownerBuyer && ownerBuyer.corporateEmail) || this.resolveBuyerEmailForRFQ(claimedRfq);
+    if (!buyerEmail) {
+      await releaseClaim();
+      logger.warn('Cannot dispatch compiled V0 buyer quotations: no buyer email on RFQ', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerAccountId: claimedRfq.buyerAccountId || null,
+      }, 'STORE_SERVICE');
+      return { dispatched: false, reason: 'missing_buyer_email', rfqNumber: claimedRfq.rfqNumber };
+    }
+
+    const recipientName = (ownerBuyer && ownerBuyer.organizationName) || claimedRfq.buyerAccountName || claimedRfq.buyerName || 'Buyer';
+    const resolvedQuotes = Array.isArray(claimedRfq.quotes) && claimedRfq.quotes.length > 0 ? claimedRfq.quotes : quotes;
+
+    try {
+      const delivery = await mailerService.sendRfqFinalComparisonEmail(buyerEmail, {
+        rfq: claimedRfq,
+        quotes: resolvedQuotes,
+        recipientName,
+      });
+      if (delivery && (delivery.sent === false || delivery.success === false)) {
+        await releaseClaim();
+        return {
+          dispatched: false,
+          reason: delivery.reason || 'email_delivery_not_accepted',
+          rfqNumber: claimedRfq.rfqNumber,
+        };
+      }
+      this.addAuditLog({
+        userEmail: buyerEmail,
+        action: `Dispatched compiled ${resolvedQuotes.length} V0 vendor quotation(s) to ${buyerEmail} for ${claimedRfq.rfqNumber} (trigger: ${triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h'}/${trigger})`,
+        rfqNumber: claimedRfq.rfqNumber,
+      });
+      logger.info('Compiled V0 buyer quotations dispatched via sendRfqFinalComparisonEmail', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerAccountId: claimedRfq.buyerAccountId || null,
+        buyerEmail,
+        quotesCount: resolvedQuotes.length,
+        trigger: triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h',
+        callerTrigger: trigger,
+      }, 'STORE_SERVICE');
+      return {
+        dispatched: true,
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerEmail,
+        quotesCount: resolvedQuotes.length,
+        trigger: triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h',
+        buyerQuotesSentAt: sentAtIso,
+      };
+    } catch (error) {
+      await releaseClaim();
+      logger.error('Failed to dispatch compiled V0 buyer quotations', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerEmail,
+        error,
+      }, 'STORE_SERVICE');
+      throw error;
+    }
+  }
+
+  /**
+   * Sweep open V0 RFQs whose 48-hour dispatch window has elapsed without a
+   * sent buyer comparison email and dispatch compiled quotations once per RFQ.
+   */
+  async dispatchDueV0BuyerQuotations(limit = 25, { now = new Date() } = {}) {
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const nowIso = nowDate.toISOString();
+    const candidates = pool.hasStorage() && typeof domainQueries.listDueV0RfqsForQuotesDispatchFromDB === 'function'
+      ? await domainQueries.listDueV0RfqsForQuotesDispatchFromDB(nowIso, limit).catch(() => [])
+      : (this.rfqs || []).filter((r) => (
+          r &&
+          this.isV0SourcingMode(r.sourcingMode) &&
+          !r.buyerQuotesSentAt &&
+          !['Closed', 'Expired', 'PO Generated'].includes(r.status) &&
+          r.quotesDispatchDueAt &&
+          Date.parse(r.quotesDispatchDueAt) <= nowDate.getTime()
+        )).slice(0, limit);
+
+    let dispatched = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const candidate of candidates) {
+      if (!candidate || !candidate.rfqNumber) continue;
+      try {
+        const res = await this.checkAndDispatchBuyerQuotations(candidate.rfqNumber, {
+          trigger: 'scheduler_48h',
+          now: nowDate,
+        });
+        if (res && res.dispatched) dispatched += 1;
+        else skipped += 1;
+      } catch (err) {
+        failed += 1;
+        logger.error('Scheduled V0 buyer quotation dispatch failed for RFQ', {
+          rfqNumber: candidate.rfqNumber,
+          error: err,
+        }, 'STORE_SERVICE');
+      }
+    }
+    return { checked: candidates.length, dispatched, skipped, failed };
   }
 
 }

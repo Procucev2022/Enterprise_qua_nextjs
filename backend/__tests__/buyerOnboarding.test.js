@@ -29,7 +29,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
         `Message-ID: <MSG-${Date.now()}.${fromEmail}>`,
         'Date: Mon, 07 Sep 2026 09:14:22 +0530',
         `From: Test Buyer <${fromEmail}>`,
-        'To: Procucev Intake <client@procucev.com>',
+        'To: Procucev Intake <rfq@procucev.com>',
         `Subject: ${subject}`,
         'MIME-Version: 1.0',
         'Content-Type: text/plain; charset=utf-8',
@@ -183,8 +183,8 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
   describe('Scenario 6 & 7: Repeated or concurrent emails do not create duplicate accounts or duplicate RFQs', () => {
     test('handles concurrent requests safely without duplicating accounts', async () => {
       const concurrentEmail = 'concurrent.buyer@fastmail.com';
-      const p1 = emailGatewayService.getOrCreateBuyerAccount(concurrentEmail);
-      const p2 = emailGatewayService.getOrCreateBuyerAccount(concurrentEmail);
+      const p1 = emailGatewayService.getOrCreateBuyerAccount(concurrentEmail, { isStrictBuyerMailbox: true });
+      const p2 = emailGatewayService.getOrCreateBuyerAccount(concurrentEmail, { isStrictBuyerMailbox: true });
 
       const [res1, res2] = await Promise.all([p1, p2]);
       expect(res1.buyerAccount.id).toBe(res2.buyerAccount.id);
@@ -919,7 +919,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValue(new Error('DB unreachable'));
       const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword').mockResolvedValue(true);
 
-      const result = await emailGatewayService.getOrCreateBuyerAccount(email);
+      const result = await emailGatewayService.getOrCreateBuyerAccount(email, { isStrictBuyerMailbox: true });
       expect(result.isOnboardingPending).toBe(true);
       expect(typeof result.tempPassword).toBe('string');
       expect(updatePwSpy).toHaveBeenCalledWith(email, result.tempPassword);
@@ -1289,7 +1289,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Identity DB connection error'));
       jest.spyOn(identityQueries, 'updateUserPassword').mockRejectedValueOnce(new Error('Password persistence error'));
 
-      const accRes = await emailGatewayService.getOrCreateBuyerAccount('errbuyer@industrial-corp.com');
+      const accRes = await emailGatewayService.getOrCreateBuyerAccount('errbuyer@industrial-corp.com', { isStrictBuyerMailbox: true });
       expect(accRes.buyerAccount.id).toBe('buyer-existing-err');
       expect(accRes.isOnboardingPending).toBe(true);
     });
@@ -1337,7 +1337,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
         resetPasswordRequired: true,
         password: 'reset-pwd-123',
       });
-      const resetAcc = await emailGatewayService.getOrCreateBuyerAccount('resetbuyer@example.com');
+      const resetAcc = await emailGatewayService.getOrCreateBuyerAccount('resetbuyer@example.com', { isStrictBuyerMailbox: true });
       expect(resetAcc.tempPassword).toBe('reset-pwd-123');
     });
   });
@@ -1362,7 +1362,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       const insertSpy = jest.spyOn(identityQueries, 'insertBuyerAccount');
       const updatePwSpy = jest.spyOn(identityQueries, 'updateUserPassword');
 
-      const result = await emailGatewayService.getOrCreateBuyerAccount(email);
+      const result = await emailGatewayService.getOrCreateBuyerAccount(email, { isStrictBuyerMailbox: true });
 
       expect(result.isNew).toBe(false);
       expect(result.isOnboardingPending).toBe(false);
@@ -1413,14 +1413,14 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       expect(auth.tempPassword).toBeNull();
 
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(flagged);
-      const acc = await emailGatewayService.getOrCreateBuyerAccount(email);
+      const acc = await emailGatewayService.getOrCreateBuyerAccount(email, { isStrictBuyerMailbox: true });
       expect(acc.tempPassword).toBeNull();
       expect(updatePwSpy).not.toHaveBeenCalled();
     });
 
     test('auto-registers after an identity lookup miss but rejects an existing vendor login', async () => {
       jest.spyOn(identityQueries, 'findUserByEmail').mockRejectedValueOnce(new Error('Identity down'));
-      const failed = await emailGatewayService.getOrCreateBuyerAccount('lookup.fails@industrial-corp.com');
+      const failed = await emailGatewayService.getOrCreateBuyerAccount('lookup.fails@industrial-corp.com', { isStrictBuyerMailbox: true });
       expect(failed.isNew).toBe(true);
 
       const vendorEmail = 'vendor.login@industrial-corp.com';
@@ -1428,7 +1428,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(vendorUser);
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: vendorUser });
       const createMirror = jest.spyOn(storeService, 'addBuyerAccountDurably');
-      await expect(emailGatewayService.getOrCreateBuyerAccount(vendorEmail)).rejects.toThrow(
+      await expect(emailGatewayService.getOrCreateBuyerAccount(vendorEmail, { isStrictBuyerMailbox: true })).rejects.toThrow(
         'This sender address belongs to a vendor account and cannot create buyer RFQs.'
       );
       expect(createMirror).not.toHaveBeenCalled();
@@ -1441,7 +1441,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockRejectedValue(new Error('D1 unavailable'));
       const createMirror = jest.spyOn(storeService, 'addBuyerAccountDurably');
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('db-down@industrial-corp.com')).rejects.toMatchObject({
+      await expect(emailGatewayService.getOrCreateBuyerAccount('db-down@industrial-corp.com', { isStrictBuyerMailbox: true })).rejects.toMatchObject({
         name: 'RetryableIngestionError',
       });
       expect(createMirror).not.toHaveBeenCalled();
@@ -1457,7 +1457,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       });
       jest.spyOn(storeService, 'addBuyerAccountDurably').mockRejectedValue(new Error('D1 unavailable'));
 
-      await expect(emailGatewayService.getOrCreateBuyerAccount('mirror-down@industrial-corp.com')).rejects.toMatchObject({
+      await expect(emailGatewayService.getOrCreateBuyerAccount('mirror-down@industrial-corp.com', { isStrictBuyerMailbox: true })).rejects.toMatchObject({
         name: 'RetryableIngestionError',
       });
     });
@@ -1468,7 +1468,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(pendingUser);
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: pendingUser });
 
-      const res = await emailGatewayService.getOrCreateBuyerAccount(email);
+      const res = await emailGatewayService.getOrCreateBuyerAccount(email, { isStrictBuyerMailbox: true });
       expect(res.isNew).toBe(true);
       expect(res.tempPassword).toBe('StoredTemp#1');
     });
@@ -1479,7 +1479,7 @@ describe('Automatic Unregistered Buyer Onboarding and Email-Based RFQ Creation',
       jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce(null);
       jest.spyOn(identityQueries, 'insertBuyerAccount').mockResolvedValue({ created: false, user: importedUser(email) });
 
-      const res = await emailGatewayService.getOrCreateBuyerAccount(email);
+      const res = await emailGatewayService.getOrCreateBuyerAccount(email, { isStrictBuyerMailbox: true });
       expect(res.isNew).toBe(true);
       expect(res.tempPassword).toBeNull();
     });

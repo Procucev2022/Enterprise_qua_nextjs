@@ -25,6 +25,7 @@ const {
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
   EMAIL_REGEX,
   DAILY_RFQ_REPORT_CONFIG,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 
@@ -774,6 +775,13 @@ async function dispatchEvent(job, options = {}) {
         error.code = 'INVALID_PERSISTED_RECORD';
         throw error;
       }
+      const inviteMessageId = target.inviteMessageId || (
+        rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+          ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, target.vendorId || target.vendor?.id || 'vendor')
+          : null
+      );
+      const invitedAt = new Date().toISOString();
+      const quotesDispatchDueAt = new Date(Date.parse(invitedAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString();
       const delivery = await mailerService.sendRfqInviteEmail(target.recipientEmail, {
         rfq,
         recipientName: target.recipientName,
@@ -782,12 +790,29 @@ async function dispatchEvent(job, options = {}) {
         isSubscribed: target.isSubscribed,
         isBuyerUploaded: target.isBuyerUploaded,
         vendor: target.vendor,
+        messageId: inviteMessageId,
       });
       if (!delivery?.sent) {
         const error = new Error('RFQ vendor invitation email provider did not accept the message.');
         error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
         throw error;
       }
+      await domainQueries.recordRfqVendorInviteInDB({
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: target.vendorId || target.vendor?.id || null,
+        vendorEmail: target.recipientEmail,
+        inviteMessageId: delivery.inviteMessageId || inviteMessageId || delivery.messageId || null,
+        invitedAt,
+        quotesDispatchDueAt,
+      }).catch((err) => {
+        logger.warn('Failed to persist RFQ vendor invite metadata after outbox dispatch', {
+          rfqId,
+          rfqNumber: rfq.rfqNumber,
+          vendorEmail: target.recipientEmail,
+          error: err.message,
+        }, 'EVENT_OUTBOX');
+      });
       logger.info('RFQ vendor invitation email accepted by a provider', {
         rfqId,
         rfqNumber: rfq.rfqNumber,

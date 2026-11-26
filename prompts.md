@@ -9606,7 +9606,7 @@ Root Cause & Permanent Solution Summary
 2. Implemented Architecture & Permanent Fixes
    A. Backend Engine
    Canonical Time-Based Trial Persistence: In internalTaskQueries.js, when approving a task with type 'Trial Periods' or 'Trial Period':
-   creditQty and creditDelta are set to 0 (the numeric credit balance remaining_free_rfqs is never mutated).
+   creditQty and creditDelta are set to 0 (the numeric credit balance remaining*free_rfqs is never mutated).
    Canonical time-based fields are persisted on the buyer account in PostgreSQL and Cloudflare D1:
    trialActive: true
    trialDays: <N> (e.g. 7)
@@ -9625,7 +9625,7 @@ Root Cause & Permanent Solution Summary
    B. Frontend UI & Live Day-by-Day Countdown
    Live Dynamic Countdown Utility:
    In constants.ts, added isBuyerTrialActive(account) and getRemainingTrialDays(trialEndDate):
-   remainingDays = max(0, ceil((trialEndDate - now) / (1000 _ 60 _ 60 \* 24)))
+   remainingDays = max(0, ceil((trialEndDate - now) / (1000 * 60 \_ 60 \* 24)))
    Buyer Account Dashboard Header (/buyer/dashboard):
    In Header.tsx, whenever a trial is active, the header renders an indigo trial badge:
    Day 1: 7 Days Trial Period (Unlimited RFQs)
@@ -9817,7 +9817,6 @@ Currently, all 10 KPI cards show `0` and all 3 monthly charts are empty even tho
 - Re-run typecheck, lint, tests, and production build.
 ```
 
-
 ---
 
 ### Prompt 427
@@ -9827,7 +9826,6 @@ Currently, all 10 KPI cards show `0` and all 3 monthly charts are empty even tho
 ```text
 Again the Dashboard showing zeros only after fix the issue identify the root cause?
 ```
-
 
 ---
 
@@ -9874,7 +9872,6 @@ Before editing any file, inspect and report the exact differences between `Dashb
 - Run typecheck, lint, tests, and `next build`, then report the **exact root cause** you found before pushing.
 ```
 
-
 ---
 
 ### Prompt 427
@@ -9904,7 +9901,6 @@ In the **Internal Tasks** table (Action Center -> Internal tasks):
 - [ ] No unused code, TypeScript errors, or console warnings remain.
 ```
 
-
 ---
 
 ### Prompt 428
@@ -9912,7 +9908,7 @@ In the **Internal Tasks** table (Action Center -> Internal tasks):
 **Timestamp**: 2026-11-24T23:34:39+05:30
 
 ```text
-Update the **Action Center** (`Vendors Directory` tab) to rename "Seller" terminology to "Vendor" and add a live **SUBSCRIPTION VENDORS** KPI card/button 
+Update the **Action Center** (`Vendors Directory` tab) to rename "Seller" terminology to "Vendor" and add a live **SUBSCRIPTION VENDORS** KPI card/button
 
 ### 1. Core Rules & Code Preservation
 - **Reuse existing code:** Preserve all existing backend routes, database models, services, and UI handlers across Action Center and other tabs. Do not break existing functionality or API contracts.
@@ -10073,4 +10069,266 @@ application is differently in different different browsers or different differen
 
 ```text
 Keep commiting & pushing the changes
+```
+
+---
+
+### Prompt 437
+
+**Timestamp**: 2026-11-25T12:12:00+05:30
+
+```text
+Tell if the vendor reply in attachment not message then the quotation is creted in portal or not?
+```
+
+### Prompt 438
+
+**Timestamp**: 2026-11-25T12:50:47+05:30
+
+```text
+Implement universal email quotation ingestion (with attachment extraction) and dynamic outbound RFQ email templates while preserving all existing backend methods, portal UI handlers, and credit/unlock flows intact.
+
+1. Universal Attachment & Body Ingestion (emailIngestionService.js)
+- Support all vendor reply formats for RFQs with <= 10 line items: plain text, HTML tables, PDF, images (.png, .jpg, .jpeg, .webp), Excel/CSV (.xlsx, .xls, .csv), Word (.docx, .doc), and text files (.txt, .tsv).
+- Excel / CSV: Parse the first sheet (using xlsx) into a structured text/CSV table and append it to attachmentText instead of marking office spreadsheets as 'manual' / NO_CONTENT.
+- Word: Extract text and tables from .docx (using mammoth or equivalent) and append to attachmentText.
+- PDF / Images: Keep base64 conversion into extractionInput.inlineData so it can be passed to Gemini.
+- Fix empty-body bug: Do NOT gate documentText / attachmentText behind if (!message.bodyText). Always concatenate message.bodyText + attachmentText so emails with short greetings/signatures (e.g., "Please find attached quote") still get their attachments parsed.
+
+2. Multimodal Quote Extraction (geminiService.js)
+- Update extractQuotationFromEmail to accept { subject, fromAddress, bodyText, attachmentText, inlineData, rfqItems } and send both text and inlineData parts to Gemini.
+- Include rfqItems in the prompt so Gemini maps extracted rates accurately to the RFQ's line items.
+- Extract and normalize unitPrice / lineItemQuotes[].unitPrice, taxes, deliveryCharges, leadTimeDays, paymentTerms, quotationValidity, and remarks.
+
+3. Strict Validation & Attachment Persistence (emailGatewayService.js)
+- 10-Item Cap: If rfq.items.length > 10, reject immediately with PORTAL_SUBMISSION_REQUIRED and send the auto-reply directing the vendor to submit via /vendor/quotation-form.
+- Mandatory Unit Price Gate: Never create a quote if unitPrice is missing or <= 0 (for single-item RFQs) or if no valid lineItemQuotes[].unitPrice > 0 is extracted (for 2-10 item RFQs). Return QUOTE_VALIDATION_FAILED and send an auto-reply asking for the Unit Price or portal submission.
+- Inquiry Guard Fix: Do not block/divert a valid quote as an inquiry just because the email contains words like "clarification" or "query". Only log as an inquiry when no valid unitPrice > 0 is present.
+- Persist Attachments: Upload valid email attachments (up to 5 files, 15 MB max) to R2 via quoteAttachmentService.js scoped to { rfqId, vendorId } and attach their IDs to the created quote object.
+
+4. Dynamic Outbound RFQ Email Template
+Update the outbound RFQ invitation email template to branch dynamically based on rfq.items.length (1 item, 2-10 items, > 10 items).
+
+5. Constraints
+- Do not break or alter existing Portal UI (quotation-form.tsx) submission handlers, rfqController.addQuote, or storeService.submitVendorQuoteDurably signatures.
+- Add clear logging for extraction source (body, attachmentText, inlineData), validation rejections, and R2 attachment uploads.
+```
+
+### Prompt 439
+
+**Timestamp**: 2026-11-25T12:24:19+05:30
+
+```text
+pass all the coverages
+```
+
+### Prompt 440
+
+**Timestamp**: 2026-11-25T12:56:52+05:30
+
+```text
+The vendor is reply for the quotation for invitations@procucev.com  but why the rfq@procucev.com is created the rfq and account for that vendor where is the hole in the code and root cause of this?
+```
+
+### Prompt 441
+
+**Timestamp**: 2026-11-25T13:02:24+05:30
+
+```text
+continue the vendo r is added by category manager why it is happening
+```
+
+### Prompt 442
+
+**Timestamp**: 2026-11-25T13:27:28+05:30
+
+```text
+# Task: Fix Email Gateway Holes, Enforce Strict `rfq@procucev.com` Isolation, and Implement V0 Vendor Bid-to-Buyer Dispatch Flow
+
+## Strict Engineering Rules
+1. **Reuse Existing Code & Functionality:** Do NOT rewrite working modules from scratch. Preserve all existing backend methods, services, DB queries, and UI/API handlers intact. Specifically, **locate and reuse the existing send-bid-details email function** for sending vendor quotations to the buyer.
+2. **Zero Regressions:** Keep all existing working buyer/vendor flows intact while closing every hole below.
+3. **No Holes Left:** Cover both mailbox-level checks (`To`, `Delivered-To`, `X-Original-To`, poller config) and identity-level checks (`vendors` table + `"user"` table).
+
+---
+
+## Part 1: Close All 4 Email Gateway Holes (Strict Mailbox Separation)
+
+### Core Rule
+- **ONLY** emails addressed directly to `rfq@procucev.com` (`EMAIL_GATEWAY_ADDRESS`) may create a Buyer RFQ or auto-register an unregistered buyer.
+- **ANY** email or reply sent to `invitations@procucev.com`, `gmtrfq@procucev.com`, or any other non-`rfq@procucev.com` mailbox (including Gmail aliases/forwards) MUST NEVER create a buyer account or a Buyer RFQ.
+
+### Required Patches
+1. **Add a shared strict allowlist helper in `emailGatewayService.js` (`isStrictBuyerRfqMailbox(message, config)`):**
+   - Return `false` immediately if `config?.isVendorMailbox === true`.
+   - Inspect all recipient headers (`message.toAddresses`, `message.deliveredTo`, `message.originalTo`), normalized to lowercase.
+   - Return `false` immediately if any recipient matches `invitations@procucev.com` (`VENDOR_EMAIL_GATEWAY_ADDRESS`) or `gmtrfq@procucev.com`.
+   - Return `true` **only** if `rfq@procucev.com` is explicitly present in the recipients.
+
+2. **Hole 1 — `processMessage` vendor guard & RFQ reference preservation (`emailGatewayService.js`):**
+   - After `resolveVendorFromEmail`, add an explicit guard: if `vendorRecord && !isRegisteredBuyer` and `targetRfq` is `null`, **never** fall through to Buyer RFQ creation. Log and handle as a vendor email missing an RFQ reference (or resolve via active invite/thread headers).
+   - In `extractRfqReferenceFromEmail`, fall back to scanning unstripped `rawBodyText` and `bodyHtml` (before `stripQuotedReplies`) when `subject` and stripped `bodyText` have no `RFQ...` match.
+   - In `buildRfqInviteEmail` / `buildRawMimeMessage`, embed the `rfqNumber` inside the outbound `Message-ID` (e.g., `<rfq-${rfqNumber}-v${vendorId}-${timestamp}@procucev.com>`) so `In-Reply-To` and `References` always preserve the RFQ reference even when a vendor changes the subject to `Offer`.
+
+3. **Hole 2 — Gate Buyer RFQ creation & lock `resolveVendorConfig`:**
+   - In `resolveVendorConfig`, hardcode `autoRegisterUnregisteredBuyers: false` so buyer env vars cannot bleed into the vendor poller.
+   - In `processMessage`, immediately before Buyer RFQ creation (line ~3070), enforce `if (!isStrictBuyerRfqMailbox(message, config)) return { status: 'skipped_non_buyer_mailbox' };`. This prevents `invitations@procucev.com`, `gmtrfq@procucev.com`, and forwarded mail from ever triggering `sendBuyerOnboardingWithRfqEmail`.
+
+4. **Hole 3 — `getOrCreateBuyerAccount` must check the `vendors` table:**
+   - Before calling `identityQueries.insertBuyerAccount`, query `domainQueries.getVendorByEmailFromDB(normEmail)` (and `storeService.getVendorById(normEmail, 'all')`).
+   - If the email exists in `vendors` (even if the `"user"` row is missing due to failed onboarding, bulk add, or GraphQL `createVendor`), block buyer creation immediately and return `{ blocked: true, reason: 'existing_vendor' }`.
+   - Require `isStrictBuyerMailbox === true` inside `getOrCreateBuyerAccount` so no other code path can auto-create a buyer from a non-`rfq@` mailbox.
+
+5. **Hole 4 — Tighten `resolveMultiBuyerAttribution` (Scenario 4):**
+   - Only permit auto-registration when `isStrictBuyerRfqMailbox(message, config) === true`, `config.autoRegisterUnregisteredBuyers !== false`, and `!vendorRecord`.
+
+---
+
+## Part 2: V0 Vendor Quote Tracking, Strict Bid Binding & Buyer Dispatch
+
+1. **Track `rfqNumber` on Outbound Vendor Invites:**
+   - Whenever an RFQ invitation is sent to a vendor, persist/track the `rfqNumber`, `vendorId`/`vendorEmail`, `inviteMessageId`, and `invitedAt` (reusing existing invitation tracking tables/columns where available; add minimal migration only if columns like `invite_message_id`, `quotes_dispatch_due_at`, or `buyer_quotes_sent_at` are missing).
+   - Set `quotes_dispatch_due_at = invited_at + 48 hours` on the RFQ when invites are sent.
+
+2. **Inbound Vendor Reply → Strict Bid Creation for That RFQ's Buyer Only:**
+   - Resolve `rfqNumber` in priority order:
+     1. `In-Reply-To` / `References` matching stored `invite_message_id` or `rfq-<RFQNUMBER>-` pattern.
+     2. `extractRfqReferenceFromEmail` across subject, stripped body, and unstripped HTML/quoted replies.
+     3. Single active open invite fallback for that vendor within the last 48 hours (only if unambiguous — exactly 1 open invite).
+   - Verify the vendor was invited to that `rfqNumber`.
+   - Create/update the bid strictly bound to `rfq.rfqNumber` and `rfq.buyerId` (reusing existing bid creation/parsing logic). Never attach to another buyer and never create a new RFQ.
+
+3. **Dual-Trigger Buyer Quotation Dispatch (Reuse Existing Send-Bid-Details Code):**
+   - Create a single idempotent function `checkAndDispatchBuyerQuotations(rfqNumber, { trigger })` that:
+     1. Checks if `buyer_quotes_sent_at` is already set — if so, exit immediately (no duplicate emails).
+     2. Triggers if **either**:
+        - **Trigger A (Immediate):** All invited vendors for `rfqNumber` have submitted bids (`receivedBids >= totalInvited && totalInvited > 0`).
+        - **Trigger B (48-Hour Timeout):** `NOW() >= quotes_dispatch_due_at` and at least 1 bid exists.
+     3. Atomically claims the dispatch in DB (`UPDATE rfqs SET buyer_quotes_sent_at = NOW() WHERE rfq_number = $1 AND buyer_quotes_sent_at IS NULL RETURNING *`) to prevent race conditions between concurrent replies and the scheduler.
+     4. Fetches the buyer's email strictly from the `rfqNumber`'s buyer record.
+     5. Calls the **existing send-bid-details email function** to send the compiled vendor quotations to that buyer.
+   - Call `checkAndDispatchBuyerQuotations` immediately after every vendor bid is saved, and wire a lightweight cron/scheduler job (every 5–15 minutes) to check open RFQs where `buyer_quotes_sent_at IS NULL AND quotes_dispatch_due_at <= NOW()`.
+
+---
+
+## Part 3: Unit Tests & Smoke Tests (Mandatory)
+
+Write and run automated **unit tests** and **end-to-end smoke tests** covering all scenarios below, and confirm every test passes:
+
+### Unit Tests
+1. **Strict Mailbox Gate:**
+   - Unregistered sender → `rfq@procucev.com` → allowed to create buyer account + RFQ.
+   - Unregistered sender → `invitations@procucev.com` → blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
+   - Unregistered or registered sender → `gmtrfq@procucev.com` → blocked (`skipped_non_buyer_mailbox`), 0 buyer accounts created, 0 RFQs created.
+   - Forwarded/aliased mail where `Delivered-To` or `To` is `invitations@procucev.com` or `gmtrfq@procucev.com` on the buyer poller → blocked.
+2. **Vendor Protection (No `"user"` Row):**
+   - Vendor exists in `vendors` table (no `"user"` row) and emails `rfq@procucev.com` or `invitations@procucev.com` with subject `Offer` and `Quote 25/11/2026` → blocked from `getOrCreateBuyerAccount` and Buyer RFQ creation.
+3. **RFQ Reference Extraction:**
+   - Vendor reply with subject `Offer` (no RFQ # in subject or top body) resolves `rfqNumber` via `In-Reply-To` / `References` `Message-ID` OR unstripped quoted HTML.
+4. **Strict Bid Binding:**
+   - Vendor reply creates a bid strictly under the matching `rfq.buyerId`, never another buyer.
+5. **Dual-Trigger Buyer Dispatch & Idempotency:**
+   - All invited vendors bid before 48h → existing send-bid-details email fires immediately to the exact buyer email for that `rfqNumber`; `buyer_quotes_sent_at` is set.
+   - Partial bids + 48h elapsed → scheduler fires existing send-bid-details email once to that buyer email.
+   - Concurrent replies or repeated cron runs → atomic DB lock prevents duplicate emails.
+   - Late vendor bid after 48h → bid is saved under `rfq.buyerId` without duplicating the initial buyer dispatch email.
+
+### Smoke Tests
+- Simulate the exact production incident (`dhairya@dhairyaengineering.co.in` replying to `invitations@procucev.com` with subject `Offer` and HTML table `Quote 25/11/2026`) and verify:
+  - No buyer account created.
+  - No new RFQ created.
+  - No onboarding email sent from `rfq@procucev.com`.
+  - Bid is properly linked to the original RFQ's buyer.
+- Run the full existing test suite to verify zero regressions.
+
+---
+
+## Deliverable
+1. Apply all code changes cleanly while reusing existing functions.
+2. Run all unit tests and smoke tests and fix any failures.
+3. Report:
+   - Exact files and functions modified (and which existing send-bid-details function was reused).
+   - Full test execution output showing all unit and smoke tests passing.
+```
+
+### Prompt 443
+
+**Timestamp**: 2026-11-25T13:29:14+05:30
+
+```text
+Create the bnch and create pr and pass all the covergaes and gemini pr check and ready to merge in test-v3 i can merge after all the test cases / coverages are passed?
+```
+
+### Prompt 444
+
+**Timestamp**: 2026-11-25T14:58:41+05:30
+
+```text
+continue
+```
+
+### Prompt 445
+
+**Timestamp**: 2026-11-25T15:04:59+05:30
+
+```text
+continuw
+```
+
+### Prompt 446
+
+**Timestamp**: 2026-11-25T17:22:10+05:30
+
+```text
+please create pr and pass all the covergaes
+```
+
+### Prompt 447
+
+**Timestamp**: 2026-11-25T18:03:32+05:30
+
+```text
+which branch is the code tell me i raise the pr manually
+```
+
+### Prompt 448
+
+**Timestamp**: 2026-11-25T18:06:15+05:30
+
+```text
+noo create CM Branch and remove the s1 to s11.json files one drive no hardcarded unceesary changes i don't want
+```
+
+### Prompt 449
+
+**Timestamp**: 2026-11-25T18:37:13+05:30
+
+```text
+create a new pr for this code and pass all the coverages
+```
+
+### Prompt 450
+
+**Timestamp**: 2026-11-26T11:57:23+05:30
+
+```text
+delete all the code for this issue
+```
+
+### Prompt 451
+
+**Timestamp**: 2026-11-26T12:11:26+05:30
+
+```text
+Now no changes are done for this issue am i right?
+```
+
+---
+
+### Prompt 452
+
+**Timestamp**: 2026-11-26T11:59:21+05:30
+
+```text
+continue
 ```

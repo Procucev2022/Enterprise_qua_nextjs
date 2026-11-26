@@ -23,6 +23,7 @@ beforeEach(() => {
   chasers = {
     dispatchDueChaserJobs: jest.fn().mockResolvedValue([]),
     dispatchDueRFQComparisonJobs: jest.fn().mockResolvedValue([]),
+    dispatchDueV0BuyerQuotationJobs: jest.fn().mockResolvedValue({ checked: 0, dispatched: 0, skipped: 0, failed: 0 }),
   };
   eventOutbox = {
     dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
@@ -217,6 +218,7 @@ describe('Worker cron jobs', () => {
 
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalledTimes(1);
+    expect(chasers.dispatchDueV0BuyerQuotationJobs).toHaveBeenCalledTimes(1);
     expect(store.closeExpiredRFQsDurably).toHaveBeenCalledTimes(1);
     expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
     expect(process.env.WORKER_TEST_SETTING).toBe('cron');

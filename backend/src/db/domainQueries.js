@@ -2568,6 +2568,268 @@ async function deleteRFQInDB(id) {
   return result.rowCount > 0;
 }
 
+/**
+ * Persist an outbound RFQ vendor invitation (Message-ID + invitedAt) and stamp
+ * the 48-hour V0 quotation dispatch deadline on the RFQ when not already set.
+ */
+async function recordRfqVendorInviteInDB({
+  rfqId = null,
+  rfqNumber,
+  vendorId = null,
+  vendorEmail,
+  inviteMessageId = null,
+  invitedAt = new Date().toISOString(),
+  quotesDispatchDueAt = null,
+}) {
+  if (!pool.hasStorage() || !rfqNumber || !vendorEmail) return null;
+  const cleanRfqNumber = String(rfqNumber).trim();
+  const cleanEmail = String(vendorEmail).trim().toLowerCase();
+  if (!cleanRfqNumber || !cleanEmail) return null;
+  const inviteId = `invite:${cleanRfqNumber}:${cleanEmail}`.slice(0, 128);
+
+  await pool.query(
+    `INSERT INTO rfq_vendor_invites (id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, now())
+     ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
+       rfq_id = COALESCE(EXCLUDED.rfq_id, rfq_vendor_invites.rfq_id),
+       vendor_id = COALESCE(EXCLUDED.vendor_id, rfq_vendor_invites.vendor_id),
+       invite_message_id = COALESCE(EXCLUDED.invite_message_id, rfq_vendor_invites.invite_message_id),
+       invited_at = LEAST(rfq_vendor_invites.invited_at, EXCLUDED.invited_at),
+       updated_at = now()`,
+    [inviteId, rfqId || null, cleanRfqNumber, vendorId || null, cleanEmail, inviteMessageId || null, invitedAt],
+    {
+      d1: true,
+      d1Text: `INSERT INTO rfq_vendor_invites (id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, CURRENT_TIMESTAMP)
+       ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
+         rfq_id = COALESCE(excluded.rfq_id, rfq_vendor_invites.rfq_id),
+         vendor_id = COALESCE(excluded.vendor_id, rfq_vendor_invites.vendor_id),
+         invite_message_id = COALESCE(excluded.invite_message_id, rfq_vendor_invites.invite_message_id),
+         invited_at = CASE
+           WHEN excluded.invited_at < rfq_vendor_invites.invited_at THEN excluded.invited_at
+           ELSE rfq_vendor_invites.invited_at
+         END,
+         updated_at = CURRENT_TIMESTAMP`,
+    }
+  );
+
+  if (quotesDispatchDueAt) {
+    const duePatch = JSON.stringify({ quotesDispatchDueAt });
+    await pool.query(
+      `UPDATE rfqs
+       SET quotes_dispatch_due_at = COALESCE(quotes_dispatch_due_at, $2),
+           raw = CASE
+             WHEN COALESCE(raw->>'quotesDispatchDueAt', '') = '' THEN raw || $3::jsonb
+             ELSE raw
+           END,
+           updated_at = now()
+       WHERE rfq_number = $1`,
+      [cleanRfqNumber, quotesDispatchDueAt, duePatch],
+      {
+        d1: true,
+        d1Text: `UPDATE rfqs
+         SET quotes_dispatch_due_at = COALESCE(quotes_dispatch_due_at, $2),
+             raw = CASE
+               WHEN COALESCE(json_extract(raw, '$.quotesDispatchDueAt'), '') = '' THEN json_patch(raw, $3)
+               ELSE raw
+             END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE rfq_number = $1`,
+      }
+    );
+    queryCache.invalidate('rfqs');
+  }
+
+  return {
+    id: inviteId,
+    rfqId,
+    rfqNumber: cleanRfqNumber,
+    vendorId,
+    vendorEmail: cleanEmail,
+    inviteMessageId,
+    invitedAt,
+    quotesDispatchDueAt,
+  };
+}
+
+/** Look up an RFQ vendor invite by one or more RFC2822 Message-IDs. */
+async function findRfqVendorInviteByMessageIdsFromDB(messageIds = []) {
+  if (!pool.hasStorage() || !Array.isArray(messageIds) || messageIds.length === 0) return null;
+  const cleanIds = Array.from(new Set(messageIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return null;
+
+  const result = await pool.query(
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+     FROM rfq_vendor_invites
+     WHERE invite_message_id = ANY($1::text[])
+     ORDER BY invited_at DESC
+     LIMIT 1`,
+    [cleanIds],
+    {
+      d1: true,
+      d1Text: `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+       FROM rfq_vendor_invites
+       WHERE invite_message_id IN (SELECT value FROM json_each($1))
+       ORDER BY invited_at DESC
+       LIMIT 1`,
+      d1Params: [JSON.stringify(cleanIds)],
+    }
+  );
+  return result.rows[0] || null;
+}
+
+/** Return open RFQ invites for a vendor within the active quotation window. */
+async function findOpenVendorInvitesWithinWindowFromDB({ vendorId = null, vendorEmail = null, cutoffIso }) {
+  if (!pool.hasStorage() || (!vendorId && !vendorEmail) || !cutoffIso) return [];
+  const cleanEmail = vendorEmail ? String(vendorEmail).trim().toLowerCase() : null;
+  const cleanVendorId = vendorId ? String(vendorId).trim() : null;
+  const result = await pool.query(
+    `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at
+     FROM rfq_vendor_invites i
+     LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
+     WHERE ((($1::text IS NOT NULL) AND lower(i.vendor_email) = $1)
+         OR (($2::text IS NOT NULL) AND i.vendor_id = $2))
+       AND i.invited_at >= $3
+       AND COALESCE(r.status, r.raw->>'status', '') NOT IN ('Closed', 'Expired', 'PO Generated')
+     ORDER BY i.invited_at DESC
+     LIMIT 10`,
+    [cleanEmail, cleanVendorId, cutoffIso],
+    {
+      d1: true,
+      d1Text: `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at
+       FROM rfq_vendor_invites i
+       LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
+       WHERE ((($1 IS NOT NULL) AND lower(i.vendor_email) = $1)
+           OR (($2 IS NOT NULL) AND i.vendor_id = $2))
+         AND i.invited_at >= $3
+         AND COALESCE(r.status, json_extract(r.raw, '$.status'), '') NOT IN ('Closed', 'Expired', 'PO Generated')
+       ORDER BY i.invited_at DESC
+       LIMIT 10`,
+    }
+  );
+  return result.rows || [];
+}
+
+/** Return all tracked vendor invitations for an RFQ number. */
+async function findRfqVendorInvitesByRfqNumberFromDB(rfqNumber) {
+  if (!pool.hasStorage() || !rfqNumber) return [];
+  const cleanNumber = String(rfqNumber).trim();
+  if (!cleanNumber) return [];
+  const result = await pool.query(
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at
+     FROM rfq_vendor_invites
+     WHERE rfq_number = $1
+     ORDER BY invited_at ASC`,
+    [cleanNumber],
+    { d1: true }
+  );
+  return result.rows || [];
+}
+
+/**
+ * Atomically claim the buyer quotation summary dispatch on an RFQ so concurrent
+ * vendor replies and cron runs can never send duplicate buyer emails.
+ */
+async function claimRfqBuyerQuotesDispatchInDB(rfqNumber, sentAtIso = new Date().toISOString()) {
+  if (!pool.hasStorage() || !rfqNumber) return null;
+  const cleanNumber = String(rfqNumber).trim();
+  const patch = JSON.stringify({ buyerQuotesSentAt: sentAtIso });
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET buyer_quotes_sent_at = $2,
+         raw = raw || $3::jsonb,
+         updated_at = now()
+     WHERE rfq_number = $1
+       AND buyer_quotes_sent_at IS NULL
+       AND COALESCE(raw->>'buyerQuotesSentAt', '') = ''
+     RETURNING raw`,
+    [cleanNumber, sentAtIso, patch],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET buyer_quotes_sent_at = $2,
+           raw = json_patch(raw, $3),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE rfq_number = $1
+         AND buyer_quotes_sent_at IS NULL
+         AND COALESCE(json_extract(raw, '$.buyerQuotesSentAt'), '') = ''
+       RETURNING raw`,
+    }
+  );
+  if (result.rows[0]) {
+    queryCache.invalidate('rfqs');
+    return parseRaw(result.rows[0].raw);
+  }
+  return null;
+}
+
+/**
+ * Roll back a claimed buyer quotation dispatch timestamp when mail delivery fails
+ * before provider acceptance so the next cron/trigger can retry cleanly.
+ */
+async function releaseRfqBuyerQuotesDispatchClaimInDB(rfqNumber) {
+  if (!pool.hasStorage() || !rfqNumber) return false;
+  const cleanNumber = String(rfqNumber).trim();
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET buyer_quotes_sent_at = NULL,
+         raw = raw - 'buyerQuotesSentAt',
+         updated_at = now()
+     WHERE rfq_number = $1
+     RETURNING rfq_number`,
+    [cleanNumber],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET buyer_quotes_sent_at = NULL,
+           raw = json_remove(raw, '$.buyerQuotesSentAt'),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE rfq_number = $1
+       RETURNING rfq_number`,
+    }
+  );
+  queryCache.invalidate('rfqs');
+  return Boolean(result.rows && result.rows.length > 0);
+}
+
+/**
+ * List open V0 RFQs whose 48-hour quotation window has elapsed and whose buyer
+ * comparison email has not yet been dispatched.
+ */
+async function listDueV0RfqsForQuotesDispatchFromDB(nowIso = new Date().toISOString(), limit = 25) {
+  if (!pool.hasStorage()) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 200);
+  const result = await pool.query(
+    `SELECT raw FROM rfqs
+     WHERE lower(COALESCE(sourcing_mode, raw->>'sourcingMode', '')) IN ('mode_0', 'v0', 'version_0')
+       AND buyer_quotes_sent_at IS NULL
+       AND COALESCE(raw->>'buyerQuotesSentAt', '') = ''
+       AND COALESCE(status, raw->>'status', '') NOT IN ('Closed', 'Expired', 'PO Generated')
+       AND (
+         (quotes_dispatch_due_at IS NOT NULL AND quotes_dispatch_due_at <= $1)
+         OR (COALESCE(raw->>'quotesDispatchDueAt', '') <> '' AND raw->>'quotesDispatchDueAt' <= $1)
+       )
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [nowIso, safeLimit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM rfqs
+       WHERE lower(COALESCE(sourcing_mode, json_extract(raw, '$.sourcingMode'), '')) IN ('mode_0', 'v0', 'version_0')
+         AND buyer_quotes_sent_at IS NULL
+         AND COALESCE(json_extract(raw, '$.buyerQuotesSentAt'), '') = ''
+         AND COALESCE(status, json_extract(raw, '$.status'), '') NOT IN ('Closed', 'Expired', 'PO Generated')
+         AND (
+           (quotes_dispatch_due_at IS NOT NULL AND quotes_dispatch_due_at <= $1)
+           OR (COALESCE(json_extract(raw, '$.quotesDispatchDueAt'), '') <> '' AND json_extract(raw, '$.quotesDispatchDueAt') <= $1)
+         )
+       ORDER BY created_at ASC
+       LIMIT $2`,
+    }
+  );
+  return (result.rows || []).map((row) => parseRaw(row.raw));
+}
+
 // ── Evaluations (append-only — no update/delete method exists) ────────────────
 
 async function getEvaluationsFromDB(limit = null) {
@@ -4275,6 +4537,13 @@ module.exports = {
   closeExpiredRFQsInDB,
   extendRFQOnceInDB,
   deleteRFQInDB,
+  recordRfqVendorInviteInDB,
+  findRfqVendorInviteByMessageIdsFromDB,
+  findOpenVendorInvitesWithinWindowFromDB,
+  findRfqVendorInvitesByRfqNumberFromDB,
+  claimRfqBuyerQuotesDispatchInDB,
+  releaseRfqBuyerQuotesDispatchClaimInDB,
+  listDueV0RfqsForQuotesDispatchFromDB,
   getEvaluationsFromDB,
   getEvaluationsForVendorFromDB,
   upsertEvaluationInDB,
