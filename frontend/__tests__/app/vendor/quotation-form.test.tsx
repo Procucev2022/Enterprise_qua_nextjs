@@ -1739,4 +1739,124 @@ describe("QuotationForm Comprehensive Suite", () => {
     const cancelBtn = screen.getByRole("button", { name: /Cancel/i });
     fireEvent.click(cancelBtn);
   });
+
+  test("calculates Discount and GST per line item matching user example (Rate: 100, Discount: 20%, GST: 18%, Total: 94.40)", async () => {
+    const multiItemRfq = {
+      ...DEFAULT_RFQ,
+      id: "rfq-disc-001",
+      rfqNumber: "RFQ-2026-DISC01",
+      extractedEntities: [
+        { id: "li-item-1", itemName: "Precision Gear", quantity: 1, unit: "Nos", targetDate: "", technicalSpecs: "", confidence: 1, category: "Engineering Spares - Mechanical", minorCategory: "Gears" },
+      ],
+    };
+    (global.fetch as jest.Mock).mockImplementation((url: string, options: any = {}) => {
+      const method = options.method || "GET";
+      if (/\/api\/rfqs(\?|$)/.test(url) && method === "GET") {
+        return Promise.resolve({ ok: true, json: async () => ({ success: true, data: [multiItemRfq] }) });
+      }
+      return defaultMockFetchImpl(url, options);
+    });
+
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={jest.fn()}
+        withSession
+        customSubscription="select"
+      />,
+    );
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Submit Quotation/i })).toBeInTheDocument();
+    });
+
+    const rateInput = screen.getByLabelText(/Rate for Precision Gear/i);
+    const discInput = screen.getByLabelText(/Discount for Precision Gear/i);
+    const gstInput = screen.getByLabelText(/GST for Precision Gear/i);
+
+    fireEvent.change(rateInput, { target: { value: "100" } });
+    fireEvent.change(discInput, { target: { value: "20" } });
+    fireEvent.change(gstInput, { target: { value: "18" } });
+
+    // 100 - 20% discount = 80; 80 + 18% GST = 94.40
+    expect(screen.getAllByText("94.4").length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText("-20%")).toBeInTheDocument();
+    expect(screen.getByText("+18% GST")).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText("e.g. 14"), { target: { value: "5" } });
+
+    const submitQuotationBtn = screen.getByRole("button", { name: /Submit Quotation/i });
+    await act(async () => {
+      fireEvent.click(submitQuotationBtn);
+    });
+
+    const quoteCall = (global.fetch as jest.Mock).mock.calls.find(([url, opts]) =>
+      /\/api\/rfqs\/[^/]+\/quotes$/.test(url) && opts?.method === "POST",
+    );
+    expect(quoteCall).toBeDefined();
+    const body = JSON.parse(quoteCall![1].body);
+    expect(body.totalPrice).toBe(94.4);
+    expect(body.discountPercent).toBe(20);
+    expect(body.discountAmount).toBe(20);
+    expect(body.taxableAmount).toBe(80);
+    expect(body.taxRate).toBe(18);
+    expect(body.taxAmount).toBe(14.4);
+    expect(body.lineItemQuotes[0]).toEqual({
+      lineItemId: "li-item-1",
+      itemName: "Precision Gear",
+      quantity: 1,
+      unitPrice: 100,
+      totalPrice: 94.4,
+      discountPercent: 20,
+      discountAmount: 20,
+      taxableAmount: 80,
+      taxRate: 18,
+      gstPercent: 18,
+      taxAmount: 14.4,
+      gstAmount: 14.4,
+    });
+  });
+
+  test("calculates Discount and GST on single item quotation with live breakdown", async () => {
+    renderWithProvider(
+      <QuotationFormCustomWrapper
+        onBack={jest.fn()}
+        withSession
+        customSubscription="select"
+      />,
+    );
+
+    const submitBtns = await waitFor(() => {
+      const btns = screen.getAllByRole("button", { name: /Submit Quote$/i });
+      expect(btns.length).toBeGreaterThan(0);
+      return btns;
+    });
+    fireEvent.click(submitBtns[0]);
+
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Submit Quotation/i })).toBeInTheDocument();
+    });
+
+    const priceInputs = document.querySelectorAll('input[type="number"]');
+    // priceInputs[0] is unit price, [1] is lead time
+    fireEvent.change(priceInputs[0], { target: { value: "100" } });
+    const textInputs = screen.getAllByRole("textbox");
+    // Discount & GST inputs
+    const discInput = screen.getByPlaceholderText("0");
+    const gstInput = screen.getByPlaceholderText("18");
+    fireEvent.change(discInput, { target: { value: "20" } });
+    fireEvent.change(gstInput, { target: { value: "18" } });
+
+    // Live breakdown should show Final Quote Price: ₹80 and GST (18%): +₹14.40
+    expect(screen.getByText("Final Quote Price (Taxable):")).toBeInTheDocument();
+    expect(screen.getByText("₹80")).toBeInTheDocument();
+    expect(screen.getByText("+₹14.4")).toBeInTheDocument();
+    expect(screen.getByText("₹94.4")).toBeInTheDocument();
+  });
 });

@@ -559,6 +559,64 @@ describe('QuoteMatrix Component Tests', () => {
     expect(screen.queryByText(/GST \(\d+%\)/)).not.toBeInTheDocument();
   });
 
+  test('renders Discount and GST correctly in Line-Item-Wise Bid Comparison', () => {
+    const discountedRfq = {
+      ...mockRFQs[0],
+      extractedEntities: [
+        { id: 'li-disc-1', itemName: 'Industrial Sensor', quantity: 2, unit: 'Nos' },
+      ],
+      quotes: [
+        {
+          vendorId: 'v-disc-1',
+          vendorName: 'Discounted Supplies',
+          vendorCategory: 'Verified Supplier' as const,
+          unitPrice: 100,
+          totalPrice: 188.8,
+          leadTimeDays: 5,
+          discountPercent: 20,
+          discountAmount: 40,
+          taxableAmount: 160,
+          taxRate: 18,
+          taxAmount: 28.8,
+          lineItemQuotes: [
+            {
+              lineItemId: 'li-disc-1',
+              itemName: 'Industrial Sensor',
+              quantity: 2,
+              unitPrice: 100,
+              totalPrice: 188.8,
+              discountPercent: 20,
+              discountAmount: 40,
+              taxableAmount: 160,
+              taxRate: 18,
+              taxAmount: 28.8,
+            },
+          ],
+        },
+      ],
+    };
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [discountedRfq],
+      selectedRFQForMatrix: discountedRfq,
+      setSelectedRFQForMatrix: mockSetSelectedRFQForMatrix,
+      showToast: mockShowToast,
+      openRFQDeepDive: mockOpenRFQDeepDive,
+      deepDiveModalOpen: false,
+      setDeepDiveModalOpen: mockSetDeepDiveModalOpen,
+      selectedRFQForDeepDive: null,
+      activeBuyerAccount: { id: 'buyer-1', organizationName: 'Buyer Corp' },
+      buyerVendors: [],
+    });
+
+    render(<QuoteMatrix onBackToDashboard={mockOnBackToDashboard} />);
+
+    expect(screen.getByText('Discount (20%):')).toBeInTheDocument();
+    expect(screen.getByText('-₹40')).toBeInTheDocument();
+    expect(screen.getByText('GST (18%):')).toBeInTheDocument();
+    expect(screen.getByText('+₹29')).toBeInTheDocument();
+  });
+
   test('handles awarded vendor matching by awardedVendorId, awardedVendor name, and poFinalised flags', () => {
     const awardedByIdRfq = {
       ...mockRFQs[0],

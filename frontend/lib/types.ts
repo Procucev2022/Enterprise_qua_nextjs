@@ -66,6 +66,13 @@ export interface LineItemQuote {
   unit?: string;
   unitPrice: number;
   totalPrice: number;
+  discountPercent?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
+  taxRate?: number;
+  gstPercent?: number;
+  taxAmount?: number;
+  gstAmount?: number;
   leadTimeDays?: number;
   warrantyYears?: number;
   remarks?: string;
@@ -77,6 +84,10 @@ export interface QuoteComparison {
   vendorCategory: 'Client List' | 'Procucev - AI Rec' | 'Procucev Network';
   unitPrice: number;
   totalPrice: number;
+  subtotal?: number;
+  discountPercent?: number;
+  discountAmount?: number;
+  taxableAmount?: number;
   leadTimeDays: number;
   aiMatchScore: number;
   isBestPrice?: boolean;
@@ -90,6 +101,9 @@ export interface QuoteComparison {
   submittedAt?: string;
   taxes?: number;
   taxRate?: number;
+  gstPercent?: number;
+  taxAmount?: number;
+  gstAmount?: number;
   deliveryCharges?: number;
   deliveryDate?: string;
   lineItemQuotes?: LineItemQuote[];

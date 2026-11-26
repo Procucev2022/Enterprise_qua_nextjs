@@ -741,9 +741,43 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                       </td>
                       {prices.map(({ quote, matched, effectivePrice }) => {
                         const isL1 = effectivePrice !== null && lowestPrice !== null && effectivePrice === lowestPrice;
-                        const lineTotal = matched ? matched.totalPrice || matched.unitPrice * (item.quantity || 1) : null;
-                        const taxRate = typeof quote.taxRate === 'number' ? quote.taxRate : null;
-                        const estTax = lineTotal !== null && taxRate !== null ? Math.round((lineTotal * taxRate) / 100) : null;
+                        const lineBaseRate = matched ? matched.unitPrice : quote.unitPrice;
+                        const lineQty = item.quantity || 1;
+                        const lineBaseTotal = lineBaseRate ? lineBaseRate * lineQty : null;
+
+                        const lineDiscPct = typeof (matched as any)?.discountPercent === 'number'
+                          ? (matched as any).discountPercent
+                          : typeof quote.discountPercent === 'number'
+                          ? quote.discountPercent
+                          : 0;
+
+                        const lineDiscAmt = typeof (matched as any)?.discountAmount === 'number'
+                          ? (matched as any).discountAmount
+                          : (lineBaseTotal !== null && lineDiscPct > 0 ? (lineBaseTotal * lineDiscPct) / 100 : 0);
+
+                        const lineTaxableBase = typeof (matched as any)?.taxableAmount === 'number'
+                          ? (matched as any).taxableAmount
+                          : (lineBaseTotal !== null ? lineBaseTotal - lineDiscAmt : null);
+
+                        const taxRate = typeof (matched as any)?.taxRate === 'number'
+                          ? (matched as any).taxRate
+                          : typeof (matched as any)?.gstPercent === 'number'
+                          ? (matched as any).gstPercent
+                          : typeof quote.taxRate === 'number'
+                          ? quote.taxRate
+                          : typeof quote.gstPercent === 'number'
+                          ? quote.gstPercent
+                          : null;
+
+                        const estTax = typeof (matched as any)?.taxAmount === 'number'
+                          ? (matched as any).taxAmount
+                          : typeof (matched as any)?.gstAmount === 'number'
+                          ? (matched as any).gstAmount
+                          : lineTaxableBase !== null && taxRate !== null
+                          ? Math.round((lineTaxableBase * taxRate) / 100)
+                          : (lineBaseTotal !== null && taxRate !== null ? Math.round((lineBaseTotal * taxRate) / 100) : null);
+
+                        const lineTotal = matched ? matched.totalPrice || (lineTaxableBase !== null && estTax !== null ? lineTaxableBase + estTax : lineBaseTotal) : null;
                         const leadTime = matched?.leadTimeDays ?? quote.leadTimeDays;
 
                         return (
@@ -769,6 +803,12 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
                                     </span>
                                   )}
                                 </div>
+                                {lineDiscPct > 0 && (
+                                  <div className="text-[9px] text-amber-600 dark:text-amber-400 flex items-center justify-between">
+                                    <span>Discount ({lineDiscPct}%):</span>
+                                    <span className="mono font-semibold">-{formatCurrency(lineDiscAmt)}</span>
+                                  </div>
+                                )}
                                 <div className="text-[10px] text-slate-500 dark:text-gray-400 flex items-center justify-between">
                                   <span>Total:</span>
                                   <span className="mono font-semibold text-slate-700 dark:text-gray-300">
@@ -838,15 +878,25 @@ export default function QuoteMatrix({ onBackToDashboard, scopeToOwnBuyerAccount 
           buyerAccount={activeBuyerAccount}
           vendorRecord={buyerVendors?.find((v) => v.id === selectedVendorForPO.vendorId || v.name === selectedVendorForPO.vendorName)}
           onFinalized={handlePOFinalized}
-          lineItems={(currentRFQ.extractedEntities || []).map((ent) => ({
-            id: ent.id,
-            description: ent.itemName || 'Item',
-            technicalSpecs: ent.technicalSpecs,
-            quantity: ent.quantity,
-            unit: ent.unit || 'Nos',
-            unitPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.unitPrice ?? selectedVendorForPO.unitPrice,
-            totalPrice: (selectedVendorForPO.lineItemQuotes || []).find((li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase())?.totalPrice ?? (selectedVendorForPO.unitPrice * (ent.quantity || 1)),
-          }))}
+          lineItems={(currentRFQ.extractedEntities || []).map((ent) => {
+            const matchedLi = (selectedVendorForPO.lineItemQuotes || []).find(
+              (li) => li.lineItemId === ent.id || (li.itemName || '').trim().toLowerCase() === (ent.itemName || '').trim().toLowerCase()
+            );
+            return {
+              id: ent.id,
+              description: ent.itemName || 'Item',
+              technicalSpecs: ent.technicalSpecs,
+              quantity: ent.quantity,
+              unit: ent.unit || 'Nos',
+              unitPrice: matchedLi?.unitPrice ?? selectedVendorForPO.unitPrice,
+              totalPrice: matchedLi?.totalPrice ?? (selectedVendorForPO.unitPrice * (ent.quantity || 1)),
+              discountPercent: matchedLi?.discountPercent ?? selectedVendorForPO.discountPercent,
+              discountAmount: matchedLi?.discountAmount,
+              taxableAmount: matchedLi?.taxableAmount,
+              taxRate: matchedLi?.taxRate ?? matchedLi?.gstPercent ?? selectedVendorForPO.taxRate ?? selectedVendorForPO.gstPercent,
+              taxAmount: matchedLi?.taxAmount ?? matchedLi?.gstAmount,
+            };
+          })}
         />
       )}
 

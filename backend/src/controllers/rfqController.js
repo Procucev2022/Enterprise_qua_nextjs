@@ -2125,7 +2125,26 @@ async function addQuote(req, res, next) {
       return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
     }
 
-    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus, lineItemQuotes } = req.body;
+    const {
+      unitPrice,
+      totalPrice,
+      subtotal,
+      discountPercent,
+      discountAmount,
+      taxableAmount,
+      taxRate,
+      gstPercent,
+      taxAmount,
+      gstAmount,
+      taxes,
+      leadTimeDays,
+      warrantyYears,
+      paymentTerms,
+      remarks,
+      vendorCategory,
+      complianceStatus,
+      lineItemQuotes,
+    } = req.body;
     const requestedAttachments = req.body?.attachments;
     if (requestedAttachments !== undefined && !Array.isArray(requestedAttachments)) {
       return res.status(400).json({ success: false, error: 'Bid documents must be provided as a list.' });
@@ -2218,6 +2237,15 @@ async function addQuote(req, res, next) {
       unitPrice,
       totalPrice: totalPrice || unitPrice,
       totalAmount: totalPrice || unitPrice,
+      subtotal: optionalQuoteNumber(subtotal),
+      discountPercent: optionalQuoteNumber(discountPercent),
+      discountAmount: optionalQuoteNumber(discountAmount),
+      taxableAmount: optionalQuoteNumber(taxableAmount),
+      taxRate: optionalQuoteNumber(taxRate ?? gstPercent),
+      gstPercent: optionalQuoteNumber(gstPercent ?? taxRate),
+      taxAmount: optionalQuoteNumber(taxAmount ?? gstAmount ?? taxes),
+      gstAmount: optionalQuoteNumber(gstAmount ?? taxAmount ?? taxes),
+      taxes: optionalQuoteNumber(taxes ?? taxAmount ?? gstAmount),
       leadTimeDays: optionalQuoteNumber(leadTimeDays),
       // No score is computed for a quote submitted through this route, so none is invented here.
       aiMatchScore: null,
