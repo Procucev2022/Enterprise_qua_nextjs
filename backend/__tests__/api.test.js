@@ -1894,7 +1894,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       expect(res.body.data.title).toBe('Mechanical Spares Procurement');
     });
 
-    test('closes an RFQ for a buyer, notifies all invited vendors, and prevents reopening after close', async () => {
+    test('closes an RFQ for a buyer, notifies all invited vendors without sending closure email, and prevents reopening after close', async () => {
       const mailerService = require('../src/services/mailerService');
       const { RFQ_CLOSURE_MESSAGES } = require('../src/config/constants');
       const rfq = await createOwnRFQ({
@@ -1904,7 +1904,9 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
           { id: 'v-inv-2', name: 'Invited Supplier B', email: 'invited-b@test.com', phone: '9876500002' },
         ],
       });
-      const emailSpy = jest.spyOn(mailerService, 'sendRfqClosedVendorEmail').mockResolvedValue({ sent: true });
+      const deliverVendorSpy = jest.spyOn(mailerService, 'deliverVendor').mockResolvedValue({ sent: true });
+      expect(mailerService.buildRfqClosedVendorEmail).toBeUndefined();
+      expect(mailerService.sendRfqClosedVendorEmail).toBeUndefined();
 
       const closeRes = await request(app)
         .put(`/api/rfqs/${rfq.id}`)
@@ -1918,8 +1920,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       expect(closeRes.body.data.closedAt).toBeTruthy();
 
       await new Promise((resolve) => setImmediate(resolve));
-      expect(emailSpy).toHaveBeenCalledWith('invited-a@test.com', expect.objectContaining({ rfq: expect.objectContaining({ id: rfq.id }) }));
-      expect(emailSpy).toHaveBeenCalledWith('invited-b@test.com', expect.objectContaining({ rfq: expect.objectContaining({ id: rfq.id }) }));
+      expect(deliverVendorSpy).not.toHaveBeenCalled();
       expect(storeService.notifications.some((n) => n.recipientType === 'vendor' && n.recipientId === 'v-inv-1' && n.kind === 'rfq_closed')).toBe(true);
       expect(storeService.notifications.some((n) => n.recipientType === 'vendor' && n.recipientId === 'v-inv-2' && n.kind === 'rfq_closed')).toBe(true);
 
@@ -1944,7 +1945,7 @@ describe('RFQ edit and delete (/api/rfqs/:id)', () => {
       expect(cmCloseRes.statusCode).toBe(200);
       expect(cmCloseRes.body.data.closedReason).toBe(RFQ_CLOSURE_MESSAGES.CM_CLOSE_REASON);
 
-      emailSpy.mockRestore();
+      deliverVendorSpy.mockRestore();
     });
   });
 

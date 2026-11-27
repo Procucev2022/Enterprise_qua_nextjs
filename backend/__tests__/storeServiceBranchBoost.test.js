@@ -2823,7 +2823,7 @@ describe('storeService comprehensive branch boost tests', () => {
       storeService.notifyOfRFQClosure(null);
 
       const clearSpy = jest.spyOn(rfqChaserScheduler, 'clearScheduledChasers').mockImplementation(() => {});
-      const sendVendorEmailSpy = jest.spyOn(mailerService, 'sendRfqClosedVendorEmail').mockResolvedValue({ sent: true });
+      const deliverVendorSpy = jest.spyOn(mailerService, 'deliverVendor').mockResolvedValue({ sent: true });
       const sendSmsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: true });
       const sendWaSpy = jest.spyOn(whatsAppService, 'sendRFQClosedWhatsApp').mockResolvedValue({ success: true });
 
@@ -2882,10 +2882,7 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(clearSpy).toHaveBeenCalledWith('RFQ-CLOSE-INV-1');
       expect(getDbVendorsSpy).toHaveBeenCalledWith(expect.arrayContaining(['v-db-only-1']));
 
-      expect(sendVendorEmailSpy).toHaveBeenCalledWith('mem@vendor.test', expect.objectContaining({ recipientName: expect.any(String) }));
-      expect(sendVendorEmailSpy).toHaveBeenCalledWith('direct@string.test', expect.any(Object));
-      expect(sendVendorEmailSpy).toHaveBeenCalledWith('fup@vendor.test', expect.any(Object));
-      expect(sendVendorEmailSpy).toHaveBeenCalledWith('db-cold@vendor.test', expect.any(Object));
+      expect(deliverVendorSpy).not.toHaveBeenCalled();
 
       expect(sendSmsSpy).toHaveBeenCalledTimes(3);
       expect(sendWaSpy).toHaveBeenCalledTimes(3);
@@ -2904,7 +2901,7 @@ describe('storeService comprehensive branch boost tests', () => {
       hasStorageSpy.mockRestore();
       getDbVendorsSpy.mockRestore();
       clearSpy.mockRestore();
-      sendVendorEmailSpy.mockRestore();
+      deliverVendorSpy.mockRestore();
       sendSmsSpy.mockRestore();
       sendWaSpy.mockRestore();
     });
