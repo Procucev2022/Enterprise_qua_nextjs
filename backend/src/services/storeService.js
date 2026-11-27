@@ -2278,6 +2278,9 @@ class StoreService {
     }
 
     if (onboardingEvent) {
+      if (vendor.onboardingEmailStatus !== 'pending') {
+        await this._persistVendorOnboardingStatus(vendor, 'pending');
+      }
       logger.info('Vendor onboarding email recorded for durable delivery', {
         vendorId: vendor.id,
         email: vendor.email,
@@ -9694,8 +9697,8 @@ class StoreService {
               'STORE_SERVICE'
             );
             const onboardingVendorPayload = isCmActor
-              ? { ...vendor, isCmCreated: true, createdByRole: normalizedActorRole }
-              : vendor;
+              ? { ...vendor, email: vendor.email || vendorEmail, isCmCreated: true, createdByRole: normalizedActorRole }
+              : { ...vendor, email: vendor.email || vendorEmail };
             const onboarding = await this._provisionVendorOnboarding(onboardingVendorPayload, actorEmail);
             if (onboarding?.status === 'sent' || onboarding?.status === 'pending') {
               newlyProvisioned.push({ id: vendor.id, email: vendorEmail, status: onboarding.status });

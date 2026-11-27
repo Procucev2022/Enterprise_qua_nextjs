@@ -452,7 +452,34 @@ const rootResolvers = {
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
     const buyerAccount = user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(user.email) : null;
     const buyerId = user.role === 'buyer' ? (buyerAccount ? buyerAccount.id : user.sub || user.email) : null;
-    return storeService.addVendorDurably(input, user.email, buyerId);
+    const vendorInput = { ...input };
+    if (user.role === 'category_manager') {
+      vendorInput.source = 'procucev_network';
+      vendorInput.createdByRole = 'category_manager';
+      vendorInput.isCmCreated = true;
+    } else if (user.role === 'buyer') {
+      if (buyerAccount?.organizationName) {
+        vendorInput.addedByBuyerCompany = buyerAccount.organizationName;
+      }
+      vendorInput.buyerEmail = user.email;
+    }
+    if (vendorInput.email) {
+      const claimed = await storeService.claimMigratedVendorProfile(vendorInput.email, vendorInput, buyerId, user.email);
+      if (claimed) {
+        return claimed;
+      }
+    }
+    const created = await storeService.addVendorDurably(vendorInput, user.email, buyerId);
+    if (created.email) {
+      await storeService.provisionVendorOnboarding(
+        created,
+        user.email,
+        user.role === 'category_manager'
+          ? { isCmCreated: true, mailboxChannel: 'direct' }
+          : undefined
+      );
+    }
+    return storeService.getVendorById(created.id, 'all') || created;
   },
 
   updateVendor: async ({ id, input }, context) => {

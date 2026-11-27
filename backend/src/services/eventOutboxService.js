@@ -26,6 +26,7 @@ const {
   EMAIL_REGEX,
   DAILY_RFQ_REPORT_CONFIG,
   V0_QUOTES_DISPATCH_WINDOW_MS,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 

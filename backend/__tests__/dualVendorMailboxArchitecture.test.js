@@ -815,6 +815,238 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       expect(sendIngestionSpy).not.toHaveBeenCalled();
     });
 
+    test('CM durable new-vendor create + invite-vendors sends both login credentials outbox email and RFQ invite without resending credentials', async () => {
+      process.env.AES_ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const uniqueEmail = `cm-durable-${Date.now()}@sup.in`;
+      let storedVendor = null;
+      let storedRfq = {
+        id: 'rfq-cm-dur-1',
+        rfqNumber: 'RFQ262711936607',
+        title: 'IT Cloud Licenses',
+        category: 'IT',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_0',
+        assignedVendors: [],
+      };
+      let capturedOnboardingEvent = null;
+
+      jest.spyOn(domainQueries, 'upsertVendorInDB').mockImplementation(async (v) => {
+        storedVendor = { ...v };
+        return storedVendor;
+      });
+      jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockImplementation(async (email) => (
+        storedVendor && storedVendor.email === email ? storedVendor : null
+      ));
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (id) => (
+        storedVendor && (storedVendor.id === id || storedVendor.email === id) ? storedVendor : null
+      ));
+      jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockImplementation(async (id) => (
+        storedVendor && storedVendor.id === id ? { id: storedVendor.id, vendor: storedVendor, raw: JSON.stringify(storedVendor) } : null
+      ));
+      jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockImplementation(async (_snap, nextVendor) => {
+        storedVendor = { ...nextVendor };
+        return storedVendor;
+      });
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockImplementation(async (id) => (id === storedRfq.id ? storedRfq : null));
+      jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockImplementation(async (id) => (
+        id === storedRfq.id ? { id: storedRfq.id, rfq: storedRfq, raw: JSON.stringify(storedRfq) } : null
+      ));
+      jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snap, nextRfq) => {
+        storedRfq = { ...nextRfq };
+        return storedRfq;
+      });
+      jest.spyOn(domainQueries, 'upsertRFQInDB').mockImplementation(async (r) => {
+        storedRfq = { ...r };
+        return storedRfq;
+      });
+      jest.spyOn(domainQueries, 'recordRfqVendorInviteInDB').mockResolvedValue(true);
+      const bgPromises = [];
+      jest.spyOn(storeService, '_persistVendor').mockImplementation(() => {});
+      jest.spyOn(storeService, '_persistRFQ').mockImplementation(() => {});
+      jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(storeService, '_background').mockImplementation((promise) => {
+        const tracked = Promise.resolve(promise).catch(() => {});
+        bgPromises.push(tracked);
+        return tracked;
+      });
+      const claimSpy = jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
+
+      const findUserSpy = jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const insertAccSpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockImplementation(async ({ onboardingEvent }) => {
+        capturedOnboardingEvent = onboardingEvent;
+        return { created: true, user: { id: 'u-cm-durable', email: uniqueEmail } };
+      });
+      const sendIngestionSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true, messageId: 'cred-outbox-1' });
+      const sendRfqInviteSpy = jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true, messageId: 'invite-outbox-1' });
+      jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+
+      const reqCreate = {
+        user: { role: 'category_manager', email: 'cm@procucev.test' },
+        body: {
+          name: 'CM Durable Supplier',
+          email: uniqueEmail,
+          contactPerson: 'Tikec',
+          majorCategory: 'IT',
+          minorCategories: ['Cloud'],
+          city: 'Pune',
+          state: 'Maharashtra',
+        },
+      };
+      const resCreate = makeRes();
+      const nextCreate = jest.fn();
+      await vendorController.createVendor(reqCreate, resCreate, nextCreate);
+
+      expect(nextCreate).not.toHaveBeenCalled();
+      expect(resCreate.statusCode).toBe(201);
+      expect(resCreate.body.onboardingStatus).toBe('pending');
+      expect(capturedOnboardingEvent).toBeTruthy();
+
+      // Dispatch the queued VENDOR_ONBOARDING_EMAIL outbox job (guards against missing VENDOR_CM_ONBOARDING_NOTIFICATION import)
+      claimSpy.mockResolvedValueOnce([
+        {
+          id: capturedOnboardingEvent.id,
+          event_type: constants.EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+          attempts: 0,
+          lease_token: 'lease-cm-cred-1',
+          raw: capturedOnboardingEvent.payload,
+        },
+      ]);
+      const markCompleteSpy = jest.spyOn(eventOutboxQueries, 'markEventOutboxCompleteInDB').mockResolvedValue(true);
+
+      const credDispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [capturedOnboardingEvent.id]);
+      expect(credDispatch).toMatchObject({ completed: 1, retried: 0, dead: 0 });
+      expect(sendIngestionSpy).toHaveBeenCalledTimes(1);
+      expect(sendIngestionSpy.mock.calls[0][0]).toMatchObject({
+        to: uniqueEmail,
+        from: expect.stringContaining(DIRECT_MAILBOX),
+        subject: constants.VENDOR_CM_ONBOARDING_NOTIFICATION.SUBJECT,
+      });
+      expect(sendIngestionSpy.mock.calls[0][0].html).toContain(constants.VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME);
+      expect(sendIngestionSpy.mock.calls[0][2]).toEqual({ vendorChannel: 'direct' });
+      expect(storedVendor.onboardingEmailStatus).toBe('sent');
+      expect(markCompleteSpy).toHaveBeenCalledWith(capturedOnboardingEvent.id, 'lease-cm-cred-1');
+
+      // Invite newly created vendor to RFQ: identity exists so credentials are NOT resent, RFQ email IS sent
+      insertAccSpy.mockClear();
+      sendIngestionSpy.mockClear();
+      findUserSpy.mockResolvedValueOnce({ id: 'u-cm-durable', email: uniqueEmail });
+      storeService.rfqs.push(storedRfq);
+
+      const inviteResult = await storeService.inviteVendorsToRFQ(
+        storedRfq.id,
+        [storedVendor.id],
+        'cm@procucev.test',
+        { actorRole: 'category_manager' }
+      );
+      expect(inviteResult.invitedCount).toBe(1);
+      expect(inviteResult.provisionedCount).toBe(0);
+      expect(insertAccSpy).not.toHaveBeenCalled();
+      expect(sendIngestionSpy).not.toHaveBeenCalled();
+
+      const target = storedRfq.vendorInvitationTargets[0];
+      claimSpy.mockResolvedValueOnce([
+        {
+          id: `rfq-vendor-invite:${target.key}`,
+          event_type: constants.EVENT_OUTBOX_TYPES.RFQ_VENDOR_INVITE_EMAIL,
+          attempts: 0,
+          lease_token: 'lease-cm-rfq-inv-1',
+          raw: { rfqId: storedRfq.id, target },
+        },
+      ]);
+      const rfqDispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [`rfq-vendor-invite:${target.key}`]);
+      expect(rfqDispatch).toMatchObject({ completed: 1, retried: 0, dead: 0 });
+      expect(sendRfqInviteSpy).toHaveBeenCalledWith(uniqueEmail, expect.objectContaining({
+        isCmAssigned: true,
+        inviteChannel: 'direct',
+        replyToQuoteAllowed: true,
+      }));
+      await Promise.allSettled(bgPromises);
+    });
+
+    test('CM inviteVendorsToRFQ resets stale onboardingEmailStatus and provisions credentials when corporateEmail lacks identity', async () => {
+      process.env.AES_ENCRYPTION_KEY = '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef';
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+
+      const corpEmail = `corp-unprov-${Date.now()}@sup.in`;
+      let unprovVendor = {
+        id: `v-unprov-${Date.now()}`,
+        name: 'Unprovisioned Corp Vendor',
+        corporateEmail: corpEmail,
+        source: 'procucev_network',
+        onboardingEmailStatus: 'failed',
+      };
+      let targetRfq = {
+        id: `rfq-unprov-${Date.now()}`,
+        rfqNumber: 'RFQ262711999999',
+        title: 'IT Switches',
+        category: 'IT',
+        status: 'Quotes Pending',
+        sourcingMode: 'mode_0',
+        assignedVendors: [],
+      };
+
+      storeService.vendors.push(unprovVendor);
+      storeService.rfqs.push(targetRfq);
+
+      jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockResolvedValue(unprovVendor);
+      jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockImplementation(async (id) => (
+        id === unprovVendor.id ? { id: unprovVendor.id, vendor: unprovVendor, raw: JSON.stringify(unprovVendor) } : null
+      ));
+      jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockImplementation(async (_snap, nextV) => {
+        unprovVendor = { ...nextV };
+        return unprovVendor;
+      });
+      jest.spyOn(domainQueries, 'getRFQByIdFromDB').mockResolvedValue(targetRfq);
+      jest.spyOn(domainQueries, 'getRFQSnapshotByIdFromDB').mockImplementation(async () => ({
+        id: targetRfq.id,
+        rfq: targetRfq,
+        raw: JSON.stringify(targetRfq),
+      }));
+      jest.spyOn(domainQueries, 'updateRFQIfUnchangedInDB').mockImplementation(async (_snap, nextR) => {
+        targetRfq = { ...nextR };
+        return targetRfq;
+      });
+      jest.spyOn(domainQueries, 'recordRfqVendorInviteInDB').mockResolvedValue(true);
+      const bgPromises = [];
+      jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
+      jest.spyOn(storeService, 'addAuditLog').mockImplementation(() => {});
+      jest.spyOn(storeService, '_background').mockImplementation((promise) => {
+        const tracked = Promise.resolve(promise).catch(() => {});
+        bgPromises.push(tracked);
+        return tracked;
+      });
+      jest.spyOn(eventOutboxQueries, 'claimDueEventOutboxInDB').mockResolvedValue([]);
+      jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+
+      jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+      const insertAccSpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValueOnce({
+        created: true,
+        user: { id: 'u-unprov-1', email: corpEmail },
+      });
+
+      const res = await storeService.inviteVendorsToRFQ(
+        targetRfq.id,
+        [unprovVendor.id],
+        'cm@procucev.test',
+        { actorRole: 'category_manager' }
+      );
+      expect(res.invitedCount).toBe(1);
+      expect(res.provisionedCount).toBe(1);
+      expect(insertAccSpy).toHaveBeenCalledWith(expect.objectContaining({
+        email: corpEmail,
+        resetPasswordRequired: true,
+        onboardingEvent: expect.objectContaining({
+          eventType: constants.EVENT_OUTBOX_TYPES.VENDOR_ONBOARDING_EMAIL,
+          payload: expect.objectContaining({ isCmCreated: true, mailboxChannel: 'direct' }),
+        }),
+      }));
+      expect(unprovVendor.onboardingEmailStatus).toBe('pending');
+      await Promise.allSettled(bgPromises);
+    });
+
     test('CM vendor ingestion empanelment and recipient delivery provision immediate credentials on first-time vendor creation', async () => {
       jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
         found: true,

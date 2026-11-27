@@ -712,6 +712,88 @@ describe('GraphQL Resolvers Direct Unit Tests', () => {
       expect(singleResult.quotesHidden).toBe(true);
       expect(singleResult.quotes).toEqual([]);
     });
+
+    test('createVendor provisions CM credentials once, handles claimed migrated profiles, and skips email-less/duplicate identities', async () => {
+      const identityQueries = require('../src/db/identityQueries');
+      const mailerService = require('../src/services/mailerService');
+      const prevDirect = process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS;
+      process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS = 'gmtrfqprocucev@gmail.com';
+
+      try {
+        const cmEmail = `cm-gql-${Date.now()}@procucev.test`;
+        const cmVendorEmail = `cm-gql-vendor-${Date.now()}@sup.in`;
+        const cmCtx = { req: { user: { role: 'category_manager', email: cmEmail } } };
+
+        jest.spyOn(identityQueries, 'findUserByEmail').mockResolvedValue(null);
+        const insertAccSpy = jest.spyOn(identityQueries, 'insertVendorAccount').mockResolvedValue({ created: true, user: { id: 'u-gql-cm-1' } });
+        const sendIngestionSpy = jest.spyOn(mailerService, 'sendVendorIngestionEmail').mockResolvedValue({ sent: true, messageId: 'gql-cred-1' });
+
+        const cmVendor = await rootResolvers.createVendor(
+          { input: { name: 'GQL CM Vendor', email: cmVendorEmail, majorCategory: 'IT' } },
+          cmCtx
+        );
+        expect(cmVendor).toMatchObject({
+          name: 'GQL CM Vendor',
+          email: cmVendorEmail,
+          source: 'procucev_network',
+          createdByRole: 'category_manager',
+          isCmCreated: true,
+          onboardingEmailStatus: 'sent',
+        });
+        expect(insertAccSpy).toHaveBeenCalledWith(expect.objectContaining({
+          email: cmVendorEmail,
+          resetPasswordRequired: true,
+        }));
+        expect(sendIngestionSpy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            to: cmVendorEmail,
+            from: expect.stringContaining('gmtrfqprocucev@gmail.com'),
+          }),
+          'onboarding',
+          { vendorChannel: 'direct' }
+        );
+
+        // Duplicate identity check: must NOT resend credentials if identity already exists
+        insertAccSpy.mockClear();
+        sendIngestionSpy.mockClear();
+        identityQueries.findUserByEmail.mockResolvedValueOnce({ id: 'u-gql-cm-1', email: cmVendorEmail });
+        const existingVendor = await rootResolvers.createVendor(
+          { input: { name: 'GQL CM Vendor Dup', email: `cm-gql-dup-${Date.now()}@sup.in`, majorCategory: 'IT' } },
+          cmCtx
+        );
+        expect(existingVendor.onboardingEmailStatus).toBe('account_exists');
+        expect(insertAccSpy).not.toHaveBeenCalled();
+        expect(sendIngestionSpy).not.toHaveBeenCalled();
+
+        // Claimed migrated profile returns early without adding or re-sending onboarding credentials
+        const provSpy = jest.spyOn(storeService, 'provisionVendorOnboarding');
+        jest.spyOn(storeService, 'claimMigratedVendorProfile').mockResolvedValueOnce({
+          id: 'v-claimed-gql',
+          name: 'Claimed Vendor',
+          email: 'claimed@sup.in',
+          onboardingEmailStatus: 'account_exists',
+        });
+        const claimed = await rootResolvers.createVendor(
+          { input: { name: 'Claimed Vendor', email: 'claimed@sup.in', majorCategory: 'IT' } },
+          contextFor('buyer')
+        );
+        expect(claimed.id).toBe('v-claimed-gql');
+        expect(provSpy).not.toHaveBeenCalled();
+
+        // Email-less vendor creation skips provisioning and falls back cleanly if cache lookup misses
+        jest.spyOn(storeService, 'addVendorDurably').mockResolvedValueOnce({ id: 'v-gql-nomail', name: 'No Email Vendor' });
+        jest.spyOn(storeService, 'getVendorById').mockReturnValueOnce(null);
+        const noMailVendor = await rootResolvers.createVendor(
+          { input: { name: 'No Email Vendor', majorCategory: 'IT' } },
+          { req: { user: { role: 'buyer', email: 'no-org@buyer.test', sub: 'b-no-org' } } }
+        );
+        expect(noMailVendor).toEqual({ id: 'v-gql-nomail', name: 'No Email Vendor' });
+        expect(provSpy).not.toHaveBeenCalled();
+      } finally {
+        if (prevDirect === undefined) delete process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS;
+        else process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS = prevDirect;
+      }
+    });
   });
 });
 
