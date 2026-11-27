@@ -10595,3 +10595,48 @@ please proceed and fix all the issues
 ```text
 create the pr from this branch and pass all the coverages ready to merge in test-v3
 ```
+
+---
+
+### Prompt 470
+
+**Timestamp**: 2026-11-27T17:53:58+05:30
+
+```text
+On the `/buyer/ingestion-wizard` page, under **3. Select Sourcing Mode**, allow buyers to select **Category Mismatch** vendors **only for their own internal vendors** (Buyer's Approved Vendor Roster / buyer-uploaded vendors).
+
+Requirements:
+1. Enable vendor selection on **Category Mismatch** cards strictly for the buyer's own internal vendors Keep **Category Mismatch** selection disabled for Procucev Network / Vetted vendors.
+2. Reuse the existing selection checkbox/toggle and selected state styling from the **Matched** vendor cards.
+3. Update the `Create & Dispatch RFQ` submission/filter logic so selected internal mismatch vendors are included in the RFQ dispatch payload.
+4. Keep the existing `Category Mismatch` badge, registered category warning box, and `Send Email to Update Category` button intact (use `e.stopPropagation()` on the button so clicking it does not toggle card selection).
+5. Do not change any other functionality, layout, or styling.
+```
+
+---
+
+### Prompt 471
+
+**Timestamp**: 2026-11-27T18:34:33+05:30
+
+```text
+create the pr and  check pass all the covergaes and ready to merge with test-v3
+```
+
+
+---
+
+### Prompt 470
+
+**Timestamp**: 2026-11-27T18:49:26+05:30
+
+```text
+Investigate and fix a bug in the Category Manager "Invite New Vendor" flow where the RFQ details email is sent, but the new vendor's login credentials email is NOT being sent.
+
+Requirements:
+1. Trace the Category Manager invite-new-vendor backend flow (GraphQL resolver / service) and compare it with the existing working new-vendor creation / onboarding flow that sends login credentials.
+2. Identify why the credentials email is not triggered (e.g., missing call to the credentials/welcome email helper, vendor created before the `isNewVendor` check, missing temporary password generation, or a silently caught/unawaited error).
+3. Strictly reuse the existing vendor account creation, temporary password/token generation, and credentials email service/template—do NOT create new email templates, duplicate mailer logic, or new helper functions.
+4. Ensure that when a Category Manager invites a brand-new vendor, both the login credentials email and the RFQ details email are reliably sent (and do not resend credentials if the vendor already exists).
+5. Do not change any other functionality, database schema, or UI.
+```

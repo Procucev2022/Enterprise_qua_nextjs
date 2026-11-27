@@ -299,6 +299,101 @@ export function isV2OrV3SourcingMode(mode: string | null | undefined): boolean {
   return V2_V3_SOURCING_MODES.includes(String(mode || ''));
 }
 
+/**
+ * Whether a vendor card in the Mode 1 / Mode 2 roster panel can be toggled by the buyer.
+ * Category-matched vendors are always selectable; Category Mismatch vendors are selectable
+ * strictly when they belong to the buyer's own internal roster (buyer-uploaded).
+ */
+export function isRosterVendorSelectable(vendor: VendorEntry, isCategoryMismatch: boolean): boolean {
+  return !isCategoryMismatch || isBuyerUploaded(vendor);
+}
+
+/**
+ * Resolves whether a Mode 1 / Mode 2 roster vendor card is currently selected.
+ * Non-internal Category Mismatch vendors can never be selected.
+ */
+export function isRosterVendorSelected(params: {
+  vendor: VendorEntry;
+  isCategoryMismatch: boolean;
+  hasExplicitSelection: boolean;
+  selectedVendorIds: string[];
+  defaultSelectedIds: string[];
+}): boolean {
+  const { vendor, isCategoryMismatch, hasExplicitSelection, selectedVendorIds, defaultSelectedIds } = params;
+  if (!isRosterVendorSelectable(vendor, isCategoryMismatch) || !vendor.id) return false;
+  const activeIds = hasExplicitSelection ? selectedVendorIds : defaultSelectedIds;
+  return activeIds.includes(vendor.id);
+}
+
+/**
+ * Resolves the card container and selection checkbox Tailwind classes for a Mode 1 / Mode 2
+ * roster vendor card so internal Category Mismatch vendors reuse the exact Matched card
+ * checkbox and selected state styling while non-internal mismatches stay visually disabled.
+ */
+export function getRosterVendorCardClasses(params: {
+  isSelected: boolean;
+  isCategoryMismatch: boolean;
+  isSelectable: boolean;
+  accent: 'blue' | 'emerald';
+}): { cardClass: string; checkboxClass: string } {
+  const { isSelected, isCategoryMismatch, isSelectable, accent } = params;
+  const cursorClass = isSelectable ? 'cursor-pointer' : 'cursor-not-allowed';
+
+  if (!isSelectable) {
+    return {
+      cardClass: `${cursorClass} border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs`,
+      checkboxClass: 'bg-amber-500 border-amber-500 text-white opacity-80',
+    };
+  }
+
+  if (isSelected) {
+    const selectedStyles = accent === 'blue'
+      ? {
+          card: 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs',
+          checkbox: 'bg-blue-600 border-blue-600 text-white',
+        }
+      : {
+          card: 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs',
+          checkbox: 'bg-emerald-600 border-emerald-600 text-white',
+        };
+    return {
+      cardClass: `${cursorClass} ${selectedStyles.card}`,
+      checkboxClass: selectedStyles.checkbox,
+    };
+  }
+
+  return {
+    cardClass: isCategoryMismatch
+      ? `${cursorClass} border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs`
+      : `${cursorClass} border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60`,
+    checkboxClass: 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800',
+  };
+}
+
+/**
+ * Selection checkbox indicator shared across Mode 1 and Mode 2 vendor cards.
+ * Disabled (non-internal mismatch) cards show a non-interactive warning icon.
+ */
+export function RosterVendorCheckbox({
+  isSelectable,
+  isSelected,
+  checkboxClass,
+}: {
+  isSelectable: boolean;
+  isSelected: boolean;
+  checkboxClass: string;
+}) {
+  return (
+    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${checkboxClass}`}>
+      {!isSelectable ? (
+        <AlertCircle size={12} strokeWidth={2.5} />
+      ) : isSelected ? (
+        <Check size={12} strokeWidth={3} />
+      ) : null}
+    </span>
+  );
+}
+
 interface IngestionWizardProps {
   onComplete: () => void;
   onCancel: () => void;
@@ -566,6 +661,47 @@ export default function IngestionWizard({
     router = null;
   }
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  const [hasExplicitVendorSelection, setHasExplicitVendorSelection] = useState(false);
+
+  const toggleRosterVendorSelection = (
+    vendor: VendorEntry,
+    isCategoryMismatch: boolean,
+    defaultSelectedIds: string[]
+  ) => {
+    if (!isRosterVendorSelectable(vendor, isCategoryMismatch) || !vendor.id) return;
+    const targetId = vendor.id;
+    setSelectedVendorIds((prev) => {
+      const base = !hasExplicitVendorSelection && prev.length === 0 ? defaultSelectedIds : prev;
+      return base.includes(targetId)
+        ? base.filter((id) => id !== targetId)
+        : [...base, targetId];
+    });
+    setHasExplicitVendorSelection(true);
+  };
+
+  const renderRosterSelectionSummary = (
+    allMyVendors: VendorEntry[],
+    matchingVendors: VendorEntry[],
+    accentClass: string
+  ) => {
+    const activeIds = new Set(allMyVendors.map((v) => v.id).filter(Boolean));
+    const effectiveSelectedIds = selectedVendorIds.filter((id) => activeIds.has(id));
+    if (hasExplicitVendorSelection || effectiveSelectedIds.length > 0) {
+      const matchedIds = new Set(matchingVendors.map((v) => v.id).filter(Boolean));
+      const hasMismatchSelected = effectiveSelectedIds.some((id) => !matchedIds.has(id));
+      const summaryText = hasMismatchSelected || matchingVendors.length === 0
+        ? formatString(MODAL.vendorsSelectedSummary, {
+            selected: effectiveSelectedIds.length,
+            total: allMyVendors.length,
+          })
+        : formatString(MODAL.matchedVendorsSelectedSummary, {
+            selected: effectiveSelectedIds.length,
+            total: matchingVendors.length,
+          });
+      return <span className={`font-semibold ${accentClass}`}>{summaryText}</span>;
+    }
+    return <span>{formatString(MODAL.allMatchedVendorsDispatchNotice, { count: matchingVendors.length })}</span>;
+  };
   // V3 (Autonomous) only — the top-ranked Procucev network vendors for this RFQ
   // (by category relevance + delivery location) and the buyer's picks from them.
   const [procucevV3Ranked, setProcucevV3Ranked] = useState<RankedProcucevVendor[]>([]);
@@ -1341,15 +1477,27 @@ export default function IngestionWizard({
           ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
           : activeReconciledVendors;
         const { signals: dispatchSignals, rawSignals: dispatchRawSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
-        const candidatePool = selectedVendorIds.length > 0
-          ? pool.filter((v) => selectedVendorIds.includes(v.id))
+        const hasManualSelection = hasExplicitVendorSelection || selectedVendorIds.length > 0;
+        const candidatePool = hasManualSelection
+          ? pool.filter((v) => Boolean(v.id) && selectedVendorIds.includes(v.id))
           : pool;
 
         let finalMatching: typeof candidatePool = [];
 
-        if (selectedVendorIds.length > 0) {
-          // Explicitly selected vendors are always assigned regardless of category
-          finalMatching = candidatePool;
+        if (hasManualSelection) {
+          // Explicitly selected internal vendors are always assigned regardless of category mismatch;
+          // Procucev Network / Vetted vendors remain excluded when category-mismatched.
+          finalMatching = candidatePool.filter((v) => {
+            if (dispatchSignals.length === 0 && dispatchRawSignals.length === 0) return true;
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: dispatchSignals,
+              rawSignals: dispatchRawSignals,
+              minorOnly: dispatchMinorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            return isRosterVendorSelectable(v, !matchEval.isMatch);
+          });
         } else {
           const matchingVendors: typeof candidatePool = [];
 
@@ -1474,6 +1622,8 @@ export default function IngestionWizard({
     setSubmitAttempted(false);
     setSubmitError(null);
     setSupportingDocsError(null);
+    setSelectedVendorIds([]);
+    setHasExplicitVendorSelection(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
     if (supportingDocsInputRef.current) supportingDocsInputRef.current.value = '';
     showToast('Form Cleared', 'All fields, line items, and uploaded files have been reset.', 'info');
@@ -2348,8 +2498,9 @@ export default function IngestionWizard({
                   )
                   : pool;
 
-                const allIds = myVendors.map((v) => v.id);
+                const allIds = myVendors.map((v) => v.id).filter(Boolean);
                 const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                const defaultSelectedIds = matchingVendors.map((v) => v.id).filter(Boolean);
 
                 return (
                   <div className="space-y-2.5">
@@ -2394,13 +2545,7 @@ export default function IngestionWizard({
 
                       <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
                         <div className="text-slate-500 dark:text-gray-400">
-                          {selectedVendorIds.length > 0 ? (
-                            <span className="font-semibold text-blue-600 dark:text-blue-400">
-                              {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
-                            </span>
-                          ) : (
-                            <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
-                          )}
+                          {renderRosterSelectionSummary(allMyVendors, matchingVendors, 'text-blue-600 dark:text-blue-400')}
                         </div>
                         <button
                           type="button"
@@ -2414,8 +2559,9 @@ export default function IngestionWizard({
                                 majorCategory: form.majorCategory,
                                 minorCategory: form.minorCategory,
                               }).isMatch;
-                            }).map((v) => v.id);
+                            }).map((v) => v.id).filter(Boolean);
 
+                            setHasExplicitVendorSelection(true);
                             if (allSelected) {
                               setSelectedVendorIds([]);
                             } else {
@@ -2476,43 +2622,34 @@ export default function IngestionWizard({
                             : { isMatch: true };
                           const isCategoryMismatch = (mode1Signals.length > 0 || mode1RawSignals.length > 0) && !matchResult.isMatch;
 
-                          const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
-                          const isSelected = selectedVendorIds.length === 0
-                            ? defaultSelectedIds.includes(vendor.id)
-                            : selectedVendorIds.includes(vendor.id);
+                          const isSelectable = isRosterVendorSelectable(vendor, isCategoryMismatch);
+                          const isSelected = isRosterVendorSelected({
+                            vendor,
+                            isCategoryMismatch,
+                            hasExplicitSelection: hasExplicitVendorSelection,
+                            selectedVendorIds,
+                            defaultSelectedIds,
+                          });
+                          const { cardClass, checkboxClass } = getRosterVendorCardClasses({
+                            isSelected,
+                            isCategoryMismatch,
+                            isSelectable,
+                            accent: 'blue',
+                          });
 
                           return (
                             <div
                               key={vendor.id || idx}
-                              onClick={() => {
-                                setSelectedVendorIds((prev) => {
-                                  const base = prev.length === 0 ? defaultSelectedIds : prev;
-                                  return base.includes(vendor.id)
-                                    ? base.filter((id) => id !== vendor.id)
-                                    : [...base, vendor.id];
-                                });
-                              }}
-                              className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
-                                ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                : isSelected
-                                  ? 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
-                                  : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                                }`}
+                              onClick={() => toggleRosterVendorSelection(vendor, isCategoryMismatch, defaultSelectedIds)}
+                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${cardClass}`}
                             >
                               <div className="flex items-start justify-between gap-1.5">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                    ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                    : isSelected
-                                      ? 'bg-blue-600 border-blue-600 text-white'
-                                      : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                                    }`}>
-                                    {isCategoryMismatch ? (
-                                      <AlertCircle size={12} strokeWidth={2.5} />
-                                    ) : isSelected ? (
-                                      <Check size={12} strokeWidth={3} />
-                                    ) : null}
-                                  </span>
+                                  <RosterVendorCheckbox
+                                    isSelectable={isSelectable}
+                                    isSelected={isSelected}
+                                    checkboxClass={checkboxClass}
+                                  />
                                   <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
                                     {vendor.name}
                                   </span>
@@ -2690,8 +2827,9 @@ export default function IngestionWizard({
                   )
                   : pool;
 
-                const allIds = myVendors.map((v) => v.id);
+                const allIds = myVendors.map((v) => v.id).filter(Boolean);
                 const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                const defaultSelectedIds = matchingVendors.map((v) => v.id).filter(Boolean);
 
                 return (
                   <>
@@ -2804,13 +2942,7 @@ export default function IngestionWizard({
 
                         <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
                           <div className="text-slate-500 dark:text-gray-400">
-                            {selectedVendorIds.length > 0 ? (
-                              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                                {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
-                              </span>
-                            ) : (
-                              <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
-                            )}
+                            {renderRosterSelectionSummary(allMyVendors, matchingVendors, 'text-emerald-600 dark:text-emerald-400')}
                           </div>
                           <button
                             type="button"
@@ -2824,8 +2956,9 @@ export default function IngestionWizard({
                                   majorCategory: form.majorCategory,
                                   minorCategory: form.minorCategory,
                                 }).isMatch;
-                              }).map((v) => v.id);
+                              }).map((v) => v.id).filter(Boolean);
 
+                              setHasExplicitVendorSelection(true);
                               if (allSelected) {
                                 setSelectedVendorIds([]);
                               } else {
@@ -2879,43 +3012,34 @@ export default function IngestionWizard({
                               : { isMatch: true };
                             const isCategoryMismatch = (rfqSignals.length > 0 || rfqRawSignals.length > 0) && !matchResult.isMatch;
 
-                            const defaultSelectedIds = matchingVendors.length > 0 ? matchingVendors.map((v) => v.id) : allIds;
-                            const isSelected = selectedVendorIds.length === 0
-                              ? defaultSelectedIds.includes(vendor.id)
-                              : selectedVendorIds.includes(vendor.id);
+                            const isSelectable = isRosterVendorSelectable(vendor, isCategoryMismatch);
+                            const isSelected = isRosterVendorSelected({
+                              vendor,
+                              isCategoryMismatch,
+                              hasExplicitSelection: hasExplicitVendorSelection,
+                              selectedVendorIds,
+                              defaultSelectedIds,
+                            });
+                            const { cardClass, checkboxClass } = getRosterVendorCardClasses({
+                              isSelected,
+                              isCategoryMismatch,
+                              isSelectable,
+                              accent: 'emerald',
+                            });
 
                             return (
                               <div
                                 key={vendor.id || idx}
-                                onClick={() => {
-                                  setSelectedVendorIds((prev) => {
-                                    const base = prev.length === 0 ? defaultSelectedIds : prev;
-                                    return base.includes(vendor.id)
-                                      ? base.filter((id) => id !== vendor.id)
-                                      : [...base, vendor.id];
-                                  });
-                                }}
-                                className={`rounded-xl border p-3.5 space-y-2 transition-all cursor-pointer ${isCategoryMismatch
-                                  ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                  : isSelected
-                                    ? 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
-                                    : 'border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                                  }`}
+                                onClick={() => toggleRosterVendorSelection(vendor, isCategoryMismatch, defaultSelectedIds)}
+                                className={`rounded-xl border p-3.5 space-y-2 transition-all ${cardClass}`}
                               >
                                 <div className="flex items-start justify-between gap-1.5">
                                   <div className="flex items-center gap-2 min-w-0">
-                                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                      ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                      : isSelected
-                                        ? 'bg-emerald-600 border-emerald-600 text-white'
-                                        : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                                      }`}>
-                                      {isCategoryMismatch ? (
-                                        <AlertCircle size={12} strokeWidth={2.5} />
-                                      ) : isSelected ? (
-                                        <Check size={12} strokeWidth={3} />
-                                      ) : null}
-                                    </span>
+                                    <RosterVendorCheckbox
+                                      isSelectable={isSelectable}
+                                      isSelected={isSelected}
+                                      checkboxClass={checkboxClass}
+                                    />
                                     <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
                                       {vendor.name}
                                     </span>
