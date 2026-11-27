@@ -277,24 +277,8 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       expect(cmMail.html).toContain('Email Reply Format (Copy, Fill & Send)');
     });
 
-    test('secondary vendor notices (closure, complex redirect, mismatch, bulk invitation) honor vendor mailbox routing', () => {
+    test('secondary vendor notices (complex redirect, mismatch, bulk invitation) honor vendor mailbox routing', () => {
       const rfq = { rfqNumber: 'RFQ-SEC-1', title: 'Pumps', items: Array.from({ length: 12 }, (_, idx) => ({ itemName: `P${idx}` })) };
-
-      const closedNet = mailerService.buildRfqClosedVendorEmail('net@sup.in', {
-        rfq,
-        vendor: { id: 'v-n', source: 'procucev_network' },
-        isBuyerUploaded: false,
-      });
-      expect(closedNet.from).toContain(INVITE_MAILBOX);
-      expect(closedNet.replyTo).toBe(INVITE_MAILBOX);
-
-      const closedCm = mailerService.buildRfqClosedVendorEmail('cm@sup.in', {
-        rfq,
-        vendor: { id: 'v-c', source: 'procucev_network', isCmAssigned: true },
-        isCmAssigned: true,
-      });
-      expect(closedCm.from).toContain(DIRECT_MAILBOX);
-      expect(closedCm.replyTo).toBe(DIRECT_MAILBOX);
 
       const complex = mailerService.buildComplexRfqPortalRedirectEmail('buy@sup.in', { rfq, itemCount: 12 });
       expect(complex.from).toContain(DIRECT_MAILBOX);
@@ -1211,10 +1195,6 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       });
       expect(sendComplexUnset.sent).toBe(false);
 
-      await expect(mailerService.sendRfqClosedVendorEmail('c@sup.in', {
-        rfq: { rfqNumber: 'RFQ-CL-1' },
-        vendor: { id: 'v-n', source: 'procucev_network' },
-      })).resolves.toMatchObject({ sent: false });
       await expect(mailerService.sendVendorCategoryMismatchEmail('m@sup.in', {
         rfq: { rfqNumber: 'RFQ-MM-1' },
         vendor: { id: 'v-n', source: 'procucev_network' },

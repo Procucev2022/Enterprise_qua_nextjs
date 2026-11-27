@@ -10465,3 +10465,26 @@ create the code and not merge in test-v3 not raise the pr after this giive me th
 ```text
 now check the quotation via emai flow it should take pdf , doc , execl and create the quotation ex:gmtrfa@procucev.com if they reply with attachment it should create the quotation
 ```
+
+
+
+---
+
+### Prompt 458
+
+**Timestamp**: 2026-11-27T05:15:37+05:30
+
+```text
+now tell me the description of vendor quote via email process
+```
+
+---
+
+### Prompt 459
+
+**Timestamp**: 2026-11-27T05:21:54+05:30
+
+```text
+There is no need for this email
+remove this email template and raise the pr feom this branch and able to merge in test-v3
+```

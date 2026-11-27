@@ -10174,7 +10174,7 @@ class StoreService {
     const missingDbIds = Array.from(
       new Set(
         merged
-          .filter((v) => v.id && (!v.email || !v.phone))
+          .filter((v) => v.id && !v.phone)
           .map((v) => String(v.id).trim())
       )
     );
@@ -10184,7 +10184,6 @@ class StoreService {
 
   _dispatchVendorClosureMessages(rfq, vendors, tracking = {}) {
     const notifiedIds = tracking.notifiedIds || new Set();
-    const emailedKeys = tracking.emailedKeys || new Set();
     const messagedPhones = tracking.messagedPhones || new Set();
 
     const rfqNumber = rfq.rfqNumber || rfq.id || '';
@@ -10211,35 +10210,6 @@ class StoreService {
               closedAt: rfq.closedAt || null,
             },
           })
-        );
-      }
-
-      const email = resolveVendorEmail(vendor);
-      const emailKey = email ? email.toLowerCase() : '';
-      if (emailKey && !emailedKeys.has(emailKey)) {
-        emailedKeys.add(emailKey);
-        const isBuyerUploaded = this.isBuyerUploaded(vendor);
-        const trackedInvite = this._rfqVendorInvites && rfq.rfqNumber
-          ? this._rfqVendorInvites.get(`${rfq.rfqNumber}:${emailKey}`)
-          : null;
-        this._background(
-          mailerService.sendRfqClosedVendorEmail(email, {
-            rfq,
-            recipientName: vendor.contactPerson || vendor.name,
-            vendor,
-            isBuyerUploaded,
-            isCmAssigned: Boolean(vendor.isCmAssigned || trackedInvite?.inviteOrigin === VENDOR_INVITE_ORIGINS.CM_ASSIGNED),
-            inviteChannel: vendor.inviteChannel || trackedInvite?.inviteChannel || null,
-            inviteOrigin: vendor.inviteOrigin || trackedInvite?.inviteOrigin || null,
-          }),
-          'Failed to send RFQ closed notification email to invited vendor',
-          {
-            deliveryChannel: 'email',
-            operation: 'rfq-closed-vendor-email',
-            rfqId: rfq.id,
-            rfqNumber: rfq.rfqNumber,
-            vendorId: vendor.id || null,
-          }
         );
       }
 
@@ -10333,7 +10303,6 @@ class StoreService {
 
     const tracking = {
       notifiedIds: new Set(),
-      emailedKeys: new Set(),
       messagedPhones: new Set(),
     };
     const { vendors, missingDbIds } = this._resolveInvitedVendorEntries(rfq);
