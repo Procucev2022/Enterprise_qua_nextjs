@@ -508,6 +508,38 @@ describe('OBD Voice Calling Service (obdVoiceService)', () => {
       );
     });
 
+    test('handles exact portal webhook payload with snake_case keys', async () => {
+      const mockRfq = {
+        id: 'rfq-wb-portal',
+        rfqNumber: 'RFQ-PORTAL-001',
+        followUpData: {
+          vendors: [{ vendorId: 'v-portal-1', phone: '9876543210', call: { messageId: 'camp-portal-1' } }],
+          callStats: { total: 1, connected: 0, avgDuration: null },
+        },
+      };
+      storeService.rfqs = [mockRfq];
+
+      const req = {
+        body: {
+          campaign_id: 'camp-portal-1',
+          user_id: '506155',
+          cli: '917090170801',
+          mobile: '9876543210',
+          answer_status: 'ANSWERED',
+          dtmf: '1',
+          billing_duration: 35,
+          hangup_cause: 'NORMAL_CLEARING',
+          dtmf_sequence: '1',
+        },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const next = jest.fn();
+
+      await rfqController.handleCallWebhook(req, res, next);
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, updated: true }));
+    });
+
     test('handles variations in payload keys (campId, mobile_number, callStatus, keypress)', async () => {
       const mockRfq = {
         id: 'rfq-wb-2',

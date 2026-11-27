@@ -2667,11 +2667,11 @@ async function addBroadcast(req, res, next) {
 async function handleCallWebhook(req, res, next) {
   try {
     const payload = req.body || {};
-    const effectiveCampId = payload.campaignId || payload.campId || payload.campid;
-    const effectivePhone = payload.mobile || payload.phone || payload.mobile_number;
-    const status = payload.status || payload.callStatus;
-    const duration = payload.duration || payload.callDuration;
-    const dtmf = payload.dtmf || payload.keypress;
+    const effectiveCampId = payload.campaignId || payload.campId || payload.campid || payload.campaign_id || payload.camp_id;
+    const effectivePhone = payload.mobile || payload.phone || payload.mobile_number || payload.mobile_no;
+    const status = payload.status || payload.callStatus || payload.answer_status || payload.hangup_cause;
+    const duration = payload.duration || payload.callDuration || payload.billing_duration;
+    const dtmf = payload.dtmf || payload.keypress || payload.dtmf_sequence;
 
     logger.info('[RFQ_CONTROLLER] Received OBD call webhook', {
       campaignId: effectiveCampId,
