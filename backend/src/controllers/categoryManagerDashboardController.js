@@ -241,13 +241,14 @@ function buildSqlDateFilter(colPg, colD1, fromDate, toDate) {
  */
 async function executeQueries(tasks) {
   const isD1 = Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
-  if (!isD1) {
-    return Promise.all(tasks.map((task) => task()));
+  if (isD1) {
+    const results = [];
+    for (const task of tasks) {
+      results.push(await task());
+    }
+    return results;
   }
-  const results = [];
-  for (const task of tasks) {
-    results.push(await task());
-  }
+  const results = await Promise.all(tasks.map((task) => task()));
   return results;
 }
 
