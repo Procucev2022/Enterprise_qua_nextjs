@@ -244,8 +244,15 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       });
       expect(mail.from).toContain(INVITE_MAILBOX);
       expect(mail.replyTo).toBe(INVITE_MAILBOX);
+      expect(mail.html).not.toContain('Dear <strong>Network Supplier</strong>');
+      expect(mail.html).not.toContain('Hello,');
+      expect(mail.html).toContain('Greetings from <strong>Procucev!</strong>');
       expect(mail.html).toContain('/vendor/rfqs/RFQ-NET-1');
+      expect(mail.html).toContain('Portal Submission Required (Do Not Reply to This Email)');
       expect(mail.html).toContain('Portal submission is required');
+      expect(mail.html).toContain('no quotation will be created');
+      expect(mail.html).not.toContain('How to Submit Your Quotation');
+      expect(mail.html).not.toContain('Mandatory Quotation Information Required:');
       expect(mail.html).not.toContain('Email Reply Format (Copy, Fill & Send)');
     });
 
@@ -260,11 +267,17 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       };
       const buyerMail = mailerService.buildRfqInviteEmail('buyer-v@sup.in', {
         rfq,
+        recipientName: 'Chola Turbo Machinery',
         vendor: { id: 'v-buy-1', source: 'buyer_manual' },
         isBuyerUploaded: true,
       });
       expect(buyerMail.from).toContain(DIRECT_MAILBOX);
       expect(buyerMail.replyTo).toBe(DIRECT_MAILBOX);
+      expect(buyerMail.html).not.toContain('Dear <strong>Chola Turbo Machinery</strong>');
+      expect(buyerMail.html).not.toContain('Hello,');
+      expect(buyerMail.html).toContain('Greetings from <strong>Procucev!</strong>');
+      expect(buyerMail.html).toContain('How to Submit Your Quotation');
+      expect(buyerMail.html).toContain('Mandatory Quotation Information Required:');
       expect(buyerMail.html).toContain('Email Reply Format (Copy, Fill & Send)');
 
       const cmMail = mailerService.buildRfqInviteEmail('cm-v@sup.in', {
@@ -274,6 +287,8 @@ describe('Dual-Mailbox Vendor Email Architecture & CM Vendor Credentials', () =>
       });
       expect(cmMail.from).toContain(DIRECT_MAILBOX);
       expect(cmMail.replyTo).toBe(DIRECT_MAILBOX);
+      expect(cmMail.html).not.toContain('Hello,');
+      expect(cmMail.html).toContain('Mandatory Quotation Information Required:');
       expect(cmMail.html).toContain('Email Reply Format (Copy, Fill & Send)');
     });
 
