@@ -10519,3 +10519,25 @@ Tell me how to fix this issue i dev and production?
 processed change all this things and make work porperly
 ```
 
+
+---
+
+### Prompt 463
+
+**Timestamp**: 2026-11-27T12:35:13+05:30
+
+```text
+Remove only the "Export Directory" button from both the Buyers Directory (`/category-manager/internal-tasks?tab=buyers`) and Vendors Directory (`/category-manager/internal-tasks?tab=sellers`) tabs.
+
+Do not change, refactor, or remove anything else in the code, layout, or styling.
+```
+
+---
+
+### Prompt 464
+
+**Timestamp**: 2026-11-27T13:12:20+05:30
+
+```text
+create the pr and pass all the coverages and ready to merge inn test-v3 i can verify and merge
+```
