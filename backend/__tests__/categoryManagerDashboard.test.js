@@ -1,12 +1,17 @@
+const fs = require('fs');
+const path = require('path');
 const request = require('supertest');
 const express = require('express');
 const categoryManagerRoutes = require('../src/routes/categoryManager');
 const controller = require('../src/controllers/categoryManagerDashboardController');
 const storeService = require('../src/services/storeService');
 const pool = require('../src/db/pool');
+const d1Bridge = require('../src/db/d1Bridge');
+const directoryKPIQueries = require('../src/db/directoryKPIQueries');
 const domainQueries = require('../src/db/domainQueries');
 const loginLogsQueries = require('../src/db/loginLogsQueries');
 const authService = require('../src/services/authService');
+const { D1_OVERLOAD_CONFIG, STORE_HYDRATION_CONFIG } = require('../src/config/constants');
 
 const cmToken = authService.generateSessionToken({
   id: 'cm-tester-1',
@@ -581,8 +586,8 @@ describe('Category Manager Dashboard Backend Suite', () => {
         if (sql.includes('FROM buyer_accounts GROUP BY ym')) {
           return { rows: [{ ym, cnt: 43, subs: 4 }] };
         }
-        if (sql.includes('FROM vendors GROUP BY ym')) {
-          return { rows: [{ ym, cnt: 633851 }] };
+        if (sql.includes('AS m5') && sql.includes('FROM vendors')) {
+          return { rows: [{ total_vendors: 633851, m0: 0, m1: 0, m2: 0, m3: 0, m4: 610325, m5: 23526 }] };
         }
         if (sql.includes('SELECT id, created_at, raw FROM vendors')) {
           return {
@@ -728,6 +733,90 @@ describe('Category Manager Dashboard Backend Suite', () => {
         expect(resR.status).toBe(200);
         expect(resR.body.total).toBe(0);
       }
+    });
+
+    test('executes D1 dashboard queries sequentially and passes D1-safe SQL guards and coarse date params', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(d1Bridge, 'getD1Binding').mockReturnValue({ prepare: jest.fn() });
+      jest.spyOn(loginLogsQueries, 'listLoginLogs').mockResolvedValue({ logs: [] });
+
+      let inFlight = 0;
+      let maxConcurrent = 0;
+      const recordedCalls = [];
+      jest.spyOn(pool, 'query').mockImplementation(async (text, params, options) => {
+        inFlight += 1;
+        maxConcurrent = Math.max(maxConcurrent, inFlight);
+        recordedCalls.push({ text, params, options });
+        await Promise.resolve();
+        inFlight -= 1;
+        if (text.includes('AS m5')) {
+          return { rows: [{ total_vendors: 10, m0: 1, m1: 1, m2: 2, m3: 2, m4: 2, m5: 2 }] };
+        }
+        if (text.includes('AS total_vendors FROM vendors')) {
+          return { rows: [{ total_vendors: 4 }] };
+        }
+        return { rows: [] };
+      });
+
+      const res = await request(app)
+        .get('/api/category-manager/dashboard/metrics?preset=this_month')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(res.status).toBe(200);
+      expect(maxConcurrent).toBe(1);
+      const rfqCall = recordedCalls.find((c) => c.text.includes('AS open_rfqs'));
+      expect(rfqCall.options.d1Text).toContain("json_valid(raw) AND json_type(raw, '$.quotes') = 'array'");
+      expect(rfqCall.text).toContain("jsonb_typeof(raw->'quotes') = 'array'");
+      const boundedVendorCall = recordedCalls.find((c) => c.text.includes('AS total_vendors FROM vendors'));
+      expect(boundedVendorCall.options.d1Text).toContain('created_at >= $1 AND datetime(created_at) >= datetime($2)');
+      expect(boundedVendorCall.options.d1Params).toHaveLength(4);
+    });
+
+    test('surfaces D1 overload errors as retryable 503 with Retry-After on metrics and records endpoints', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      jest.spyOn(pool, 'query').mockRejectedValue(new Error('D1_ERROR: D1 DB is overloaded'));
+
+      const resMetrics = await request(app)
+        .get('/api/category-manager/dashboard/metrics')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(resMetrics.status).toBe(503);
+      expect(resMetrics.headers['retry-after']).toBe(String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+      expect(resMetrics.body).toEqual({
+        success: false,
+        retryable: true,
+        error: D1_OVERLOAD_CONFIG.MESSAGE,
+      });
+
+      const resRecords = await request(app)
+        .get('/api/category-manager/dashboard/records?type=total_rfqs')
+        .set('Authorization', `Bearer ${cmToken}`);
+
+      expect(resRecords.status).toBe(503);
+      expect(resRecords.headers['retry-after']).toBe(String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+      expect(resRecords.body).toEqual({
+        success: false,
+        retryable: true,
+        error: D1_OVERLOAD_CONFIG.MESSAGE,
+      });
+
+      // Fallback when res.setHeader is absent
+      const reqNoHeader = { query: {} };
+      const resNoHeader = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await controller.getMetrics(reqNoHeader, resNoHeader);
+      expect(resNoHeader.status).toHaveBeenCalledWith(503);
+    });
+
+    test('skips store hydration for dashboard routes and keeps migration 0044 partial index aligned', () => {
+      expect(STORE_HYDRATION_CONFIG.SKIP_PATHS).toContain('/api/category-manager/dashboard');
+
+      const migrationsDir = path.resolve(__dirname, '../src/db/migrations');
+      const normalize = (s) => s.replace(/\s+/g, ' ').trim();
+      const d1Sql = normalize(fs.readFileSync(path.join(migrationsDir, '0044_vendors_paid_subscription_index.d1.sql'), 'utf8'));
+      const pgSql = normalize(fs.readFileSync(path.join(migrationsDir, '0044_vendors_paid_subscription_index.pg.sql'), 'utf8'));
+
+      expect(d1Sql).toContain(normalize(directoryKPIQueries.PAID_VENDOR_SQL_D1));
+      expect(pgSql).toContain(normalize(directoryKPIQueries.PAID_VENDOR_SQL_PG));
     });
   });
 });
