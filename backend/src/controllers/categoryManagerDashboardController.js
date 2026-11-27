@@ -194,36 +194,28 @@ function buildSqlDateFilter(colPg, colD1, fromDate, toDate) {
   const isBareColumn = colD1 === 'created_at';
   const pgExpr = colPg === 'created_at' ? 'created_at::timestamptz' : colPg;
 
-  if (fromDate) {
-    const isoFrom = fromDate.toISOString();
-    params.push(isoFrom);
-    const pPg = `$${params.length}`;
-    pgConds.push(`${pgExpr} >= ${pPg}::timestamptz`);
+  const appendBound = (boundDate, op, coarseOffsetDays) => {
+    const iso = boundDate.toISOString();
+    params.push(iso);
+    const pgIdx = params.length;
+    pgConds.push(`${pgExpr} ${op} $${pgIdx}::timestamptz`);
 
     if (isBareColumn) {
-      const coarseFrom = new Date(fromDate.getTime() - DAY_MS).toISOString().slice(0, 10);
-      d1Params.push(coarseFrom, isoFrom);
-      d1Conds.push(`created_at >= $${d1Params.length - 1} AND datetime(created_at) >= datetime($${d1Params.length})`);
+      const coarse = new Date(boundDate.getTime() + coarseOffsetDays * DAY_MS).toISOString().slice(0, 10);
+      d1Params.push(coarse);
+      const coarseIdx = d1Params.length;
+      d1Params.push(iso);
+      const exactIdx = d1Params.length;
+      d1Conds.push(`created_at ${op} $${coarseIdx} AND datetime(created_at) ${op} datetime($${exactIdx})`);
     } else {
-      d1Params.push(isoFrom);
-      d1Conds.push(`datetime(${colD1}) >= datetime($${d1Params.length})`);
+      d1Params.push(iso);
+      const exactIdx = d1Params.length;
+      d1Conds.push(`datetime(${colD1}) ${op} datetime($${exactIdx})`);
     }
-  }
-  if (toDate) {
-    const isoTo = toDate.toISOString();
-    params.push(isoTo);
-    const pPg = `$${params.length}`;
-    pgConds.push(`${pgExpr} <= ${pPg}::timestamptz`);
+  };
 
-    if (isBareColumn) {
-      const coarseTo = new Date(toDate.getTime() + 2 * DAY_MS).toISOString().slice(0, 10);
-      d1Params.push(coarseTo, isoTo);
-      d1Conds.push(`created_at <= $${d1Params.length - 1} AND datetime(created_at) <= datetime($${d1Params.length})`);
-    } else {
-      d1Params.push(isoTo);
-      d1Conds.push(`datetime(${colD1}) <= datetime($${d1Params.length})`);
-    }
-  }
+  if (fromDate) appendBound(fromDate, '>=', -1);
+  if (toDate) appendBound(toDate, '<=', 2);
   return {
     pgWhere: pgConds.length ? `WHERE ${pgConds.join(' AND ')}` : '',
     d1Where: d1Conds.length ? `WHERE ${d1Conds.join(' AND ')}` : '',
