@@ -954,6 +954,26 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     expect(rawWrangler).not.toContain('anshul.goel@procucev.com');
     expect(rawWrangler).not.toContain('gmtrfq@procucev.com');
     expect(constantsSource).toContain('EXCLUDED_DAILY_REPORT_RECIPIENTS');
+
+    const testVars = wrangler.env?.test?.vars || {};
+    expect(testVars.EMAIL_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.EMAIL_GATEWAY_USER).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.EMAIL_GATEWAY_ADDRESS).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.GMAIL_SENDER_EMAIL).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.OTP_GMAIL_SENDER_EMAIL).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.SMTP_USER).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.SMTP_FROM).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_INVITE_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_INVITE_EMAIL_ADDRESS).toBe('invitationsprocucev@gmail.com');
+    expect(testVars.VENDOR_INVITE_GMAIL_SENDER_EMAIL).toBe('invitationsprocucev@gmail.com');
+    expect(testVars.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_USER).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_ADDRESS).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_GMAIL_SENDER_EMAIL).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_SMTP_USER).toBe('gmtrfqprocucev@gmail.com');
   });
 
   test('QUOTE_FAILURE_ALERT and VENDOR_QUOTE_SUPPORT_CC exclude quateam@procucev.com and default to gmtrfq, anshul, veerababu', () => {

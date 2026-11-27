@@ -10541,3 +10541,46 @@ Do not change, refactor, or remove anything else in the code, layout, or styling
 ```text
 create the pr and pass all the coverages and ready to merge inn test-v3 i can verify and merge
 ```
+
+
+
+---
+
+### Prompt 465
+
+**Timestamp**: 2026-11-27T15:49:59+05:30
+
+```text
+For invitationsprocucev@gmail.com as no reply message and no quote be created when reply right why it is showing again please change the template only gmtrfqprocucev.com can have this template without name 
+Dear Chola Turbo Machinery International Private Limited,  removing this first line in  both templates ? 
+```
+
+---
+
+### Prompt 466
+
+**Timestamp**: 2026-11-27T14:40:37+05:30
+
+```text
+when ever category manager invite the vendor it is showing invited but not getting the emails and create rfq via email also acknowledgement not coming please check the root cause?
+```
+
+---
+
+### Prompt 467
+
+**Timestamp**: 2026-11-27T14:56:55+05:30
+
+```text
+continue
+```
+
+---
+
+### Prompt 468
+
+**Timestamp**: 2026-11-27T15:03:29+05:30
+
+```text
+please proceed and fix all the issues
+```

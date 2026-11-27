@@ -1956,6 +1956,78 @@ function decryptAcknowledgementPassword(encryptedPassword, messageId) {
   });
 }
 
+/** Normalise line items from an RFQ into the Email 2 acknowledgement template shape. */
+function normalizeRfqAckLineItems(rfq = {}) {
+  const rawEntities = Array.isArray(rfq?.extractedEntities) && rfq.extractedEntities.length > 0
+    ? rfq.extractedEntities
+    : Array.isArray(rfq?.items)
+      ? rfq.items
+      : [];
+  return rawEntities.map((it) => ({
+    item_name: it.itemName || it.name || it.item_name || null,
+    item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
+    qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
+    uom: it.unit || it.uom || null,
+  }));
+}
+
+/** Resolve the whole-number supplier count required by transactional Email 2 templates. */
+function resolveRfqAckSuppliersCount(rfq = {}) {
+  if (Array.isArray(rfq?.assignedVendors) && rfq.assignedVendors.length > 0) {
+    return rfq.assignedVendors.length;
+  }
+  if (Number.isFinite(rfq?.procucevVendorCount) && rfq.procucevVendorCount >= 0) {
+    return rfq.procucevVendorCount;
+  }
+  return 0;
+}
+
+/**
+ * Reconstruct missing RFQ acknowledgement fields from the persisted RFQ record so older
+ * `ACK_PENDING` rows without `suppliersInvited` or summary metadata recover cleanly on retry.
+ */
+async function resolveAckRetryContext(row, saved) {
+  const rfqLookupRef = row.rfq_id || row.rfq_number || null;
+  const needsRfqHydration =
+    saved.suppliersInvited === undefined
+    || saved.suppliersInvited === null
+    || !saved.category
+    || !saved.deliveryLocation
+    || !saved.deliveryDate
+    || !Array.isArray(saved.items);
+  const persistedRfq =
+    needsRfqHydration && rfqLookupRef && typeof domainQueries.getRFQByIdFromDB === 'function'
+      ? await domainQueries.getRFQByIdFromDB(rfqLookupRef).catch(() => null)
+      : null;
+
+  const items = Array.isArray(saved.items)
+    ? saved.items
+    : (persistedRfq ? normalizeRfqAckLineItems(persistedRfq) : undefined);
+  const itemCount =
+    saved.itemCount !== undefined && saved.itemCount !== null
+      ? saved.itemCount
+      : (Array.isArray(items) ? items.length : undefined);
+  const suppliersInvited =
+    saved.suppliersInvited !== undefined && saved.suppliersInvited !== null
+      ? saved.suppliersInvited
+      : (persistedRfq
+        ? resolveRfqAckSuppliersCount(persistedRfq)
+        : (pool.hasStorage() ? 0 : undefined));
+  const deliveryDate = saved.deliveryDate || persistedRfq?.targetDeliveryDate;
+
+  return {
+    rfqTitle: saved.rfqTitle || persistedRfq?.title || row.subject,
+    category: saved.category || persistedRfq?.category,
+    deliveryLocation: saved.deliveryLocation || persistedRfq?.deliveryLocation,
+    deliveryDate,
+    requiredBy: saved.requiredBy || deliveryDate,
+    quoteDeadline: saved.quoteDeadline || saved.deadline || persistedRfq?.deadline,
+    suppliersInvited,
+    items,
+    itemCount,
+  };
+}
+
 /**
  * Keep an acknowledgement that could not be sent, so a later poll retries it.
  * Before this, a failed send was only logged — every buyer whose RFQ was raised
@@ -1981,15 +2053,24 @@ async function queueAcknowledgement(rfqKey, ack) {
     'buyerEmail',
     'recipientName',
     'quotesCount',
+    'category',
+    'deliveryLocation',
+    'requiredBy',
+    'quoteDeadline',
+    'deadline',
+    'suppliersInvited',
   ].forEach((key) => {
     if (ack[key] !== undefined && ack[key] !== null) detailObj[key] = ack[key];
   });
   if (
-    ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT
-    && ack.itemCount !== undefined
+    ack.itemCount !== undefined
     && ack.itemCount !== null
+    && (!ack.deliveryKind || ack.deliveryKind === EMAIL_GATEWAY_DELIVERY_KIND.VENDOR_PORTAL_REDIRECT)
   ) {
     detailObj.itemCount = ack.itemCount;
+  }
+  if (Array.isArray(ack.items) && ack.items.length > 0) {
+    detailObj.items = ack.items;
   }
   const messageId = `${rfqKey}#ack`;
   let status = INGESTION_OUTCOME.ACK_PENDING;
@@ -2328,34 +2409,37 @@ async function retryPendingAcknowledgements({
           }), 'Buyer quote notification retry');
         }
       } else if (retryTempPassword) {
+        const ackRetry = await resolveAckRetryContext(row, saved);
         ensureMailDeliveryAccepted(await mailerService.sendBuyerOnboardingWithRfqEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           tempPassword: retryTempPassword,
           rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          deliveryDate: saved.deliveryDate,
+          rfqTitle: ackRetry.rfqTitle,
+          deliveryDate: ackRetry.deliveryDate,
           mobileNumber: saved.mobileNumber || PLACEHOLDER_MOBILE_NUMBER,
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
+          category: ackRetry.category,
+          deliveryLocation: ackRetry.deliveryLocation,
+          requiredBy: ackRetry.requiredBy,
+          quoteDeadline: ackRetry.quoteDeadline,
+          suppliersInvited: ackRetry.suppliersInvited,
+          items: ackRetry.items,
         }), 'Buyer onboarding acknowledgement retry');
       } else {
+        const ackRetry = await resolveAckRetryContext(row, saved);
         ensureMailDeliveryAccepted(await mailerService.sendRfqAcknowledgementEmail({
           to: row.from_address,
           buyerName: saved.buyerName,
           rfqNumber: row.rfq_number,
-          rfqTitle: saved.rfqTitle || row.subject,
-          category: saved.category,
-          deliveryLocation: saved.deliveryLocation,
-          deliveryDate: saved.deliveryDate,
-          requiredBy: saved.requiredBy || saved.deliveryDate,
-          quoteDeadline: saved.quoteDeadline || saved.deadline,
-          suppliersInvited: saved.suppliersInvited,
-          items: saved.items,
+          rfqTitle: ackRetry.rfqTitle,
+          category: ackRetry.category,
+          ...(ackRetry.itemCount !== undefined ? { itemCount: ackRetry.itemCount } : {}),
+          deliveryLocation: ackRetry.deliveryLocation,
+          deliveryDate: ackRetry.deliveryDate,
+          requiredBy: ackRetry.requiredBy,
+          quoteDeadline: ackRetry.quoteDeadline,
+          suppliersInvited: ackRetry.suppliersInvited,
+          items: ackRetry.items,
         }), 'RFQ acknowledgement retry');
       }
       const completed = await record(INGESTION_OUTCOME.ACK_SENT, 'Acknowledgement sent on retry');
@@ -3931,24 +4015,11 @@ async function processMessage(rawSource, config = resolveConfig()) {
       PLACEHOLDER_MOBILE_NUMBER;
     const resolvedMobile = rawMobile ? String(rawMobile).replace(/^\+91/, '').replace(/\D/g, '') || PLACEHOLDER_MOBILE_NUMBER : PLACEHOLDER_MOBILE_NUMBER;
 
-    const rawEntities = Array.isArray(created.extractedEntities) && created.extractedEntities.length > 0
-      ? created.extractedEntities
-      : Array.isArray(created.items)
-        ? created.items
-        : [];
-
     // A field the document did not state stays null. It is not replaced with a stand-in name, quantity or unit.
-    const normalizedLineItems = rawEntities.map((it) => ({
-      item_name: it.itemName || it.name || it.item_name || null,
-      item_spec: it.technicalSpecs || it.specifications || it.specs || it.description || it.item_spec || null,
-      qty: it.quantity != null ? it.quantity : (it.qty != null ? it.qty : null),
-      uom: it.unit || it.uom || null,
-    }));
+    const normalizedLineItems = normalizeRfqAckLineItems(created);
 
-    // The number of suppliers actually assigned. With none assigned and no recorded count, it stays null.
-    const resolvedSuppliersCount = created.assignedVendors && created.assignedVendors.length > 0
-      ? created.assignedVendors.length
-      : (Number.isFinite(created.procucevVendorCount) ? created.procucevVendorCount : null);
+    // Default to 0 when no vendors are assigned or recorded yet so Email 2 template validation succeeds.
+    const resolvedSuppliersCount = resolveRfqAckSuppliersCount(created);
 
     const notificationRecipients = Array.isArray(attribution.eligibleNotificationRecipients) && attribution.eligibleNotificationRecipients.length > 0
       ? attribution.eligibleNotificationRecipients
@@ -3966,6 +4037,7 @@ async function processMessage(rawSource, config = resolveConfig()) {
           );
 
           const ack = {
+            rfqId: created.id,
             to: recipient.email,
             buyerName: buyerDisplayName(recipient.buyer, message),
             rfqNumber: created.rfqNumber,
