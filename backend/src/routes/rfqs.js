@@ -40,6 +40,8 @@ router.get('/email-gateway/status', authenticate, rfqController.getEmailGatewayS
 router.post('/email-gateway/poll', authenticate, rfqController.pollEmailGateway);
 // Buyer-triggered request to email a vendor to update their category
 router.post('/request-vendor-category-update', authenticate, rfqController.requestVendorCategoryUpdate);
+// OBD automated call completion & DTMF response webhook
+router.post('/call-webhook', rfqController.handleCallWebhook);
 // Registered before '/:id' so 'attachments' is not read as an RFQ identifier.
 // Both require a session: an attachment is commercial-in-confidence, so the
 // download must never be anonymous.
@@ -64,6 +66,12 @@ router.post(
   rfqController.addBroadcast
 );
 router.post('/:id/batch-chaser', authenticate, rfqController.triggerBatchChaser);
+router.post(
+  '/:id/call-vendor',
+  authenticate,
+  requireRole('buyer', 'category_manager', 'admin'),
+  rfqController.initiateVendorCall
+);
 router.post('/:id/approve-po', authenticate, rfqController.approvePO);
 // Download / unlock an RFQ with free credit deduction check
 router.post('/:id/download', authenticate, rfqController.downloadRFQ);

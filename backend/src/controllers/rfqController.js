@@ -2423,6 +2423,36 @@ async function triggerBatchChaser(req, res, next) {
       logger.warn(`RFQ not found for batch chasers: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+    if (Array.isArray(channels) && channels.includes('call')) {
+      const obdVoiceService = require('../services/obdVoiceService');
+      if (obdVoiceService.isConfigured()) {
+        const vendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+        for (const row of result.results || []) {
+          if (row.channel === 'call' && row.status === CHASER_OUTCOME_STATUS.NOT_CONFIGURED) {
+            const v = vendors.find((cand) => cand && (cand.id === row.vendorId || cand.name === row.vendorName));
+            const phone = v?.phone || v?.mobile || v?.mobileNumber;
+            if (phone) {
+              const callRes = await obdVoiceService.sendRfqVoiceReminder({
+                phone,
+                vendorName: row.vendorName,
+                rfqNumber: rfq.rfqNumber,
+                rfqTitle: rfq.title,
+              });
+              if (callRes.success) {
+                row.status = CHASER_OUTCOME_STATUS.SENT;
+                row.success = true;
+                row.error = null;
+                result.sentCount = (result.sentCount || 0) + 1;
+                result.success = true;
+              } else {
+                row.status = CHASER_OUTCOME_STATUS.FAILED;
+                row.error = callRes.error;
+              }
+            }
+          }
+        }
+      }
+    }
     if (result.sentCount > 0) {
       return res.json(result);
     }
@@ -2630,6 +2660,141 @@ async function addBroadcast(req, res, next) {
   }
 }
 
+/**
+ * POST /api/rfqs/call-webhook
+ * Inbound webhook handler for OBD call completion and DTMF responses.
+ */
+async function handleCallWebhook(req, res, next) {
+  try {
+    const payload = req.body || {};
+    const effectiveCampId = payload.campaignId || payload.campId || payload.campid;
+    const effectivePhone = payload.mobile || payload.phone || payload.mobile_number;
+    const status = payload.status || payload.callStatus;
+    const duration = payload.duration || payload.callDuration;
+    const dtmf = payload.dtmf || payload.keypress;
+
+    logger.info('[RFQ_CONTROLLER] Received OBD call webhook', {
+      campaignId: effectiveCampId,
+      phone: effectivePhone,
+      status,
+      duration,
+      dtmf,
+    }, 'RFQ_CONTROLLER');
+
+    if (!effectivePhone && !effectiveCampId) {
+      return res.status(400).json({ success: false, error: 'Missing phone or campaignId in webhook payload' });
+    }
+
+    const obdVoiceService = require('../services/obdVoiceService');
+    let updated = false;
+    const rfqs = storeService.getRFQs ? storeService.getRFQs() : (storeService.rfqs || []);
+    for (const rfq of rfqs) {
+      const match = obdVoiceService.recordCallOutcome(rfq, {
+        campaignId: effectiveCampId,
+        phone: effectivePhone,
+        status: status || 'completed',
+        duration,
+        dtmf,
+      });
+      if (match) {
+        updated = true;
+        if (typeof storeService._persistRFQ === 'function') {
+          storeService._persistRFQ(rfq);
+        }
+        break;
+      }
+    }
+
+    return res.status(200).json({
+      success: true,
+      message: 'Call webhook processed',
+      updated,
+    });
+  } catch (err) {
+    logger.error('[RFQ_CONTROLLER] Error processing OBD call webhook', err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+/**
+ * POST /api/rfqs/:id/call-vendor
+ * Trigger an instant outbound call to a specific assigned vendor on this RFQ.
+ */
+async function initiateVendorCall(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { vendorId, phone, dtmf } = req.body || {};
+
+    if (!req.user) {
+      return res.status(401).json({ success: false, error: AUTH_MESSAGES.NO_SESSION_TOKEN });
+    }
+    if (!['buyer', 'category_manager', 'admin'].includes(req.user.role)) {
+      return res.status(403).json({ success: false, error: 'Permission denied to initiate vendor call.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
+    }
+
+    const obdVoiceService = require('../services/obdVoiceService');
+    if (!obdVoiceService.isConfigured()) {
+      return res.status(503).json({
+        success: false,
+        status: 'not_configured',
+        error: 'OBD voice calling gateway is not configured.',
+      });
+    }
+
+    const vendors = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const targetVendor = vendors.find((v) => (v && (v.id === vendorId || v.vendorId === vendorId))) || {
+      name: 'Vendor',
+      phone,
+    };
+    const targetPhone = phone || targetVendor.phone || targetVendor.mobile || targetVendor.mobileNumber;
+
+    if (!targetPhone) {
+      return res.status(400).json({ success: false, error: 'No phone number available for vendor.' });
+    }
+
+    const callResult = await obdVoiceService.sendRfqVoiceReminder({
+      phone: targetPhone,
+      vendorName: targetVendor.name || 'Vendor',
+      rfqNumber: rfq.rfqNumber,
+      rfqTitle: rfq.title,
+      dtmf,
+    });
+
+    if (callResult.success) {
+      if (rfq.followUpData) {
+        if (!rfq.followUpData.callStats) {
+          rfq.followUpData.callStats = { total: 0, connected: 0, avgDuration: null };
+        }
+        rfq.followUpData.callStats.total = (rfq.followUpData.callStats.total || 0) + 1;
+        const vRecord = (rfq.followUpData.vendors || []).find((v) => (
+          v && (v.id === targetVendor.id || v.vendorId === targetVendor.id)
+        ));
+        if (vRecord) {
+          vRecord.call = {
+            status: 'sent',
+            lastAttempt: new Date().toISOString(),
+            messageId: callResult.campaignId,
+          };
+        }
+        if (typeof storeService._persistRFQ === 'function') {
+          storeService._persistRFQ(rfq);
+        }
+      }
+      return res.status(200).json({ success: true, ...callResult });
+    }
+
+    return res.status(422).json({ success: false, ...callResult });
+  } catch (err) {
+    logger.error(`Error initiating vendor call for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getRFQs,
   getAllRFQs,
@@ -2668,4 +2833,6 @@ module.exports = {
   canVendorViewRfq,
   applyVendorBuyerPrivacy,
   applyQuotesVisibility,
+  handleCallWebhook,
+  initiateVendorCall,
 };
