@@ -1355,7 +1355,6 @@ function buildRfqInviteMessageId(rfqNumber, vendorId = 'vendor', timestamp = Dat
 function buildRfqInviteEmail(to, context = {}) {
   const {
     rfq = {},
-    recipientName,
     buyerEmail,
     cc,
     freeCreditsRemaining,
@@ -1416,13 +1415,49 @@ function buildRfqInviteEmail(to, context = {}) {
     inviteCc = list.length > 0 ? list.join(', ') : undefined;
   }
   const requiresPortal = items.length > 10;
-  const allowEmailReply = !requiresPortal && routing.replyToQuoteAllowed;
+  const isInviteOnlyTemplate = !routing.replyToQuoteAllowed;
   const rfqPortalIdentifier = encodeURIComponent(rfq.rfqNumber || rfq.id || '');
   const directRfqPortalUrl = `${getPublicFrontendUrl()}/vendor/rfqs/${rfqPortalIdentifier}`;
   const quotationFormUrl = `${getPublicFrontendUrl()}/vendor/quotation-form?rfq=${encodeURIComponent(rfq.rfqNumber || '')}`;
 
+  const submissionSectionHtml = isInviteOnlyTemplate
+    ? `
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">Portal Submission Required (Do Not Reply to This Email)</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        Please download the RFQ details and submit your bid directly through the <a href="${directRfqPortalUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a> (or open the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Quotation Form</a>). <strong>Portal submission is required for this network invitation — do not reply to this email; replies sent to this mailbox are not processed and no quotation will be created.</strong>
+      </p>
+      <p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Please use the Procucev Vendor Portal (<a href="${directRfqPortalUrl}" style="color: #0284c7;">View RFQ &amp; Submit Quote</a>) so your offer is captured accurately and compared immediately.</em></p>
+    `
+    : `
+      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
+      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
+        ${
+          requiresPortal
+            ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
+            : `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
+        }
+      </p>
+
+      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
+      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
+        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
+        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
+        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
+        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
+        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
+      </ul>
+
+      ${
+        requiresPortal
+          ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
+          : `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
+             <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${replyFormatGuide}</div>
+             <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
+             ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}`
+      }
+    `;
+
   const inner = `
-    <p>${recipientName ? `Dear <strong>${recipientName}</strong>,` : 'Hello,'}</p>
     <p>Greetings from <strong>Procucev!</strong></p>
     <p>QUA by <strong>Procucev</strong> is a trusted AI B2B marketplace connecting genuine buyers and quality sellers across India.</p>
     <p>${introMessage}</p>
@@ -1454,36 +1489,7 @@ function buildRfqInviteEmail(to, context = {}) {
           ? `<div style="background: #f8fafc; border: 1px solid #cbd5e1; color: #334155; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;">📊 <strong>Available Free Quotation Credits:</strong> ${freeCreditsRemaining} / ${VENDOR_FREE_CREDITS_LIMIT} remaining.${freeCreditsRemaining === 0 ? ' <span style="color: #b91c1c; font-weight: bold;">(Plan upgrade required to submit quote)</span>' : ''}</div>`
           : ''
       }
-      <h4 style="margin: 0 0 10px 0; color: #1e40af; font-size: 15px; font-weight: 700;">How to Submit Your Quotation</h4>
-      <p style="margin: 0 0 10px 0; font-size: 13px; color: #1e293b; line-height: 1.5;">
-        ${
-          requiresPortal
-            ? `This RFQ has ${items.length} line items. <strong>Email bids are not accepted for RFQs with more than 10 items.</strong> Submit your bid through the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a>: download the RFQ Excel file, enter a unit price for each item, then upload the completed workbook and supporting documents.`
-            : allowEmailReply
-              ? `You can submit your bid either by <strong>replying directly to this email at <a href="mailto:${gatewayEmail}" style="color: #0284c7; font-weight: bold;">${gatewayEmail}</a></strong> (keep the subject line intact with RFQ number <strong>#${rfq.rfqNumber}</strong>), or online via the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Procucev Quotation Portal</a>. Attach your quotation and any supporting documents when submitting by email.`
-              : `Please download the RFQ details and submit your bid directly through the <a href="${directRfqPortalUrl}" style="color: #0284c7; font-weight: bold;">Procucev Vendor Portal</a> (or open the <a href="${quotationFormUrl}" style="color: #0284c7; font-weight: bold;">Quotation Form</a>). <strong>Portal submission is required for this network invitation — replies sent to this mailbox are not processed as email quotes.</strong>`
-        }
-      </p>
-
-      <p style="margin: 12px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Mandatory Quotation Information Required:</p>
-      <ul style="margin: 0 0 12px 0; padding-left: 20px; font-size: 13px; color: #334155; line-height: 1.6;">
-        <li><strong>Unit Price (₹)*</strong> — <span style="color: #b91c1c; font-weight: bold;">Mandatory</span>: Quoted unit rate (must be greater than ₹0) for each line item.</li>
-        <li><strong>Lead Time (Days)</strong> — Expected delivery timeline from PO issuance.</li>
-        <li><strong>Warranty (Years)</strong> — Product warranty period.</li>
-        <li><strong>Payment Terms</strong> — Commercial terms (e.g., Net 30, Advance).</li>
-        <li><strong>Remarks</strong> — Any inclusions, exclusions, or terms.</li>
-      </ul>
-
-      ${
-        requiresPortal
-          ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Make sure every RFQ line item is priced in the downloaded workbook. Include supporting documents with your portal submission.</em></p>'
-          : allowEmailReply
-            ? `<p style="margin: 14px 0 6px 0; font-size: 13px; font-weight: 700; color: #1e293b;">Email Reply Format (Copy, Fill & Send):</p>
-               <div style="background: #ffffff; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-family: monospace; font-size: 12px; color: #1e293b; white-space: pre-wrap; line-height: 1.4;">${replyFormatGuide}</div>
-               <p style="margin: 8px 0 0 0; font-size: 11px; color: #64748b;"><em>Our automated AI Email Gateway will parse your reply and immediately reflect your bid in Enterprise QUA Vendor Comparison.</em></p>
-               ${items.length > 1 ? '<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>For multi-item RFQs, please quote unit price per item in your reply.</em></p>' : ''}`
-            : `<p style="margin: 8px 0 0 0; font-size: 12px; color: #475569;"><em>Please use the Procucev Vendor Portal (<a href="${directRfqPortalUrl}" style="color: #0284c7;">View RFQ &amp; Submit Quote</a>) so your offer is captured accurately and compared immediately.</em></p>`
-      }
+      ${submissionSectionHtml}
     </div>
 
     <div style="margin: 16px 0; padding: 12px 16px; background: #fdf4ff; border: 1px solid #f0abfc; border-radius: 8px; font-size: 12px; color: #701a75;">
