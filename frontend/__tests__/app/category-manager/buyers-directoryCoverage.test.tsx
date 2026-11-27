@@ -2,7 +2,6 @@ import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import BuyersDirectory, { isPendingBuyer } from '@/app/category-manager/buyers-directory';
 import { useApp } from '@/lib/store';
-import { exportReportToExcel } from '@/lib/reportsClient';
 import * as userPreferencesClient from '@/lib/userPreferencesClient';
 import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import type { AuditLogEntry, BuyerAccount, RFQItem } from '@/lib/types';
@@ -29,10 +28,6 @@ jest.mock('@/lib/buyerProfileClient', () => {
     }),
   };
 });
-
-jest.mock('@/lib/reportsClient', () => ({
-  exportReportToExcel: jest.fn(),
-}));
 
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockResolvedValue([]),
@@ -93,10 +88,6 @@ const openTab = (name: RegExp): void => {
   fireEvent.click(screen.getByRole('button', { name }));
 };
 
-const exportDirectory = (): void => {
-  fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
-};
-
 beforeEach(() => {
   jest.clearAllMocks();
   window.sessionStorage.clear();
@@ -122,17 +113,11 @@ describe('BuyersDirectory with no store data', () => {
     expect(screen.queryByLabelText('Rows per page')).not.toBeInTheDocument();
   });
 
-  test('exports an empty row set under a dated Buyers_Directory file name', () => {
+  test('does not render an Export Directory button when the store is empty', () => {
     render(<BuyersDirectory />);
 
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledTimes(1);
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [],
-      expect.stringMatching(/^Buyers_Directory_\d{4}-\d{2}-\d{2}$/),
-      'BuyersDirectory',
-    );
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customize Columns' })).toBeInTheDocument();
   });
 });
 
@@ -626,99 +611,23 @@ describe('BuyersDirectory dossier audit history', () => {
   });
 });
 
-describe('BuyersDirectory export', () => {
-  const exportBuyers = [
-    makeBuyer({
-      id: 'e-1',
-      organizationName: 'Export One',
-      contactPerson: 'Asha Rao',
-      corporateEmail: 'asha@export-one.example',
-      mobileNumber: '+910000000001',
-      city: 'Chennai',
-      primaryPlantLocation: 'Ennore Plant',
-      sourcingMode: RFQ_MODES.MODE_2,
-      subscriptionPlan: 'version_2',
-      remainingFreeRFQs: 0,
-      totalRFQsCreated: 3,
-      totalSpend: `${CURRENCY.SYMBOL}1,00,000`,
-      status: 'ACTIVE_VERIFIED',
-    }),
-    makeBuyer({ id: 'e-2', organizationName: 'Export Two', corporateEmail: 'two@export.example', sourcingMode: 'legacy_mode', totalSpend: '$250' }),
-    makeBuyer({ id: 'e-3', organizationName: 'Export Three', corporateEmail: 'three@export.example', sourcingMode: RFQ_MODES.MODE_1, totalSpend: '$0' }),
-  ];
-  const exportRfqs = [
-    makeRfq({ id: 'e-r1', rfqNumber: 'RFQ-E-1', buyerAccountId: 'e-1', budget: 30000 }),
-    makeRfq({ id: 'e-r2', rfqNumber: 'RFQ-E-2', buyerAccountId: 'e-1', budget: 20000 }),
-  ];
-
-  test('exports one row per buyer with live spend, fallbacks applied and a dated file name', () => {
-    jest.useFakeTimers({ now: new Date('2026-05-17T10:00:00Z') });
-    mockStore({ buyerAccounts: exportBuyers, rfqs: exportRfqs });
-    render(<BuyersDirectory />);
-
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledTimes(1);
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [
-        {
-          OrganizationName: 'Export One',
-          ContactPerson: 'Asha Rao',
-          Email: 'asha@export-one.example',
-          Phone: '+910000000001',
-          City: 'Chennai',
-          PlantLocation: 'Ennore Plant',
-          SourcingMode: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
-          Plan: 'version_2',
-          RemainingFreeRFQs: 0,
-          TotalRFQsCreated: 3,
-          TotalSpend: formatCurrency(50000),
-          Status: 'ACTIVE_VERIFIED',
-        },
-        {
-          OrganizationName: 'Export Two',
-          ContactPerson: '',
-          Email: 'two@export.example',
-          City: '',
-          PlantLocation: '',
-          SourcingMode: 'Mode 0',
-          Plan: 'standard',
-          RemainingFreeRFQs: 5,
-          TotalRFQsCreated: 0,
-          TotalSpend: formatCurrency(250),
-          Status: 'ACTIVE',
-        },
-        {
-          OrganizationName: 'Export Three',
-          ContactPerson: '',
-          Email: 'three@export.example',
-          City: '',
-          PlantLocation: '',
-          SourcingMode: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
-          Plan: 'standard',
-          RemainingFreeRFQs: 5,
-          TotalRFQsCreated: 0,
-          TotalSpend: `${CURRENCY.SYMBOL}0`,
-          Status: 'ACTIVE',
-        },
+describe('BuyersDirectory toolbar', () => {
+  test('does not render an Export Directory button while keeping the column settings button', () => {
+    mockStore({
+      buyerAccounts: [
+        makeBuyer({
+          id: 'e-1',
+          organizationName: 'Export One',
+          corporateEmail: 'asha@export-one.example',
+          sourcingMode: RFQ_MODES.MODE_2,
+          status: 'ACTIVE_VERIFIED',
+        }),
       ],
-      'Buyers_Directory_2026-05-17',
-      'BuyersDirectory',
-    );
-  });
-
-  test('exports only the buyers that match the current search', () => {
-    mockStore({ buyerAccounts: exportBuyers, rfqs: exportRfqs });
+    });
     render(<BuyersDirectory />);
-    fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value: 'ASHA@' } });
 
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [expect.objectContaining({ OrganizationName: 'Export One', TotalRFQsCreated: 3 })],
-      expect.stringMatching(/^Buyers_Directory_\d{4}-\d{2}-\d{2}$/),
-      'BuyersDirectory',
-    );
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customize Columns' })).toBeInTheDocument();
   });
 });
 

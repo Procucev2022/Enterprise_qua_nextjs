@@ -3,7 +3,6 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import SellersDirectory from '@/app/category-manager/sellers-directory';
 import CategoryManagerSellersDirectoryPage from '@/app/category-manager/sellers-directory/page';
 import { useApp } from '@/lib/store';
-import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { RFQ_MODES } from '@/lib/constants';
@@ -15,14 +14,6 @@ jest.mock('@/lib/store', () => ({
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
-
-jest.mock('@/lib/reportsClient', () => {
-  const actual = jest.requireActual('@/lib/reportsClient');
-  return {
-    ...actual,
-    exportReportToExcel: jest.fn(),
-  };
-});
 
 jest.mock('@/lib/rfqClient', () => {
   const actual = jest.requireActual('@/lib/rfqClient');
@@ -121,7 +112,8 @@ describe('SellersDirectory Component Suite', () => {
   test('renders page header, KPI cards, and unified sellers table', async () => {
     render(<SellersDirectory />);
 
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -277,21 +269,15 @@ describe('SellersDirectory Component Suite', () => {
     expect(screen.getByText(UI_STRINGS.sellerDirectory.noSellersFound)).toBeInTheDocument();
   });
 
-  test('export directory button triggers exportReportToExcel with Vendors Directory naming', async () => {
+  test('does not render Export Directory button in toolbar', async () => {
     render(<SellersDirectory />);
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const exportBtn = screen.getByText('Export Directory');
-    fireEvent.click(exportBtn);
-
-    expect(reportsClient.exportReportToExcel).toHaveBeenCalledWith(
-      expect.any(Array),
-      expect.stringMatching(/^Vendors_Directory_/),
-      'VendorsDirectory'
-    );
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
   });
 
   test('clicking 360 Dossier opens seller drawer with 5 sections and close button', async () => {
@@ -397,7 +383,8 @@ describe('SellersDirectory Component Suite', () => {
     });
 
     render(<CategoryManagerSellersDirectoryPage />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -633,7 +620,7 @@ describe('SellersDirectory Component Suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
 
@@ -649,7 +636,7 @@ describe('SellersDirectory Component Suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
 

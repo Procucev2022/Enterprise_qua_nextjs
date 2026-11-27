@@ -22,7 +22,6 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
-  Download,
   AlertCircle,
   TrendingUp,
   Star,
@@ -56,7 +55,6 @@ import {
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
-import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
 import { fetchSellerDirectoryKPIStats } from '@/lib/accountDocumentsClient';
 import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
@@ -774,26 +772,6 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     }
   };
 
-  const handleExportDirectory = () => {
-    const rows = sortedSellers.map((s) => ({
-      CompanyName: s.name || EMPTY_VALUE,
-      ContactPerson: s.contactPerson || EMPTY_VALUE,
-      Email: s.email || EMPTY_VALUE,
-      Phone: s.phone || EMPTY_VALUE,
-      CompanyLocation: s.location || EMPTY_VALUE,
-      DeliveryLocation: s.deliveryLocation || s.location || EMPTY_VALUE,
-      LastLogin: s.lastLogin ? formatIndianDateTime(s.lastLogin) : EMPTY_VALUE,
-      Source: sourceLabelFor(s.source),
-      MajorCategory: s.majorCategory || EMPTY_VALUE,
-      AIScore: s.score ?? EMPTY_VALUE,
-      StarRating: s.rating ?? EMPTY_VALUE,
-      FreeQuotationCredits: s.freeQuotationCredits ?? EMPTY_VALUE,
-      RFQDownloadsUsed: s.rfqDownloadsUsed ?? EMPTY_VALUE,
-      Status: s.status || EMPTY_VALUE,
-    }));
-    exportReportToExcel(rows, `Vendors_Directory_${new Date().toISOString().split('T')[0]}`, 'VendorsDirectory');
-  };
-
   const visibleColumns = useMemo(() => {
     return columns.filter((c) => c.visible);
   }, [columns]);
@@ -996,16 +974,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           <option value="4.5plus">★ 4.5+ Stars</option>
         </select>
 
-        {/* Export Directory and Gear icon aligned to right */}
+        {/* Gear icon aligned to right */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleExportDirectory}
-            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{strings.exportDirectory}</span>
-          </button>
-
           <button
             type="button"
             onClick={() => setShowColumnSettings(true)}
