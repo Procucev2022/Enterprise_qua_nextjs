@@ -7,15 +7,27 @@
 
 const storeService = require('../services/storeService');
 const pool = require('../db/pool');
+const d1Bridge = require('../db/d1Bridge');
 const domainQueries = require('../db/domainQueries');
 const directoryKPIQueries = require('../db/directoryKPIQueries');
 const loginLogsQueries = require('../db/loginLogsQueries');
+const { D1_OVERLOAD_CONFIG } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const { logger } = require('../services/loggerService');
 
 const LOG_CATEGORY = 'CM_DASHBOARD_CONTROLLER';
 const MAX_POPUP_RECORDS_DEFAULT = 2000;
 const MAX_VENDOR_POPUP_RECORDS = 500;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+const RFQ_COL_PG = "CASE WHEN created_at IS NOT NULL THEN created_at WHEN NULLIF(trim(raw->>'createdAt'), '') ~ '^\\d{4}-\\d{2}-\\d{2}' THEN (raw->>'createdAt')::timestamptz END";
+const RFQ_COL_D1 = "COALESCE(NULLIF(created_at, ''), CASE WHEN json_valid(raw) THEN json_extract(raw, '$.createdAt') END)";
+const BUYER_COL_PG = "CASE WHEN created_at IS NOT NULL THEN created_at WHEN NULLIF(trim(raw->>'createdAt'), '') ~ '^\\d{4}-\\d{2}-\\d{2}' THEN (raw->>'createdAt')::timestamptz END";
+const BUYER_COL_D1 = "COALESCE(NULLIF(created_at, ''), CASE WHEN json_valid(raw) THEN json_extract(raw, '$.createdAt') END)";
+const OPEN_CLAUSE_PG = "upper(COALESCE(status, raw->>'status', '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
+const OPEN_CLAUSE_D1 = "upper(COALESCE(status, CASE WHEN json_valid(raw) THEN json_extract(raw, '$.status') END, '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
+const QUOTE_LEN_PG = "COALESCE(CASE WHEN jsonb_typeof(raw->'quotes') = 'array' THEN jsonb_array_length(raw->'quotes') END, CASE WHEN jsonb_typeof(raw->'vendorQuotes') = 'array' THEN jsonb_array_length(raw->'vendorQuotes') END, CASE WHEN (raw->>'quotesReceivedCount') ~ '^\\d+$' THEN (raw->>'quotesReceivedCount')::int END, 0)";
+const QUOTE_LEN_D1 = "COALESCE(CASE WHEN json_valid(raw) AND json_type(raw, '$.quotes') = 'array' THEN json_array_length(raw, '$.quotes') END, CASE WHEN json_valid(raw) AND json_type(raw, '$.vendorQuotes') = 'array' THEN json_array_length(raw, '$.vendorQuotes') END, CASE WHEN json_valid(raw) AND typeof(json_extract(raw, '$.quotesReceivedCount')) IN ('integer', 'real') THEN CAST(json_extract(raw, '$.quotesReceivedCount') AS INTEGER) WHEN json_valid(raw) AND typeof(json_extract(raw, '$.quotesReceivedCount')) = 'text' AND length(json_extract(raw, '$.quotesReceivedCount')) > 0 AND json_extract(raw, '$.quotesReceivedCount') GLOB '[0-9]*' AND json_extract(raw, '$.quotesReceivedCount') NOT GLOB '*[^0-9]*' THEN CAST(json_extract(raw, '$.quotesReceivedCount') AS INTEGER) END, 0)";
 
 const MONTH_NAMES = Object.freeze(['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']);
 
@@ -170,22 +182,47 @@ function normalizeDbRow(row) {
 
 /**
  * Builds Postgres & D1 date filter clauses and normalized ISO parameter bindings.
+ * When filtering on an indexed bare `created_at` column in D1, pairs the exact
+ * `datetime()` check with coarse `YYYY-MM-DD` range bounds so SQLite uses
+ * `idx_vendors_created_at` / partial indexes across both space- and `T`-separated timestamps.
  */
 function buildSqlDateFilter(colPg, colD1, fromDate, toDate) {
   const pgConds = [];
   const d1Conds = [];
   const params = [];
+  const d1Params = [];
+  const isBareColumn = colD1 === 'created_at';
+  const pgExpr = colPg === 'created_at' ? 'created_at::timestamptz' : colPg;
+
   if (fromDate) {
-    params.push(fromDate.toISOString());
-    const p = `$${params.length}`;
-    pgConds.push(`${colPg}::timestamptz >= ${p}::timestamptz`);
-    d1Conds.push(`datetime(${colD1}) >= datetime(${p})`);
+    const isoFrom = fromDate.toISOString();
+    params.push(isoFrom);
+    const pPg = `$${params.length}`;
+    pgConds.push(`${pgExpr} >= ${pPg}::timestamptz`);
+
+    if (isBareColumn) {
+      const coarseFrom = new Date(fromDate.getTime() - DAY_MS).toISOString().slice(0, 10);
+      d1Params.push(coarseFrom, isoFrom);
+      d1Conds.push(`created_at >= $${d1Params.length - 1} AND datetime(created_at) >= datetime($${d1Params.length})`);
+    } else {
+      d1Params.push(isoFrom);
+      d1Conds.push(`datetime(${colD1}) >= datetime($${d1Params.length})`);
+    }
   }
   if (toDate) {
-    params.push(toDate.toISOString());
-    const p = `$${params.length}`;
-    pgConds.push(`${colPg}::timestamptz <= ${p}::timestamptz`);
-    d1Conds.push(`datetime(${colD1}) <= datetime(${p})`);
+    const isoTo = toDate.toISOString();
+    params.push(isoTo);
+    const pPg = `$${params.length}`;
+    pgConds.push(`${pgExpr} <= ${pPg}::timestamptz`);
+
+    if (isBareColumn) {
+      const coarseTo = new Date(toDate.getTime() + 2 * DAY_MS).toISOString().slice(0, 10);
+      d1Params.push(coarseTo, isoTo);
+      d1Conds.push(`created_at <= $${d1Params.length - 1} AND datetime(created_at) <= datetime($${d1Params.length})`);
+    } else {
+      d1Params.push(isoTo);
+      d1Conds.push(`datetime(${colD1}) <= datetime($${d1Params.length})`);
+    }
   }
   return {
     pgWhere: pgConds.length ? `WHERE ${pgConds.join(' AND ')}` : '',
@@ -193,7 +230,25 @@ function buildSqlDateFilter(colPg, colD1, fromDate, toDate) {
     pgAnd: pgConds.length ? `AND ${pgConds.join(' AND ')}` : '',
     d1And: d1Conds.length ? `AND ${d1Conds.join(' AND ')}` : '',
     params,
+    d1Params,
   };
+}
+
+/**
+ * Executes DB tasks sequentially when Cloudflare D1 is active so multiple queries
+ * never saturate D1's 10-second sliding resource window in one parallel burst,
+ * while preserving concurrent execution on PostgreSQL.
+ */
+async function executeQueries(tasks) {
+  const isD1 = Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
+  if (!isD1) {
+    return Promise.all(tasks.map((task) => task()));
+  }
+  const results = [];
+  for (const task of tasks) {
+    results.push(await task());
+  }
+  return results;
 }
 
 /**
@@ -243,33 +298,21 @@ async function loadCmPortalLogins(fromDate, toDate) {
  * Queries full-table SQL aggregates (zero 200/1000 row truncation) and 6-month chart series from DB.
  */
 async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
-  const rfqColPg = "COALESCE(created_at::text, raw->>'createdAt')";
-  const rfqColD1 = "COALESCE(created_at, json_extract(raw, '$.createdAt'))";
-  const buyerColPg = "COALESCE(created_at::text, raw->>'createdAt')";
-  const buyerColD1 = "COALESCE(created_at, json_extract(raw, '$.createdAt'))";
-  const vendorColPg = 'created_at';
-  const vendorColD1 = 'created_at';
-
-  const rfqFilter = buildSqlDateFilter(rfqColPg, rfqColD1, fromDate, toDate);
-  const buyerFilter = buildSqlDateFilter(buyerColPg, buyerColD1, fromDate, toDate);
-  const vendorFilter = buildSqlDateFilter(vendorColPg, vendorColD1, fromDate, toDate);
-
-  const openClausePg = "upper(COALESCE(status, raw->>'status', '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
-  const openClauseD1 = "upper(COALESCE(status, json_extract(raw, '$.status'), '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
-  const quoteLenPg = "COALESCE(jsonb_array_length(raw->'quotes'), jsonb_array_length(raw->'vendorQuotes'), NULLIF(raw->>'quotesReceivedCount', '')::int, 0)";
-  const quoteLenD1 = "COALESCE(json_array_length(json_extract(raw, '$.quotes')), json_array_length(json_extract(raw, '$.vendorQuotes')), CAST(json_extract(raw, '$.quotesReceivedCount') AS INTEGER), 0)";
+  const rfqFilter = buildSqlDateFilter(RFQ_COL_PG, RFQ_COL_D1, fromDate, toDate);
+  const buyerFilter = buildSqlDateFilter(BUYER_COL_PG, BUYER_COL_D1, fromDate, toDate);
+  const vendorFilter = buildSqlDateFilter('created_at', 'created_at', fromDate, toDate);
 
   const rfqKpiPg = `
     SELECT
       COUNT(*)::int AS total_rfqs,
-      COUNT(CASE WHEN ${openClausePg} THEN 1 END)::int AS open_rfqs,
-      COUNT(CASE WHEN ${openClausePg} AND ${quoteLenPg} = 0 THEN 1 END)::int AS rfqs_without_quotes
+      COUNT(CASE WHEN ${OPEN_CLAUSE_PG} THEN 1 END)::int AS open_rfqs,
+      COUNT(CASE WHEN ${OPEN_CLAUSE_PG} AND ${QUOTE_LEN_PG} = 0 THEN 1 END)::int AS rfqs_without_quotes
     FROM rfqs ${rfqFilter.pgWhere}`;
   const rfqKpiD1 = `
     SELECT
       CAST(COUNT(*) AS INTEGER) AS total_rfqs,
-      CAST(COUNT(CASE WHEN ${openClauseD1} THEN 1 END) AS INTEGER) AS open_rfqs,
-      CAST(COUNT(CASE WHEN ${openClauseD1} AND ${quoteLenD1} = 0 THEN 1 END) AS INTEGER) AS rfqs_without_quotes
+      CAST(COUNT(CASE WHEN ${OPEN_CLAUSE_D1} THEN 1 END) AS INTEGER) AS open_rfqs,
+      CAST(COUNT(CASE WHEN ${OPEN_CLAUSE_D1} AND ${QUOTE_LEN_D1} = 0 THEN 1 END) AS INTEGER) AS rfqs_without_quotes
     FROM rfqs ${rfqFilter.d1Where}`;
 
   const buyerKpiPg = `
@@ -284,77 +327,95 @@ async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
     FROM buyer_accounts ${buyerFilter.d1Where}`;
 
   const rfqMonthlyPg = `
-    SELECT to_char(date_trunc('month', ${rfqColPg}::timestamptz), 'YYYY-MM') AS ym,
+    SELECT to_char(date_trunc('month', ${RFQ_COL_PG}), 'YYYY-MM') AS ym,
       COUNT(*)::int AS rfqs,
-      COALESCE(SUM(${quoteLenPg}), 0)::int AS quotes
+      COALESCE(SUM(${QUOTE_LEN_PG}), 0)::int AS quotes
     FROM rfqs GROUP BY ym ORDER BY ym ASC`;
   const rfqMonthlyD1 = `
-    SELECT strftime('%Y-%m', datetime(${rfqColD1})) AS ym,
+    SELECT strftime('%Y-%m', datetime(${RFQ_COL_D1})) AS ym,
       CAST(COUNT(*) AS INTEGER) AS rfqs,
-      CAST(COALESCE(SUM(${quoteLenD1}), 0) AS INTEGER) AS quotes
+      CAST(COALESCE(SUM(${QUOTE_LEN_D1}), 0) AS INTEGER) AS quotes
     FROM rfqs GROUP BY ym ORDER BY ym ASC`;
 
   const buyerMonthlyPg = `
-    SELECT to_char(date_trunc('month', ${buyerColPg}::timestamptz), 'YYYY-MM') AS ym,
+    SELECT to_char(date_trunc('month', ${BUYER_COL_PG}), 'YYYY-MM') AS ym,
       COUNT(*)::int AS cnt,
       COUNT(CASE WHEN ${directoryKPIQueries.PAID_BUYER_SQL_PG} THEN 1 END)::int AS subs
     FROM buyer_accounts GROUP BY ym ORDER BY ym ASC`;
   const buyerMonthlyD1 = `
-    SELECT strftime('%Y-%m', datetime(${buyerColD1})) AS ym,
+    SELECT strftime('%Y-%m', datetime(${BUYER_COL_D1})) AS ym,
       CAST(COUNT(*) AS INTEGER) AS cnt,
       CAST(COUNT(CASE WHEN ${directoryKPIQueries.PAID_BUYER_SQL_D1} THEN 1 END) AS INTEGER) AS subs
     FROM buyer_accounts GROUP BY ym ORDER BY ym ASC`;
 
-  const vendorMonthlyPg = `
-    SELECT to_char(date_trunc('month', ${vendorColPg}::timestamptz), 'YYYY-MM') AS ym,
-      COUNT(*)::int AS cnt
-    FROM vendors GROUP BY ym ORDER BY ym ASC`;
-  const vendorMonthlyD1 = `
-    SELECT substr(datetime(${vendorColD1}), 1, 7) AS ym,
-      CAST(COUNT(*) AS INTEGER) AS cnt
-    FROM vendors GROUP BY ym ORDER BY ym ASC`;
+  const monthsMeta = buildLast6MonthsMeta();
+  const vendorStatsPgParams = [];
+  const vendorStatsD1Params = [];
+  const vendorStatsPgCols = [];
+  const vendorStatsD1Cols = [];
+  monthsMeta.forEach((m, i) => {
+    const nextPg = new Date(m.year, m.month + 1, 1, 0, 0, 0, 0).toISOString();
+    const nextD1 = new Date(Date.UTC(m.year, m.month + 1, 1)).toISOString().slice(0, 10);
+    vendorStatsPgParams.push(m.startOfMonth.toISOString(), nextPg);
+    vendorStatsD1Params.push(`${m.ym}-01`, nextD1);
+    const p1 = `$${i * 2 + 1}`;
+    const p2 = `$${i * 2 + 2}`;
+    vendorStatsPgCols.push(`COUNT(*) FILTER (WHERE created_at >= ${p1}::timestamptz AND created_at < ${p2}::timestamptz)::int AS m${i}`);
+    vendorStatsD1Cols.push(`CAST(COALESCE(SUM(CASE WHEN created_at >= ${p1} AND created_at < ${p2} THEN 1 ELSE 0 END), 0) AS INTEGER) AS m${i}`);
+  });
+
+  // Single covering-index scan over idx_vendors_created_at computes both total_vendors and the 6-month counts.
+  const vendorStatsPg = `
+    SELECT
+      COUNT(*)::int AS total_vendors,
+      ${vendorStatsPgCols.join(',\n      ')}
+    FROM vendors`;
+  const vendorStatsD1 = `
+    SELECT
+      CAST(COUNT(*) AS INTEGER) AS total_vendors,
+      ${vendorStatsD1Cols.join(',\n      ')}
+    FROM vendors`;
 
   const paidVendorsPg = `SELECT id, created_at, raw FROM vendors WHERE ${directoryKPIQueries.PAID_VENDOR_SQL_PG}`;
   const paidVendorsD1 = `SELECT id, created_at, raw FROM vendors WHERE ${directoryKPIQueries.PAID_VENDOR_SQL_D1}`;
-
-  const vendorBoundedCountPromise = (fromDate || toDate)
-    ? pool.query(
-        `SELECT COUNT(*)::int AS total_vendors FROM vendors ${vendorFilter.pgWhere}`,
-        vendorFilter.params,
-        {
-          d1: true,
-          d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total_vendors FROM vendors ${vendorFilter.d1Where}`,
-          useCache: true,
-          tag: 'vendors',
-          ttlMs: 30000,
-        }
-      )
-    : Promise.resolve(null);
 
   const [
     rfqKpiRes,
     buyerKpiRes,
     rfqMonthlyRes,
     buyerMonthlyRes,
-    vendorMonthlyRes,
+    vendorStatsRes,
     paidVendorsRes,
     vendorBoundedRes,
     cmLogins,
-  ] = await Promise.all([
-    pool.query(rfqKpiPg, rfqFilter.params, { d1: true, d1Text: rfqKpiD1, useCache: true, tag: 'rfqs', ttlMs: 15000 }),
-    pool.query(buyerKpiPg, buyerFilter.params, { d1: true, d1Text: buyerKpiD1, useCache: true, tag: 'buyer_accounts', ttlMs: 15000 }),
-    pool.query(rfqMonthlyPg, [], { d1: true, d1Text: rfqMonthlyD1, useCache: true, tag: 'rfqs', ttlMs: 30000 }),
-    pool.query(buyerMonthlyPg, [], { d1: true, d1Text: buyerMonthlyD1, useCache: true, tag: 'buyer_accounts', ttlMs: 30000 }),
-    pool.query(vendorMonthlyPg, [], { d1: true, d1Text: vendorMonthlyD1, useCache: true, tag: 'vendors', ttlMs: 30000 }),
-    pool.query(paidVendorsPg, [], { d1: true, d1Text: paidVendorsD1, useCache: true, tag: 'vendors', ttlMs: 30000 }),
-    vendorBoundedCountPromise,
-    loadCmPortalLogins(fromDate, toDate),
+  ] = await executeQueries([
+    () => pool.query(rfqKpiPg, rfqFilter.params, { d1: true, d1Text: rfqKpiD1, d1Params: rfqFilter.d1Params, useCache: true, tag: 'rfqs', ttlMs: 15000 }),
+    () => pool.query(buyerKpiPg, buyerFilter.params, { d1: true, d1Text: buyerKpiD1, d1Params: buyerFilter.d1Params, useCache: true, tag: 'buyer_accounts', ttlMs: 15000 }),
+    () => pool.query(rfqMonthlyPg, [], { d1: true, d1Text: rfqMonthlyD1, useCache: true, tag: 'rfqs', ttlMs: 30000 }),
+    () => pool.query(buyerMonthlyPg, [], { d1: true, d1Text: buyerMonthlyD1, useCache: true, tag: 'buyer_accounts', ttlMs: 30000 }),
+    () => pool.query(vendorStatsPg, vendorStatsPgParams, { d1: true, d1Text: vendorStatsD1, d1Params: vendorStatsD1Params, useCache: true, tag: 'vendors', ttlMs: 30000 }),
+    () => pool.query(paidVendorsPg, [], { d1: true, d1Text: paidVendorsD1, useCache: true, tag: 'vendors', ttlMs: 30000 }),
+    () => ((fromDate || toDate)
+      ? pool.query(
+          `SELECT COUNT(*)::int AS total_vendors FROM vendors ${vendorFilter.pgWhere}`,
+          vendorFilter.params,
+          {
+            d1: true,
+            d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total_vendors FROM vendors ${vendorFilter.d1Where}`,
+            d1Params: vendorFilter.d1Params,
+            useCache: true,
+            tag: 'vendors',
+            ttlMs: 30000,
+          }
+        )
+      : Promise.resolve(null)),
+    () => loadCmPortalLogins(fromDate, toDate),
   ]);
 
   const rfqRow = rfqKpiRes?.rows?.[0] || {};
   const buyerRow = buyerKpiRes?.rows?.[0] || {};
-  const vendorMonthRows = vendorMonthlyRes?.rows || [];
-  const allTimeVendorTotal = vendorMonthRows.reduce((acc, r) => acc + (Number(r.cnt) || 0), 0);
+  const vendorStatsRow = vendorStatsRes?.rows?.[0] || {};
+  const allTimeVendorTotal = Number(vendorStatsRow.total_vendors || 0);
   const totalVendorsCount = vendorBoundedRes
     ? Number(vendorBoundedRes.rows?.[0]?.total_vendors || 0)
     : allTimeVendorTotal;
@@ -380,17 +441,15 @@ async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
 
   const rfqByMonth = new Map((rfqMonthlyRes?.rows || []).map((r) => [r.ym, r]));
   const buyerByMonth = new Map((buyerMonthlyRes?.rows || []).map((r) => [r.ym, r]));
-  const vendorByMonth = new Map(vendorMonthRows.map((r) => [r.ym, Number(r.cnt || 0)]));
 
-  const monthsMeta = buildLast6MonthsMeta();
   const totalRfqsAndSubs = [];
   const newRegistrations = [];
   const activityRfqsVsQuotes = [];
 
-  for (const m of monthsMeta) {
+  monthsMeta.forEach((m, i) => {
     const rStats = rfqByMonth.get(m.ym) || {};
     const bStats = buyerByMonth.get(m.ym) || {};
-    const vCount = vendorByMonth.get(m.ym) || 0;
+    const vCount = Number(vendorStatsRow[`m${i}`] || 0);
     const monthPaidVendors = paidVendors.filter((v) => isWithinBounds(getItemDate(v), m.startOfMonth, m.endOfMonth)).length;
 
     const monthRfqs = Number(rStats.rfqs || 0);
@@ -414,7 +473,7 @@ async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
       rfqsRaised: monthRfqs,
       vendorQuotes: monthQuotes,
     });
-  }
+  });
 
   return {
     kpi,
@@ -431,28 +490,18 @@ async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
  * Queries popup drilldown records directly from SQL using the exact same predicates as KPI metrics.
  */
 async function loadDashboardRecordsFromDB({ type, fromDate, toDate, search }) {
-  const rfqColPg = "COALESCE(created_at::text, raw->>'createdAt')";
-  const rfqColD1 = "COALESCE(created_at, json_extract(raw, '$.createdAt'))";
-  const buyerColPg = "COALESCE(created_at::text, raw->>'createdAt')";
-  const buyerColD1 = "COALESCE(created_at, json_extract(raw, '$.createdAt'))";
-
   if (type === 'total_rfqs' || type === 'open_rfqs' || type === 'rfqs_without_quotes') {
-    const df = buildSqlDateFilter(rfqColPg, rfqColD1, fromDate, toDate);
+    const df = buildSqlDateFilter(RFQ_COL_PG, RFQ_COL_D1, fromDate, toDate);
     const pgConds = [...(df.pgWhere ? [df.pgWhere.replace(/^WHERE /, '')] : [])];
     const d1Conds = [...(df.d1Where ? [df.d1Where.replace(/^WHERE /, '')] : [])];
 
-    const openClausePg = "upper(COALESCE(status, raw->>'status', '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
-    const openClauseD1 = "upper(COALESCE(status, json_extract(raw, '$.status'), '')) NOT IN ('CLOSED', 'EXPIRED', 'AWARDED', 'CANCELLED', 'REJECTED')";
-    const quoteLenPg = "COALESCE(jsonb_array_length(raw->'quotes'), jsonb_array_length(raw->'vendorQuotes'), NULLIF(raw->>'quotesReceivedCount', '')::int, 0)";
-    const quoteLenD1 = "COALESCE(json_array_length(json_extract(raw, '$.quotes')), json_array_length(json_extract(raw, '$.vendorQuotes')), CAST(json_extract(raw, '$.quotesReceivedCount') AS INTEGER), 0)";
-
     if (type === 'open_rfqs' || type === 'rfqs_without_quotes') {
-      pgConds.push(openClausePg);
-      d1Conds.push(openClauseD1);
+      pgConds.push(OPEN_CLAUSE_PG);
+      d1Conds.push(OPEN_CLAUSE_D1);
     }
     if (type === 'rfqs_without_quotes') {
-      pgConds.push(`${quoteLenPg} = 0`);
-      d1Conds.push(`${quoteLenD1} = 0`);
+      pgConds.push(`${QUOTE_LEN_PG} = 0`);
+      d1Conds.push(`${QUOTE_LEN_D1} = 0`);
     }
 
     const pgWhere = pgConds.length ? `WHERE ${pgConds.join(' AND ')}` : '';
@@ -463,13 +512,14 @@ async function loadDashboardRecordsFromDB({ type, fromDate, toDate, search }) {
       {
         d1: true,
         d1Text: `SELECT id, rfq_number, category, status, created_at, raw FROM rfqs ${d1Where} ORDER BY created_at DESC LIMIT ${MAX_POPUP_RECORDS_DEFAULT}`,
+        d1Params: df.d1Params,
       }
     );
     return { rows: (res?.rows || []).map(normalizeDbRow), exactTotal: null };
   }
 
   if (type === 'buyer_subscriptions' || type === 'total_buyers' || type === 'buyer_registration') {
-    const df = buildSqlDateFilter(buyerColPg, buyerColD1, fromDate, toDate);
+    const df = buildSqlDateFilter(BUYER_COL_PG, BUYER_COL_D1, fromDate, toDate);
     const pgConds = [...(df.pgWhere ? [df.pgWhere.replace(/^WHERE /, '')] : [])];
     const d1Conds = [...(df.d1Where ? [df.d1Where.replace(/^WHERE /, '')] : [])];
     if (type === 'buyer_subscriptions') {
@@ -484,6 +534,7 @@ async function loadDashboardRecordsFromDB({ type, fromDate, toDate, search }) {
       {
         d1: true,
         d1Text: `SELECT id, corporate_email, status, created_at, raw FROM buyer_accounts ${d1Where} ORDER BY created_at DESC LIMIT ${MAX_POPUP_RECORDS_DEFAULT}`,
+        d1Params: df.d1Params,
       }
     );
     return { rows: (res?.rows || []).map(normalizeDbRow), exactTotal: null };
@@ -499,6 +550,7 @@ async function loadDashboardRecordsFromDB({ type, fromDate, toDate, search }) {
       {
         d1: true,
         d1Text: `SELECT id, email, major_category, status, created_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT ${MAX_POPUP_RECORDS_DEFAULT}`,
+        d1Params: df.d1Params,
       }
     );
     return { rows: (res?.rows || []).map(normalizeDbRow), exactTotal: null };
@@ -508,27 +560,30 @@ async function loadDashboardRecordsFromDB({ type, fromDate, toDate, search }) {
     const df = buildSqlDateFilter('created_at', 'created_at', fromDate, toDate);
     const pgConds = [...(df.pgWhere ? [df.pgWhere.replace(/^WHERE /, '')] : [])];
     const d1Conds = [...(df.d1Where ? [df.d1Where.replace(/^WHERE /, '')] : [])];
-    const params = [...df.params];
+    const pgParams = [...df.params];
+    const d1Params = [...df.d1Params];
     const q = search && String(search).trim() !== '' ? `%${String(search).toLowerCase().trim()}%` : '';
     if (q) {
-      params.push(q);
-      const p = `$${params.length}`;
-      pgConds.push(`(LOWER(COALESCE(email, '')) LIKE ${p} OR LOWER(COALESCE(major_category, '')) LIKE ${p} OR LOWER(raw::text) LIKE ${p})`);
-      d1Conds.push(`(LOWER(COALESCE(email, '')) LIKE ${p} OR LOWER(COALESCE(major_category, '')) LIKE ${p} OR LOWER(COALESCE(raw, '')) LIKE ${p})`);
+      pgParams.push(q);
+      const pPg = `$${pgParams.length}`;
+      pgConds.push(`(LOWER(COALESCE(email, '')) LIKE ${pPg} OR LOWER(COALESCE(major_category, '')) LIKE ${pPg} OR LOWER(raw::text) LIKE ${pPg})`);
+      d1Params.push(q);
+      const pD1 = `$${d1Params.length}`;
+      d1Conds.push(`(LOWER(COALESCE(email, '')) LIKE ${pD1} OR LOWER(COALESCE(major_category, '')) LIKE ${pD1} OR LOWER(COALESCE(raw, '')) LIKE ${pD1})`);
     }
     const pgWhere = pgConds.length ? `WHERE ${pgConds.join(' AND ')}` : '';
     const d1Where = d1Conds.length ? `WHERE ${d1Conds.join(' AND ')}` : '';
 
-    const [countRes, dataRes] = await Promise.all([
-      pool.query(
+    const [countRes, dataRes] = await executeQueries([
+      () => pool.query(
         `SELECT COUNT(*)::int AS total FROM vendors ${pgWhere}`,
-        params,
-        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}` }
+        pgParams,
+        { d1: true, d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${d1Where}`, d1Params }
       ),
-      pool.query(
+      () => pool.query(
         `SELECT id, email, major_category, status, created_at, raw FROM vendors ${pgWhere} ORDER BY created_at DESC LIMIT ${MAX_VENDOR_POPUP_RECORDS}`,
-        params,
-        { d1: true, d1Text: `SELECT id, email, major_category, status, created_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT ${MAX_VENDOR_POPUP_RECORDS}` }
+        pgParams,
+        { d1: true, d1Text: `SELECT id, email, major_category, status, created_at, raw FROM vendors ${d1Where} ORDER BY created_at DESC LIMIT ${MAX_VENDOR_POPUP_RECORDS}`, d1Params }
       ),
     ]);
     return {
@@ -605,6 +660,30 @@ async function loadCollections() {
   }
 
   return { rfqs, buyers, vendors, totalVendorsCount };
+}
+
+/**
+ * Sends a structured error response for dashboard endpoints, surfacing Cloudflare D1
+ * resource overload as a retryable 503 instead of masking it as an internal 500.
+ */
+function sendDashboardError(res, actionLabel, err, fallbackMessage) {
+  const overload = d1Bridge.isD1OverloadError(err);
+  const statusCode = overload ? 503 : 500;
+  logger.error(`Failed to get Category Manager dashboard ${actionLabel}`, {
+    error: err,
+    errorName: err?.name,
+    errorCode: err?.code,
+    databaseOverloaded: overload,
+    retryable: overload || d1Bridge.isRetryableD1Error(err),
+  }, LOG_CATEGORY);
+  if (overload && typeof res.setHeader === 'function') {
+    res.setHeader('Retry-After', String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+  }
+  return res.status(statusCode).json({
+    success: false,
+    ...(overload ? { retryable: true } : {}),
+    error: overload ? D1_OVERLOAD_CONFIG.MESSAGE : fallbackMessage,
+  });
 }
 
 /**
@@ -697,8 +776,7 @@ async function getMetrics(req, res) {
       charts,
     });
   } catch (err) {
-    logger.error('Failed to get Category Manager dashboard metrics', { error: err.message }, LOG_CATEGORY);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve dashboard metrics' });
+    return sendDashboardError(res, 'metrics', err, 'Failed to retrieve dashboard metrics');
   }
 }
 
@@ -852,8 +930,7 @@ async function getRecords(req, res) {
       records,
     });
   } catch (err) {
-    logger.error('Failed to get Category Manager dashboard records', { error: err.message }, LOG_CATEGORY);
-    return res.status(500).json({ success: false, error: 'Failed to retrieve dashboard records' });
+    return sendDashboardError(res, 'records', err, 'Failed to retrieve dashboard records');
   }
 }
 

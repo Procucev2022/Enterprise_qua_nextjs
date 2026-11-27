@@ -500,6 +500,7 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/bot',
     '/api/buyer-accounts/active',
     '/api/buyer-profile',
+    '/api/category-manager/dashboard',
     '/api/crypto',
     '/api/db',
     '/api/document-vault',
