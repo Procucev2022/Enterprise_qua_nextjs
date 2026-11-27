@@ -349,12 +349,19 @@ async function loadDashboardMetricsFromDB({ fromDate, toDate }) {
   monthsMeta.forEach((m, i) => {
     const nextPg = new Date(m.year, m.month + 1, 1, 0, 0, 0, 0).toISOString();
     const nextD1 = new Date(Date.UTC(m.year, m.month + 1, 1)).toISOString().slice(0, 10);
-    vendorStatsPgParams.push(m.startOfMonth.toISOString(), nextPg);
-    vendorStatsD1Params.push(`${m.ym}-01`, nextD1);
-    const p1 = `$${i * 2 + 1}`;
-    const p2 = `$${i * 2 + 2}`;
-    vendorStatsPgCols.push(`COUNT(*) FILTER (WHERE created_at >= ${p1}::timestamptz AND created_at < ${p2}::timestamptz)::int AS m${i}`);
-    vendorStatsD1Cols.push(`CAST(COALESCE(SUM(CASE WHEN created_at >= ${p1} AND created_at < ${p2} THEN 1 ELSE 0 END), 0) AS INTEGER) AS m${i}`);
+    vendorStatsPgParams.push(m.startOfMonth.toISOString());
+    const pgStartIdx = vendorStatsPgParams.length;
+    vendorStatsPgParams.push(nextPg);
+    const pgEndIdx = vendorStatsPgParams.length;
+
+    vendorStatsD1Params.push(`${m.ym}-01`);
+    const d1StartIdx = vendorStatsD1Params.length;
+    vendorStatsD1Params.push(nextD1);
+    const d1EndIdx = vendorStatsD1Params.length;
+
+    // Each m${i} column reads the exact [start, nextMonth) bounds for monthsMeta[i], independent of sort order.
+    vendorStatsPgCols.push(`COUNT(*) FILTER (WHERE created_at >= $${pgStartIdx}::timestamptz AND created_at < $${pgEndIdx}::timestamptz)::int AS m${i}`);
+    vendorStatsD1Cols.push(`CAST(COALESCE(SUM(CASE WHEN created_at >= $${d1StartIdx} AND created_at < $${d1EndIdx} THEN 1 ELSE 0 END), 0) AS INTEGER) AS m${i}`);
   });
 
   // Single covering-index scan over idx_vendors_created_at computes both total_vendors and the 6-month counts.
