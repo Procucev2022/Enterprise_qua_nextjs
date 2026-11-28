@@ -5831,12 +5831,22 @@ describe('app/buyer/vendor-summary.tsx', () => {
         />
       );
 
+      // Main table container: must have overflow classes, role, aria-label,
+      // the shared scrollbar class, AND the new no-bottom-scrollbar modifier.
       const tableContainer = screen.getByTestId('vendor-directory-table-container');
       expect(tableContainer).toBeInTheDocument();
       expect(tableContainer).toHaveClass('overflow-x-auto');
       expect(tableContainer).toHaveClass('vendor-directory-table-scroll');
+      expect(tableContainer).toHaveClass('vendor-directory-main-scroll');
       expect(tableContainer).toHaveAttribute('role', 'region');
       expect(tableContainer).toHaveAttribute('aria-label', 'Vendor Directory Table');
+
+      // Top scroller: visible, aria-hidden proxy bar that drives horizontal sync.
+      const topScroller = screen.getByTestId('vendor-directory-top-scroller');
+      expect(topScroller).toBeInTheDocument();
+      expect(topScroller).toHaveClass('overflow-x-auto');
+      expect(topScroller).toHaveClass('vendor-directory-table-scroll');
+      expect(topScroller).toHaveAttribute('aria-hidden', 'true');
 
       const table = tableContainer.querySelector('table');
       expect(table).toBeInTheDocument();

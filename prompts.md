@@ -10672,3 +10672,16 @@ create the pr and pass all the coverages and ready to merge in test-v3
 ```text
 Continue
 ```
+
+---
+## 2026-11-28T09:35:53+05:30
+In the Vendor Directory page (/buyer/vendor-summary), there are currently two horizontal scrollbars on the vendor table—one at the top and one at the bottom.
+
+Task:
+1. Hide/remove ONLY the bottom horizontal scrollbar on the main table scroll container.
+2. Keep the upper horizontal scrollbar visible and fully synced with the table's horizontal scroll position.
+3. Keep the right-side vertical scrollbar visible and functional.
+4. Keep horizontal scrolling (via the upper scrollbar, trackpad, or Shift + wheel) working smoothly across browsers (Chrome, Edge, Safari, Firefox).
+5. Reuse the existing component structure, refs, and styling—do not refactor unrelated layout, queries, or UI components.
+
+Create the pr and pass all the coverages and make to ready to merge in test-v3 i can merge

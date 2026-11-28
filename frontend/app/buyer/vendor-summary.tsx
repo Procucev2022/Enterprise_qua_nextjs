@@ -2485,7 +2485,7 @@ export default function VendorSummary({ onViewEvaluation, onNavigateToWizard }: 
               ref={tableContainerRef}
               onScroll={handleTableScroll}
               data-testid="vendor-directory-table-container"
-              className="w-full max-w-full overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto vendor-directory-table-scroll focus:outline-none"
+              className="w-full max-w-full overflow-x-auto max-h-[calc(100vh-280px)] overflow-y-auto vendor-directory-table-scroll vendor-directory-main-scroll focus:outline-none"
               tabIndex={0}
               role="region"
               aria-label="Vendor Directory Table"
