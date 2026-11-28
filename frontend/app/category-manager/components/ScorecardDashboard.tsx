@@ -26,6 +26,8 @@ import {
 import { fetchScorecardData } from '@/lib/scorecardClient';
 import type { ScorecardData, TeamScorecardRow } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 
 type PeriodType = 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_quarter' | 'financial_year' | 'custom';
@@ -64,7 +66,7 @@ const SCORECARD_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'performanceStatus', label: 'Performance Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const SCORECARD_COL_PREF_KEY = 'qua_scorecard_col_prefs';
+const SCORECARD_COL_PREF_KEY = USER_PREFERENCE_KEYS.SCORECARD_COLUMNS;
 
 export function ScorecardDashboard() {
   const strings = UI_STRINGS.actionCenter.scorecard;
@@ -86,21 +88,33 @@ export function ScorecardDashboard() {
   const [drilldownExecutive, setDrilldownExecutive] = useState<TeamScorecardRow | null>(null);
 
   // Column customization states
-  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(SCORECARD_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved);
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-        }
-      } catch {}
-    }
-    return SCORECARD_DEFAULT_COLUMNS;
-  });
+  const [scorecardColumns, setScorecardColumns] = useState<ColumnDef[]>(SCORECARD_DEFAULT_COLUMNS);
   const [showScorecardColumnSettings, setShowScorecardColumnSettings] = useState<boolean>(false);
   const [scorecardSortField, setScorecardSortField] = useState<string>('rank');
   const [scorecardSortOrder, setScorecardSortOrder] = useState<'asc' | 'desc'>('asc');
+
+  // Hydrate scorecard column preferences from backend user preferences API
+  useEffect(() => {
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(SCORECARD_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setScorecardColumns(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Close drilldown modal on Escape key
+  useEffect(() => {
+    if (!drilldownExecutive) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setDrilldownExecutive(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [drilldownExecutive]);
 
   const handleScorecardSort = (field: string) => {
     if (scorecardSortField === field) {
@@ -367,14 +381,28 @@ export function ScorecardDashboard() {
                 type="date"
                 value={customStartDate}
                 onChange={(e) => setCustomStartDate(e.target.value)}
-                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs cursor-pointer"
               />
               <span className="text-slate-400">to</span>
               <input
                 type="date"
                 value={customEndDate}
                 onChange={(e) => setCustomEndDate(e.target.value)}
-                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="border border-slate-300 rounded px-2 py-1 bg-white text-xs cursor-pointer"
               />
               <button
                 type="button"
@@ -981,8 +1009,18 @@ export function ScorecardDashboard() {
 
       {/* Drilldown Modal for Individual Executive */}
       {drilldownExecutive && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDrilldownExecutive(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 backdrop-blur-sm p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white rounded-xl shadow-xl max-w-2xl w-full p-6 border border-slate-200 max-h-[90vh] overflow-y-auto"
+          >
             <div className="flex items-center justify-between border-b border-slate-100 pb-3">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{strings.executivePerformanceTitle}</h3>
@@ -1073,15 +1111,11 @@ export function ScorecardDashboard() {
         columns={scorecardColumns}
         onSave={(newCols) => {
           setScorecardColumns(newCols);
-          try {
-            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(newCols));
-          } catch {}
+          void saveUserPreference(SCORECARD_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setScorecardColumns(SCORECARD_DEFAULT_COLUMNS);
-          try {
-            localStorage.setItem(SCORECARD_COL_PREF_KEY, JSON.stringify(SCORECARD_DEFAULT_COLUMNS));
-          } catch {}
+          void deleteUserPreference(SCORECARD_COL_PREF_KEY);
         }}
       />
     </div>

@@ -277,6 +277,9 @@ describe('atomic vendor RFQ unlock persistence', () => {
       expect.objectContaining({ text: expect.stringContaining('vendor_credit_transactions') }),
     ]));
     expect(batch.mock.calls[0][1]).toHaveLength(9);
+    const updateStmt = batch.mock.calls[0][1][3];
+    expect(updateStmt.text).not.toContain('vendors.raw');
+    expect(updateStmt.text).toContain("json_extract(raw, '$.unlockedRfqIds')");
   });
 
   test('handles D1 replays, legacy raw IDs, exhaustion and missing vendors', async () => {

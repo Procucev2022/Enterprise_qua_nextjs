@@ -505,7 +505,7 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
 
       expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
       expect(getOrCreateSpy).toHaveBeenCalledTimes(1);
-      expect(getOrCreateSpy).toHaveBeenCalledWith(UNREG_TO_EMAIL);
+      expect(getOrCreateSpy).toHaveBeenCalledWith(UNREG_TO_EMAIL, { isStrictBuyerMailbox: true });
 
       const [payload, owner] = createRfqSpy.mock.calls[0];
       expect(owner.id).toBe(autoAccount.id);
@@ -702,8 +702,8 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
         status: 'PENDING_ONBOARDING',
       });
 
-      const p1 = emailGatewayService.getOrCreateBuyerAccount('concurrent@example.com');
-      const p2 = emailGatewayService.getOrCreateBuyerAccount('concurrent@example.com');
+      const p1 = emailGatewayService.getOrCreateBuyerAccount('concurrent@example.com', { isStrictBuyerMailbox: true });
+      const p2 = emailGatewayService.getOrCreateBuyerAccount('concurrent@example.com', { isStrictBuyerMailbox: true });
       const [r1, r2] = await Promise.all([p1, p2]);
       expect(r1.buyerAccount.id).toBe(r2.buyerAccount.id);
     });
@@ -727,7 +727,7 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
         status: 'PENDING_ONBOARDING',
       });
 
-      const res = await emailGatewayService.getOrCreateBuyerAccount('existing.pending@example.com');
+      const res = await emailGatewayService.getOrCreateBuyerAccount('existing.pending@example.com', { isStrictBuyerMailbox: true });
       expect(res.tempPassword).toBe('StoredPendingPassword#1');
     });
 
@@ -925,7 +925,10 @@ describe('CC-Based Buyer Identification & Multi-Buyer Email-to-RFQ Scenarios', (
       expect(resSystem.allowed).toBe(false);
 
       const msgVendor = { fromAddress: 'unreg-vendor@example.com' };
-      const resVendor = await emailGatewayService.resolveMultiBuyerAttribution(msgVendor, emailGatewayService.resolveVendorConfig());
+      const resVendor = await emailGatewayService.resolveMultiBuyerAttribution(
+        msgVendor,
+        emailGatewayService.resolveVendorConfig({ VENDOR_EMAIL_GATEWAY_AUTO_REGISTER: 'false' })
+      );
       expect(resVendor.allowed).toBe(false);
 
       const msgAllowed = { fromAddress: 'unreg-unallowed@example.com' };

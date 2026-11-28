@@ -1,7 +1,7 @@
 import { act, render, screen, fireEvent, waitFor, within } from '@testing-library/react';
 import ManualRFQModal from '@/app/buyer/ManualRFQModal';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { SOURCING_MODES } from '@/lib/constants';
+import { SOURCING_MODES, VENDOR_UPLOAD_HISTORY_STORAGE_KEY } from '@/lib/constants';
 import { CATEGORY_TAXONOMY_FIXTURE as categoriesData } from '../../../test-fixtures/categoryTaxonomy';
 import { chooseCategory } from '../../../test-fixtures/categorySearch';
 import type {
@@ -634,6 +634,35 @@ describe('ManualRFQModal: sourcing mode', () => {
     expect(rfqClient.createRFQ.mock.calls[0][0].sourcingMode).toBe('mode_3');
   });
 
+  it('sorts Mode 3 fetched category candidates by delivery pincode proximity before submitting top 10', async () => {
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      activeBuyerAccount: { subscriptionPlan: 'version_3' },
+    });
+    (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValue({
+      success: true,
+      candidates: [
+        { id: 'pin-far', name: 'Far Kerala Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '683542', rating: 4 },
+        { id: 'pin-dist', name: 'Delhi District Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '110045', rating: 4 },
+        { id: 'pin-exact', name: 'Delhi Exact Supplier', majorCategory: categoriesData[0].majorCategory, minorCategories: [categoriesData[0].minorCategories[0]], pincode: '110002', rating: 4 },
+      ],
+    });
+    renderModal();
+    fireEvent.click(screen.getByLabelText(/(Mode 3|Version 3)/i));
+    fillRow();
+    fillHeaderFields();
+    fireEvent.change(screen.getByLabelText(/Delivery Location/i), { target: { value: 'Central Delhi, Delhi' } });
+    fireEvent.change(screen.getByLabelText(/Pincode|PIN/i), { target: { value: '110002' } });
+
+    await waitFor(() => expect(rfqClient.fetchAllVendors).toHaveBeenCalled());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 400)));
+
+    clickSave();
+    await waitFor(() => expect(rfqClient.createRFQ).toHaveBeenCalled());
+    const submittedIds = rfqClient.createRFQ.mock.calls[0][0].assignedVendors.map((v: { id: string }) => v.id);
+    expect(submittedIds).toEqual(['pin-exact', 'pin-dist', 'pin-far']);
+  });
+
   it('blocks save and shows the sourcing-mode message when no mode is chosen', () => {
     (useApp as jest.Mock).mockReturnValue({
       buyerVendors: [],
@@ -835,6 +864,33 @@ describe('ManualRFQModal: extraction from an attached document', () => {
     );
     expect(screen.getByLabelText(new RegExp(MODAL.titleLabel, 'i'))).toHaveValue('');
     expect(screen.getByLabelText(/Estimated Budget/i)).toHaveValue(null);
+  });
+
+  it('supports multi-digit budget, comma-formatted paste, and handles currency key intercept', () => {
+    renderModal();
+
+    const budgetInput = screen.getByLabelText(/Estimated Budget/i);
+    // Multi-digit entry
+    fireEvent.change(budgetInput, { target: { value: '5000000' } });
+    expect(budgetInput).toHaveValue(5000000);
+
+    // Paste with formatted Indian currency
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => '₹ 25,00,000' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Paste with non-numeric text
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => 'abc' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Keydown for comma, rupee, and dollar
+    expect(fireEvent.keyDown(budgetInput, { key: ',' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '₹' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '$' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '9' })).toBe(true);
   });
 
   it('shows the in-progress label while the document is being read', async () => {
@@ -2530,5 +2586,78 @@ describe('ManualRFQModal: mandatory fields', () => {
 
     const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
     expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker))).toHaveLength(6);
+  });
+});
+
+describe('ManualRFQModal: backend buyerVendors sourcing & ensureVendors', () => {
+  it('displays backend buyerVendors across Mode 1, Mode 2, Mode 3, ignores stale localStorage, and calls ensureVendors when empty', async () => {
+    const mockEnsureVendors = jest.fn().mockResolvedValue(undefined);
+    const backendVendors = [
+      {
+        id: 'v-manual-backend-1',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        majorCategory: categoriesData[0].majorCategory,
+        minorCategories: [categoriesData[0].minorCategories[0]],
+        source: 'buyer_uploaded',
+      },
+      {
+        id: 'v-manual-backend-2',
+        name: 'Veera Local Vendor',
+        email: 'veera-local@test.com',
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+        source: 'buyer_uploaded',
+      },
+    ];
+    (useApp as jest.Mock).mockReturnValue({
+      buyerVendors: [],
+      ensureVendors: mockEnsureVendors,
+    });
+
+    // Stale localStorage upload history must NOT leak synthetic vendors into RFQ matching
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-stale-1',
+          records: [{ vendorName: 'Stale Browser Only Vendor', email: 'stale@browser.test', majorCategory: categoriesData[0].majorCategory }],
+        },
+      ])
+    );
+
+    try {
+      const { rerender } = renderModal();
+      expect(mockEnsureVendors).toHaveBeenCalledTimes(1);
+
+      chooseMode('mode_1');
+      expect(screen.queryByText(/Stale Browser Only Vendor/)).not.toBeInTheDocument();
+
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: backendVendors,
+        ensureVendors: mockEnsureVendors,
+      });
+      rerender(
+        <ManualRFQModal
+          isOpen
+          onClose={onClose}
+          onCreated={onCreated}
+        />
+      );
+
+      expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+      expect(screen.getByText(/Veera Local Vendor/)).toBeInTheDocument();
+
+      chooseMode('mode_2');
+      expect(await screen.findByText(/2 Approved Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+
+      chooseMode('mode_3');
+      expect(await screen.findByText(/2 Verified Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText(/Govardhan Solutions pvt LTD/)).toBeInTheDocument();
+    } finally {
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
   });
 });

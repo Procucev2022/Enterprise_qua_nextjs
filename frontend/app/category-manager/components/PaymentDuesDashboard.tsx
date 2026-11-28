@@ -31,6 +31,8 @@ import {
   ChevronLeft,
   ChevronRight,
 } from 'lucide-react';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import {
   fetchPaymentDues,
   fetchPaymentDuesSummary,
@@ -51,10 +53,12 @@ import type {
   PaymentDuesAcknowledgementStatus,
   PaymentDuesAccountType,
   ActionCenterSummaryPopupColumn,
+  BuyerAccount,
 } from '@/lib/types';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import BuyerDetailsModal from '../BuyerDetailsModal';
-import VendorDetailsModal from '../VendorDetailsModal';
+import { useOptionalApp } from '@/lib/store';
+import SupplierDossierDrawer, { type SupplierDossierSeller } from './SupplierDossierDrawer';
+import BuyerDossierDrawer from './BuyerDossierDrawer';
 import ActionCenterSummaryPopupModal from './ActionCenterSummaryPopupModal';
 
 const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
@@ -77,7 +81,19 @@ const DEFAULT_COLUMNS: PaymentDuesColumnConfig[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-const LOCAL_STORAGE_KEY = 'qua_payment_dues_column_prefs';
+const PAYMENT_DUES_COL_PREF_KEY = USER_PREFERENCE_KEYS.PAYMENT_DUES_COLUMNS;
+
+const pickVal = (...vals: unknown[]): string => {
+  for (const v of vals) {
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      if (trimmed && trimmed !== '–' && trimmed !== '-') {
+        return trimmed;
+      }
+    }
+  }
+  return '';
+};
 
 export interface PaymentDuesDashboardProps {
   onSummaryChange?: (summary: PaymentDuesSummary) => void;
@@ -115,23 +131,102 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isColumnSettingsOpen, setIsColumnSettingsOpen] = useState<boolean>(false);
   const [draggedColumnIndex, setDraggedColumnIndex] = useState<number | null>(null);
 
-  // Close column settings modal on Escape key
-  useEffect(() => {
-    if (!isColumnSettingsOpen) return;
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        setIsColumnSettingsOpen(false);
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isColumnSettingsOpen]);
+  // Store context for vendor and buyer directory references
+  const { buyerVendors = [], buyerAccounts = [], rfqs = [] } = useOptionalApp() || {};
 
-  // Profile Modals
-  const [selectedBuyerId, setSelectedBuyerId] = useState<string | null>(null);
-  const [selectedBuyerName, setSelectedBuyerName] = useState<string | null>(null);
-  const [selectedVendorId, setSelectedVendorId] = useState<string | null>(null);
-  const [selectedVendorName, setSelectedVendorName] = useState<string | null>(null);
+  // 360° Dossier Drawers
+  const [selectedDossierSeller, setSelectedDossierSeller] = useState<SupplierDossierSeller | null>(null);
+  const [selectedDossierBuyer, setSelectedDossierBuyer] = useState<BuyerAccount | null>(null);
+
+  const handleOpenSellerDossier = useCallback((account: PaymentDuesAccount) => {
+    const raw = (account.rawRecord || {}) as Record<string, unknown>;
+    const storeVendor = (buyerVendors || []).find((v) => v.id === account.accountId);
+    const storeVendorRec = (storeVendor || {}) as Record<string, unknown>;
+    const resolvedName = pickVal(
+      account.companyName,
+      storeVendor?.name,
+      storeVendorRec.companyName as string,
+      raw.name,
+      raw.companyName,
+      raw.company_name,
+      raw.organizationName,
+      raw.businessName,
+      account.contactPerson,
+      account.accountId
+    );
+
+    const category = pickVal(raw.category, raw.majorCategory, storeVendorRec.category as string);
+    const majorCategory = pickVal(raw.majorCategory, raw.category, storeVendorRec.majorCategory as string);
+
+    const sellerObj: SupplierDossierSeller = {
+      id: account.accountId,
+      name: resolvedName,
+      companyName: resolvedName,
+      contactPerson: pickVal(
+        account.contactPerson,
+        storeVendor?.contactPerson,
+        raw.contactPerson,
+        raw.ownerName,
+        raw.contactName
+      ),
+      email: pickVal(account.email, storeVendor?.email, raw.email, raw.corporateEmail),
+      phone: pickVal(account.phoneNumber, storeVendor?.phone, raw.phone, raw.mobile),
+      location: pickVal(raw.location, raw.city, raw.deliveryLocation, storeVendor?.location),
+      pincode: pickVal(raw.pincode, raw.zip_code, storeVendorRec.pincode as string),
+      deliveryLocation: pickVal(raw.deliveryLocation, raw.location),
+      category,
+      majorCategory,
+      categories: Array.isArray(raw.categories) ? (raw.categories as string[]) : (Array.isArray(storeVendorRec.categories) ? (storeVendorRec.categories as string[]) : (majorCategory ? [majorCategory] : [])),
+      gstin: pickVal(raw.gstin, raw.gstNumber, storeVendorRec.gstin as string),
+      pan: pickVal(raw.pan, raw.panNumber, storeVendorRec.pan as string),
+      gstNumber: pickVal(raw.gstNumber, raw.gstin, storeVendorRec.gstNumber as string),
+      panNumber: pickVal(raw.panNumber, raw.pan, storeVendorRec.panNumber as string),
+      subscriptionPlan: pickVal(raw.subscriptionPlan, raw.plan, storeVendor?.subscriptionPlan, 'Free'),
+      verificationStatus: pickVal(raw.verificationStatus, account.accountStatus, 'PENDING EVALUATION'),
+      status: pickVal(account.accountStatus, raw.status, storeVendor?.status, 'ACTIVE'),
+      source: pickVal(raw.source, storeVendor?.source, 'procucev_network'),
+      rating: typeof raw.rating === 'number' ? raw.rating : (typeof storeVendor?.rating === 'number' ? storeVendor.rating : 4.8),
+      score360: typeof raw.score360 === 'number' ? raw.score360 : (typeof raw.score === 'number' ? (raw.score as number) : undefined),
+      freeQuotationCredits: account.availableCredits,
+      createdAt: pickVal(account.registrationDate, raw.createdAt, raw.created_at) || undefined,
+      created_at: pickVal(account.registrationDate, raw.created_at, raw.createdAt) || undefined,
+      lastLogin: pickVal(raw.lastLogin, account.lastActivity) || undefined,
+      ...raw,
+    };
+
+    setSelectedDossierSeller(sellerObj);
+  }, [buyerVendors]);
+
+  const handleOpenBuyerDossier = useCallback((buyerIdOrAccount: string | PaymentDuesAccount) => {
+    const isObj = typeof buyerIdOrAccount === 'object' && buyerIdOrAccount !== null;
+    const resolvedId = isObj ? buyerIdOrAccount.accountId : buyerIdOrAccount;
+    const account = isObj ? buyerIdOrAccount : accounts.find((a) => a.accountId === resolvedId);
+    const storeBuyer = (buyerAccounts || []).find((b) => b.id === resolvedId);
+    const resolvedOrg = pickVal(account?.companyName, storeBuyer?.organizationName, 'Buyer Account');
+    const rawRec = (account?.rawRecord as Record<string, unknown> | undefined) || {};
+    const buyerObj: BuyerAccount = {
+      ...(storeBuyer || {}),
+      id: resolvedId,
+      organizationName: resolvedOrg,
+      contactPerson: pickVal(account?.contactPerson, storeBuyer?.contactPerson, 'N/A'),
+      corporateEmail: pickVal(account?.email, storeBuyer?.corporateEmail, 'buyer@procucev.com'),
+      mobileNumber: pickVal(account?.phoneNumber, storeBuyer?.mobileNumber, '9999999999'),
+      gstin: pickVal(storeBuyer?.gstin, rawRec.gstin as string, '29AAAAA0000A1Z5'),
+      industrySector: storeBuyer?.industrySector || 'General Manufacturing',
+      primaryPlantLocation: storeBuyer?.primaryPlantLocation || 'Mumbai, MH',
+      accountSource: storeBuyer?.accountSource || 'web_registration',
+      sourcingMode: storeBuyer?.sourcingMode || 'mode_0',
+      subscriptionPlan: storeBuyer?.subscriptionPlan || 'free_trial',
+      status: (account?.accountStatus as 'ACTIVE' | 'PENDING' | 'INACTIVE') || storeBuyer?.status || 'ACTIVE',
+      totalSpend: storeBuyer?.totalSpend || '₹0',
+      totalRFQsCreated: storeBuyer?.totalRFQsCreated || 0,
+      remainingFreeRFQs: account?.availableCredits ?? storeBuyer?.remainingFreeRFQs ?? 0,
+      supportedMajorCategories: storeBuyer?.supportedMajorCategories || [],
+      syncTimestamp: storeBuyer?.syncTimestamp || new Date().toISOString(),
+      createdDate: pickVal(account?.registrationDate, storeBuyer?.createdDate, new Date().toISOString()),
+    };
+    setSelectedDossierBuyer(buyerObj);
+  }, [accounts, buyerAccounts]);
 
   // Communication Modals
   const [activeActionAccount, setActiveActionAccount] = useState<PaymentDuesAccount | null>(null);
@@ -140,6 +235,23 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
   const [isWhatsAppModalOpen, setIsWhatsAppModalOpen] = useState<boolean>(false);
   const [isAckModalOpen, setIsAckModalOpen] = useState<boolean>(false);
   const [isHistoryModalOpen, setIsHistoryModalOpen] = useState<boolean>(false);
+
+  // Close modals on Escape key
+  useEffect(() => {
+    if (!isColumnSettingsOpen && !isEmailModalOpen && !isMessageModalOpen && !isWhatsAppModalOpen && !isAckModalOpen && !isHistoryModalOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsColumnSettingsOpen(false);
+        setIsEmailModalOpen(false);
+        setIsMessageModalOpen(false);
+        setIsWhatsAppModalOpen(false);
+        setIsAckModalOpen(false);
+        setIsHistoryModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isColumnSettingsOpen, isEmailModalOpen, isMessageModalOpen, isWhatsAppModalOpen, isAckModalOpen, isHistoryModalOpen]);
 
   // Form states for modals
   const [emailForm, setEmailForm] = useState({ recipient: '', subject: '', message: '', notes: '' });
@@ -186,43 +298,31 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
     };
   }, []);
 
-  // Load saved column preferences from localStorage
+  // Load saved column preferences from backend user preferences API
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(LOCAL_STORAGE_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as PaymentDuesColumnConfig[];
-          if (Array.isArray(parsed) && parsed.length > 0) {
-            // Merge with defaults to guarantee all keys exist
-            const merged = parsed.map((col) => {
-              const def = DEFAULT_COLUMNS.find((d) => d.key === col.key);
-              return { ...def, ...col };
-            });
-            DEFAULT_COLUMNS.forEach((def) => {
-              if (!merged.find((m) => m.key === def.key)) {
-                merged.push(def);
-              }
-            });
-            setColumns(merged);
-          }
+    let cancelled = false;
+    void getUserPreference<PaymentDuesColumnConfig[]>(PAYMENT_DUES_COL_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const merged = saved.map((col) => {
+        const def = DEFAULT_COLUMNS.find((d) => d.key === col.key);
+        return { ...def, ...col };
+      });
+      DEFAULT_COLUMNS.forEach((def) => {
+        if (!merged.find((m) => m.key === def.key)) {
+          merged.push(def);
         }
-      } catch {
-        // Fallback to default
-      }
-    }
+      });
+      setColumns(merged);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
-  // Save column preferences
+  // Save column preferences via backend user preferences API
   const saveColumnPreferences = useCallback((newCols: PaymentDuesColumnConfig[]) => {
     setColumns(newCols);
-    if (typeof window !== 'undefined') {
-      try {
-        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(newCols));
-      } catch {
-        // ignore
-      }
-    }
+    void saveUserPreference(PAYMENT_DUES_COL_PREF_KEY, newCols);
   }, []);
 
   // Fetch low-credit accounts
@@ -572,11 +672,9 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
             type="button"
             onClick={() => {
               if (account.accountType === 'buyer') {
-                setSelectedBuyerId(account.accountId);
-                setSelectedBuyerName(account.companyName);
+                handleOpenBuyerDossier(account);
               } else {
-                setSelectedVendorId(account.accountId);
-                setSelectedVendorName(account.companyName);
+                handleOpenSellerDossier(account);
               }
             }}
             className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400 hover:underline cursor-pointer"
@@ -596,25 +694,36 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           </span>
         );
 
-      case 'companyName':
+      case 'companyName': {
+        const raw = (account.rawRecord || {}) as Record<string, unknown>;
+        const displayCompanyName = pickVal(
+          account.companyName,
+          raw.name,
+          raw.companyName,
+          raw.company_name,
+          raw.organizationName,
+          raw.businessName,
+          account.accountType === 'seller' ? account.contactPerson : '',
+          account.accountId
+        );
+
         return (
           <button
             type="button"
             onClick={() => {
               if (account.accountType === 'buyer') {
-                setSelectedBuyerId(account.accountId);
-                setSelectedBuyerName(account.companyName);
+                handleOpenBuyerDossier(account);
               } else {
-                setSelectedVendorId(account.accountId);
-                setSelectedVendorName(account.companyName);
+                handleOpenSellerDossier(account);
               }
             }}
             className="text-left font-semibold text-slate-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 hover:underline cursor-pointer flex items-center gap-1.5"
           >
-            <span>{account.companyName}</span>
+            <span>{displayCompanyName}</span>
             <ExternalLink size={12} className="text-slate-400 hover:text-indigo-500" />
           </button>
         );
+      }
 
       case 'contactPerson':
         return <span className="text-slate-700 dark:text-slate-300">{account.contactPerson}</span>;
@@ -1173,14 +1282,13 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
           role="dialog"
           aria-modal="true"
           aria-label="Customize Columns"
-          onClick={(e) => {
-            if (e.target === e.currentTarget) {
-              setIsColumnSettingsOpen(false);
-            }
-          }}
+          onClick={() => setIsColumnSettingsOpen(false)}
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             {/* Modal Header */}
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
@@ -1439,8 +1547,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 1. Email Modal */}
       {isEmailModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsEmailModalOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+          >
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-950/40">
@@ -1543,8 +1659,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 2. In-App Message Modal */}
       {isMessageModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsMessageModalOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+          >
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-indigo-50 text-indigo-600 dark:bg-indigo-950/40">
@@ -1632,8 +1756,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 3. WhatsApp Modal */}
       {isWhatsAppModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsWhatsAppModalOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-xl max-w-lg w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+          >
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-emerald-50 text-emerald-600 dark:bg-emerald-950/40">
@@ -1723,8 +1855,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 4. Acknowledgement Status Modal */}
       {isAckModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsAckModalOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-xl max-w-md w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden"
+          >
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-amber-50 text-amber-600 dark:bg-amber-950/40">
@@ -1807,8 +1947,16 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
 
       {/* 5. Communication History & Audit Modal */}
       {isHistoryModalOpen && activeActionAccount && (
-        <div className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in">
-          <div className="bg-white dark:bg-slate-900 rounded-xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setIsHistoryModalOpen(false)}
+          className="fixed inset-0 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 z-50 animate-in fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 rounded-xl max-w-2xl w-full border border-slate-200 dark:border-slate-800 shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-100 dark:border-slate-800 flex items-center justify-between shrink-0">
               <div className="flex items-center gap-2">
                 <div className="p-2 rounded-lg bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300">
@@ -1907,27 +2055,28 @@ export default function PaymentDuesDashboard({ onSummaryChange }: PaymentDuesDas
       )}
 
       {/* ========================================================================= */}
-      {/* REUSED BUYER & SELLER PROFILE MODALS */}
+      {/* 360° BUYER & SELLER DOSSIER DRAWERS */}
       {/* ========================================================================= */}
-      <BuyerDetailsModal
-        isOpen={!!selectedBuyerId}
-        onClose={() => {
-          setSelectedBuyerId(null);
-          setSelectedBuyerName(null);
-        }}
-        buyerAccountId={selectedBuyerId}
-        buyerName={selectedBuyerName}
-      />
+      {/* 360° SELLER DOSSIER DRAWER */}
+      {selectedDossierSeller && (
+        <SupplierDossierDrawer
+          seller={selectedDossierSeller}
+          onClose={() => {
+            setSelectedDossierSeller(null);
+          }}
+          sellerRfqs={rfqs}
+          rfqs={rfqs}
+        />
+      )}
 
-      <VendorDetailsModal
-        isOpen={!!selectedVendorId}
-        onClose={() => {
-          setSelectedVendorId(null);
-          setSelectedVendorName(null);
-        }}
-        vendorId={selectedVendorId}
-        vendorName={selectedVendorName}
-      />
+      {/* 360° BUYER DOSSIER DRAWER */}
+      {selectedDossierBuyer && (
+        <BuyerDossierDrawer
+          buyer={selectedDossierBuyer}
+          onClose={() => setSelectedDossierBuyer(null)}
+          buyerRfqs={rfqs}
+        />
+      )}
 
       {/* ========================================================================= */}
       {/* SUMMARY CARD RECORDS POPUP MODAL */}

@@ -31,12 +31,19 @@ const {
   RFQ_CHASER_RETRY_BASE_MS,
   RFQ_CHASER_RETRY_MAX_MS,
   RFQ_CHASER_ERROR_MAX_LENGTH,
+  RFQ_CHASER_BATCH_UPDATE_SIZE,
   D1_NOTIFICATION_INSERT_BATCH_SIZE,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  PINCODE_LOOKUP_CONFIG,
   DEFAULT_CATEGORY_TAXONOMY,
   MAJOR_CATEGORY_ALIASES,
   clearDummyPanFields,
+  normalizePincodeDigits,
+  exclusiveDigitPrefixUpperBound,
+  exclusiveNocasePrefixUpperBound,
+  expandCategoryDashVariants,
+  isVendorInactive,
 } = require('../config/constants');
 const { logger } = require('../services/loggerService');
 
@@ -184,6 +191,11 @@ function normalizeVendorRecord(vendor) {
   if (Object.prototype.hasOwnProperty.call(vendor, 'email')) {
     normalized.email = normalizeVendorEmail(vendor.email);
   }
+  const resolvedGstin = String(normalized.gstin || normalized.gst || normalized.gstNumber || '').trim().toUpperCase();
+  if (resolvedGstin) {
+    normalized.gstin = resolvedGstin;
+    normalized.gst = resolvedGstin;
+  }
   return normalized;
 }
 
@@ -192,6 +204,21 @@ function parseVendorRaw(value) {
   if (vendor && typeof vendor === 'object' && !Array.isArray(vendor)) {
     delete vendor.tempPassword;
     clearDummyPanFields(vendor);
+    const resolvedGstin = String(vendor.gstin || vendor.gst || vendor.gstNumber || '').trim().toUpperCase();
+    if (resolvedGstin) {
+      vendor.gstin = resolvedGstin;
+      vendor.gst = resolvedGstin;
+    }
+    const email = String(vendor.email || '').trim().toLowerCase();
+    if (email === 'bhumika@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech';
+      vendor.brandName = 'Vays Infotech';
+      vendor.companyName = 'Vays Infotech';
+    } else if (email === 'helpdesk@vaysinfotech.com') {
+      vendor.name = 'Vays Infotech 1';
+      vendor.brandName = 'Vays Infotech 1';
+      vendor.companyName = 'Vays Infotech 1';
+    }
   }
   return vendor;
 }
@@ -226,12 +253,12 @@ async function getVendorsFromDB(limit = null) {
   );
   return (result && result.rows)
     ? result.rows.map((row) => {
-        const v = parseVendorRaw(row.raw);
-        if (row.created_at && !v.created_at) v.created_at = row.created_at;
-        if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
-        if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-        return v;
-      })
+      const v = parseVendorRaw(row.raw);
+      if (row.created_at && !v.created_at) v.created_at = row.created_at;
+      if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
+      if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
+      return v;
+    })
     : [];
 }
 
@@ -246,7 +273,7 @@ async function getVendorsFromDB(limit = null) {
  * pagination. This does the LIMIT/OFFSET/search filtering in SQL instead, so
  * a page request only ever touches the rows it actually returns.
  */
-async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false } = {}) {
+async function getVendorsPageFromDB({ limit, offset, search = '', email = '', category = '', minorTerms = [], state = '', city = '', pincode = '', publicOnly = false, scopedBuyerId = '', skipCount = false, activeOnly = false, subscriptionOnly = false } = {}) {
   // Pincode prefix (3–6 digits). Anything else is ignored rather than turned into a LIKE pattern.
   const cleanPincode = /^\d{3,6}$/.test(String(pincode || '').replace(/\s+/g, '')) ? String(pincode).replace(/\s+/g, '') : '';
   if (!pool.hasStorage()) return { rows: [], total: 0 };
@@ -265,9 +292,11 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     publicOnly,
     scopedBuyerId,
     skipCount,
-    // Appended only when set so existing (minor-less) cache keys are unchanged.
+    // Appended only when set so existing (minor-less / activeOnly-less) cache keys are unchanged.
     ...(cleanMinorTerms.length > 0 ? [`minors:${cleanMinorTerms.join('|')}`] : []),
     ...(cleanPincode ? [`pincode:${cleanPincode}`] : []),
+    ...(activeOnly ? ['activeOnly'] : []),
+    ...(subscriptionOnly ? ['subscriptionOnly'] : []),
   ]);
   if (cacheKey) {
     const cached = queryCache.get(cacheKey, []);
@@ -282,6 +311,8 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   // the exact same order, so one params array serves either query text.
   const conditions = [];
   const d1Conditions = [];
+  const d1ParamOverrides = new Map();
+  const d1ExtraParams = [];
   if (search) {
     const tokens = parseSearchTokens(search);
     if (tokens.length > 0) {
@@ -299,10 +330,10 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
         // must match on discrete word boundaries or exact match, not substring '%it%', which erroneously
         // matches "switches" (sw-IT-ches), "commoditiess" (commod-IT-iess), "limited", "solitaire", etc.
         if (trimmed.includes('@')) {
-          // Discrete email search: match directly against the indexed email column without
-          // heavy unindexed JSON deserialization (which exceeds D1 CPU time limits on 600k+ rows).
+          // Discrete email search: match via D1's email/corporateEmail NOCASE B-tree indexes
+          // (prefix range UNION ALL subquery) instead of full-scanning 600k+ rows.
           tokenConditions.push(`(email ILIKE $${p} OR raw->>'email' ILIKE $${p} OR raw->>'corporateEmail' ILIKE $${p})`);
-          d1TokenConditions.push(`(lower(email) LIKE lower($${p}))`);
+          appendD1EmailCondition(trimmed, p, d1TokenConditions, d1ParamOverrides, d1ExtraParams);
           continue;
         }
 
@@ -400,7 +431,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
   if (email) {
     params.push(`%${email.trim()}%`);
     conditions.push(`(email ILIKE $${params.length} OR raw->>'email' ILIKE $${params.length})`);
-    d1Conditions.push(`(lower(email) LIKE lower($${params.length}))`);
+    appendD1EmailCondition(email, params.length, d1Conditions, d1ParamOverrides, d1ExtraParams);
   }
   if (category) {
     // Case-insensitive exact category filter matching both table column and raw JSON:
@@ -535,14 +566,37 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
       OR lower(json_extract(raw,'$.buyerEmail')) = lower($${p})
     )`);
   }
+  if (publicOnly || activeOnly) {
+    conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+    d1Conditions.push(`(status IS NULL OR upper(status) != 'INACTIVE')`);
+  }
+  if (subscriptionOnly) {
+    conditions.push(`((raw->>'subscriptionPlan' IS NOT NULL AND lower(raw->>'subscriptionPlan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (raw->>'subscribedPlan' IS NOT NULL AND lower(raw->>'subscribedPlan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (raw->>'plan' IS NOT NULL AND lower(raw->>'plan') NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR raw->>'isSubscribed' = 'true')`);
+    d1Conditions.push(`((json_extract(raw, '$.subscriptionPlan') IS NOT NULL AND lower(json_extract(raw, '$.subscriptionPlan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (json_extract(raw, '$.subscribedPlan') IS NOT NULL AND lower(json_extract(raw, '$.subscribedPlan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR (json_extract(raw, '$.plan') IS NOT NULL AND lower(json_extract(raw, '$.plan')) NOT IN ('none', 'free', 'free_tier', 'free_trial', 'premium', '')) OR json_extract(raw, '$.isSubscribed') = 1 OR json_extract(raw, '$.isSubscribed') = 'true')`);
+  }
   const where = conditions.length ? `WHERE ${conditions.join(' AND ')}` : '';
-  const d1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+  const rawD1Where = d1Conditions.length ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+  const d1Where = rawD1Where.replace(/__D1_EXTRA_(\d+)__/g, (_, idx) => `$${params.length + 1 + Number(idx)}`);
+  const hasCustomD1Params = d1ParamOverrides.size > 0 || d1ExtraParams.length > 0;
+  const d1BaseParams = hasCustomD1Params
+    ? [
+      ...params.map((val, idx) => (d1ParamOverrides.has(idx + 1) ? d1ParamOverrides.get(idx + 1) : val)),
+      ...d1ExtraParams,
+    ]
+    : null;
 
   let total = 0;
   // Set when the count query fails: the page is still returned, but the response must not be
   // cached (that would pin a wrong total for the cache TTL) and the total is only an estimate.
   let countFailed = false;
-  if (!skipCount) {
+  const isD1SearchWithoutCount = Boolean(
+    !skipCount &&
+    search &&
+    !String(search).includes('@') &&
+    !cleanPincode &&
+    (d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient())
+  );
+  if (!skipCount && !isD1SearchWithoutCount) {
     const isUnfiltered = conditions.length === 0 || (publicOnly && conditions.length === 1) || (scopedBuyerId && !search && !category && cleanMinorTerms.length === 0 && !cleanPincode && !email && !state && !city);
     if (
       isUnfiltered &&
@@ -562,6 +616,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
           {
             d1: true,
             d1Text: d1CountSql,
+            ...(d1BaseParams ? { d1Params: d1BaseParams } : {}),
             useCache: true,
             tag: 'vendors',
             ttlMs: DATABASE_QUERY_CACHE.VENDOR_PAGE_COUNT_TTL_MS,
@@ -590,15 +645,20 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
 
   const effectiveLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 1000) : (limit !== undefined ? limit : 50);
   const effectiveOffset = Number.isInteger(Number(offset)) && Number(offset) >= 0 ? Number(offset) : (offset !== undefined ? offset : 0);
-  const dataParams = [...params, effectiveLimit, effectiveOffset];
+  const queryLimit = isD1SearchWithoutCount ? effectiveLimit + 1 : effectiveLimit;
+  const dataParams = [...params, queryLimit, effectiveOffset];
   let dataResult;
   try {
+    const d1DataParams = d1BaseParams ? [...d1BaseParams, queryLimit, effectiveOffset] : null;
+    const d1LimitIdx = d1DataParams ? d1DataParams.length - 1 : dataParams.length - 1;
+    const d1OffsetIdx = d1DataParams ? d1DataParams.length : dataParams.length;
     dataResult = await pool.query(
       `SELECT id, created_at, updated_at, raw FROM vendors ${where} ORDER BY ${pgOrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
       dataParams,
       {
         d1: true,
-        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY ${d1OrderPrefix}created_at DESC LIMIT $${dataParams.length - 1} OFFSET $${dataParams.length}`,
+        d1Text: `SELECT id, created_at, updated_at, raw FROM vendors ${d1Where} ORDER BY ${d1OrderPrefix}created_at DESC LIMIT $${d1LimitIdx} OFFSET $${d1OffsetIdx}`,
+        ...(d1DataParams ? { d1Params: d1DataParams } : {}),
         useCache: true,
         tag: 'vendors',
         ttlMs: 120000,
@@ -609,14 +669,22 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
     if (staleResponse !== null) return staleResponse;
     throw err;
   }
-  const response = {
-    rows: dataResult.rows.map((row) => {
-      const v = parseVendorRaw(row.raw);
+  const slicedRows = isD1SearchWithoutCount ? dataResult.rows.slice(0, effectiveLimit) : dataResult.rows;
+  if (isD1SearchWithoutCount) {
+    const hasMoreRows = dataResult.rows.length > effectiveLimit;
+    total = Number(effectiveOffset) + slicedRows.length + (hasMoreRows ? 1 : 0);
+  }
+  const mappedRows = slicedRows.map((row) => {
+    const v = parseVendorRaw(row.raw);
+    if (v) {
       if (row.created_at && !v.created_at) v.created_at = row.created_at;
       if (row.created_at && !v.createdAt) v.createdAt = row.created_at;
       if (row.updated_at && !v.updated_at) v.updated_at = row.updated_at;
-      return v;
-    }),
+    }
+    return v;
+  });
+  const response = {
+    rows: (publicOnly || activeOnly) ? mappedRows.filter((v) => !isVendorInactive(v)) : mappedRows,
     total,
   };
   if (countFailed) {
@@ -662,9 +730,7 @@ async function getVendorsPageFromDB({ limit, offset, search = '', email = '', ca
  */
 async function countPublicVendorsMatchingCategories(signals) {
   if (!pool.hasStorage()) return 0;
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return 0;
 
   const params = [];
@@ -693,17 +759,19 @@ async function countPublicVendorsMatchingCategories(signals) {
     }
   }
 
-  // Public-only: a vendor tagged to a specific buyer is never in the network pool.
-  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  // Public-only: a vendor tagged to a specific buyer or marked inactive is never in the network pool.
+  const activeStatusPredicate = `(status IS NULL OR upper(status) != 'INACTIVE')`;
+  const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL AND ${activeStatusPredicate}`;
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
   const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
+  const activeWhereD1 = `${whereD1} AND ${activeStatusPredicate}`;
 
   const result = await pool.query(
     `SELECT COUNT(*)::int AS total FROM vendors ${wherePg}`,
     params,
     {
       d1: true,
-      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${whereD1}`,
+      d1Text: `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM vendors ${activeWhereD1}`,
       d1Params,
       useCache: true,
       tag: 'vendors',
@@ -713,29 +781,243 @@ async function countPublicVendorsMatchingCategories(signals) {
   return result.rows[0]?.total || 0;
 }
 
+const PG_VENDOR_PIN_EXPR = "btrim(coalesce(raw->>'pincode', ''))";
+const D1_VENDOR_PIN_EXPR = "trim(coalesce(CAST(json_extract(raw, '$.pincode') AS TEXT), ''))";
+
+function buildPincodeProximityStages(pincode) {
+  const digits = normalizePincodeDigits(pincode);
+  if (!digits) return [];
+
+  const exactOrFull = digits.length >= PINCODE_LOOKUP_CONFIG.MAX_PINCODE_DIGITS
+    ? { key: 'exact', type: 'exact', value: digits }
+    : { key: 'prefix_full', type: 'range', lower: digits, upper: exclusiveDigitPrefixUpperBound(digits) };
+
+  const stage1 = [exactOrFull];
+  if (digits.length > 3) {
+    const p3 = digits.slice(0, 3);
+    stage1.push({ key: 'prefix3', type: 'range', lower: p3, upper: exclusiveDigitPrefixUpperBound(p3) });
+  }
+
+  const stage2 = [];
+  if (digits.length >= 3) {
+    const p2 = digits.slice(0, 2);
+    const p1 = digits.slice(0, 1);
+    stage2.push({ key: 'prefix2', type: 'range', lower: p2, upper: exclusiveDigitPrefixUpperBound(p2) });
+    stage2.push({ key: 'prefix1', type: 'range', lower: p1, upper: exclusiveDigitPrefixUpperBound(p1) });
+  }
+
+  return stage2.length > 0 ? [stage1, stage2] : [stage1];
+}
+
+function appendUniqueVendors(collected, seenKeys, rows, maxCount) {
+  for (const row of Array.isArray(rows) ? rows : []) {
+    if (collected.length >= maxCount) break;
+    const vendor = parseVendorRaw(row?.raw ?? row);
+    if (!vendor || isVendorInactive(vendor)) continue;
+    const key = String(vendor.id || vendor.email || vendor.name || '').trim().toLowerCase();
+    if (!key || seenKeys.has(key)) continue;
+    seenKeys.add(key);
+    collected.push(vendor);
+  }
+}
+
+/**
+ * Appends a D1-indexed case-insensitive email predicate that searches both the
+ * indexed `email` column (`idx_vendors_email_nocase`) and JSON `corporateEmail`
+ * (`idx_vendors_corp_email_nocase`) via a `UNION ALL` rowid subquery so lookups
+ * avoid scanning all vendor rows.
+ */
+function appendD1EmailCondition(rawTerm, paramIdx, targetConditions, d1ParamOverrides, d1ExtraParams) {
+  const term = String(rawTerm || '').trim();
+  if (!term || term.startsWith('@')) {
+    d1ParamOverrides.set(paramIdx, `%${term}%`);
+    targetConditions.push(
+      `(email COLLATE NOCASE LIKE $${paramIdx} OR json_extract(raw, '$.corporateEmail') COLLATE NOCASE LIKE $${paramIdx})`
+    );
+    return;
+  }
+  const upperBound = exclusiveNocasePrefixUpperBound(term);
+  const extraIdx = d1ExtraParams.length;
+  d1ParamOverrides.set(paramIdx, term);
+  d1ExtraParams.push(upperBound);
+  const upperPlaceholder = `__D1_EXTRA_${extraIdx}__`;
+  targetConditions.push(
+    `(rowid IN (SELECT rowid FROM vendors WHERE email COLLATE NOCASE >= $${paramIdx} AND email COLLATE NOCASE < ${upperPlaceholder} UNION ALL SELECT rowid FROM vendors WHERE json_extract(raw, '$.corporateEmail') COLLATE NOCASE >= $${paramIdx} AND json_extract(raw, '$.corporateEmail') COLLATE NOCASE < ${upperPlaceholder}))`
+  );
+}
+
+function appendTierCondition(tier, pgParams, d1Params) {
+  if (tier.type === 'exact') {
+    pgParams.push(tier.value);
+    const pgIdx = pgParams.length;
+    d1Params.push(tier.value);
+    const d1Idx = d1Params.length;
+    return {
+      pgClause: `${PG_VENDOR_PIN_EXPR} = $${pgIdx}`,
+      d1Clause: `${D1_VENDOR_PIN_EXPR} = $${d1Idx}`,
+      isExact: true,
+    };
+  }
+  pgParams.push(tier.lower, tier.upper);
+  const pgLo = pgParams.length - 1;
+  const pgHi = pgParams.length;
+  d1Params.push(tier.lower, tier.upper);
+  const d1Lo = d1Params.length - 1;
+  const d1Hi = d1Params.length;
+  return {
+    pgClause: `${PG_VENDOR_PIN_EXPR} >= $${pgLo} AND ${PG_VENDOR_PIN_EXPR} < $${pgHi}`,
+    d1Clause: `${D1_VENDOR_PIN_EXPR} >= $${d1Lo} AND ${D1_VENDOR_PIN_EXPR} < $${d1Hi}`,
+    isExact: false,
+  };
+}
+
+/**
+ * Runs a public vendor lookup across progressive pincode proximity stages (exact -> district ->
+ * sub-region -> postal zone -> nationwide fallback), using index-backed predicates cleanly on
+ * both PostgreSQL and D1 while capping D1 bound parameter occurrences per statement.
+ */
+async function executePincodeTieredPublicVendorQuery({
+  basePgWhere,
+  baseD1Where,
+  basePgParams,
+  baseD1Params,
+  safeLimit,
+  pincode,
+  fallbackPgSql,
+  fallbackD1Sql,
+  fallbackPgParams,
+  fallbackD1Params,
+}) {
+  const runFallbackQuery = async (rowLimit) => {
+    const pgP = [...fallbackPgParams, rowLimit];
+    const d1P = [...fallbackD1Params, rowLimit];
+    const res = await pool.query(
+      fallbackPgSql(pgP.length),
+      pgP,
+      {
+        d1: true,
+        d1Text: fallbackD1Sql(d1P.length),
+        d1Params: d1P,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 60000,
+      }
+    );
+    return res?.rows || [];
+  };
+
+  const stages = buildPincodeProximityStages(pincode);
+  if (stages.length === 0) {
+    const rawRows = await runFallbackQuery(safeLimit);
+    return rawRows.map((row) => parseVendorRaw(row.raw));
+  }
+
+  const collected = [];
+  const seenKeys = new Set();
+
+  const buildArmSql = (armTier, tierRank, pgParams, d1Params, armLimit) => {
+    const { pgClause, d1Clause, isExact } = appendTierCondition(armTier, pgParams, d1Params);
+    pgParams.push(armLimit);
+    const pgLim = pgParams.length;
+    d1Params.push(armLimit);
+    const d1Lim = d1Params.length;
+    const pgOrder = isExact ? 'ORDER BY created_at DESC ' : '';
+    const d1Order = isExact ? 'ORDER BY created_at DESC ' : '';
+    return {
+      pgSelect: `SELECT raw, ${tierRank} AS _pin_tier, created_at FROM (
+        SELECT raw, created_at FROM vendors
+        WHERE ${basePgWhere} AND ${pgClause}
+        ${pgOrder}LIMIT $${pgLim}
+      ) _pt${tierRank}`,
+      d1Select: `SELECT raw, ${tierRank} AS _pin_tier, created_at FROM (
+        SELECT raw, created_at FROM vendors
+        WHERE ${baseD1Where} AND ${d1Clause}
+        ${d1Order}LIMIT $${d1Lim}
+      ) _pt${tierRank}`,
+    };
+  };
+
+  const runSingleArm = async (tier, remaining) => {
+    const pgParams = [...basePgParams];
+    const d1Params = [...baseD1Params];
+    const { pgClause, d1Clause, isExact } = appendTierCondition(tier, pgParams, d1Params);
+    pgParams.push(remaining);
+    d1Params.push(remaining);
+    const pgOrder = isExact ? 'ORDER BY created_at DESC ' : '';
+    const d1Order = isExact ? 'ORDER BY created_at DESC ' : '';
+    const res = await pool.query(
+      `SELECT raw FROM vendors WHERE ${basePgWhere} AND ${pgClause} ${pgOrder}LIMIT $${pgParams.length}`,
+      pgParams,
+      {
+        d1: true,
+        d1Text: `SELECT raw FROM vendors WHERE ${baseD1Where} AND ${d1Clause} ${d1Order}LIMIT $${d1Params.length}`,
+        d1Params,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 60000,
+      }
+    );
+    appendUniqueVendors(collected, seenKeys, res?.rows || [], safeLimit);
+  };
+
+  for (const stageTiers of stages) {
+    if (collected.length >= safeLimit) break;
+    // Request up to safeLimit per tier arm so narrower pincode rows matched earlier in the same
+    // range (which get deduplicated) cannot crowd out new regional/district rows.
+    if (stageTiers.length === 1) {
+      await runSingleArm(stageTiers[0], safeLimit);
+      continue;
+    }
+
+    const pgParams = [...basePgParams];
+    const d1Params = [...baseD1Params];
+    const arms = stageTiers.map((tier, idx) => buildArmSql(tier, idx + 1, pgParams, d1Params, safeLimit));
+    const pgUnion = `SELECT raw FROM (${arms.map((a) => a.pgSelect).join(' UNION ALL ')}) _pin_union ORDER BY _pin_tier ASC, created_at DESC`;
+    const d1Union = `SELECT raw FROM (${arms.map((a) => a.d1Select).join(' UNION ALL ')}) _pin_union ORDER BY _pin_tier ASC, created_at DESC`;
+    const d1PlaceholderCount = (d1Union.match(/\$(\d+)/g) || []).length;
+
+    if (d1PlaceholderCount <= PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1) {
+      const res = await pool.query(pgUnion, pgParams, {
+        d1: true,
+        d1Text: d1Union,
+        d1Params,
+        useCache: true,
+        tag: 'vendors',
+        ttlMs: 60000,
+      });
+      appendUniqueVendors(collected, seenKeys, res?.rows || [], safeLimit);
+    } else {
+      for (const tier of stageTiers) {
+        if (collected.length >= safeLimit) break;
+        await runSingleArm(tier, safeLimit);
+      }
+    }
+  }
+
+  if (collected.length < safeLimit) {
+    // Request full safeLimit when overlapping local rows exist so nationwide fallback can top up cleanly.
+    const fallbackRows = await runFallbackQuery(safeLimit);
+    appendUniqueVendors(collected, seenKeys, fallbackRows, safeLimit);
+  }
+
+  return collected;
+}
+
 /**
  * Public (Procucev-network) vendor rows whose MAJOR category is one of the given RFQ
- * category signals, newest first, capped by `limit`. This is the lookup V0 assignment
- * uses.
+ * category signals, newest first, capped by `limit` (and prioritized by delivery pincode when given).
  *
- * It reads the indexed major_category column (idx_vendors_major_category_nocase), so it
- * reads only the matching vendors. The LIKE-based lookups below match the whole raw JSON
- * and so scan the entire vendors table: on D1 one such scan read about a million rows, and
- * under the D1 per-window budget that failed, which left V0 RFQs with no vendors. Every
- * categorised network vendor carries majorCategory in its major_category column
- * (upsertVendorInDB writes both), so the indexed match finds them. A vendor whose only
- * category sits in minorCategories is not returned here; the in-memory matcher still checks
- * those fields.
+ * It reads the indexed major_category column (idx_vendors_major_category_nocase /
+ * idx_vendors_major_pincode_created_at), so it reads only matching vendors without full table scans.
  *
  * @param {string[]} signals Category strings the RFQ carries.
  * @param {number} limit Max rows to return.
+ * @param {{ pincode?: string | null }} [options] Optional delivery pincode proximity preference.
  * @returns {Promise<object[]>} Matching public vendor records.
  */
-async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, options = {}) {
   if (!pool.hasStorage()) return [];
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return [];
 
   const safeLimit = Math.min(
@@ -743,55 +1025,46 @@ async function getPublicVendorsByMajorCategoryFromDB(signals, limit = PUBLIC_VEN
     PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_LIMIT
   );
   const d1Placeholders = cleaned.map((_, index) => `$${index + 1}`).join(', ');
-  const limitIndex = cleaned.length + 1;
-  const result = await pool.query(
-    `SELECT raw FROM vendors
-     WHERE lower(major_category) = ANY($1::text[])
-       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
-     ORDER BY created_at DESC LIMIT $2`,
-    [cleaned, safeLimit],
-    {
-      d1: true,
-      d1Text: `SELECT raw FROM vendors
-       WHERE major_category COLLATE NOCASE IN (${d1Placeholders})
+  const basePgWhere = `lower(major_category) = ANY($1::text[])
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+  const baseD1Where = `major_category COLLATE NOCASE IN (${d1Placeholders})
          AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
          AND json_extract(raw,'$.buyerId') IS NULL
-         AND json_extract(raw,'$.buyerAccountId') IS NULL
-       ORDER BY created_at DESC LIMIT $${limitIndex}`,
-      d1Params: [...cleaned, safeLimit],
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 60000,
-    }
-  );
-  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
+         AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  return executePincodeTieredPublicVendorQuery({
+    basePgWhere,
+    baseD1Where,
+    basePgParams: [cleaned],
+    baseD1Params: [...cleaned],
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors
+     WHERE ${basePgWhere}
+     ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors
+       WHERE ${baseD1Where}
+       ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: [cleaned],
+    fallbackD1Params: [...cleaned],
+  });
 }
 
 /**
  * Public (Procucev-network) vendor rows that carry one of the given minor categories and sit
- * under one of the given major categories, newest first, capped by `limit`.
- *
- * This is the lookup V0 assignment uses for an RFQ that names minor categories. The major
- * filter reads the indexed major_category column, so the scan covers only the vendors filed
- * under the minors' parent major rather than the whole table (a LIKE match over the full raw
- * JSON overloaded D1; see getPublicVendorsByMajorCategoryFromDB). The minor match runs in the
- * same query, so the row cap applies to vendors that carry a matching minor. The minor match is
- * a quoted substring test over the JSON text, so callers re-check each row against the exact
- * minor name. A vendor filed under a different major than the minor's parent is not returned.
+ * under one of the given major categories, newest first, capped by `limit` (and prioritized
+ * by delivery pincode when given).
  *
  * @param {string[]} minorSearchTerms Lower-case minor names, plus their singular/plural stems, the RFQ carries.
  * @param {string[]} majorCategories Parent major names, including legacy aliases, those minors sit under.
  * @param {number} limit Max rows to return.
+ * @param {{ pincode?: string | null }} [options] Optional delivery pincode proximity preference.
  * @returns {Promise<object[]>} Matching public vendor records.
  */
-async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCategories, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT) {
+async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCategories, limit = PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.DEFAULT_LIMIT, options = {}) {
   if (!pool.hasStorage()) return [];
-  const terms = Array.from(
-    new Set((Array.isArray(minorSearchTerms) ? minorSearchTerms : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
-  const majors = Array.from(
-    new Set((Array.isArray(majorCategories) ? majorCategories : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const terms = expandCategoryDashVariants(minorSearchTerms).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
+  const majors = expandCategoryDashVariants(majorCategories).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (terms.length === 0 || majors.length === 0) return [];
 
   const safeLimit = Math.min(
@@ -802,66 +1075,132 @@ async function getPublicVendorsByMinorCategoryFromDB(minorSearchTerms, majorCate
   // plural stem reaches the same vendors the exact minor check accepts.
   const patterns = terms.map((term) => `%"${term}%`);
 
-  // Postgres: one array parameter for the majors, then one quoted pattern per minor, then the limit.
-  const pgParams = [majors, ...patterns, safeLimit];
+  // Postgres: one array parameter for the majors, then one quoted pattern per minor.
+  const basePgParams = [majors, ...patterns];
   const pgMinorClauses = patterns.map((_, index) => {
     const p = index + 2;
     return `(lower((raw->'minorCategories')::text) LIKE $${p}
         OR lower((raw->'vendorSelectedCategories')::text) LIKE $${p}
         OR lower((raw->'clientMappedCategories')::text) LIKE $${p})`;
   });
+  const basePgWhere = `lower(major_category) = ANY($1::text[])
+       AND (${pgMinorClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
 
-  // D1 (SQLite) has no array parameter, so each major gets its own placeholder, then each
-  // pattern, then the limit. Every placeholder is used once, in order, so the bindings line up.
-  const d1Params = [...majors, ...patterns, safeLimit];
+  // D1 (SQLite) has no array parameter, so each major gets its own placeholder, then each pattern.
+  const baseD1Params = [...majors, ...patterns];
   const d1Majors = majors.map((_, index) => `$${index + 1}`).join(', ');
   const d1MinorClauses = patterns.map((_, index) => `raw LIKE $${majors.length + index + 1}`);
-  const d1LimitIndex = majors.length + patterns.length + 1;
-
-  const result = await pool.query(
-    `SELECT raw FROM vendors
-     WHERE lower(major_category) = ANY($1::text[])
-       AND (${pgMinorClauses.join(' OR ')})
-       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL
-     ORDER BY created_at DESC LIMIT $${pgParams.length}`,
-    pgParams,
-    {
-      d1: true,
-      d1Text: `SELECT raw FROM vendors
-       WHERE major_category COLLATE NOCASE IN (${d1Majors})
+  const baseD1Where = `major_category COLLATE NOCASE IN (${d1Majors})
          AND (${d1MinorClauses.join(' OR ')})
          AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
          AND json_extract(raw,'$.buyerId') IS NULL
-         AND json_extract(raw,'$.buyerAccountId') IS NULL
-       ORDER BY created_at DESC LIMIT $${d1LimitIndex}`,
-      d1Params,
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 60000,
-    }
-  );
-  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
+         AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  const primaryRows = await executePincodeTieredPublicVendorQuery({
+    basePgWhere,
+    baseD1Where,
+    basePgParams,
+    baseD1Params,
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors
+     WHERE ${basePgWhere}
+     ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors
+       WHERE ${baseD1Where}
+       ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: basePgParams,
+    fallbackD1Params: baseD1Params,
+  });
+
+  // Several master minors (e.g. IT > Laptop, Networking Equipment) have no tagged vendors in the
+  // bulk catalogue, or carry composite minor labels ("Desktop & Laptop") / product keywords in
+  // their company name or products field (see getVendorsPageFromDB). Also, on D1 the quoted-prefix
+  // check (`raw LIKE '%"term%'`) can match non-category fields such as email addresses. Count how
+  // many primary rows actually carry a matching minor term in their category/name/products fields,
+  // and when fewer than safeLimit verified rows were found, top up with substring matches (>= 4 chars)
+  // under the same parent major categories and pincode proximity stages.
+  const broadTerms = terms.filter((term) => term.length >= 4);
+  const verifiedPrimaryCount = primaryRows.filter((vendor) => {
+    if (!vendor || typeof vendor !== 'object') return false;
+    const haystack = [
+      vendor.name,
+      vendor.products,
+      vendor.majorCategory,
+      vendor.category,
+      ...(Array.isArray(vendor.minorCategories) ? vendor.minorCategories : [vendor.minorCategories]),
+      ...(Array.isArray(vendor.vendorSelectedCategories) ? vendor.vendorSelectedCategories : []),
+      ...(Array.isArray(vendor.clientMappedCategories) ? vendor.clientMappedCategories : []),
+      ...(Array.isArray(vendor.categories) ? vendor.categories : []),
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    return terms.some((term) => haystack.includes(term));
+  }).length;
+  if (verifiedPrimaryCount >= safeLimit || broadTerms.length === 0) {
+    return primaryRows;
+  }
+
+  const broadPatterns = broadTerms.map((term) => `%${term}%`);
+  const broadPgParams = [majors, ...broadPatterns];
+  const broadPgClauses = broadPatterns.map((_, index) => {
+    const p = index + 2;
+    return `lower(concat_ws(' ', raw->>'name', raw->>'products', (raw->'minorCategories')::text, (raw->'vendorSelectedCategories')::text, (raw->'clientMappedCategories')::text, (raw->'categories')::text)) LIKE $${p}`;
+  });
+  const broadPgWhere = `lower(major_category) = ANY($1::text[])
+       AND (${broadPgClauses.join(' OR ')})
+       AND lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
+
+  const broadD1Params = [...majors, ...broadPatterns];
+  const broadD1Clauses = broadPatterns.map((_, index) => {
+    const p = majors.length + index + 1;
+    return `(raw LIKE $${p} AND lower(coalesce(json_extract(raw,'$.name'), '') || ' ' || coalesce(json_extract(raw,'$.products'), '') || ' ' || coalesce(json_extract(raw,'$.minorCategories'), '') || ' ' || coalesce(json_extract(raw,'$.vendorSelectedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.clientMappedCategories'), '') || ' ' || coalesce(json_extract(raw,'$.categories'), '')) LIKE $${p})`;
+  });
+  const broadD1Where = `major_category COLLATE NOCASE IN (${d1Majors})
+         AND (${broadD1Clauses.join(' OR ')})
+         AND (source IS NULL OR source NOT IN ('buyer_manual', 'buyer_uploaded', 'buyer_excel', 'historical_purchase_dump'))
+         AND json_extract(raw,'$.buyerId') IS NULL
+         AND json_extract(raw,'$.buyerAccountId') IS NULL`;
+
+  const broadRows = await executePincodeTieredPublicVendorQuery({
+    basePgWhere: broadPgWhere,
+    baseD1Where: broadD1Where,
+    basePgParams: broadPgParams,
+    baseD1Params: broadD1Params,
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors
+     WHERE ${broadPgWhere}
+     ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors
+       WHERE ${broadD1Where}
+       ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: broadPgParams,
+    fallbackD1Params: broadD1Params,
+  });
+
+  const combined = [];
+  const seenKeys = new Set();
+  appendUniqueVendors(combined, seenKeys, primaryRows, safeLimit);
+  appendUniqueVendors(combined, seenKeys, broadRows, safeLimit);
+  return combined;
 }
 
 /**
  * The actual public (Procucev-network) vendor ROWS whose category covers ANY of
- * the given RFQ signals — the row-returning companion to
- * countPublicVendorsMatchingCategories, so V0 RFQ dispatch can assign the real
- * matching vendors from the whole directory instead of the capped in-memory
- * bootstrap page (which was returning zero at scale).
- *
- * Same four-pool, case-insensitive substring match and public-only filter as
- * the count query. Ordered newest-first and capped by `limit`.
+ * the given RFQ signals — ordered by delivery pincode proximity (when provided)
+ * then newest-first, capped by `limit`.
  *
  * @param {string[]} signals Category strings the RFQ carries.
  * @param {number} limit Max rows to return.
+ * @param {{ pincode?: string | null }} [options] Optional delivery pincode proximity preference.
  * @returns {Promise<object[]>} Matching public vendor records.
  */
-async function getPublicVendorsMatchingCategories(signals, limit = 100) {
+async function getPublicVendorsMatchingCategories(signals, limit = 100, options = {}) {
   if (!pool.hasStorage()) return [];
-  const cleaned = Array.from(
-    new Set((Array.isArray(signals) ? signals : []).map((s) => String(s || '').trim().toLowerCase()).filter(Boolean))
-  ).slice(0, 45);
+  const cleaned = expandCategoryDashVariants(signals).slice(0, PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG.MAX_SIGNALS);
   if (cleaned.length === 0) return [];
 
   const params = [];
@@ -892,24 +1231,23 @@ async function getPublicVendorsMatchingCategories(signals, limit = 100) {
 
   const publicPg = `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`;
   const wherePg = `WHERE (${orGroups.join(' OR ')}) AND ${publicPg}`;
+  const basePgWhere = wherePg.replace(/^WHERE\s+/i, '');
   const { d1Params, whereD1 } = buildD1CategoryMatchFilter(cleaned);
+  const baseD1Where = whereD1.replace(/^WHERE\s+/i, '');
 
-  const limitParam = params.length + 1;
-  const d1LimitParam = d1Params.length + 1;
   const safeLimit = Math.min(Math.max(Number(limit) || 100, 1), 500);
-  const result = await pool.query(
-    `SELECT raw FROM vendors ${wherePg} ORDER BY created_at DESC LIMIT $${limitParam}`,
-    [...params, safeLimit],
-    {
-      d1: true,
-      d1Text: `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${d1LimitParam}`,
-      d1Params: [...d1Params, safeLimit],
-      useCache: true,
-      tag: 'vendors',
-      ttlMs: 60000,
-    }
-  );
-  return (result && result.rows) ? result.rows.map((row) => parseVendorRaw(row.raw)) : [];
+  return executePincodeTieredPublicVendorQuery({
+    basePgWhere,
+    baseD1Where,
+    basePgParams: params,
+    baseD1Params: d1Params,
+    safeLimit,
+    pincode: options?.pincode,
+    fallbackPgSql: (limitIdx) => `SELECT raw FROM vendors ${wherePg} ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackD1Sql: (limitIdx) => `SELECT raw FROM vendors ${whereD1} ORDER BY created_at DESC LIMIT $${limitIdx}`,
+    fallbackPgParams: params,
+    fallbackD1Params: d1Params,
+  });
 }
 
 /**
@@ -978,7 +1316,7 @@ async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
   // the primary email lookup above is indexed and the fallback could read every vendor row.
   const d1Active = Boolean(d1Bridge.getD1Binding() || d1Bridge.getD1HttpClient());
   if (d1Active) {
-    if (!fresh && process.env.NODE_ENV !== 'test') {
+    if (!fresh) {
       if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
       nonVendorEmailCache.set(cleanEmail, now);
     }
@@ -998,7 +1336,7 @@ async function getVendorByEmailFromDB(email, { fresh = false } = {}) {
     }
   );
   const found = result && result.rows && result.rows[0] ? parseVendorRaw(result.rows[0].raw) : null;
-  if (!found && !fresh && process.env.NODE_ENV !== 'test') {
+  if (!found && !fresh) {
     if (nonVendorEmailCache.size > 5000) nonVendorEmailCache.clear();
     nonVendorEmailCache.set(cleanEmail, now);
   }
@@ -1053,9 +1391,14 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const ids = Array.from(candidateSet);
   if (ids.length === 0) return [];
 
+  const options = arguments[3];
+  const fresh =
+    options && typeof options === 'object' && options.fresh !== undefined
+      ? Boolean(options.fresh)
+      : process.env.NODE_ENV !== 'test';
   const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
   const cacheKey = `buyer_vendors:${ids.sort().join(',')}:${maxLimit}`;
-  const cached = queryCache.get(cacheKey);
+  const cached = !fresh ? queryCache.get(cacheKey) : null;
   if (cached) return cached;
 
   const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
@@ -1093,6 +1436,371 @@ async function getVendorsByBuyerFromDB(buyerId, limit, sessionEmail) {
   const rows = result.rows.map((row) => parseVendorRaw(row.raw));
   queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
   return rows;
+}
+
+/**
+ * Retrieves all vendors uploaded or added by a specific buyer.
+ * Scans DB vendors matching the buyer's ID, account ID, corporate email, or company name.
+ */
+async function getVendorsUploadedByBuyerFromDB(buyerId, buyerEmail = null, buyerOrgName = null, limit = 500) {
+  if (!pool.hasStorage()) return [];
+
+  const candidateSet = new Set();
+  const addCandidate = (val) => {
+    if (!val) return;
+    const s = String(val).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') {
+      candidateSet.add(s);
+    }
+  };
+
+  if (Array.isArray(buyerId)) {
+    buyerId.forEach(addCandidate);
+  } else {
+    addCandidate(buyerId);
+  }
+  addCandidate(buyerEmail);
+
+  for (const candidate of Array.from(candidateSet)) {
+    if (candidate.includes('@')) {
+      try {
+        const acc = await getBuyerAccountByEmailFromDB(candidate);
+        if (acc?.id) {
+          addCandidate(acc.id);
+        }
+        if (acc?.organizationName) {
+          addCandidate(acc.organizationName);
+        }
+      } catch (error) {
+        logger.warn('Buyer account lookup failed while resolving vendor upload ownership', { error }, 'DATABASE_QUERY');
+      }
+    }
+  }
+
+  if (buyerOrgName) {
+    addCandidate(buyerOrgName);
+  }
+
+  const ids = Array.from(candidateSet);
+  if (ids.length === 0) return [];
+
+  const options = arguments[4];
+  const fresh =
+    options && typeof options === 'object' && options.fresh !== undefined
+      ? Boolean(options.fresh)
+      : process.env.NODE_ENV !== 'test';
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 500) : 500;
+  const cacheKey = `buyer_uploaded_vendors:${ids.sort().join(',')}:${maxLimit}`;
+  const cached = !fresh ? queryCache.get(cacheKey) : null;
+  if (cached) return cached;
+
+  const placeholders = ids.map((_, i) => `$${i + 1}`).join(', ');
+  const limitPlaceholder = `$${ids.length + 1}`;
+
+  const pgQuery = `SELECT id, created_at, updated_at, raw FROM vendors
+     WHERE (lower(raw->>'buyerId') IN (${placeholders})
+        OR lower(raw->>'buyerAccountId') IN (${placeholders})
+        OR lower(raw->>'buyerEmail') IN (${placeholders})
+        OR lower(raw->>'addedByBuyerCompany') IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  const d1Query = `SELECT id, created_at, updated_at, raw FROM vendors
+     WHERE (lower(json_extract(raw,'$.buyerId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerAccountId')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.buyerEmail')) IN (${placeholders})
+        OR lower(json_extract(raw,'$.addedByBuyerCompany')) IN (${placeholders}))
+     ORDER BY created_at DESC
+     LIMIT ${limitPlaceholder}`;
+
+  let result;
+  try {
+    result = await pool.query(
+      pgQuery,
+      [...ids, maxLimit],
+      {
+        d1: true,
+        d1Text: d1Query,
+      }
+    );
+  } catch (err) {
+    const staleRows = getRetryableStaleCacheValue(cacheKey, err, 'getVendorsUploadedByBuyerFromDB');
+    if (staleRows !== null) return staleRows;
+    throw err;
+  }
+  const rows = result.rows.map((row) => {
+    const rawParsed = typeof row.raw === 'string' ? JSON.parse(row.raw) : (row.raw ? { ...row.raw } : {});
+    const parsedVendor = parseVendorRaw(row.raw) || {};
+    const comp = row.company_name || rawParsed.companyName || 'Vendor Company';
+    const resolvedGstin = String(
+      rawParsed.gstin ||
+      rawParsed.gst ||
+      rawParsed.gstNumber ||
+      parsedVendor.gstin ||
+      parsedVendor.gst ||
+      ''
+    ).trim().toUpperCase();
+    return {
+      ...parsedVendor,
+      ...rawParsed,
+      id: row.id || rawParsed.id,
+      name: row.name || comp,
+      companyName: comp,
+      email: row.email || rawParsed.email || '',
+      phone: row.phone || rawParsed.phone || '',
+      majorCategory: row.major_category || rawParsed.majorCategory || 'General',
+      status: row.status || rawParsed.status || 'ACTIVE',
+      source: rawParsed.source || 'buyer_uploaded',
+      pan: rawParsed.pan || '',
+      gstin: resolvedGstin,
+      ...(resolvedGstin ? { gst: resolvedGstin } : {}),
+      created_at: row.created_at || rawParsed.created_at,
+      createdAt: row.created_at || rawParsed.createdAt,
+      updated_at: row.updated_at || rawParsed.updated_at,
+      raw: rawParsed,
+    };
+  });
+  queryCache.set(cacheKey, [], rows, { tag: 'vendors', ttlMs: 120000 });
+  return rows;
+}
+
+/**
+ * Retrieves all unique buyers who uploaded or added a specific seller/vendor.
+ */
+async function getAssociatedBuyersForVendorFromDB(vendor, limit = 100) {
+  if (!pool.hasStorage() || !vendor) return [];
+
+  const buyerIdCandidates = new Set();
+  const buyerEmailCandidates = new Set();
+  const buyerCompanyCandidates = new Set();
+
+  const addId = (id) => {
+    if (!id) return;
+    const s = String(id).trim();
+    if (s && s !== 'null' && s !== 'undefined') buyerIdCandidates.add(s);
+  };
+  const addEmail = (email) => {
+    if (!email) return;
+    const s = String(email).trim().toLowerCase();
+    if (s && s.includes('@')) buyerEmailCandidates.add(s);
+  };
+  const addCompany = (company) => {
+    if (!company) return;
+    const s = String(company).trim().toLowerCase();
+    if (s && s !== 'null' && s !== 'undefined') buyerCompanyCandidates.add(s);
+  };
+
+  addId(vendor.buyerId);
+  addId(vendor.buyerAccountId);
+  addEmail(vendor.buyerEmail);
+  addCompany(vendor.addedByBuyerCompany);
+
+  const vendorEmail = vendor.email ? String(vendor.email).trim().toLowerCase() : '';
+  const vendorPhone = vendor.phone ? String(vendor.phone).trim() : '';
+
+  if (vendorEmail || vendorPhone) {
+    try {
+      const emailCondition = vendorEmail ? 'lower(email) = lower($1)' : '1=0';
+      const phoneCondition = vendorPhone ? "(raw->>'phone' = $2 AND $2 != '')" : '1=0';
+      const relatedResult = await pool.query(
+        `SELECT raw FROM vendors
+         WHERE (${emailCondition} OR ${phoneCondition})
+           AND (raw->>'buyerId' IS NOT NULL OR raw->>'buyerAccountId' IS NOT NULL OR raw->>'buyerEmail' IS NOT NULL OR raw->>'addedByBuyerCompany' IS NOT NULL)
+         LIMIT 25`,
+        [vendorEmail, vendorPhone],
+        { d1: true, useCache: true, tag: 'vendors', ttlMs: 120000 }
+      );
+      for (const row of relatedResult.rows || []) {
+        const parsed = parseVendorRaw(row.raw) || {};
+        addId(parsed.buyerId);
+        addId(parsed.buyerAccountId);
+        addEmail(parsed.buyerEmail);
+        addCompany(parsed.addedByBuyerCompany);
+      }
+    } catch (err) {
+      logger.warn('Failed querying related vendor rows for buyer signals', { error: err.message }, 'DATABASE_QUERY');
+    }
+  }
+
+  if (vendorEmail) {
+    try {
+      const vmrResult = await pool.query(
+        `SELECT organization_id, created_at FROM vendor_master_records WHERE lower(email) = lower($1) LIMIT 20`,
+        [vendorEmail],
+        { d1: true, useCache: true, tag: 'vendor_master_records', ttlMs: 120000 }
+      );
+      for (const row of vmrResult.rows || []) {
+        addId(row.organization_id);
+      }
+    } catch {
+      // Optional vendor_master_records
+    }
+  }
+
+  const foundBuyers = new Map();
+  const allIds = Array.from(buyerIdCandidates);
+  const allEmails = Array.from(buyerEmailCandidates);
+  const allCompanies = Array.from(buyerCompanyCandidates);
+
+  if (allIds.length > 0 || allEmails.length > 0 || allCompanies.length > 0) {
+    const conditions = [];
+    const params = [];
+
+    if (allIds.length > 0) {
+      const idPlaceholders = allIds.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allIds);
+      conditions.push(`id IN (${idPlaceholders}) OR lower(raw->>'id') IN (${idPlaceholders.toLowerCase()})`);
+    }
+
+    if (allEmails.length > 0) {
+      const emailPlaceholders = allEmails.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allEmails);
+      conditions.push(`lower(corporate_email) IN (${emailPlaceholders})`);
+    }
+
+    if (allCompanies.length > 0) {
+      const compPlaceholders = allCompanies.map((_, i) => `$${params.length + i + 1}`).join(', ');
+      params.push(...allCompanies);
+      conditions.push(`lower(raw->>'organizationName') IN (${compPlaceholders}) OR lower(raw->>'companyName') IN (${compPlaceholders})`);
+    }
+
+    if (conditions.length > 0) {
+      try {
+        const buyersResult = await pool.query(
+          `SELECT id, corporate_email, status, created_at, raw FROM buyer_accounts WHERE (${conditions.join(' OR ')}) LIMIT ${Number(limit) || 50}`,
+          params,
+          { d1: true, useCache: true, tag: 'buyer_accounts', ttlMs: 120000 }
+        );
+        for (const row of buyersResult.rows || []) {
+          const rawBuyer = parseRaw(row.raw) || {};
+          const buyerKey = String(row.id || rawBuyer.id || row.corporate_email).toLowerCase();
+          const org = row.organization_name || rawBuyer.organizationName || 'Enterprise Buyer';
+          if (!foundBuyers.has(buyerKey)) {
+            foundBuyers.set(buyerKey, {
+              id: row.id || rawBuyer.id,
+              name: org,
+              companyName: org,
+              contactPerson: row.contact_person || rawBuyer.contactPerson || 'Primary Contact',
+              email: row.corporate_email || rawBuyer.corporateEmail || '',
+              phone: rawBuyer.phone || '',
+              uploadDate: row.created_at || vendor.createdAt || '',
+              status: row.status || rawBuyer.status || 'ACTIVE_VERIFIED',
+              sourcingMode: rawBuyer.sourcingMode || 'Mode 1',
+              subscriptionPlan: rawBuyer.subscriptionPlan || 'Version_3',
+              location: rawBuyer.location || '',
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed querying buyer accounts for associated buyers', { error: err.message }, 'DATABASE_QUERY');
+      }
+    }
+  }
+
+  const fallbackCompany = vendor.addedByBuyerCompany || 'Enterprise Client';
+  const fallbackEmail = vendor.buyerEmail || '';
+  const fallbackId = vendor.buyerId || (fallbackEmail ? `buyer-ext-${fallbackEmail.split('@')[0]}` : '');
+  if (fallbackId || fallbackEmail || vendor.addedByBuyerCompany) {
+    const fallbackKey = String(fallbackId || fallbackEmail || fallbackCompany).toLowerCase();
+    if (!foundBuyers.has(fallbackKey)) {
+      foundBuyers.set(fallbackKey, {
+        id: fallbackId || `buyer-ext-${fallbackKey.slice(0, 12)}`,
+        name: fallbackCompany,
+        companyName: fallbackCompany,
+        contactPerson: fallbackEmail ? fallbackEmail.split('@')[0] : 'Procurement Manager',
+        email: fallbackEmail,
+        phone: '',
+        uploadDate: vendor.createdAt || new Date().toISOString(),
+        status: 'ACTIVE_VERIFIED',
+        sourcingMode: 'Mode 1',
+        subscriptionPlan: 'Enterprise',
+        location: vendor.city || '',
+      });
+    }
+  }
+
+  return Array.from(foundBuyers.values());
+}
+
+/**
+ * Retrieves active, category-matched RFQs for a seller/vendor.
+ * Excludes closed, expired, cancelled, and completed RFQs.
+ */
+async function getActiveCategoryMatchedRFQsForVendorFromDB(vendor, limit = 100) {
+  if (!pool.hasStorage() || !vendor) return [];
+
+  const storeService = require('../services/storeService');
+  const maxLimit = Number.isInteger(Number(limit)) && Number(limit) > 0 ? Math.min(Number(limit), 200) : 100;
+  let rfqResult;
+  try {
+    rfqResult = await pool.query(
+      `SELECT id, rfq_number, category, status, created_at, updated_at, raw
+       FROM rfqs
+       WHERE status NOT ILIKE '%closed%'
+         AND status NOT ILIKE '%cancel%'
+         AND status NOT ILIKE '%expire%'
+         AND status NOT ILIKE '%complete%'
+       ORDER BY created_at DESC
+       LIMIT 300`,
+      [],
+      { d1: true }
+    );
+  } catch (err) {
+    logger.warn('Failed querying active RFQs from DB for vendor category matching', { error: err.message }, 'DATABASE_QUERY');
+    return [];
+  }
+
+  const now = Date.now();
+  const matched = [];
+
+  for (const row of rfqResult.rows || []) {
+    if (matched.length >= maxLimit) break;
+    const rfq = parseRaw(row.raw) || {};
+    rfq.id = row.id || rfq.id;
+    rfq.rfqNumber = row.rfq_number || rfq.rfqNumber || rfq.id;
+    rfq.status = row.status || rfq.status;
+    rfq.category = row.category || rfq.category;
+
+    const closingDate = rfq.closingDate || rfq.deadline;
+    if (closingDate) {
+      const parsedTime = new Date(closingDate).getTime();
+      if (!isNaN(parsedTime) && parsedTime < now) {
+        continue; // Expired
+      }
+    }
+
+    const rfqCategory = rfq.category || rfq.procurementCategory || rfq.majorCategory || 'General';
+    const matchesCategory =
+      storeService.vendorCoversCategory(vendor, rfqCategory) ||
+      (typeof storeService._vendorCoversRFQCategories === 'function' && storeService._vendorCoversRFQCategories(vendor, rfq)) ||
+      (Array.isArray(rfq.extractedEntities) && rfq.extractedEntities.some((item) => storeService.vendorCoversCategory(vendor, item.majorCategory || item.category)));
+
+    if (matchesCategory) {
+      const buyerName = rfq.buyerAccountName || rfq.buyerCompanyName || 'Buyer Enterprise';
+      matched.push({
+        ...rfq,
+        id: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        title: rfq.title || `RFQ ${rfq.rfqNumber}`,
+        category: rfqCategory,
+        procurementCategory: rfqCategory,
+        buyerCompanyName: buyerName,
+        buyerCompany: buyerName,
+        buyerName,
+        location: rfq.deliveryLocation || '—',
+        publishedDate: rfq.publishedDate || row.created_at || '',
+        closingDate: closingDate || null,
+        status: rfq.status,
+        budget: rfq.budget ?? 0,
+        sourcingMode: rfq.sourcingMode || 'Mode 1',
+        extractedEntities: Array.isArray(rfq.extractedEntities) ? rfq.extractedEntities : [],
+        lineItems: Array.isArray(rfq.lineItems) ? rfq.lineItems : [],
+        description: rfq.description || '',
+      });
+    }
+  }
+
+  return matched;
 }
 
 /** Single-row lookup by id — same reasoning as getVendorByEmailFromDB, keyed
@@ -1162,6 +1870,9 @@ async function updateVendorIfUnchangedInDB(snapshot, vendor) {
   );
   if (!result.rows[0]) return null;
   queryCache.invalidate('vendors');
+  if (normalizedVendor.id) {
+    void syncVendorCategoriesIndexed(normalizedVendor.id, normalizedVendor);
+  }
   return parseVendorRaw(result.rows[0].raw);
 }
 
@@ -1299,6 +2010,47 @@ async function deleteVendorInDB(id) {
   queryCache.invalidate('vendors');
   nonVendorEmailCache.clear();
   return result.rowCount > 0;
+}
+
+async function getVendorsByIdsFromDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return [];
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  const rows = [];
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `SELECT raw FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    for (const row of result.rows || []) {
+      const parsed = parseVendorRaw(row.raw);
+      if (parsed) rows.push(parsed);
+    }
+  }
+  return rows;
+}
+
+async function deleteVendorsInDB(ids) {
+  const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+  if (!pool.hasStorage() || uniqueIds.length === 0) return 0;
+  const chunkSize = PINCODE_LOOKUP_CONFIG.MAX_UNION_PARAMS_D1;
+  let totalDeleted = 0;
+  for (let offset = 0; offset < uniqueIds.length; offset += chunkSize) {
+    const chunk = uniqueIds.slice(offset, offset + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    const result = await pool.query(
+      `DELETE FROM vendors WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    totalDeleted += result.rowCount || 0;
+  }
+  queryCache.invalidate('vendors');
+  nonVendorEmailCache.clear();
+  return totalDeleted;
 }
 
 // One multi-row INSERT for a whole batch of newly bulk-uploaded vendors,
@@ -1463,9 +2215,118 @@ async function getRFQsFromDB(buyerAccountId = null, limit = null) {
   const result = await pool.query(
     sql,
     params,
-    { d1: true, d1Text: d1Sql, useCache: true, tag: 'rfqs', ttlMs: 60000 }
+    { d1: true, d1Text: d1Sql }
   );
   return result.rows.map((row) => parseRaw(row.raw));
+}
+
+async function getRFQsPageFromDB({
+  page = 1,
+  limit = 100,
+  search = '',
+  status = '',
+  buyer = '',
+  startDate = '',
+  endDate = '',
+} = {}) {
+  if (!pool.hasStorage()) return { rows: [], total: 0 };
+
+  const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+  const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+  const offset = (parsedPage - 1) * parsedLimit;
+
+  const pgConditions = [];
+  const d1Conditions = [];
+  const params = [];
+
+  const trimmedStatus = typeof status === 'string' ? status.trim() : '';
+  if (trimmedStatus && trimmedStatus !== 'all') {
+    params.push(trimmedStatus);
+    const p = params.length;
+    pgConditions.push(`(status = $${p} OR raw->>'status' = $${p})`);
+    d1Conditions.push(`(status = $${p} OR json_extract(raw, '$.status') = $${p})`);
+  }
+
+  const trimmedBuyer = typeof buyer === 'string' ? buyer.trim() : '';
+  if (trimmedBuyer && trimmedBuyer !== 'all') {
+    params.push(trimmedBuyer);
+    const p = params.length;
+    pgConditions.push(`(raw->>'buyerAccountName' = $${p} OR raw->>'buyerAccountId' = $${p} OR raw->>'buyerId' = $${p})`);
+    d1Conditions.push(`(json_extract(raw, '$.buyerAccountName') = $${p} OR json_extract(raw, '$.buyerAccountId') = $${p} OR json_extract(raw, '$.buyerId') = $${p})`);
+  }
+
+  const trimmedSearch = typeof search === 'string' ? search.trim().toLowerCase() : '';
+  if (trimmedSearch) {
+    params.push(`%${trimmedSearch}%`);
+    const p = params.length;
+    pgConditions.push(`(
+      LOWER(rfq_number) LIKE $${p}
+      OR LOWER(category) LIKE $${p}
+      OR LOWER(COALESCE(raw->>'title', '')) LIKE $${p}
+      OR LOWER(COALESCE(raw->>'buyerAccountName', '')) LIKE $${p}
+      OR LOWER(raw::text) LIKE $${p}
+    )`);
+    d1Conditions.push(`(
+      LOWER(rfq_number) LIKE $${p}
+      OR LOWER(category) LIKE $${p}
+      OR LOWER(COALESCE(json_extract(raw, '$.title'), '')) LIKE $${p}
+      OR LOWER(COALESCE(json_extract(raw, '$.buyerAccountName'), '')) LIKE $${p}
+      OR LOWER(raw) LIKE $${p}
+    )`);
+  }
+
+  if (startDate) {
+    try {
+      const startIso = new Date(`${startDate}T00:00:00`).toISOString();
+      params.push(startIso);
+      const p = params.length;
+      pgConditions.push(`created_at >= $${p}`);
+      d1Conditions.push(`created_at >= $${p}`);
+    } catch {
+      // Ignore unparseable start date
+    }
+  }
+
+  if (endDate) {
+    try {
+      const endIso = new Date(`${endDate}T23:59:59.999`).toISOString();
+      params.push(endIso);
+      const p = params.length;
+      pgConditions.push(`created_at <= $${p}`);
+      d1Conditions.push(`created_at <= $${p}`);
+    } catch {
+      // Ignore unparseable end date
+    }
+  }
+
+  const pgWhere = pgConditions.length > 0 ? `WHERE ${pgConditions.join(' AND ')}` : '';
+  const d1Where = d1Conditions.length > 0 ? `WHERE ${d1Conditions.join(' AND ')}` : '';
+
+  const countSql = `SELECT COUNT(*)::int AS total FROM rfqs ${pgWhere}`.trim();
+  const d1CountSql = `SELECT CAST(COUNT(*) AS INTEGER) AS total FROM rfqs ${d1Where}`.trim();
+
+  const countResult = await pool.query(
+    countSql,
+    params,
+    { d1: true, d1Text: d1CountSql }
+  );
+  const total = parseInt(countResult.rows[0]?.total || 0, 10);
+
+  const dataParams = [...params, parsedLimit, offset];
+  const limitIdx = dataParams.length - 1;
+  const offsetIdx = dataParams.length;
+
+  const dataSql = `SELECT raw FROM rfqs ${pgWhere} ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`.trim();
+  const d1DataSql = `SELECT raw FROM rfqs ${d1Where} ORDER BY created_at DESC LIMIT $${limitIdx} OFFSET $${offsetIdx}`.trim();
+
+  const dataResult = await pool.query(
+    dataSql,
+    dataParams,
+    { d1: true, d1Text: d1DataSql }
+  );
+
+  const rows = (dataResult && dataResult.rows) ? dataResult.rows.map((row) => parseRaw(row.raw)) : [];
+  return { rows, total };
 }
 
 async function getRFQsByBuyerFromDB(buyerAccountId, limit = 50) {
@@ -1705,6 +2566,324 @@ async function deleteRFQInDB(id) {
   );
   queryCache.invalidate('rfqs');
   return result.rowCount > 0;
+}
+
+/**
+ * Persist an outbound RFQ vendor invitation (Message-ID, invitedAt, mailbox routing)
+ * and stamp the 48-hour V0 quotation dispatch deadline on the RFQ when not already set.
+ */
+async function recordRfqVendorInviteInDB({
+  rfqId = null,
+  rfqNumber,
+  vendorId = null,
+  vendorEmail,
+  inviteMessageId = null,
+  invitedAt = new Date().toISOString(),
+  quotesDispatchDueAt = null,
+  inviteChannel = null,
+  inviteOrigin = null,
+  senderMailbox = null,
+  replyToQuoteAllowed = null,
+}) {
+  if (!pool.hasStorage() || !rfqNumber || !vendorEmail) return null;
+  const cleanRfqNumber = String(rfqNumber).trim();
+  const cleanEmail = String(vendorEmail).trim().toLowerCase();
+  if (!cleanRfqNumber || !cleanEmail) return null;
+  const inviteId = `invite:${cleanRfqNumber}:${cleanEmail}`.slice(0, 128);
+  const cleanChannel = inviteChannel ? String(inviteChannel).trim().toLowerCase() : null;
+  const cleanOrigin = inviteOrigin ? String(inviteOrigin).trim().toLowerCase() : null;
+  const cleanMailbox = senderMailbox ? String(senderMailbox).trim().toLowerCase() : null;
+  const normalizedReplyAllowed = typeof replyToQuoteAllowed === 'boolean' ? replyToQuoteAllowed : null;
+
+  await pool.query(
+    `INSERT INTO rfq_vendor_invites (
+       id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+       invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed, updated_at
+     )
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, now())
+     ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
+       rfq_id = COALESCE(EXCLUDED.rfq_id, rfq_vendor_invites.rfq_id),
+       vendor_id = COALESCE(EXCLUDED.vendor_id, rfq_vendor_invites.vendor_id),
+       invite_message_id = COALESCE(EXCLUDED.invite_message_id, rfq_vendor_invites.invite_message_id),
+       invite_channel = COALESCE(EXCLUDED.invite_channel, rfq_vendor_invites.invite_channel),
+       invite_origin = COALESCE(EXCLUDED.invite_origin, rfq_vendor_invites.invite_origin),
+       sender_mailbox = COALESCE(EXCLUDED.sender_mailbox, rfq_vendor_invites.sender_mailbox),
+       reply_to_quote_allowed = COALESCE(EXCLUDED.reply_to_quote_allowed, rfq_vendor_invites.reply_to_quote_allowed),
+       invited_at = LEAST(rfq_vendor_invites.invited_at, EXCLUDED.invited_at),
+       updated_at = now()`,
+    [
+      inviteId,
+      rfqId || null,
+      cleanRfqNumber,
+      vendorId || null,
+      cleanEmail,
+      inviteMessageId || null,
+      invitedAt,
+      cleanChannel,
+      cleanOrigin,
+      cleanMailbox,
+      normalizedReplyAllowed,
+    ],
+    {
+      d1: true,
+      d1Text: `INSERT INTO rfq_vendor_invites (
+         id, rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+         invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed, updated_at
+       )
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, CURRENT_TIMESTAMP)
+       ON CONFLICT (rfq_number, vendor_email) DO UPDATE SET
+         rfq_id = COALESCE(excluded.rfq_id, rfq_vendor_invites.rfq_id),
+         vendor_id = COALESCE(excluded.vendor_id, rfq_vendor_invites.vendor_id),
+         invite_message_id = COALESCE(excluded.invite_message_id, rfq_vendor_invites.invite_message_id),
+         invite_channel = COALESCE(excluded.invite_channel, rfq_vendor_invites.invite_channel),
+         invite_origin = COALESCE(excluded.invite_origin, rfq_vendor_invites.invite_origin),
+         sender_mailbox = COALESCE(excluded.sender_mailbox, rfq_vendor_invites.sender_mailbox),
+         reply_to_quote_allowed = COALESCE(excluded.reply_to_quote_allowed, rfq_vendor_invites.reply_to_quote_allowed),
+         invited_at = CASE
+           WHEN excluded.invited_at < rfq_vendor_invites.invited_at THEN excluded.invited_at
+           ELSE rfq_vendor_invites.invited_at
+         END,
+         updated_at = CURRENT_TIMESTAMP`,
+      d1Params: [
+        inviteId,
+        rfqId || null,
+        cleanRfqNumber,
+        vendorId || null,
+        cleanEmail,
+        inviteMessageId || null,
+        invitedAt,
+        cleanChannel,
+        cleanOrigin,
+        cleanMailbox,
+        normalizedReplyAllowed === null ? null : (normalizedReplyAllowed ? 1 : 0),
+      ],
+    }
+  );
+
+  if (quotesDispatchDueAt) {
+    const duePatch = JSON.stringify({ quotesDispatchDueAt });
+    await pool.query(
+      `UPDATE rfqs
+       SET quotes_dispatch_due_at = COALESCE(quotes_dispatch_due_at, $2),
+           raw = CASE
+             WHEN COALESCE(raw->>'quotesDispatchDueAt', '') = '' THEN raw || $3::jsonb
+             ELSE raw
+           END,
+           updated_at = now()
+       WHERE rfq_number = $1`,
+      [cleanRfqNumber, quotesDispatchDueAt, duePatch],
+      {
+        d1: true,
+        d1Text: `UPDATE rfqs
+         SET quotes_dispatch_due_at = COALESCE(quotes_dispatch_due_at, $2),
+             raw = CASE
+               WHEN COALESCE(json_extract(raw, '$.quotesDispatchDueAt'), '') = '' THEN json_patch(raw, $3)
+               ELSE raw
+             END,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE rfq_number = $1`,
+      }
+    );
+    queryCache.invalidate('rfqs');
+  }
+
+  return {
+    id: inviteId,
+    rfqId,
+    rfqNumber: cleanRfqNumber,
+    vendorId,
+    vendorEmail: cleanEmail,
+    inviteMessageId,
+    invitedAt,
+    quotesDispatchDueAt,
+    inviteChannel: cleanChannel,
+    inviteOrigin: cleanOrigin,
+    senderMailbox: cleanMailbox,
+    replyToQuoteAllowed: normalizedReplyAllowed,
+  };
+}
+
+/** Look up an RFQ vendor invite by one or more RFC2822 Message-IDs. */
+async function findRfqVendorInviteByMessageIdsFromDB(messageIds = []) {
+  if (!pool.hasStorage() || !Array.isArray(messageIds) || messageIds.length === 0) return null;
+  const cleanIds = Array.from(new Set(messageIds.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (cleanIds.length === 0) return null;
+
+  const result = await pool.query(
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+            invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
+     FROM rfq_vendor_invites
+     WHERE invite_message_id = ANY($1::text[])
+     ORDER BY invited_at DESC
+     LIMIT 1`,
+    [cleanIds],
+    {
+      d1: true,
+      d1Text: `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+              invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
+       FROM rfq_vendor_invites
+       WHERE invite_message_id IN (SELECT value FROM json_each($1))
+       ORDER BY invited_at DESC
+       LIMIT 1`,
+      d1Params: [JSON.stringify(cleanIds)],
+    }
+  );
+  return result.rows[0] || null;
+}
+
+/** Return open RFQ invites for a vendor within the active quotation window. */
+async function findOpenVendorInvitesWithinWindowFromDB({ vendorId = null, vendorEmail = null, cutoffIso }) {
+  if (!pool.hasStorage() || (!vendorId && !vendorEmail) || !cutoffIso) return [];
+  const cleanEmail = vendorEmail ? String(vendorEmail).trim().toLowerCase() : null;
+  const cleanVendorId = vendorId ? String(vendorId).trim() : null;
+  const result = await pool.query(
+    `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at,
+            i.invite_channel, i.invite_origin, i.sender_mailbox, i.reply_to_quote_allowed
+     FROM rfq_vendor_invites i
+     LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
+     WHERE ((($1::text IS NOT NULL) AND lower(i.vendor_email) = $1)
+         OR (($2::text IS NOT NULL) AND i.vendor_id = $2))
+       AND i.invited_at >= $3
+       AND COALESCE(r.status, r.raw->>'status', '') NOT IN ('Closed', 'Expired', 'PO Generated')
+     ORDER BY i.invited_at DESC
+     LIMIT 10`,
+    [cleanEmail, cleanVendorId, cutoffIso],
+    {
+      d1: true,
+      d1Text: `SELECT i.rfq_id, i.rfq_number, i.vendor_id, i.vendor_email, i.invite_message_id, i.invited_at,
+              i.invite_channel, i.invite_origin, i.sender_mailbox, i.reply_to_quote_allowed
+       FROM rfq_vendor_invites i
+       LEFT JOIN rfqs r ON r.rfq_number = i.rfq_number
+       WHERE ((($1 IS NOT NULL) AND lower(i.vendor_email) = $1)
+           OR (($2 IS NOT NULL) AND i.vendor_id = $2))
+         AND i.invited_at >= $3
+         AND COALESCE(r.status, json_extract(r.raw, '$.status'), '') NOT IN ('Closed', 'Expired', 'PO Generated')
+       ORDER BY i.invited_at DESC
+       LIMIT 10`,
+    }
+  );
+  return result.rows || [];
+}
+
+/** Return all tracked vendor invitations for an RFQ number. */
+async function findRfqVendorInvitesByRfqNumberFromDB(rfqNumber) {
+  if (!pool.hasStorage() || !rfqNumber) return [];
+  const cleanNumber = String(rfqNumber).trim();
+  if (!cleanNumber) return [];
+  const result = await pool.query(
+    `SELECT rfq_id, rfq_number, vendor_id, vendor_email, invite_message_id, invited_at,
+            invite_channel, invite_origin, sender_mailbox, reply_to_quote_allowed
+     FROM rfq_vendor_invites
+     WHERE rfq_number = $1
+     ORDER BY invited_at ASC`,
+    [cleanNumber],
+    { d1: true }
+  );
+  return result.rows || [];
+}
+
+/**
+ * Atomically claim the buyer quotation summary dispatch on an RFQ so concurrent
+ * vendor replies and cron runs can never send duplicate buyer emails.
+ */
+async function claimRfqBuyerQuotesDispatchInDB(rfqNumber, sentAtIso = new Date().toISOString()) {
+  if (!pool.hasStorage() || !rfqNumber) return null;
+  const cleanNumber = String(rfqNumber).trim();
+  const patch = JSON.stringify({ buyerQuotesSentAt: sentAtIso });
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET buyer_quotes_sent_at = $2,
+         raw = raw || $3::jsonb,
+         updated_at = now()
+     WHERE rfq_number = $1
+       AND buyer_quotes_sent_at IS NULL
+       AND COALESCE(raw->>'buyerQuotesSentAt', '') = ''
+     RETURNING raw`,
+    [cleanNumber, sentAtIso, patch],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET buyer_quotes_sent_at = $2,
+           raw = json_patch(raw, $3),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE rfq_number = $1
+         AND buyer_quotes_sent_at IS NULL
+         AND COALESCE(json_extract(raw, '$.buyerQuotesSentAt'), '') = ''
+       RETURNING raw`,
+    }
+  );
+  if (result.rows[0]) {
+    queryCache.invalidate('rfqs');
+    return parseRaw(result.rows[0].raw);
+  }
+  return null;
+}
+
+/**
+ * Roll back a claimed buyer quotation dispatch timestamp when mail delivery fails
+ * before provider acceptance so the next cron/trigger can retry cleanly.
+ */
+async function releaseRfqBuyerQuotesDispatchClaimInDB(rfqNumber) {
+  if (!pool.hasStorage() || !rfqNumber) return false;
+  const cleanNumber = String(rfqNumber).trim();
+  const result = await pool.query(
+    `UPDATE rfqs
+     SET buyer_quotes_sent_at = NULL,
+         raw = raw - 'buyerQuotesSentAt',
+         updated_at = now()
+     WHERE rfq_number = $1
+     RETURNING rfq_number`,
+    [cleanNumber],
+    {
+      d1: true,
+      d1Text: `UPDATE rfqs
+       SET buyer_quotes_sent_at = NULL,
+           raw = json_remove(raw, '$.buyerQuotesSentAt'),
+           updated_at = CURRENT_TIMESTAMP
+       WHERE rfq_number = $1
+       RETURNING rfq_number`,
+    }
+  );
+  queryCache.invalidate('rfqs');
+  return Boolean(result.rows && result.rows.length > 0);
+}
+
+/**
+ * List open V0 RFQs whose 48-hour quotation window has elapsed and whose buyer
+ * comparison email has not yet been dispatched.
+ */
+async function listDueV0RfqsForQuotesDispatchFromDB(nowIso = new Date().toISOString(), limit = 25) {
+  if (!pool.hasStorage()) return [];
+  const safeLimit = Math.min(Math.max(Number(limit) || 25, 1), 200);
+  const result = await pool.query(
+    `SELECT raw FROM rfqs
+     WHERE lower(COALESCE(sourcing_mode, raw->>'sourcingMode', '')) IN ('mode_0', 'v0', 'version_0')
+       AND buyer_quotes_sent_at IS NULL
+       AND COALESCE(raw->>'buyerQuotesSentAt', '') = ''
+       AND COALESCE(status, raw->>'status', '') NOT IN ('Closed', 'Expired', 'PO Generated')
+       AND (
+         (quotes_dispatch_due_at IS NOT NULL AND quotes_dispatch_due_at <= $1)
+         OR (COALESCE(raw->>'quotesDispatchDueAt', '') <> '' AND raw->>'quotesDispatchDueAt' <= $1)
+       )
+     ORDER BY created_at ASC
+     LIMIT $2`,
+    [nowIso, safeLimit],
+    {
+      d1: true,
+      d1Text: `SELECT raw FROM rfqs
+       WHERE lower(COALESCE(sourcing_mode, json_extract(raw, '$.sourcingMode'), '')) IN ('mode_0', 'v0', 'version_0')
+         AND buyer_quotes_sent_at IS NULL
+         AND COALESCE(json_extract(raw, '$.buyerQuotesSentAt'), '') = ''
+         AND COALESCE(status, json_extract(raw, '$.status'), '') NOT IN ('Closed', 'Expired', 'PO Generated')
+         AND (
+           (quotes_dispatch_due_at IS NOT NULL AND quotes_dispatch_due_at <= $1)
+           OR (COALESCE(json_extract(raw, '$.quotesDispatchDueAt'), '') <> '' AND json_extract(raw, '$.quotesDispatchDueAt') <= $1)
+         )
+       ORDER BY created_at ASC
+       LIMIT $2`,
+    }
+  );
+  return (result.rows || []).map((row) => parseRaw(row.raw));
 }
 
 // ── Evaluations (append-only — no update/delete method exists) ────────────────
@@ -1961,11 +3140,33 @@ async function getBuyerAccountsFromDB(limit = null) {
 async function getBuyerAccountByEmailFromDB(email, { fresh = false } = {}) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
   );
   return result.rows[0] ? parseRaw(result.rows[0].raw) : null;
+}
+
+/**
+ * Every buyer_accounts row sharing a corporate_email, not just the one
+ * getBuyerAccountByEmailFromDB would pick. A buyer can end up with more than
+ * one row under the same email (a re-registration, an org re-provisioning,
+ * or any other path that inserts rather than reuses), and `is_active` is a
+ * single global pointer — switching it to a newer row does not retro-tag the
+ * vendors a buyer already imported while an older row was active. Ownership
+ * checks that resolve to "the current active row only" would then 403 a
+ * buyer on their own historical vendors the moment the active row changes.
+ * Callers that need to recognize a vendor as theirs across that switch use
+ * every id/email in this list, not just the single active one.
+ */
+async function getBuyerAccountsByEmailFromDB(email, { fresh = false } = {}) {
+  if (!pool.hasStorage() || !email) return [];
+  const result = await pool.query(
+    'SELECT raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC',
+    [email],
+    { d1: true, useCache: !fresh, tag: 'buyer_accounts', ttlMs: 60000 }
+  );
+  return result.rows.map((row) => parseRaw(row.raw)).filter(Boolean);
 }
 
 async function getBuyerAccountByIdFromDB(id, { fresh = false } = {}) {
@@ -1990,7 +3191,7 @@ async function getBuyerAccountSnapshotByIdFromDB(id) {
 async function getBuyerAccountSnapshotByEmailFromDB(email) {
   if (!pool.hasStorage() || !email) return null;
   const result = await pool.query(
-    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) LIMIT 1',
+    'SELECT id, raw FROM buyer_accounts WHERE lower(corporate_email) = lower($1) ORDER BY is_active DESC, updated_at DESC, created_at DESC LIMIT 1',
     [email],
     { d1: true }
   );
@@ -2185,11 +3386,11 @@ async function upsertAIFeedItemInDB(item) {
 
   try {
     await pool.query(
-      `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY sequence DESC LIMIT 100)`,
+      `DELETE FROM ai_feed WHERE sequence < (SELECT MIN(sequence) FROM (SELECT sequence FROM ai_feed ORDER BY sequence DESC LIMIT 100) AS recent_ai_feed)`,
       [],
       {
         d1: true,
-        d1Text: `DELETE FROM ai_feed WHERE id NOT IN (SELECT id FROM ai_feed ORDER BY rowid DESC LIMIT 100)`,
+        d1Text: `DELETE FROM ai_feed WHERE rowid < (SELECT MIN(rowid) FROM (SELECT rowid FROM ai_feed ORDER BY rowid DESC LIMIT 100))`,
       }
     );
   } catch (error) {
@@ -2213,6 +3414,17 @@ async function upsertAuditLogInDB(entry) {
 
 // ── Notifications ────────────────────────────────────────────────────────────
 
+function parseNotificationRow(row) {
+  const parsed = parseRaw(row.raw);
+  if (row.is_read === undefined || row.is_read === null) {
+    return parsed;
+  }
+  return {
+    ...parsed,
+    read: Boolean(row.is_read),
+  };
+}
+
 async function getNotificationsFromDB(recipientId = null, limit = null) {
   if (!pool.hasStorage()) return [];
   const conditions = [];
@@ -2228,14 +3440,44 @@ async function getNotificationsFromDB(recipientId = null, limit = null) {
     params.push(Math.min(Number(limit), 1000));
     limitClause = `LIMIT $${params.length}`;
   }
-  const sql = `SELECT raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
-  const d1Sql = `SELECT raw FROM notifications ${where} ORDER BY rowid DESC ${limitClause}`.trim();
+  const sql = `SELECT is_read, raw FROM notifications ${where} ORDER BY sequence DESC ${limitClause}`.trim();
+  const d1Sql = `SELECT is_read, raw FROM notifications ${where} ORDER BY rowid DESC ${limitClause}`.trim();
   const result = await pool.query(
     sql,
     params,
     { d1: true, d1Text: d1Sql, useCache: true, tag: 'notifications', ttlMs: 15000 }
   );
-  return result.rows.map((row) => parseRaw(row.raw));
+  return result.rows.map(parseNotificationRow);
+}
+
+/** Indexed per-recipient notification feed and unread count without loading global tables. */
+async function getNotificationsForRecipientFromDB(recipientType, recipientId, limit = 50) {
+  if (!pool.hasStorage() || !recipientType || !recipientId) return { data: [], unreadCount: 0 };
+  const safeLimit = Math.min(Math.max(Number(limit) || 50, 1), 200);
+  const [listResult, countResult] = await Promise.all([
+    pool.query(
+      'SELECT is_read, raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY sequence DESC LIMIT $3',
+      [recipientType, recipientId, safeLimit],
+      {
+        d1: true,
+        d1Text: 'SELECT is_read, raw FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 ORDER BY rowid DESC LIMIT $3',
+        useCache: false,
+      }
+    ),
+    pool.query(
+      'SELECT COUNT(*)::int AS unread_count FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false',
+      [recipientType, recipientId],
+      {
+        d1: true,
+        d1Text: 'SELECT CAST(COUNT(*) AS INTEGER) AS unread_count FROM notifications WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = 0',
+        useCache: false,
+      }
+    ),
+  ]);
+  return {
+    data: listResult.rows.map(parseNotificationRow),
+    unreadCount: Number(countResult.rows?.[0]?.unread_count) || 0,
+  };
 }
 
 async function insertNotificationInDB(notification) {
@@ -2337,7 +3579,7 @@ async function markNotificationReadInDB(id, recipientType, recipientId) {
     }
   );
   queryCache.invalidate('notifications');
-  return result.rowCount > 0;
+  return result.rowCount > 0 || (Array.isArray(result.rows) && result.rows.length > 0);
 }
 
 async function markAllNotificationsReadInDB(recipientType, recipientId) {
@@ -2351,11 +3593,11 @@ async function markAllNotificationsReadInDB(recipientType, recipientId) {
       d1: true,
       d1Text: `UPDATE notifications
        SET is_read = 1, raw = json_set(raw, '$.read', json('true'))
-     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = false`,
+     WHERE recipient_type = $1 AND recipient_id = $2 AND is_read = 0`,
     }
   );
   queryCache.invalidate('notifications');
-  return result.rowCount;
+  return Number(result.rowCount) || 0;
 }
 
 // ── Zoho OAuth token (single-row cache) ────────────────────────────────────────
@@ -2599,6 +3841,30 @@ async function markChaserJobFiredInDB(id) {
     [id],
     { d1: true }
   );
+}
+
+/** Batch-mark multiple dispatched chaser jobs as fired to minimize D1 write roundtrips. */
+async function markChaserJobsFiredInDB(ids) {
+  if (!pool.hasStorage() || !Array.isArray(ids)) return 0;
+  const uniqueIds = Array.from(new Set(ids.map((id) => String(id || '').trim()).filter(Boolean)));
+  if (uniqueIds.length === 0) return 0;
+  if (uniqueIds.length === 1) {
+    await markChaserJobFiredInDB(uniqueIds[0]);
+    return 1;
+  }
+  const chunkSize = Math.max(1, RFQ_CHASER_BATCH_UPDATE_SIZE || 80);
+  let updated = 0;
+  for (let i = 0; i < uniqueIds.length; i += chunkSize) {
+    const chunk = uniqueIds.slice(i, i + chunkSize);
+    const placeholders = chunk.map((_, idx) => `$${idx + 1}`).join(', ');
+    await pool.query(
+      `UPDATE chaser_queue SET status='fired', fired_at=CURRENT_TIMESTAMP, updated_at=CURRENT_TIMESTAMP WHERE id IN (${placeholders})`,
+      chunk,
+      { d1: true }
+    );
+    updated += chunk.length;
+  }
+  return updated;
 }
 
 /** Record a failed attempt and schedule bounded retry work while attempts remain. */
@@ -2918,15 +4184,20 @@ async function recordCreditTransactionInDB({ id, vendorId, rfqId, transactionTyp
 async function getVendorCreditTransactionsFromDB(vendorId, limit = 50) {
   if (!pool.hasStorage() || !vendorId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const sql = hasLimit
-    ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`;
-  const params = hasLimit ? [vendorId, Math.min(Number(limit), 1000)] : [vendorId];
+  const maxLimit = hasLimit ? Math.min(Number(limit), 1000) : 1000;
+  const idList = (Array.isArray(vendorId) ? vendorId : [vendorId]).map((x) => String(x || '').trim()).filter(Boolean);
+  if (idList.length === 0) return [];
+
+  const sql = `SELECT * FROM vendor_credit_transactions WHERE vendor_id = ANY($1::text[]) ORDER BY created_at DESC LIMIT $2`;
+  const d1Placeholders = idList.map((_, i) => `$${i + 1}`).join(', ');
+  const d1Sql = `SELECT * FROM vendor_credit_transactions WHERE vendor_id IN (${d1Placeholders}) ORDER BY created_at DESC LIMIT $${idList.length + 1}`;
+  const params = [idList, maxLimit];
+  const d1Params = [...idList, maxLimit];
+
   const result = await pool.query(sql, params, {
     d1: true,
-    d1Text: hasLimit
-      ? `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM vendor_credit_transactions WHERE vendor_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    d1Text: d1Sql,
+    d1Params,
     useCache: true,
     tag: 'vendor_credits',
     ttlMs: 60000,
@@ -3017,15 +4288,63 @@ async function unlockVendorRfqDurablyInDB(options) {
 async function getBuyerCreditTransactionsFromDB(buyerId, limit = 50) {
   if (!pool.hasStorage() || !buyerId) return [];
   const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
-  const sql = hasLimit
-    ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-    : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`;
-  const params = hasLimit ? [buyerId, Math.min(Number(limit), 1000)] : [buyerId];
+  const maxLimit = hasLimit ? Math.min(Number(limit), 1000) : 1000;
+
+  if (!Array.isArray(buyerId)) {
+    const targetId = String(buyerId).trim();
+    if (!targetId) return [];
+    const sql = hasLimit
+      ? 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2'
+      : 'SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000';
+    const params = hasLimit ? [targetId, maxLimit] : [targetId];
+    const result = await pool.query(sql, params, {
+      d1: true,
+      d1Text: sql,
+      useCache: true,
+      tag: 'buyer_credits',
+      ttlMs: 60000,
+    });
+    return result && result.rows ? result.rows : [];
+  }
+
+  const idList = buyerId.map((x) => String(x || '').trim()).filter(Boolean);
+  if (idList.length === 0) return [];
+
+  const sql = `
+    SELECT * FROM buyer_credit_transactions 
+    WHERE buyer_id = ANY($1::text[])
+       OR buyer_id IN (
+            SELECT id FROM buyer_accounts 
+            WHERE id = ANY($1::text[]) 
+               OR raw->>'userId' = ANY($1::text[]) 
+               OR raw->>'user_id' = ANY($1::text[]) 
+               OR raw->>'organizationId' = ANY($1::text[]) 
+               OR lower(corporate_email) = ANY($2::text[])
+          )
+    ORDER BY created_at DESC LIMIT $3
+  `;
+  const lowerEmails = idList.map((x) => x.toLowerCase());
+  const d1Placeholders = idList.map((_, i) => `$${i + 1}`).join(', ');
+  const d1Sql = `
+    SELECT * FROM buyer_credit_transactions 
+    WHERE buyer_id IN (${d1Placeholders})
+       OR buyer_id IN (
+            SELECT id FROM buyer_accounts 
+            WHERE id IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.userId') IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.user_id') IN (${d1Placeholders}) 
+               OR json_extract(raw, '$.organizationId') IN (${d1Placeholders}) 
+               OR lower(corporate_email) IN (${d1Placeholders})
+          )
+    ORDER BY created_at DESC LIMIT $${idList.length + 1}
+  `;
+  const params = [idList, lowerEmails, maxLimit];
+  const d1Params = [...idList, maxLimit];
+
   const result = await pool.query(sql, params, {
     d1: true,
-    d1Text: hasLimit
-      ? `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT $2`
-      : `SELECT * FROM buyer_credit_transactions WHERE buyer_id = $1 ORDER BY created_at DESC LIMIT 1000`,
+    d1Text: d1Sql,
+    d1Params,
     useCache: true,
     tag: 'buyer_credits',
     ttlMs: 60000,
@@ -3057,12 +4376,14 @@ async function getPublicVendorsPageFromDB({
   }
 
   const params = [];
-  // Rule: public listing NEVER exposes private buyer rosters.
+  // Rule: public listing NEVER exposes private buyer rosters or inactive suppliers.
   const pgConditions = [
     `lower(raw->>'buyerId') IS NULL AND lower(raw->>'buyerAccountId') IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
   const d1Conditions = [
     `lower(json_extract(raw,'$.buyerId')) IS NULL AND lower(json_extract(raw,'$.buyerAccountId')) IS NULL`,
+    `(status IS NULL OR upper(status) != 'INACTIVE')`,
   ];
 
   if (search) {
@@ -3193,13 +4514,13 @@ async function getPublicVendorFiltersFromDB() {
 
     const categories = (catResult && catResult.rows)
       ? catResult.rows
-          .map((r) => (r && r.category ? String(r.category).trim() : ''))
-          .filter((c) => (
-            c &&
-            c.length >= 2 &&
-            !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
-            !c.includes('(No Past POs)')
-          ))
+        .map((r) => (r && r.category ? String(r.category).trim() : ''))
+        .filter((c) => (
+          c &&
+          c.length >= 2 &&
+          !/^(uncategorized|new category|sample|test|n\/a|na|none|dummy)/i.test(c) &&
+          !c.includes('(No Past POs)')
+        ))
       : [];
 
     return { categories, states: defaultStates };
@@ -3247,6 +4568,9 @@ module.exports = {
   getPublicVendorsPerCategoryFromDB,
   getVendorByEmailFromDB,
   getVendorsByBuyerFromDB,
+  getVendorsUploadedByBuyerFromDB,
+  getAssociatedBuyersForVendorFromDB,
+  getActiveCategoryMatchedRFQsForVendorFromDB,
   getVendorByIdFromDB,
   getVendorSnapshotByIdFromDB,
   getVendorSnapshotByEmailFromDB,
@@ -3256,6 +4580,8 @@ module.exports = {
   incrementBulkImportSessionInDB,
   upsertVendorInDB,
   deleteVendorInDB,
+  getVendorsByIdsFromDB,
+  deleteVendorsInDB,
   bulkInsertVendorsInDB,
   getRFQsFromDB,
   getRFQsByBuyerFromDB,
@@ -3267,6 +4593,13 @@ module.exports = {
   closeExpiredRFQsInDB,
   extendRFQOnceInDB,
   deleteRFQInDB,
+  recordRfqVendorInviteInDB,
+  findRfqVendorInviteByMessageIdsFromDB,
+  findOpenVendorInvitesWithinWindowFromDB,
+  findRfqVendorInvitesByRfqNumberFromDB,
+  claimRfqBuyerQuotesDispatchInDB,
+  releaseRfqBuyerQuotesDispatchClaimInDB,
+  listDueV0RfqsForQuotesDispatchFromDB,
   getEvaluationsFromDB,
   getEvaluationsForVendorFromDB,
   upsertEvaluationInDB,
@@ -3277,6 +4610,7 @@ module.exports = {
   deleteCatalogueProductInDB,
   getBuyerAccountsFromDB,
   getBuyerAccountByEmailFromDB,
+  getBuyerAccountsByEmailFromDB,
   getBuyerAccountByIdFromDB,
   getBuyerAccountSnapshotByIdFromDB,
   getBuyerAccountSnapshotByEmailFromDB,
@@ -3292,6 +4626,7 @@ module.exports = {
   appendAuditLogInDB: auditLogQueries.appendAuditLogInDB,
   upsertAuditLogInDB,
   getNotificationsFromDB,
+  getNotificationsForRecipientFromDB,
   insertNotificationInDB,
   bulkInsertNotificationsInDB,
   markNotificationReadInDB,
@@ -3308,6 +4643,7 @@ module.exports = {
   insertChaserJobInDB,
   insertChaserJobsInDB,
   markChaserJobFiredInDB,
+  markChaserJobsFiredInDB,
   markChaserJobFailedInDB,
   cancelChaserJobsForRFQInDB,
   getPendingChaserJobsFromDB,
@@ -3334,4 +4670,5 @@ module.exports = {
   createRFQWithCreditInDB: buyerRfqCreationQueries.createRFQWithCreditInDB,
   getPublicVendorsPageFromDB,
   getPublicVendorFiltersFromDB,
+  getRFQsPageFromDB,
 };

@@ -23,9 +23,20 @@ const dailyRfqReportService = require('../src/services/dailyRfqReportService');
 const { RFQ_MODES, RFQ_MODE_LABELS } = require('../src/config/constants');
 const { authHeader } = require('./testHelpers');
 
+const pool = require('../src/db/pool');
+
 describe('Reports Controller & Endpoints Suite', () => {
+  beforeAll(async () => {
+    await request(app).get('/health');
+  });
+
   beforeEach(() => {
     storeService.reset();
+    jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+  });
+
+  afterEach(() => {
+    jest.restoreAllMocks();
   });
 
   describe('Helper Functions', () => {

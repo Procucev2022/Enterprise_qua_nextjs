@@ -35,7 +35,22 @@ import {
   calculateExtendedDeadline,
   resolveRfqClosingDeadline,
   RFQ_AUTO_CLOSE_HOURS,
+  VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+  loadVendorUploadHistoryFromStorage,
+  reconcileBuyerVendorsWithUploadHistory,
+  isRfqOrPoSummaryEntity,
+  RFQ_ENTITY_PATTERN,
+  RFQ_SUMMARY_KEYWORD_PATTERN,
+  PO_SUMMARY_KEYWORD_PATTERN,
+  PO_IDENTIFIER_PATTERN,
+  PO_STANDALONE_NAME_PATTERN,
+  PO_OR_RFQ_PREFIXED_ID_PATTERN,
+  isVendorActive,
+  isVendorInactive,
+  setVendorsActiveStateInStorage,
+  normalizeVendorRating,
 } from '@/lib/constants';
+import type { BuyerAccount } from '@/lib/types';
 
 
 describe('lib/constants', () => {
@@ -234,6 +249,15 @@ describe('formatIndianDateTime', () => {
     expect(formatIndianDateTime(value)).toBe('');
   });
 
+  it('formats numeric epoch timestamps and Date objects into IST', () => {
+    const epoch = Date.parse('2026-09-04T09:25:21.000Z');
+    expect(formatIndianDateTime(epoch)).toBe('04 Sept 2026, 02:55 pm IST');
+    expect(formatIndianDateTime(new Date(epoch))).toBe('04 Sept 2026, 02:55 pm IST');
+    expect(formatIndianDateTime(NaN)).toBe('');
+    expect(formatIndianDateTime(new Date('invalid'))).toBe('');
+    expect(formatIndianDateTime({} as any)).toBe('');
+  });
+
   // A legacy record should still show whatever it holds rather than "Invalid Date".
   it('returns an unparseable value unchanged', () => {
     expect(formatIndianDateTime('not a date')).toBe('not a date');
@@ -248,6 +272,15 @@ describe('formatIndianDate', () => {
 
   it('formats the date part of a full instant', () => {
     expect(formatIndianDate('2026-09-02T11:07:16.000Z')).toBe('02 Sept 2026');
+  });
+
+  it('formats numeric epoch timestamps and Date objects', () => {
+    const epoch = Date.parse('2026-09-15T00:00:00.000Z');
+    expect(formatIndianDate(epoch)).toBe('15 Sept 2026');
+    expect(formatIndianDate(new Date(epoch))).toBe('15 Sept 2026');
+    expect(formatIndianDate(NaN)).toBe('');
+    expect(formatIndianDate(new Date('invalid'))).toBe('');
+    expect(formatIndianDate({} as any)).toBe('');
   });
 
   it.each([[''], ['  '], [undefined]])('reports nothing for %p', (value) => {
@@ -609,6 +642,14 @@ describe('normalizePoDate', () => {
 
       // Space separated emails
       expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
+
+      // Excel copy-paste with tabs and newlines
+      expect(parseSearchTokens('Vendor One\tVendor Two\r\nVendor Three\nvendor4@example.com')).toEqual([
+        'Vendor One',
+        'Vendor Two',
+        'Vendor Three',
+        'vendor4@example.com',
+      ]);
     });
   });
 });
@@ -652,6 +693,15 @@ describe('parseRfqTimestamp', () => {
 
   it.each([[undefined], [null], [''], ['   '], ['not a date']])('returns null for %p', (value) => {
     expect(parseRfqTimestamp(value)).toBeNull();
+  });
+
+  it('handles numeric timestamps, Date instances, and invalid inputs', () => {
+    const epoch = 1756977921000;
+    expect(parseRfqTimestamp(epoch)).toBe(epoch);
+    expect(parseRfqTimestamp(new Date(epoch))).toBe(epoch);
+    expect(parseRfqTimestamp(NaN)).toBeNull();
+    expect(parseRfqTimestamp(new Date('invalid'))).toBeNull();
+    expect(parseRfqTimestamp({} as any)).toBeNull();
   });
 });
 
@@ -795,13 +845,38 @@ describe('Indian address location extraction helpers', () => {
       VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
       isBuyerUploadedVendor,
       isProcucevNetworkVendor,
+      canBuyerManageVendor,
       loadVendorUploadHistoryFromStorage,
       reconcileBuyerVendorsWithUploadHistory,
     } = require('@/lib/constants');
 
     expect(isBuyerUploadedVendor(null)).toBe(false);
+    expect(isBuyerUploadedVendor({ isProcucevNetwork: true, source: 'buyer_uploaded' })).toBe(false);
     expect(isBuyerUploadedVendor({ source: 'buyer_uploaded' })).toBe(true);
     expect(isProcucevNetworkVendor({ source: 'procucev_network' })).toBe(true);
+
+    expect(canBuyerManageVendor(null)).toBe(false);
+    expect(canBuyerManageVendor({ isProcucevNetwork: true })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'procucev_network' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded' })).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded' }, null)).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerId: 'b-1' }, { id: 'b-1' })).toBe(true);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerId: 'b-2' }, { id: 'b-1' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', buyerEmail: 'other@co.test' }, { corporateEmail: 'me@co.test' })).toBe(false);
+    expect(canBuyerManageVendor({ source: 'buyer_uploaded', addedByBuyerCompany: 'Other Co' }, { organizationName: 'My Co' })).toBe(false);
+    expect(canBuyerManageVendor(
+      { source: 'buyer_uploaded', buyerAccountId: 'b-1', buyerEmail: 'me@co.test', addedByBuyerCompany: 'My Co' },
+      { id: 'b-1', corporateEmail: 'me@co.test', organizationName: 'My Co' }
+    )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'buyer_uploaded', buyerEmail: 'buyer@corp.com' },
+      null,
+      { email: 'buyer@corp.com' }
+    )).toBe(true);
+    expect(canBuyerManageVendor(
+      { source: 'vendor_master_ingestion', organizationId: 'org-abc' },
+      { id: 'ba-123', organizationId: 'org-abc' }
+    )).toBe(true);
 
     localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
     expect(loadVendorUploadHistoryFromStorage()).toEqual([]);
@@ -876,6 +951,592 @@ describe('Indian address location extraction helpers', () => {
     expect(merged[2]).toMatchObject({
       name: 'emailonly@co.test',
       rating: 0,
+    });
+  });
+
+  it('subscribes to cross-tab storage events for vendor upload history and handles unavailable window guards', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      subscribeVendorUploadHistory,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([{ id: 'batch-sub-1', records: [{ vendorName: 'Subscribed Co', email: 'sub@co.test' }] }])
+    );
+
+    const updates: unknown[] = [];
+    const unsubscribe = subscribeVendorUploadHistory((batches: unknown[]) => {
+      updates.push(batches);
+    });
+
+    window.dispatchEvent(new StorageEvent('storage', { key: 'unrelated-key' }));
+    expect(updates).toHaveLength(0);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(1);
+
+    window.dispatchEvent(new StorageEvent('storage', { key: null }));
+    expect(updates).toHaveLength(2);
+
+    unsubscribe();
+    window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    expect(updates).toHaveLength(2);
+
+    const addSpy = jest.spyOn(window, 'addEventListener');
+    const origAdd = window.addEventListener;
+    try {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: undefined });
+      const noop = subscribeVendorUploadHistory(() => {});
+      expect(() => noop()).not.toThrow();
+    } finally {
+      Object.defineProperty(window, 'addEventListener', { configurable: true, value: origAdd });
+      addSpy.mockRestore();
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+  });
+
+  it('removes deleted vendors from local storage upload batches and dispatches update event', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      removeVendorsFromUploadHistoryInStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-del-1',
+          records: [
+            { id: 'v-keep-1', vendorName: 'Keep Vendor', email: 'keep@test.com' },
+            { id: 'v-del-1', vendorName: 'Delete By ID', email: 'del1@test.com' },
+            { id: 'v-del-2', vendorName: 'Delete By Email', email: 'delete-me@test.com' },
+            { id: 'v-del-3', vendorName: 'Delete By Name', email: 'del3@test.com' },
+          ],
+        },
+        {
+          id: 'batch-del-2',
+          records: [
+            { id: 'v-del-4', vendorName: 'Only Vendor To Delete', email: 'del4@test.com' },
+          ],
+        },
+      ])
+    );
+
+    // Call with empty / null identifiers
+    expect(removeVendorsFromUploadHistoryInStorage([] as any)).toHaveLength(2);
+    expect(removeVendorsFromUploadHistoryInStorage(['   '])).toHaveLength(2);
+
+    let eventFired = false;
+    const listener = () => { eventFired = true; };
+    window.addEventListener('vendor_upload_history_updated', listener);
+
+    const updated = removeVendorsFromUploadHistoryInStorage([
+      'v-del-1',
+      'delete-me@test.com',
+      'Delete By Name',
+      'v-del-4',
+    ]);
+
+    window.removeEventListener('vendor_upload_history_updated', listener);
+
+    expect(eventFired).toBe(true);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].records).toHaveLength(1);
+    expect(updated[0].records[0]).toMatchObject({ id: 'v-keep-1', vendorName: 'Keep Vendor' });
+
+    // Verify localStorage reflects the filtered batches
+    const stored = loadVendorUploadHistoryFromStorage();
+    expect(stored).toHaveLength(1);
+    expect(stored[0].records).toHaveLength(1);
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('normalizes vendor categories, strips placeholders, and updates stored upload history batches', () => {
+    const {
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      isPlaceholderVendorCategory,
+      normalizeVendorCategoryList,
+      reconcileBuyerVendorsWithUploadHistory,
+      updateVendorInUploadHistoryStorage,
+      loadVendorUploadHistoryFromStorage,
+    } = require('@/lib/constants');
+
+    expect(isPlaceholderVendorCategory('')).toBe(true);
+    expect(isPlaceholderVendorCategory(null)).toBe(true);
+    expect(isPlaceholderVendorCategory('Vendor Master')).toBe(true);
+    expect(isPlaceholderVendorCategory('Uncategorized (No Past POs)')).toBe(true);
+    expect(isPlaceholderVendorCategory('Mechanical')).toBe(false);
+
+    expect(
+      normalizeVendorCategoryList(['Valves', 'Vendor Master', 'valves', 'Pumps', '', null, 'None'])
+    ).toEqual(['Valves', 'Pumps']);
+    expect(normalizeVendorCategoryList(null)).toEqual([]);
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory(
+      [],
+      [
+        {
+          id: 'batch-placeholder',
+          majorCategory: 'Vendor Master',
+          records: [
+            {
+              name: 'Placeholder Vendor Co',
+              email: 'placeholder@vendor.test',
+              category: 'Uncategorised',
+              minorCategories: ['Vendor Master', 'Bearings'],
+            },
+          ],
+        },
+      ]
+    );
+    expect(reconciled).toHaveLength(1);
+    expect(reconciled[0].majorCategory).toBe('');
+    expect(reconciled[0].minorCategories).toEqual(['Bearings']);
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-upd-1',
+          records: [
+            { id: 'v-master-1', vendorName: 'Govardhan Co', email: 'gov@co.test', category: 'Vendor Master' },
+            { id: 'v-other', vendorName: 'Other Co', email: 'other@co.test', category: 'Electrical' },
+          ],
+        },
+      ])
+    );
+
+    updateVendorInUploadHistoryStorage(['v-master-1', 'gov@co.test'], {
+      id: 'v-promoted-1',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops', 'Vendor Master'],
+    });
+
+    const updated = loadVendorUploadHistoryFromStorage();
+    expect(updated[0].records[0]).toMatchObject({
+      id: 'v-promoted-1',
+      category: 'IT Infrastructure',
+      majorCategory: 'IT Infrastructure',
+      minorCategories: ['Laptops'],
+    });
+    expect(updated[0].records[1]).toMatchObject({ id: 'v-other', category: 'Electrical' });
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('tracks active/inactive vendor states via isVendorInactive, isVendorActive, setVendorsActiveStateInStorage, and reconciliation', () => {
+    expect(isVendorInactive(null)).toBe(false);
+    expect(isVendorActive(null)).toBe(false);
+    expect(isVendorActive({ id: 'v-1', status: 'REGISTERED / NOT EVALUATED' })).toBe(true);
+    expect(isVendorInactive({ id: 'v-2', isActive: false })).toBe(true);
+    expect(isVendorInactive({ id: 'v-3', disabled: true })).toBe(true);
+    expect(isVendorInactive({ id: 'v-4', status: 'INACTIVE' })).toBe(true);
+    expect(isVendorActive({ id: 'v-4', status: 'INACTIVE' })).toBe(false);
+
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-status-sync',
+          records: [
+            { id: 'rec-a', vendorName: 'Inactive Master Co', email: 'inactive@master.test', category: 'Mechanical' },
+            { id: 'rec-b', vendorName: 'Active Master Co', email: 'active@master.test', category: 'Mechanical' },
+          ],
+        },
+      ])
+    );
+
+    setVendorsActiveStateInStorage(['inactive@master.test'], false);
+    let stored = loadVendorUploadHistoryFromStorage();
+    expect(stored[0].records).toHaveLength(2);
+    expect((stored[0].records ?? [])[0]).toMatchObject({ isActive: false, disabled: true, status: 'INACTIVE' });
+    expect((stored[0].records ?? [])[1].isActive).toBeUndefined();
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], stored, {
+      id: 'buyer-1',
+      organizationName: 'Acme Buyer',
+    } as unknown as BuyerAccount);
+    expect(isVendorInactive(reconciled[0])).toBe(true);
+    expect(isVendorActive(reconciled[1])).toBe(true);
+
+    setVendorsActiveStateInStorage(['inactive@master.test'], true);
+    stored = loadVendorUploadHistoryFromStorage();
+    expect((stored[0].records ?? [])[0]).toMatchObject({ isActive: true, disabled: false, status: 'REGISTERED / NOT EVALUATED' });
+
+    localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+  });
+
+  it('scopes upload history reconciliation to matching buyer identity and excludes other buyers batches', () => {
+    const activeBuyer = {
+      id: 'buyer-owner-a',
+      organizationName: 'Owner A Corp',
+      corporateEmail: 'a@ownera.com',
+    } as unknown as BuyerAccount;
+
+    const batches = [
+      {
+        id: 'batch-other-buyer',
+        buyerId: 'buyer-owner-b',
+        buyerEmail: 'b@ownerb.com',
+        records: [{ vendorName: 'Other Buyer Vendor', email: 'other@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-same-buyer',
+        buyerId: 'buyer-owner-a',
+        records: [{ vendorName: 'Same Buyer Vendor', email: 'same@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-discarded',
+        buyerId: 'buyer-owner-a',
+        status: 'DISCARDED',
+        records: [{ vendorName: 'Discarded Vendor', email: 'discarded@vendor.test', category: 'Mechanical' }],
+      },
+      {
+        id: 'batch-org-match',
+        organizationId: 'org-matching',
+        records: [{ vendorName: 'Org Matching Vendor', email: 'orgmatch@vendor.test', category: 'Mechanical' }],
+      },
+    ];
+
+    const activeBuyerWithOrg = {
+      ...activeBuyer,
+      organizationId: 'org-matching',
+    } as unknown as BuyerAccount;
+
+    const reconciled = reconcileBuyerVendorsWithUploadHistory([], batches, activeBuyerWithOrg);
+    expect(reconciled.map((v) => v.name)).toEqual(['Same Buyer Vendor', 'Org Matching Vendor']);
+  });
+
+  it('enforces comparison confidentiality helpers isRfqConcluded, resolveQuotesUnsealIso, and isBuyerQuotesSealed', () => {
+    const {
+      isRfqConcluded,
+      resolveQuotesUnsealIso,
+      isBuyerQuotesSealed,
+    } = require('@/lib/constants');
+
+    expect(isRfqConcluded(null)).toBe(false);
+    expect(isBuyerQuotesSealed(null, 'buyer')).toBe(false);
+    expect(resolveQuotesUnsealIso(null)).toBeNull();
+    expect(resolveQuotesUnsealIso({ quotesHiddenUntil: '2026-12-01T00:00:00.000Z' })).toBe('2026-12-01T00:00:00.000Z');
+    expect(resolveQuotesUnsealIso({ createdAt: 'not-a-date' })).toBeNull();
+
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+    const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+    const futureClosing = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(true);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'admin')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_0', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'In Evaluation', sourcingMode: 'mode_2', createdAt: fiftyHoursAgo, closingDeadline: futureClosing }, 'buyer')).toBe(true);
+    expect(isBuyerQuotesSealed({ status: 'Closed', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'PO Generated', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ poFinalised: true, sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ poNumber: 'PO-9', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(isBuyerQuotesSealed({ status: 'Expired', sourcingMode: 'mode_1', createdAt: twoHoursAgo }, 'buyer')).toBe(false);
+    expect(resolveQuotesUnsealIso({ createdAt: fiftyHoursAgo, closingDeadline: futureClosing })).toBe(futureClosing);
+  });
+
+  it('handles createBackdropClickHandler and registerOutsideClickClose for modal backdrops and popovers', () => {
+    const {
+      createBackdropClickHandler,
+      registerOutsideClickClose,
+    } = require('@/lib/constants');
+
+    const backdrop = document.createElement('div');
+    const child = document.createElement('span');
+    backdrop.appendChild(child);
+
+    // 1. No-arg close callback
+    const onClose = jest.fn();
+    const handleBackdrop = createBackdropClickHandler(onClose);
+    handleBackdrop({ target: child, currentTarget: backdrop });
+    expect(onClose).not.toHaveBeenCalled();
+    handleBackdrop({ target: backdrop, currentTarget: backdrop });
+    expect(onClose).toHaveBeenCalledTimes(1);
+
+    // 2. Setter callback with explicit closeValue
+    const setOpen = jest.fn();
+    const handleSetterBackdrop = createBackdropClickHandler(setOpen, false);
+    handleSetterBackdrop({ target: backdrop, currentTarget: backdrop });
+    expect(setOpen).toHaveBeenCalledWith(false);
+
+    // 3. Blocked or null callback
+    const blockedClose = jest.fn();
+    createBackdropClickHandler(blockedClose, false, true)({ target: backdrop, currentTarget: backdrop });
+    expect(blockedClose).not.toHaveBeenCalled();
+    expect(() => createBackdropClickHandler(null)({ target: backdrop, currentTarget: backdrop })).not.toThrow();
+
+    // 4. registerOutsideClickClose when closed vs open
+    expect(registerOutsideClickClose(false, { current: backdrop }, onClose)).toBeUndefined();
+
+    const closeDropdown = jest.fn();
+    const cleanup = registerOutsideClickClose(true, { current: backdrop }, closeDropdown, false);
+    expect(typeof cleanup).toBe('function');
+
+    // Click inside container does not close
+    child.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(closeDropdown).not.toHaveBeenCalled();
+
+    // Click outside container closes with closeValue
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(closeDropdown).toHaveBeenCalledWith(false);
+    cleanup?.();
+
+    // Zero-arg close callback on outside click
+    const zeroArgClose = jest.fn();
+    const cleanupZeroArg = registerOutsideClickClose(true, { current: backdrop }, zeroArgClose);
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(zeroArgClose).toHaveBeenCalledTimes(1);
+    cleanupZeroArg?.();
+
+    const { collectExistingBuyerVendorCodes } = require('@/lib/constants');
+    expect(Array.from(collectExistingBuyerVendorCodes(null))).toEqual([]);
+    expect(
+      Array.from(
+        collectExistingBuyerVendorCodes([
+          { source: 'buyer_uploaded', vendorCode: ' VC-01 ' },
+          { source: 'procucev_network', vendorCode: 'NET-1' },
+          { source: 'buyer_uploaded', vendorCode: '   ' },
+        ])
+      )
+    ).toEqual(['vc-01']);
+  });
+
+  it('covers table sorting, column visibility classes, sort indicators, and column reset helpers', () => {
+    const {
+      BUYER_VENDOR_DIRECTORY_COLUMNS,
+      BUYER_RFQ_SUMMARY_COLUMNS,
+      BUYER_EVALUATION_SUMMARY_COLUMNS,
+      BUYER_ACCOUNTS_TABLE_COLUMNS,
+      CM_ALL_RFQS_TABLE_COLUMNS,
+      nextTableSortState,
+      createColumnSortClickHandler,
+      createColumnResetHandler,
+      createBooleanSetterHandler,
+      getTableColumnClass,
+      getTableAriaSort,
+      getSortIndicatorSymbol,
+      resolveSortableCellValue,
+      sortTableRows,
+    } = require('@/lib/constants');
+
+    expect(BUYER_VENDOR_DIRECTORY_COLUMNS.length).toBeGreaterThan(10);
+    expect(BUYER_RFQ_SUMMARY_COLUMNS.length).toBeGreaterThan(8);
+    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.length).toBe(3);
+    expect(BUYER_EVALUATION_SUMMARY_COLUMNS.map((c: { key: string }) => c.key)).toEqual([
+      'vendorName',
+      'status',
+      'overallScore',
+    ]);
+    expect(BUYER_ACCOUNTS_TABLE_COLUMNS.length).toBeGreaterThan(10);
+    expect(CM_ALL_RFQS_TABLE_COLUMNS.length).toBeGreaterThan(10);
+
+    // Sort state cycling
+    let sortState = { key: null as string | null, dir: 'asc' as 'asc' | 'desc' };
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'asc' });
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'desc' });
+    sortState = nextTableSortState(sortState, 'name');
+    expect(sortState).toEqual({ key: 'name', dir: 'asc' });
+    sortState = nextTableSortState(sortState, 'email');
+    expect(sortState).toEqual({ key: 'email', dir: 'asc' });
+
+    const setSort = jest.fn((updater) => {
+      sortState = updater(sortState);
+    });
+    const clickSort = createColumnSortClickHandler('email', setSort);
+    clickSort();
+    expect(sortState).toEqual({ key: 'email', dir: 'desc' });
+
+    const setColumns = jest.fn();
+    createColumnResetHandler(BUYER_RFQ_SUMMARY_COLUMNS, setColumns)();
+    expect(setColumns).toHaveBeenCalledWith(BUYER_RFQ_SUMMARY_COLUMNS);
+
+    const setBool = jest.fn();
+    createBooleanSetterHandler(setBool, true)();
+    expect(setBool).toHaveBeenCalledWith(true);
+
+    // Column display class
+    const cols = [
+      { key: 'name', label: 'Name', visible: true },
+      { key: 'email', label: 'Email', visible: false },
+    ];
+    expect(getTableColumnClass(null, 'name', 'px-2')).toBe('px-2');
+    expect(getTableColumnClass(cols, 'name', 'px-2')).toBe('px-2');
+    expect(getTableColumnClass(cols, 'email', 'px-2')).toBe('px-2 hidden');
+    expect(getTableColumnClass(cols, 'email')).toBe('hidden');
+    expect(getTableColumnClass(cols, 'unknown', 'px-2')).toBe('px-2');
+
+    // Aria sort & indicator symbol
+    expect(getTableAriaSort(null, 'name')).toBe('none');
+    expect(getTableAriaSort({ key: 'other', dir: 'asc' }, 'name')).toBe('none');
+    expect(getTableAriaSort({ key: 'name', dir: 'asc' }, 'name')).toBe('ascending');
+    expect(getTableAriaSort({ key: 'name', dir: 'desc' }, 'name')).toBe('descending');
+    expect(getSortIndicatorSymbol(null, 'name')).toBe('↕');
+    expect(getSortIndicatorSymbol({ key: 'name', dir: 'asc' }, 'name')).toBe('↑');
+    expect(getSortIndicatorSymbol({ key: 'name', dir: 'desc' }, 'name')).toBe('↓');
+
+    // Cell value resolution
+    expect(resolveSortableCellValue(null, 'name')).toBe('');
+    expect(resolveSortableCellValue({ extractedEntities: [1, 2, 3] }, 'items')).toBe(3);
+    expect(resolveSortableCellValue({ lineItems: [1, 2] }, 'items')).toBe(2);
+    expect(resolveSortableCellValue({ items: 'fallback' }, 'items')).toBe('fallback');
+    expect(resolveSortableCellValue({ quotesCount: 4 }, 'quotes')).toBe(4);
+    expect(resolveSortableCellValue({ quotesCount: '7' }, 'quotes')).toBe(7);
+    expect(resolveSortableCellValue({}, 'quotes')).toBe(0);
+    expect(resolveSortableCellValue({ targetDeliveryDate: '2026-12-01' }, 'delivery')).toBe('2026-12-01');
+    expect(resolveSortableCellValue({ deadline: '2026-11-30' }, 'delivery')).toBe('2026-11-30');
+    expect(resolveSortableCellValue({}, 'delivery')).toBe('');
+    expect(resolveSortableCellValue({ minorCategories: ['Valves', 'Pumps'] }, 'minorCategories')).toBe('Valves, Pumps');
+    expect(resolveSortableCellValue({ minorCategories: null }, 'minorCategories')).toBe('');
+    expect(resolveSortableCellValue({ city: 'Pune' }, 'location')).toBe('Pune');
+    expect(resolveSortableCellValue({}, 'location')).toBe('');
+    expect(resolveSortableCellValue({ totalSpend: '₹1,25,000' }, 'totalSpend')).toBe(125000);
+    expect(resolveSortableCellValue({ totalSpend: 'abc' }, 'totalSpend')).toBe(0);
+    expect(resolveSortableCellValue({ score: 88 }, 'score')).toBe(88);
+    expect(resolveSortableCellValue({ vendorCode: '42' }, 'vendorCode')).toBe(42);
+    expect(resolveSortableCellValue({ name: ' Apex ' }, 'name')).toBe('apex');
+    expect(resolveSortableCellValue({ tags: ['a', 'b'] }, 'tags')).toBe(2);
+    expect(resolveSortableCellValue({ flag: true }, 'flag')).toBe('');
+
+    // Row sorting
+    expect(sortTableRows(null as unknown as unknown[], { key: 'name', dir: 'asc' })).toEqual([]);
+    const sampleRows = [
+      { name: 'Beta', score: 90 },
+      { name: 'Alpha', score: 75 },
+    ];
+    expect(sortTableRows(sampleRows, { key: null, dir: 'asc' })).toEqual(sampleRows);
+    expect(sortTableRows(sampleRows, { key: 'name', dir: 'asc' }).map((r: { name: string }) => r.name)).toEqual(['Alpha', 'Beta']);
+    expect(sortTableRows(sampleRows, { key: 'name', dir: 'desc' }).map((r: { name: string }) => r.name)).toEqual(['Beta', 'Alpha']);
+    expect(sortTableRows(sampleRows, { key: 'score', dir: 'asc' }).map((r: { score: number }) => r.score)).toEqual([75, 90]);
+    expect(sortTableRows(sampleRows, { key: 'score', dir: 'desc' }).map((r: { score: number }) => r.score)).toEqual([90, 75]);
+  });
+
+  describe('isRfqOrPoSummaryEntity and associated patterns', () => {
+    it('exports all expected regex patterns for RFQ and PO summary filtering', () => {
+      expect(RFQ_ENTITY_PATTERN).toBeInstanceOf(RegExp);
+      expect(RFQ_SUMMARY_KEYWORD_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_SUMMARY_KEYWORD_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_IDENTIFIER_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_STANDALONE_NAME_PATTERN).toBeInstanceOf(RegExp);
+      expect(PO_OR_RFQ_PREFIXED_ID_PATTERN).toBeInstanceOf(RegExp);
+    });
+
+    it('identifies RFQs, PO summaries, dumps, and order IDs across all candidate fields', () => {
+      expect(isRfqOrPoSummaryEntity(null)).toBe(false);
+      expect(isRfqOrPoSummaryEntity(undefined)).toBe(false);
+      expect(isRfqOrPoSummaryEntity({})).toBe(false);
+
+      // ID matching
+      expect(isRfqOrPoSummaryEntity({ id: 'rfq-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'po-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'po_summary_1' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ id: 'rfq_batch' })).toBe(true);
+
+      // Name / VendorName matching
+      expect(isRfqOrPoSummaryEntity({ name: 'RFQ-2024-001' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ vendorName: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Purchase Order' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Purchase Orders' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'Historical PO Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO Purchase Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO-9872' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'PO #1234' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ name: 'RFQ Summary' })).toBe(true);
+
+      // Category / MajorCategory matching
+      expect(isRfqOrPoSummaryEntity({ category: 'PO Summary' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ majorCategory: 'RFQ' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ category: 'Purchase Order Dump' })).toBe(true);
+      expect(isRfqOrPoSummaryEntity({ category: 'PO' })).toBe(true);
+
+      // Genuine vendors
+      expect(isRfqOrPoSummaryEntity({ id: 'v-1', name: 'Polycab India Limited', category: 'Electrical' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-2', name: 'Polymer Technologies', category: 'Chemical' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-3', name: 'Posco Steel', category: 'Metals' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-4', name: 'Power Grid Corp', category: 'Energy' })).toBe(false);
+      expect(isRfqOrPoSummaryEntity({ id: 'v-5', name: 'Veera Solutions Pvt LTD', category: 'Valves' })).toBe(false);
+    });
+
+    it('skips RFQ and PO summary records when reconciling upload history batches', () => {
+      const existingVendors = [
+        {
+          id: 'v-clean-1',
+          name: 'Clean Supplier Ltd',
+          contactPerson: 'Clean Contact',
+          phone: '9876543210',
+          email: 'clean@supplier.test',
+          majorCategory: 'Mechanical',
+          minorCategories: [],
+          location: 'Mumbai',
+          rating: 4,
+          source: 'buyer_manual',
+        },
+      ];
+
+      const batchWithSummaries = [
+        {
+          id: 'batch-po-dump',
+          records: [
+            { name: 'PO Summary', email: 'posummary@test.local', category: 'PO Summary' },
+            { name: 'Historical PO Dump', email: 'podump@test.local' },
+            { name: 'RFQ-2024-001', email: 'rfq@test.local' },
+            { name: 'Valid Uploaded Co', email: 'valid@uploaded.test', category: 'Electrical' },
+          ],
+        },
+      ];
+
+      const result = reconcileBuyerVendorsWithUploadHistory(existingVendors, batchWithSummaries);
+      expect(result.some((v) => v.name === 'PO Summary')).toBe(false);
+      expect(result.some((v) => v.name === 'Historical PO Dump')).toBe(false);
+      expect(result.some((v) => v.name === 'RFQ-2024-001')).toBe(false);
+      expect(result.some((v) => v.name === 'Valid Uploaded Co')).toBe(true);
+    });
+  });
+
+  describe('normalizeVendorRating', () => {
+    it('normalizes standard 1.0 - 5.0 scale ratings correctly', () => {
+      expect(normalizeVendorRating(4.5)).toBe(4.5);
+      expect(normalizeVendorRating(4.8)).toBe(4.8);
+      expect(normalizeVendorRating(1.0)).toBe(1.0);
+      expect(normalizeVendorRating(5.0)).toBe(5.0);
+      expect(normalizeVendorRating('4.5')).toBe(4.5);
+    });
+
+    it('converts normalized ratio (< 1.0) ratings to 5.0 scale', () => {
+      // 0.9 ratio represents 90% -> 4.5 / 5.0
+      expect(normalizeVendorRating(0.9)).toBe(4.5);
+      expect(normalizeVendorRating('0.9')).toBe(4.5);
+      expect(normalizeVendorRating(0.8)).toBe(4.0);
+    });
+
+    it('converts 100-point scale scores (> 5.0) to 5.0 scale', () => {
+      expect(normalizeVendorRating(90)).toBe(4.5);
+      expect(normalizeVendorRating(85)).toBe(4.3);
+      expect(normalizeVendorRating('90')).toBe(4.5);
+      expect(normalizeVendorRating(100)).toBe(5.0);
+    });
+
+    it('falls back to score when rating is absent', () => {
+      expect(normalizeVendorRating(null, 90)).toBe(4.5);
+      expect(normalizeVendorRating(undefined, 85)).toBe(4.3);
+      expect(normalizeVendorRating(null, 4.5)).toBe(4.5);
+      expect(normalizeVendorRating(null, '90')).toBe(4.5);
+    });
+
+    it('handles 0 and invalid inputs gracefully', () => {
+      expect(normalizeVendorRating(0)).toBe(0);
+      expect(normalizeVendorRating(null, 0)).toBe(0);
+      expect(normalizeVendorRating(null)).toBeNull();
+      expect(normalizeVendorRating(undefined)).toBeNull();
+      expect(normalizeVendorRating('')).toBeNull();
+      expect(normalizeVendorRating('abc')).toBeNull();
+      expect(normalizeVendorRating(NaN)).toBeNull();
     });
   });
 });

@@ -89,12 +89,13 @@ describe('Vendor Presence & Heartbeat API Routes', () => {
   });
 
   describe('GET /api/vendors/presence', () => {
-    it('requires an authenticated buyer or staff session', async () => {
+    it('requires an authenticated session', async () => {
       const anonymous = await request(app).get('/api/vendors/presence');
       expect(anonymous.status).toBe(401);
 
       const vendor = await request(app).get('/api/vendors/presence').set(vendorAuthHeader());
-      expect(vendor.status).toBe(403);
+      expect(vendor.status).toBe(200);
+      expect(vendor.body.success).toBe(true);
     });
 
     it('returns empty list when no vendors are online', async () => {

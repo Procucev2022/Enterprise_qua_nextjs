@@ -32,9 +32,14 @@
 
 const queries = require('../db/vendorIngestionQueries');
 const buyerProfileQueries = require('../db/buyerProfileQueries');
+const identityQueries = require('../db/identityQueries');
 const categorizationService = require('./vendorCategorizationService');
 const mailerService = require('./mailerService');
 const storeService = require('./storeService');
+const {
+  loadExistingPoDedupeState,
+  checkAndRegisterPoDedupe,
+} = require('./largeFileIngestionService');
 const { logger } = require('./loggerService');
 const { getWaitUntil } = require('../db/d1Bridge');
 const {
@@ -106,9 +111,11 @@ async function resolveBuyerContext(sessionUser) {
     throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.SESSION_MISSING_USER, 401);
   }
 
+  const resolvedRole = sessionUser.role || lookup.profile.role || null;
   return {
     userId: lookup.profile.userId,
     email: sessionUser.email || lookup.profile.contactEmail || '',
+    ...(resolvedRole ? { role: resolvedRole } : {}),
     organizationId: lookup.profile.organizationId,
     organizationName: lookup.profile.companyName || sessionUser.orgName || '',
   };
@@ -287,6 +294,7 @@ async function updateSessionHorizon(sessionUser, sessionId, payload) {
   const hadPoData = session.poRowCount > 0;
   if (hadPoData) {
     await queries.deletePoLineItems(sessionId, context.organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, context.organizationId);
   }
 
   const updated = await queries.updateSession(sessionId, context.organizationId, {
@@ -343,9 +351,10 @@ async function getResumeState(sessionUser, sessionId) {
     ? await requireSession(context, sessionId)
     : await queries.findLatestSession(context.organizationId);
   const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
+  const existingPoRecords = await queries.findExistingPoLineItemsByOrganization(context.organizationId);
 
   if (!session) {
-    return { session: null, categoryMaster };
+    return { session: null, categoryMaster, existingPoRecords: Array.isArray(existingPoRecords) ? existingPoRecords : [] };
   }
 
   const [mappingSummary, emailSummary, poCounts] = await Promise.all([
@@ -360,6 +369,7 @@ async function getResumeState(sessionUser, sessionId) {
     mappingSummary,
     emailSummary,
     poCounts,
+    existingPoRecords: Array.isArray(existingPoRecords) ? existingPoRecords : [],
     unlockedStep: unlockedStepFor(session),
   };
 }
@@ -501,6 +511,7 @@ async function confirmVendorMaster(sessionUser, sessionId, { rows, fileName, rep
 
   if (replaceExisting) {
     await queries.deleteVendorMasterRecords(sessionId, context.organizationId);
+    await queries.deleteCategoryMappingsForSession(sessionId, context.organizationId);
   }
 
   if (storable.length === 0) {
@@ -624,17 +635,46 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
 
   // A row without a PO date cannot be placed before or after the window. It is kept
   // inside, because a dump no longer has to carry dates to be used.
-  const stamped = valid.map((row) => ({
+  const poDedupeState = await loadExistingPoDedupeState(context.organizationId);
+  const duplicateRows = [];
+  const uniqueValid = [];
+  for (const row of valid) {
+    const rowNumber = row.sourceRowNumber || 0;
+    const dupMatch = checkAndRegisterPoDedupe(poDedupeState, row, rowNumber);
+    if (dupMatch) {
+      duplicateRows.push({
+        rowNumber,
+        poNumber: row.poNumber || undefined,
+        poDate: row.poDate || undefined,
+        vendorName: row.vendorName || row.vendorCode || undefined,
+        itemDescription: row.itemDescription,
+        specification: row.specification || undefined,
+        status: 'duplicate_skipped',
+        matchedAgainst: dupMatch.matchedAgainst,
+        reason: dupMatch.reason,
+      });
+      continue;
+    }
+    uniqueValid.push(row);
+  }
+
+  const rejected = [...invalid, ...duplicateRows];
+  const stamped = uniqueValid.map((row) => ({
     ...row,
     inHorizon: !row.poDate || (row.poDate >= session.horizonStart && row.poDate <= session.horizonEnd),
   }));
 
-  if (replaceExisting) {
-    await queries.deletePoLineItems(sessionId, context.organizationId);
+  if (stamped.length === 0) {
+    const message =
+      duplicateRows.length > 0 && invalid.length === 0
+        ? formatMessage(VENDOR_INGESTION_MESSAGES.PO_DUMP_ALL_DUPLICATES, { count: duplicateRows.length })
+        : VENDOR_INGESTION_MESSAGES.PO_DUMP_EMPTY;
+    throw new VendorIngestionError(message, 422, { invalidRows: rejected, duplicateRows });
   }
 
-  if (stamped.length === 0) {
-    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.PO_DUMP_EMPTY, 422, { invalidRows: invalid });
+  if (replaceExisting) {
+    await queries.deletePoLineItems(sessionId, context.organizationId);
+    await queries.resetCategoryMappingsForReclassification(sessionId, context.organizationId);
   }
 
   await queries.bulkInsertPoLineItems(sessionId, context.organizationId, stamped);
@@ -654,6 +694,9 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     poOutsideHorizonCount: counts.outsideHorizon,
     status: VENDOR_INGESTION_SESSION_STATUS.PO_STORED,
     currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
+    ...(replaceExisting
+      ? { aiStatus: VENDOR_INGESTION_AI_STATUS.IDLE, aiProcessedCount: 0, aiFailedCount: 0 }
+      : {}),
   });
 
   await recordAudit(context, {
@@ -665,12 +708,13 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
       fileName: fileName || null,
       submitted: rows.length,
       stored: stamped.length,
-      rejected: invalid.length,
+      rejected: rejected.length,
+      duplicates: duplicateRows.length,
       horizon: { startDate: session.horizonStart, endDate: session.horizonEnd },
       insidePeriod: counts.inHorizon,
       outsidePeriod: counts.outsideHorizon,
     },
-    summary: `Stored ${stamped.length} PO line item(s); ${counts.inHorizon} inside and ${counts.outsideHorizon} outside ${session.horizonStart}–${session.horizonEnd}.`,
+    summary: `Stored ${stamped.length} PO line item(s); ${counts.inHorizon} inside and ${counts.outsideHorizon} outside ${session.horizonStart}–${session.horizonEnd} (${duplicateRows.length} duplicate(s) skipped).`,
   });
 
   return {
@@ -678,10 +722,11 @@ async function confirmPoDump(sessionUser, sessionId, { rows, fileName, replaceEx
     totalRows: rows.length,
     validRows: stamped.length,
     invalidRows: invalid.length,
+    duplicateRows: duplicateRows.length,
     insidePeriod: counts.inHorizon,
     outsidePeriod: counts.outsideHorizon,
     totalStored: counts.total,
-    rejected: invalid,
+    rejected,
   };
 }
 
@@ -942,6 +987,47 @@ function isJobStale(job) {
   return !Number.isFinite(lastProgress) || Date.now() - lastProgress > VENDOR_INGESTION_CONFIG.AI_JOB_STALE_AFTER_MS;
 }
 
+function computeCategorizationJobCounts({
+  totalVendors,
+  matchedVendorCount,
+  unmatchedVendorCount,
+  processedInLoop,
+  failedInLoop,
+  summary,
+}) {
+  const selfMapCount = (summary?.selfMapRequired || 0) + (summary?.selfMapped || 0);
+  const effectiveSelfMap = Math.max(unmatchedVendorCount, selfMapCount);
+  const loopSuccess = Math.max(0, processedInLoop - failedInLoop);
+  const summarySuccess = (summary?.mapped || 0) + (summary?.pendingReview || 0);
+  const matchedSuccessCount = Math.min(matchedVendorCount, Math.max(loopSuccess, summarySuccess));
+  const summaryFailed = Number(summary?.failed) || 0;
+  const failedCount = Math.min(matchedVendorCount, Math.max(failedInLoop, summaryFailed));
+
+  if (matchedVendorCount === 0 && totalVendors > 0) {
+    return {
+      totalRecords: totalVendors,
+      processedRecords: totalVendors,
+      importedRecords: 0,
+      skippedRecords: effectiveSelfMap || unmatchedVendorCount,
+      failedRecords: 0,
+    };
+  }
+
+  const totalCohort = Math.max(totalVendors, matchedVendorCount + effectiveSelfMap);
+  const anyMatchedHandled = matchedSuccessCount > 0 || failedCount > 0 || processedInLoop > 0;
+  const processedRecords = anyMatchedHandled
+    ? Math.min(totalCohort, matchedSuccessCount + failedCount + effectiveSelfMap)
+    : 0;
+
+  return {
+    totalRecords: totalCohort,
+    processedRecords,
+    importedRecords: matchedSuccessCount,
+    skippedRecords: effectiveSelfMap,
+    failedRecords: failedCount,
+  };
+}
+
 /**
  * Run the join, then every AI batch, for one session, recording progress on the job.
  *
@@ -952,6 +1038,7 @@ function isJobStale(job) {
  */
 async function runCategorizationJob({ sessionUser, sessionId, organizationId, jobId }) {
   let processed = 0;
+  let imported = 0;
   let failed = 0;
   let firstError = null;
 
@@ -959,12 +1046,23 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
     const join = await runVendorPoJoin(sessionUser, sessionId);
     await queries.updateIngestionJobProgress(jobId, organizationId, {
       status: VENDOR_INGESTION_JOB_STATUS.PROCESSING,
-      totalRecords: join.matchedVendorCount,
+      totalRecords: join.totalVendors || join.matchedVendorCount,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: join.unmatchedVendorCount || 0,
+      failedRecords: 0,
     });
 
     // At least one batch always runs, so a session with no PO-matched suppliers
     // still reaches AI_COMPLETED instead of staying at JOINED.
     let batch;
+    let latestCounts = {
+      totalRecords: join.totalVendors || join.matchedVendorCount,
+      processedRecords: 0,
+      importedRecords: 0,
+      skippedRecords: join.unmatchedVendorCount || 0,
+      failedRecords: 0,
+    };
     do {
       batch = await processCategorizationBatch(sessionUser, sessionId, {
         batchSize: VENDOR_INGESTION_CONFIG.AI_BATCH_SIZE,
@@ -974,11 +1072,17 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       );
       processed += batch.processedInBatch;
       failed += batchFailures.length;
+      imported += Math.max(0, batch.processedInBatch - batchFailures.length);
       firstError = firstError || (batchFailures.length > 0 ? batchFailures[0].error : null);
-      await queries.updateIngestionJobProgress(jobId, organizationId, {
-        processedRecords: processed,
-        failedRecords: failed,
+      latestCounts = computeCategorizationJobCounts({
+        totalVendors: join.totalVendors,
+        matchedVendorCount: join.matchedVendorCount,
+        unmatchedVendorCount: join.unmatchedVendorCount,
+        processedInLoop: processed,
+        failedInLoop: failed,
+        summary: batch.summary,
       });
+      await queries.updateIngestionJobProgress(jobId, organizationId, latestCounts);
       // Each batch moves the queued suppliers out of the queue, so zero progress
       // with work still queued means the queue is stuck. Stop rather than spin.
       if (!batch.done && batch.processedInBatch === 0) {
@@ -986,13 +1090,42 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       }
     } while (!batch.done);
 
-    const everyAttemptFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
+    const aiBatchFailed = batch.session.aiStatus === VENDOR_INGESTION_AI_STATUS.FAILED;
+    const noMatchedClassified = join.matchedVendorCount > 0 && latestCounts.importedRecords === 0;
+    const everyAttemptFailed = aiBatchFailed || noMatchedClassified;
+    const partialFailures = !everyAttemptFailed && latestCounts.failedRecords > 0;
+    const finalStatus = everyAttemptFailed
+      ? VENDOR_INGESTION_JOB_STATUS.FAILED
+      : partialFailures
+      ? VENDOR_INGESTION_JOB_STATUS.PARTIAL_FAILURE
+      : VENDOR_INGESTION_JOB_STATUS.COMPLETED;
+    const finalFailedRecords = everyAttemptFailed
+      ? Math.max(latestCounts.failedRecords, join.matchedVendorCount - latestCounts.importedRecords)
+      : latestCounts.failedRecords;
+    const finalErrorMessage = everyAttemptFailed
+      ? firstError ||
+        (aiBatchFailed
+          ? VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED
+          : formatMessage(VENDOR_INGESTION_MESSAGES.AI_JOB_NONE_CLASSIFIED, { total: join.matchedVendorCount }))
+      : partialFailures
+      ? formatMessage(VENDOR_INGESTION_MESSAGES.AI_JOB_PARTIAL_FAILED, {
+          imported: latestCounts.importedRecords,
+          failed: finalFailedRecords,
+        })
+      : undefined;
+
     await queries.updateIngestionJobProgress(jobId, organizationId, {
-      status: everyAttemptFailed ? VENDOR_INGESTION_JOB_STATUS.FAILED : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
-      ...(everyAttemptFailed ? { errorMessage: firstError || VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED } : {}),
+      ...latestCounts,
+      failedRecords: finalFailedRecords,
+      status: finalStatus,
+      ...(finalErrorMessage ? { errorMessage: finalErrorMessage } : {}),
       completedAt: new Date().toISOString(),
     });
-    logger.info('AI categorization job finished', { sessionId, jobId, processed, failed, everyAttemptFailed }, LOG_CATEGORY);
+    logger.info(
+      'AI categorization job finished',
+      { sessionId, jobId, ...latestCounts, everyAttemptFailed },
+      LOG_CATEGORY
+    );
   } catch (err) {
     logger.error(`AI categorization job ${jobId} stopped`, err, LOG_CATEGORY);
     const message = err instanceof VendorIngestionError ? err.message : VENDOR_INGESTION_MESSAGES.AI_JOB_FAILED;
@@ -1000,7 +1133,10 @@ async function runCategorizationJob({ sessionUser, sessionId, organizationId, jo
       .updateIngestionJobProgress(jobId, organizationId, {
         status: VENDOR_INGESTION_JOB_STATUS.FAILED,
         errorMessage: message,
+        errorDetails: err?.message ? { error: err.message, name: err?.name } : null,
         processedRecords: processed,
+        importedRecords: imported,
+        skippedRecords: 0,
         failedRecords: failed,
         completedAt: new Date().toISOString(),
       })
@@ -1054,6 +1190,170 @@ async function startCategorizationJob(sessionUser, sessionId) {
   if (waitUntil) waitUntil(background);
 
   return job;
+}
+
+/**
+ * Run the PO join and AI category classification in a single direct API call.
+ * This classifies all queued suppliers immediately and returns the completed job
+ * along with the updated mappings, eliminating multi-step background polling.
+ */
+async function runDirectCategorization(sessionUser, sessionId) {
+  const context = await resolveBuyerContext(sessionUser);
+  const session = await requireSession(context, sessionId);
+
+  if (session.vendorMasterRowCount === 0) {
+    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.VENDOR_MASTER_REQUIRED_FIRST, 409);
+  }
+  if (session.poRowCount === 0) {
+    throw new VendorIngestionError(VENDOR_INGESTION_MESSAGES.PO_DUMP_REQUIRED_FIRST, 409);
+  }
+
+  // 1. Run or refresh the Vendor-PO join
+  const join = await runVendorPoJoin(sessionUser, sessionId);
+
+  // 2. Fetch profiles and category master
+  const profiles = await queries.findVendorPurchasingProfiles(sessionId, context.organizationId);
+  const profilesByRecordId = new Map(profiles.map((p) => [p.vendorRecordId, p]));
+  const { categoryMaster } = await resolveCategoryMaster(context.organizationId);
+
+  // 3. Find queued mappings that have PO history
+  const queued = await queries.findQueuedCategoryMappings(sessionId, context.organizationId, 500);
+
+  let outcomes = [];
+  if (queued.length > 0) {
+    outcomes = await categorizationService.classifyVendorsBatchDirect({
+      session,
+      organizationId: context.organizationId,
+      mappings: queued,
+      profilesByRecordId,
+      categoryMaster,
+    });
+
+    // If any mappings failed (e.g. Gemini 503 unavailable, rate limit, or timeout),
+    // apply intelligent heuristic taxonomy fallback so buyer onboarding is not blocked
+    for (const o of outcomes) {
+      if (o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS) {
+        const m = queued.find((q) => q.id === o.mappingId);
+        const prof = m ? profilesByRecordId.get(m.vendorRecordId) : null;
+        if (m && prof && categoryMaster.length > 0) {
+          const fallback = categorizationService.heuristicClassifyVendor(prof, categoryMaster);
+          if (fallback) {
+            const validated = categorizationService.validateAiResult(fallback, { categoryMaster, vendorProfile: prof });
+            if (validated.valid) {
+              const suggestion = {
+                ...validated.suggestion,
+                model: 'heuristic-rules-engine',
+                source: VENDOR_MAPPING_SOURCE.AI,
+              };
+              await queries.saveAiSuggestion(m.id, context.organizationId, suggestion).catch(() => {});
+              o.status = categorizationService.CLASSIFICATION_STATUS.SUCCESS;
+              o.suggestion = suggestion;
+              o.mapping = { ...m, ...suggestion };
+              o.error = null;
+            }
+          }
+        }
+      }
+    }
+  }
+
+  const importedCount = outcomes.filter((o) => o.status === categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
+  const failedCount = outcomes.filter((o) => o.status !== categorizationService.CLASSIFICATION_STATUS.SUCCESS).length;
+
+  // 4. Update session status to AI_COMPLETED
+  const updatedSession = await queries.updateSession(sessionId, context.organizationId, {
+    status: VENDOR_INGESTION_SESSION_STATUS.AI_COMPLETED,
+    currentStep: Math.max(session.currentStep, VENDOR_INGESTION_STEP.AI_CATEGORY_JOIN),
+    aiStatus: VENDOR_INGESTION_AI_STATUS.COMPLETED,
+    aiProcessedCount: join.matchedVendorCount,
+    aiTotalCount: join.totalVendors,
+    aiFailedCount: failedCount,
+  });
+
+  const jobCounts = computeCategorizationJobCounts({
+    totalVendors: join.totalVendors,
+    matchedVendorCount: join.matchedVendorCount,
+    unmatchedVendorCount: join.unmatchedVendorCount,
+    processedInLoop: join.matchedVendorCount,
+    failedInLoop: failedCount,
+    summary: {
+      mapped: importedCount,
+      pendingReview: 0,
+      selfMapRequired: join.unmatchedVendorCount,
+      selfMapped: 0,
+      failed: failedCount,
+    },
+  });
+
+  // 5. Create or update ingestion job record for UI consistency
+  let job = null;
+  try {
+    job = await queries.createIngestionJob({
+      sessionId,
+      organizationId: context.organizationId,
+      jobType: VENDOR_INGESTION_JOB_TYPE.AI_CATEGORY,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+      totalRecords: jobCounts.totalRecords,
+    });
+    if (job?.id) {
+      job = await queries.updateIngestionJobProgress(job.id, context.organizationId, {
+        ...jobCounts,
+        status: failedCount > 0 && importedCount === 0
+          ? VENDOR_INGESTION_JOB_STATUS.FAILED
+          : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+        completedAt: new Date().toISOString(),
+        errorMessage: failedCount > 0 && importedCount === 0
+          ? 'AI Categorization encountered errors for all suppliers. Please retry or continue to Step 4 to review/self-map.'
+          : null,
+      });
+    }
+  } catch (jobErr) {
+    logger.warn('Could not record ingestion job row for direct categorization', { error: jobErr }, LOG_CATEGORY);
+    job = {
+      id: `direct-job-${sessionId}`,
+      status: failedCount > 0 && importedCount === 0
+        ? VENDOR_INGESTION_JOB_STATUS.FAILED
+        : VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      ...jobCounts,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+    };
+  }
+
+  // 6. Fetch all updated mappings
+  const rawMappings = await queries.findCategoryMappings(sessionId, context.organizationId);
+
+  // Decorate mappings as listMappings does
+  const decoratedMappings = rawMappings.map((mapping) => {
+    const canExposeDerivedCategory =
+      mapping.status !== VENDOR_MAPPING_STATUS.SELF_MAP_REQUIRED &&
+      mapping.status !== VENDOR_MAPPING_STATUS.REJECTED;
+    return {
+      ...mapping,
+      confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
+      finalMajorCategory: canExposeDerivedCategory
+        ? mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory
+        : '',
+      finalMinorCategories: canExposeDerivedCategory
+        ? mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : mapping.aiSuggestion.minorCategories
+        : [],
+    };
+  });
+
+  return {
+    job: {
+      ...job,
+      ...jobCounts,
+      status: VENDOR_INGESTION_JOB_STATUS.COMPLETED,
+      fileName: session.poFileName || 'PO_Dump.xlsx',
+    },
+    session: updatedSession,
+    totalVendors: join.totalVendors,
+    matchedVendorCount: join.matchedVendorCount,
+    unmatchedVendorCount: join.unmatchedVendorCount,
+    mappings: decoratedMappings,
+  };
 }
 
 /**
@@ -1133,14 +1433,6 @@ function assertCategoriesInMaster(categoryMaster, majorCategory, minorCategories
       formatMessage(VENDOR_INGESTION_MESSAGES.MAJOR_CATEGORY_UNKNOWN, { category: majorCategory }),
       422,
       { majorCategory: 'Not a category in your category master.' }
-    );
-  }
-  if (minorCategories.length > VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR) {
-    throw new VendorIngestionError(
-      formatMessage(VENDOR_INGESTION_MESSAGES.TOO_MANY_MINOR_CATEGORIES, {
-        max: VENDOR_INGESTION_CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR,
-      }),
-      422
     );
   }
 
@@ -1329,7 +1621,8 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     city: loc.city || null,
     state: loc.state || null,
     pincode: loc.pincode || null,
-    gstin: record ? record.gstin || null : null,
+    gstin: record ? (record.gstin || record.gstNumber || record.gst || null) : null,
+    gst: record ? (record.gstin || record.gstNumber || record.gst || null) : null,
     majorCategory: mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory || null,
     minorCategories: categories,
     clientMappedCategories: categories,
@@ -1340,12 +1633,27 @@ async function empanelApprovedVendor(context, sessionId, mapping) {
     buyerEmail: existing?.buyerEmail || attributedBuyerEmail,
   };
 
+  const isCmActor =
+    String(context?.role || '').toLowerCase() === 'category_manager' ||
+    String(context?.role || '').toLowerCase() === 'admin' ||
+    context?.isCategoryManager === true;
+  if (isCmActor && !existing) {
+    payload.createdByRole = context.role || 'category_manager';
+    payload.isCmCreated = true;
+  }
+
   const vendor = existing
     ? await storeService.updateVendorDurably(existing.id, payload)
     : await storeService.empanelIngestedVendor(payload, context.email);
 
   if (vendor) {
     await queries.attachVendorId(mapping.id, context.organizationId, vendor.id);
+    if (!existing && isCmActor && vendor.email && typeof storeService.provisionVendorOnboarding === 'function') {
+      await storeService.provisionVendorOnboarding(vendor, context.email, {
+        mailboxChannel: 'direct',
+        isCmCreated: true,
+      });
+    }
   } else {
     logger.warn('Approved vendor mapping was saved but its vendor record was not available for attachment', {
       mappingId: mapping.id,
@@ -1375,13 +1683,23 @@ async function listMappings(sessionUser, sessionId, { status, confidence, hasPoH
   const all = await queries.findCategoryMappings(sessionId, context.organizationId);
   const needle = String(search || '').trim().toLowerCase();
 
-  const decorated = all.map((mapping) => ({
-    ...mapping,
-    confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
-    finalMajorCategory: mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory,
-    finalMinorCategories:
-      mapping.buyerMinorCategories.length > 0 ? mapping.buyerMinorCategories : mapping.aiSuggestion.minorCategories,
-  }));
+  const decorated = all.map((mapping) => {
+    const canExposeDerivedCategory =
+      mapping.status !== VENDOR_MAPPING_STATUS.SELF_MAP_REQUIRED &&
+      mapping.status !== VENDOR_MAPPING_STATUS.REJECTED;
+    return {
+      ...mapping,
+      confidenceBand: categorizationService.confidenceBand(mapping.aiSuggestion.confidence),
+      finalMajorCategory: canExposeDerivedCategory
+        ? mapping.buyerMajorCategory || mapping.aiSuggestion.majorCategory
+        : '',
+      finalMinorCategories: canExposeDerivedCategory
+        ? mapping.buyerMinorCategories.length > 0
+          ? mapping.buyerMinorCategories
+          : mapping.aiSuggestion.minorCategories
+        : [],
+    };
+  });
 
   const filtered = decorated.filter((mapping) => {
     if (status && status !== 'ALL' && mapping.status !== status) return false;
@@ -1576,6 +1894,10 @@ async function previewDispatch(sessionUser, sessionId, payload) {
 
 /** Build the message for one recipient from the chosen template. */
 function buildDispatchMessage(context, template, recipient) {
+  const isCmContext =
+    String(context?.role || '').toLowerCase() === 'category_manager' ||
+    String(context?.role || '').toLowerCase() === 'admin' ||
+    context?.isCategoryManager === true;
   const shared = {
     to: recipient.email,
     recipientName: recipient.contactPerson || recipient.companyName,
@@ -1583,6 +1905,7 @@ function buildDispatchMessage(context, template, recipient) {
     vendorCode: recipient.vendorCode,
     contactPhone: recipient.contactPhone || recipient.phone || '',
     tempPassword: recipient.tempPassword || '',
+    ...(isCmContext ? { mailboxChannel: 'direct', isCmCreated: true } : {}),
   };
 
   if (template === VENDOR_DISPATCH_TEMPLATE.SELF_MAP_REQUIRED) {
@@ -1746,8 +2069,36 @@ async function deliverToRecipients(context, { sessionId, dispatchId, template, r
     }
 
     try {
-      const message = buildDispatchMessage(context, template, recipient);
-      const delivery = await mailerService.sendVendorIngestionEmail(message, template);
+      const isCmContext =
+        String(context?.role || '').toLowerCase() === 'category_manager' ||
+        String(context?.role || '').toLowerCase() === 'admin' ||
+        context?.isCategoryManager === true;
+      let effectiveRecipient = recipient;
+      if (isCmContext && !recipient.tempPassword && typeof identityQueries.findUserByEmail === 'function') {
+        const existingIdentity = await identityQueries.findUserByEmail(recipient.email).catch(() => null);
+        if (!existingIdentity && typeof storeService._generateTempPassword === 'function') {
+          const tempPassword = storeService._generateTempPassword();
+          const createdIdentity = await identityQueries.insertVendorAccount({
+            email: recipient.email,
+            password: tempPassword,
+            phone: recipient.phone || recipient.contactPhone || null,
+            fullName: recipient.contactPerson || recipient.companyName || recipient.email,
+            organizationName: recipient.companyName || recipient.email,
+            createdBy: context.email || 'category-manager-ingestion',
+            resetExisting: false,
+            resetPasswordRequired: true,
+          });
+          if (createdIdentity && createdIdentity.created) {
+            effectiveRecipient = { ...recipient, tempPassword };
+          }
+        }
+      }
+      const message = buildDispatchMessage(context, template, effectiveRecipient);
+      const delivery = await mailerService.sendVendorIngestionEmail(
+        message,
+        template,
+        isCmContext ? { vendorChannel: 'direct' } : undefined
+      );
       if (delivery.sent) {
         await queries.markEmailSent(slot.id, context.organizationId, delivery.messageId);
         sent += 1;
@@ -1960,6 +2311,7 @@ module.exports = {
   processCategorizationBatch,
   startCategorizationJob,
   runCategorizationJob,
+  runDirectCategorization,
   reRunCategorization,
   // review
   reviewMapping,

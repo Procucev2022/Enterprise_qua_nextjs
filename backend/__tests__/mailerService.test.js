@@ -256,7 +256,9 @@ describe('mailerService', () => {
       });
       expect(buyerUploadedMsg.to).toBe('v@x.com');
       expect(buyerUploadedMsg.subject).toBe('New RFQ RFQ-2026-00500 in Pumps & Accessories');
-      expect(buyerUploadedMsg.html).toContain('Dear <strong>Priya</strong>');
+      expect(buyerUploadedMsg.html).not.toContain('Dear <strong>Priya</strong>');
+      expect(buyerUploadedMsg.html).not.toContain('Hello,');
+      expect(buyerUploadedMsg.html).toContain('Greetings from <strong>Procucev!</strong>');
       expect(buyerUploadedMsg.html).toContain('Acme Buyer Co');
       expect(buyerUploadedMsg.html).toContain('Centrifugal Pumps');
       expect(buyerUploadedMsg.html).toContain('Pump 500 GPM');
@@ -291,7 +293,9 @@ describe('mailerService', () => {
       expect(msg.html).toContain('1. Not specified');
       expect(msg.html).not.toContain('Line item');
       expect(msg.subject).toBe('New RFQ RFQ-2026-00777');
-      expect(msg.html).toContain('Hello,');
+      expect(msg.html).not.toContain('Hello,');
+      expect(msg.html).not.toContain('Dear <strong>');
+      expect(msg.html).toContain('Greetings from <strong>Procucev!</strong>');
       expect(msg.html).not.toContain('Category');
       expect(msg.html).not.toContain('Target delivery');
       // No fabricated fallback address / date / category anywhere.
@@ -2237,6 +2241,11 @@ describe('mailerService', () => {
       expect(req.html).toContain('background-color: #ffffff');
       expect(req.html).toContain('box-sizing: border-box');
       expect(req.html).toContain('role="presentation"');
+    });
+
+    test('buildRfqClosedVendorEmail and sendRfqClosedVendorEmail are removed', () => {
+      expect(mailerService.buildRfqClosedVendorEmail).toBeUndefined();
+      expect(mailerService.sendRfqClosedVendorEmail).toBeUndefined();
     });
   });
 });

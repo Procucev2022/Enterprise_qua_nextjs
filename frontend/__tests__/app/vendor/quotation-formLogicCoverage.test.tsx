@@ -1049,6 +1049,8 @@ describe('quote submission', () => {
   const quoteAccepted: FetchHandler = () => ({ body: { success: true, data: {} } });
   const pdf = (name = 'spec.pdf', content = 'abc'): File => new File([content], name, { type: 'application/pdf' });
   const fillPrice = (value: string): boolean =>
+    fireEvent.change(screen.getByLabelText('Rate for Centrifugal Pump'), { target: { value } });
+  const fillBlanketPrice = (value: string): boolean =>
     fireEvent.change(screen.getByPlaceholderText('e.g. 25000'), { target: { value } });
   // Lead time is a required quote term, so every bid that is submitted states one.
   const fillLeadTime = (days = '7'): boolean =>
@@ -1057,6 +1059,14 @@ describe('quote submission', () => {
 
   async function openSingleItemForm(overrides: Partial<AppState> = {}, props: Partial<FormProps> = {}): Promise<void> {
     await renderForm({ vendorOpportunities: [opportunity()], vendorUnlockedRfqIds: ['RFQ-100'], ...overrides }, props);
+    await openBidFormFor();
+  }
+
+  async function openNoLineItemForm(overrides: Partial<AppState> = {}, props: Partial<FormProps> = {}): Promise<void> {
+    await renderForm(
+      { vendorOpportunities: [opportunity({ lineItems: [] })], vendorUnlockedRfqIds: ['RFQ-100'], ...overrides },
+      props
+    );
     await openBidFormFor();
   }
 
@@ -1082,12 +1092,17 @@ describe('quote submission', () => {
   }
 
   describe('single line item', () => {
-    test('submits the entered terms, then audits, notifies the parent and refreshes', async () => {
+    test('reuses the line-item details UI, submits lineItemQuotes and commercial terms, then audits and refreshes', async () => {
       const onSubmitSuccess = jest.fn();
       stubFetch({ quote: quoteAccepted });
       await openSingleItemForm({}, { onSubmitSuccess });
 
+      expect(screen.getByText(UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingSingular.replace('{count}', '1'))).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Upload Priced Excel/i })).toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Export as Excel/i })).toBeInTheDocument();
+
       fillPrice('1500');
+      expect(screen.getAllByText('3,000').length).toBeGreaterThanOrEqual(2); // row amount + total
       fireEvent.change(screen.getByPlaceholderText('e.g. 14'), { target: { value: '12' } });
       fireEvent.change(screen.getByPlaceholderText('e.g. 1'), { target: { value: '2' } });
       fireEvent.change(screen.getByPlaceholderText(/e\.g\. 45 Days Net/), { target: { value: '30 Days Net' } });
@@ -1100,6 +1115,15 @@ describe('quote submission', () => {
       expect(bodyOf(quoteCall)).toEqual({
         unitPrice: 1500,
         totalPrice: 3000,
+        lineItemQuotes: [
+          {
+            lineItemId: 'li-1',
+            itemName: 'Centrifugal Pump',
+            quantity: 2,
+            unitPrice: 1500,
+            totalPrice: 3000,
+          },
+        ],
         leadTimeDays: 12,
         warrantyYears: 2,
         paymentTerms: '30 Days Net',
@@ -1112,6 +1136,73 @@ describe('quote submission', () => {
       expect(mockShowToast).toHaveBeenCalledWith('Quote Submitted', expect.stringContaining('RFQ-100'), 'success');
       expect(mockRefreshFromDB).toHaveBeenCalledTimes(1);
       expect(screen.queryByRole('heading', { name: BID_FORM_TITLE })).not.toBeInTheDocument();
+    });
+
+    test('hydrates single line item from backing RFQ entities when opportunity lineItems are empty', async () => {
+      await openSingleItemForm({
+        vendorOpportunities: [opportunity({ lineItems: [] })],
+        rfqs: [rfq({ id: 'rfq-1', rfqNumber: 'RFQ-100', extractedEntities: [entity({ id: 'ent-1', itemName: 'Precision Lathe', quantity: 3, unit: 'Nos' })] })],
+      });
+
+      expect(screen.getByText('Line Item Pricing (1 item) *')).toBeInTheDocument();
+      expect(screen.getByLabelText('Rate for Precision Lathe')).toBeInTheDocument();
+      expect(screen.getByText('Nos')).toBeInTheDocument();
+    });
+
+    test('hydrates line item from rfqRecord.lineItems fallback when extractedEntities are empty', async () => {
+      await openSingleItemForm({
+        vendorOpportunities: [opportunity({ lineItems: [] })],
+        rfqs: [rfq({ id: 'rfq-1', rfqNumber: 'RFQ-100', extractedEntities: [], lineItems: [{ description: 'Servo Drive', quantity: '4' }] })],
+      });
+
+      expect(screen.getByText('Line Item Pricing (1 item) *')).toBeInTheDocument();
+      expect(screen.getByLabelText('Rate for Servo Drive')).toBeInTheDocument();
+    });
+
+    test('pre-populates single line item rate on Resubmit Bid from legacy unitPrice when lineItemQuotes is absent', async () => {
+      await renderForm({
+        vendorOpportunities: [opportunity({ type: 'direct_invitation' })],
+        rfqs: [
+          rfq({
+            id: 'rfq-legacy',
+            rfqNumber: 'RFQ-100',
+            quotes: [
+              quote({
+                vendorEmail: VENDOR_EMAIL,
+                unitPrice: 4200,
+                totalPrice: 8400,
+                lineItemQuotes: [],
+              }),
+            ],
+          }),
+        ],
+      });
+
+      fireEvent.click(within(rowFor('RFQ-100')).getByRole('button', { name: /Resubmit Bid/i }));
+      expect(await screen.findByLabelText('Rate for Centrifugal Pump')).toHaveValue(4200);
+    });
+
+    test('pre-populates single line item rate on Resubmit Bid by matching itemName when lineItemId is omitted', async () => {
+      await renderForm({
+        vendorOpportunities: [opportunity({ type: 'direct_invitation' })],
+        rfqs: [
+          rfq({
+            id: 'rfq-byname',
+            rfqNumber: 'RFQ-100',
+            quotes: [
+              quote({
+                vendorEmail: VENDOR_EMAIL,
+                unitPrice: 5100,
+                totalPrice: 10200,
+                lineItemQuotes: [{ itemName: '  centrifugal pump ', quantity: 2, unitPrice: 5100, totalPrice: 10200 }],
+              }),
+            ],
+          }),
+        ],
+      });
+
+      fireEvent.click(within(rowFor('RFQ-100')).getByRole('button', { name: /Resubmit Bid/i }));
+      expect(await screen.findByLabelText('Rate for Centrifugal Pump')).toHaveValue(5100);
     });
 
     test('names the submitter "Vendor" in the audit entry when nobody has a name', async () => {
@@ -1133,15 +1224,28 @@ describe('quote submission', () => {
       );
     });
 
-    test('rejects a rate that overflows the quotation total', async () => {
+    test('rejects a single-item rate that overflows the quotation total', async () => {
       await openSingleItemForm();
 
       fillPrice('1e308');
       fillLeadTime();
       fireEvent.click(submitQuotationButton());
 
-      expect(await screen.findByText('The entered rate produces an invalid quotation total.')).toBeInTheDocument();
-      expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Check the rate and quantity.', 'warning');
+      expect(await screen.findByText('The entered line-item rates produce an invalid quotation total.')).toBeInTheDocument();
+      expect(mockShowToast).toHaveBeenCalledWith('Validation Error', 'Check the line-item quantities and rates.', 'warning');
+      expect(callsTo('quote')).toHaveLength(0);
+    });
+  });
+
+  describe('line-item-less RFQ fallback', () => {
+    test('rejects a blanket rate that overflows the quotation total when no line items exist', async () => {
+      await openNoLineItemForm();
+
+      fillBlanketPrice('1e309');
+      fillLeadTime();
+      fireEvent.click(submitQuotationButton());
+
+      expect(await screen.findByText('Please enter a valid unit price greater than 0.')).toBeInTheDocument();
       expect(callsTo('quote')).toHaveLength(0);
     });
   });
@@ -1535,3 +1639,113 @@ describe('RFQ specification download', () => {
     expect(callsTo('preview')).toHaveLength(0);
   });
 });
+
+describe('pincode and line-item category filters', () => {
+  test('covers pincode dropdown toggle, selection, clear all, and removal chips', async () => {
+    await renderForm({
+      vendorOpportunities: [
+        opportunity({ id: 'o1', rfqNumber: 'RFQ-PIN-1', pincode: '560001' }),
+        opportunity({ id: 'o2', rfqNumber: 'RFQ-PIN-2', deliveryLocation: 'Bangalore, 560002' }),
+        opportunity({ id: 'o3', rfqNumber: 'RFQ-PIN-3', pincode: '560003' }),
+      ],
+      rfqs: [
+        rfq({
+          id: 'r1',
+          rfqNumber: 'RFQ-PIN-1',
+          lineItems: [{ id: 'li-1', minorCategory: 'Pumps', category: 'Mechanical' }] as any,
+        }),
+        rfq({
+          id: 'r2',
+          rfqNumber: 'RFQ-PIN-2',
+          deliveryLocation: 'Bangalore, Karnataka 560002',
+        }),
+      ],
+    });
+
+    // Pincode dropdown toggle
+    const toggleBtn = screen.getByRole('button', { name: /Filter enquiries by pincode/i });
+    expect(toggleBtn).toBeInTheDocument();
+    fireEvent.click(toggleBtn);
+
+    // Should see checkboxes for available pincodes
+    const pin560001 = screen.getByRole('checkbox', { name: /560001/i });
+    expect(pin560001).not.toBeChecked();
+
+    // Check 560001
+    fireEvent.click(pin560001);
+    expect(pin560001).toBeChecked();
+
+    // Check 560002
+    const pin560002 = screen.getByRole('checkbox', { name: /560002/i });
+    fireEvent.click(pin560002);
+    expect(pin560002).toBeChecked();
+
+    // Uncheck 560002
+    fireEvent.click(pin560002);
+    expect(pin560002).not.toBeChecked();
+
+    // Clear all via dropdown button
+    const clearAllInDropdown = screen.getByRole('button', { name: /Clear All/i });
+    fireEvent.click(clearAllInDropdown);
+
+    // Select 560001 again
+    fireEvent.click(pin560001);
+
+    // Selected pincode chip appears below with remove button
+    const removeChip = screen.getByRole('button', { name: /Remove filter for pincode 560001/i });
+    expect(removeChip).toBeInTheDocument();
+    fireEvent.click(removeChip);
+
+    // Select 560001 again and clear via "Clear Pincodes" button
+    fireEvent.click(pin560001);
+    const clearPincodesBtn = screen.getByRole('button', { name: /Clear Pincodes/i });
+    fireEvent.click(clearPincodesBtn);
+
+    // Test programmatic hidden select
+    const selectEl = screen.getByLabelText(/Filter enquiries by pincode select/i);
+    fireEvent.change(selectEl, { target: { value: '560001' } });
+    fireEvent.change(selectEl, { target: { value: 'all' } });
+
+    // Close dropdown
+    fireEvent.click(toggleBtn);
+  });
+
+  test('handles empty pincodes in opportunities and category match pools', async () => {
+    await renderForm({
+      currentUserSession: {
+        ...VENDOR_SESSION,
+        pincode: '560001',
+        category: 'Centrifugal Pumps',
+        minorCategories: ['Valves', 'Pumps'],
+      } as any,
+      buyerVendors: [
+        vendorRecord({
+          id: VENDOR_ID,
+          name: VENDOR_NAME,
+          email: VENDOR_EMAIL,
+          pincode: '560001',
+          majorCategory: 'Mechanical',
+          minorCategories: ['Pumps', 'Turbines'],
+        }),
+      ],
+      vendorOpportunities: [
+        opportunity({ id: 'o-empty', rfqNumber: 'RFQ-NO-PIN', pincode: '', deliveryLocation: 'Unknown' }),
+      ],
+      rfqs: [
+        rfq({
+          id: 'r-no-pin',
+          rfqNumber: 'RFQ-NO-PIN',
+          deliveryLocation: 'Unknown Place',
+          category: 'Mechanical',
+          extractedEntities: [{ id: 'e1', minorCategory: 'Pumps', category: 'Mechanical' } as any],
+          lineItems: [{ id: 'li-1', minorCategory: 'Turbines', category: 'Mechanical' }] as any,
+        }),
+      ],
+    });
+
+    const toggleBtn = screen.getByRole('button', { name: /Filter enquiries by pincode/i });
+    fireEvent.click(toggleBtn);
+    expect(screen.getByText(/No pincodes found/i)).toBeInTheDocument();
+  });
+});
+

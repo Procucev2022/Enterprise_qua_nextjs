@@ -35,9 +35,22 @@ function stub(testId: string, callbackNames: string[] = [], callbackArg?: unknow
     default: (props: Record<string, unknown>) => (
       <div data-testid={testId}>
         {callbackNames.map((name) => (
-          <button key={name} type="button" onClick={() => (props[name] as (arg?: unknown) => void)?.(callbackArg)}>
-            {`${testId}:${name}`}
-          </button>
+          <React.Fragment key={name}>
+            <button key={name} type="button" onClick={() => (props[name] as (arg?: unknown) => void)?.(callbackArg)}>
+              {`${testId}:${name}`}
+            </button>
+            <button
+              key={`${name}:alt`}
+              type="button"
+              onClick={() =>
+                (props[name] as (arg?: unknown) => void)?.(
+                  callbackArg ? { id: 'empty-rfq' } : { id: 'rfq-1', rfqNumber: 'RFQ-1' }
+                )
+              }
+            >
+              {`${testId}:${name}:alt`}
+            </button>
+          </React.Fragment>
         ))}
       </div>
     ),
@@ -125,6 +138,12 @@ jest.mock('@/app/category-manager/buyer-console', () =>
   stub('buyer-console', ['onNavigateToMatrix', 'onNavigateToEvaluation'])
 );
 jest.mock('@/app/category-manager/vendor-console', () => stub('vendor-console', ['onNavigateToMatrix']));
+jest.mock('@/app/category-manager/buyers-directory', () =>
+  stub('buyers-directory', ['onSelectRFQ'], { id: 'rfq-1', rfqNumber: 'RFQ-1' })
+);
+jest.mock('@/app/category-manager/sellers-directory', () =>
+  stub('sellers-directory', ['onSelectRFQ'], { id: 'rfq-1', rfqNumber: 'RFQ-1' })
+);
 jest.mock('@/app/category-manager/category-summary-dashboard', () => stub('category-summary'));
 jest.mock('@/app/category-manager/all-rfqs', () =>
   stub('all-rfqs', ['onNavigateToMatrix', 'onViewDetails'], { id: 'rfq-1', rfqNumber: 'RFQ-1' })
@@ -167,6 +186,8 @@ const CmCategorySummaryPage = require('@/app/category-manager/category-summary/p
 const CmQuoteMatrixPage = require('@/app/category-manager/quote-matrix/page').default;
 const CmAllRFQsPage = require('@/app/category-manager/all-rfqs/page').default;
 const CmRFQDetailsPage = require('@/app/category-manager/rfq-details/page').default;
+const CmBuyersDirectoryPage = require('@/app/category-manager/buyers-directory/page').default;
+const CmSellersDirectoryPage = require('@/app/category-manager/sellers-directory/page').default;
 
 const VendorFeedPage = require('@/app/vendor/opportunity-feed/page').default;
 const VendorQuotationFormPage = require('@/app/vendor/quotation-form/page').default;
@@ -275,9 +296,16 @@ describe('Role screen routes', () => {
     });
 
     it('quote matrix returns to the previous page / dashboard', () => {
+      Object.defineProperty(window.history, 'length', { value: 2, configurable: true, writable: true });
       render(<BuyerQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockBack.mock.calls.length + mockPush.mock.calls.length).toBeGreaterThan(0);
+      expect(mockBack).toHaveBeenCalled();
+
+      mockBack.mockClear();
+      mockPush.mockClear();
+      Object.defineProperty(window.history, 'length', { value: 1, configurable: true, writable: true });
+      clickCallback('quote-matrix:onBackToDashboard');
+      expect(mockPush).toHaveBeenCalledWith('/buyer/dashboard');
     });
 
     it('rfq summary opens the quote matrix and the wizard', () => {
@@ -411,6 +439,11 @@ describe('Role screen routes', () => {
       clickCallback('kanban-board:onNavigateToMatrix');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
 
+      mockPush.mockClear();
+      clickCallback('kanban-board:onNavigateToMatrix:alt');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
+
       clickCallback('kanban-board:onNavigateToSpend');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/spend-dashboard');
     });
@@ -449,6 +482,11 @@ describe('Role screen routes', () => {
       clickCallback('buyer-console:onNavigateToMatrix');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
 
+      mockPush.mockClear();
+      clickCallback('buyer-console:onNavigateToMatrix:alt');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
+
       clickCallback('buyer-console:onNavigateToEvaluation');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/vendor-evaluation-summary');
     });
@@ -463,12 +501,52 @@ describe('Role screen routes', () => {
       render(<CmVendorConsolePage />);
       clickCallback('vendor-console:onNavigateToMatrix');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
+
+      mockPush.mockClear();
+      clickCallback('vendor-console:onNavigateToMatrix:alt');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
     });
 
     it('quote matrix returns to the previous route / All RFQs console', () => {
+      Object.defineProperty(window.history, 'length', { value: 2, configurable: true, writable: true });
       render(<CmQuoteMatrixPage />);
       clickCallback('quote-matrix:onBackToDashboard');
-      expect(mockBack.mock.calls.length + mockPush.mock.calls.length).toBeGreaterThan(0);
+      expect(mockBack).toHaveBeenCalled();
+
+      mockBack.mockClear();
+      mockPush.mockClear();
+      Object.defineProperty(window.history, 'length', { value: 1, configurable: true, writable: true });
+      clickCallback('quote-matrix:onBackToDashboard');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/all-rfqs');
+    });
+
+    it('buyers directory opens the quote matrix addressed by RFQ number or default route', () => {
+      render(<CmBuyersDirectoryPage />);
+
+      clickCallback('buyers-directory:onSelectRFQ');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
+
+      setSelectedRFQForMatrix.mockClear();
+      mockPush.mockClear();
+      clickCallback('buyers-directory:onSelectRFQ:alt');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'empty-rfq' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
+    });
+
+    it('sellers directory opens the quote matrix addressed by RFQ number or default route', () => {
+      render(<CmSellersDirectoryPage />);
+
+      clickCallback('sellers-directory:onSelectRFQ');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
+
+      setSelectedRFQForMatrix.mockClear();
+      mockPush.mockClear();
+      clickCallback('sellers-directory:onSelectRFQ:alt');
+      expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'empty-rfq' });
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
     });
 
     it('renders the category summary screen', () => {
@@ -481,7 +559,7 @@ describe('Role screen routes', () => {
 
       clickCallback('all-rfqs:onNavigateToMatrix');
       expect(setSelectedRFQForMatrix).toHaveBeenCalledWith({ id: 'rfq-1', rfqNumber: 'RFQ-1' });
-      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix');
+      expect(mockPush).toHaveBeenCalledWith('/category-manager/quote-matrix?rfq=RFQ-1');
 
       clickCallback('all-rfqs:onViewDetails');
       expect(mockPush).toHaveBeenCalledWith('/category-manager/rfq-details?rfq=RFQ-1');
@@ -710,9 +788,9 @@ describe('Role screen routes', () => {
 
     it.each<[string, () => React.ReactElement, string]>([
       ['buyer dashboard', () => BuyerDashboardPage({}) as React.ReactElement, '/buyer/quote-matrix'],
-      ['kanban board', () => CmKanbanPage({}) as React.ReactElement, '/category-manager/quote-matrix'],
-      ['buyer console', () => CmBuyerConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
-      ['vendor console', () => CmVendorConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix'],
+      ['kanban board', () => CmKanbanPage({}) as React.ReactElement, '/category-manager/quote-matrix?rfq=RFQ-1'],
+      ['buyer console', () => CmBuyerConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix?rfq=RFQ-1'],
+      ['vendor console', () => CmVendorConsolePage({}) as React.ReactElement, '/category-manager/quote-matrix?rfq=RFQ-1'],
     ])('records the chosen RFQ from the %s before opening the matrix', (_label, build, expectedRoute) => {
       const page = build();
       page.props.onNavigateToMatrix(RFQ);

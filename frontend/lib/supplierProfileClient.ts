@@ -2,6 +2,8 @@ import { authClient } from './authClient';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type {
+  SellerBuyerUploadItem,
+  SellerActiveRFQItem,
   SupplierCreditSummary,
   SupplierCreditTransaction,
   SupplierCommunicationItem,
@@ -139,12 +141,48 @@ export async function updateSupplierCategories(
   }
 }
 
+export async function fetchSellerBuyerUploads(vendorId: string): Promise<{
+  success: boolean;
+  count?: number;
+  data?: SellerBuyerUploadItem[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/buyer-uploads`, {
+      headers: authHeaders(),
+    });
+    return await readSupplierResponse(res);
+  } catch (err: unknown) {
+    logger.error('Seller buyer uploads load failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.buyerUploads.title }) };
+  }
+}
+
+export async function fetchSellerActiveRFQs(vendorId: string): Promise<{
+  success: boolean;
+  count?: number;
+  data?: SellerActiveRFQItem[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/vendors/${encodeURIComponent(vendorId)}/active-rfqs`, {
+      headers: authHeaders(),
+    });
+    return await readSupplierResponse(res);
+  } catch (err: unknown) {
+    logger.error('Seller active RFQs load failed', { error: err instanceof Error ? err.message : 'Network error' }, SUPPLIER_LOG_CATEGORY);
+    return { success: false, error: formatString(UI_STRINGS.dataLoad.networkFailed, { resource: UI_STRINGS.sellerDirectory.dossier.activeRfqs.title }) };
+  }
+}
+
 const supplierProfileClient = {
   fetchSupplierCreditHistory,
   fetchSupplierCommunications,
   recordSupplierCommunication,
   fetchSupplierPaymentHistory,
   updateSupplierCategories,
+  fetchSellerBuyerUploads,
+  fetchSellerActiveRFQs,
 };
 
 export default supplierProfileClient;

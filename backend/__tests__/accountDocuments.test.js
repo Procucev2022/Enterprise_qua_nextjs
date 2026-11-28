@@ -102,6 +102,7 @@ function persistedApprovalTask(taskData) {
   return {
     id: 'task-approval-1',
     task_number: 'TSK-APPROVAL-1',
+    task_type: taskData.taskType,
     status: taskData.status,
     approval_status: taskData.approvalStatus,
     assigned_to_name: taskData.assignedToName,
@@ -704,10 +705,10 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task).toBeDefined();
       expect(res.body.task.status).toBe('Pending Approval');
       expect(res.body.task.approval_status).toBe('PENDING');
-      expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
       expect(res.body.task.credit_quantity).toBe(15);
       const [taskData, actor] = createSpy.mock.calls[0];
-      expect(taskData).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Sudheer Sir', creditQuantity: 15 });
+      expect(taskData).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Category Manager', creditQuantity: 15 });
       expect(actor).toMatchObject({ name: 'Category Manager' });
     });
   });
@@ -760,9 +761,9 @@ describe('Account Documents & Credit Workflows API', () => {
       expect(res.body.task).toBeDefined();
       expect(res.body.task.status).toBe('Pending Approval');
       expect(res.body.task.approval_status).toBe('PENDING');
-      expect(res.body.task.assigned_to_name).toBe('Srinu Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
       expect(res.body.task.credit_quantity).toBe(5);
-      expect(createSpy.mock.calls[0][0]).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Srinu Sir', creditQuantity: 5 });
+      expect(createSpy.mock.calls[0][0]).toMatchObject({ status: 'Pending Approval', approvalStatus: 'PENDING', assignedToName: 'Category Manager', creditQuantity: 5 });
     });
 
     it('rejects non-category-manager/admin roles with 403', async () => {
@@ -805,7 +806,194 @@ describe('Account Documents & Credit Workflows API', () => {
         });
       expect(res.status).toBe(201);
       expect(res.body.success).toBe(true);
-      expect(res.body.task.assigned_to_name).toBe('Sudheer Sir');
+      expect(res.body.task.assigned_to_name).toBe('Category Manager');
+    });
+
+    it('handles Seller Credit Deletion with balance validation and approval task', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
+      // Rejection when amount exceeds balance
+      const resExceed = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 9999,
+          requestType: 'Seller Credit Deletion',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resExceed.status).toBe(400);
+      expect(resExceed.body.success).toBe(false);
+
+      // Success deletion
+      const resDel = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 1,
+          requestType: 'Seller Credit Deletion',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+          reason: 'Deducting extra credits',
+        });
+      expect(resDel.status).toBe(201);
+      expect(resDel.body.success).toBe(true);
+      expect(resDel.body.task.taskType || resDel.body.task.task_type).toBe('Credit Deletion');
+    });
+
+    it('handles Discount and Trial Period request types for sellers', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
+      const resDisc = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 20,
+          requestType: 'Discount',
+          discountPercentage: 20,
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+          reason: '20% discount approval',
+        });
+      expect(resDisc.status).toBe(201);
+      expect(resDisc.body.success).toBe(true);
+      expect(resDisc.body.task.taskType || resDisc.body.task.task_type).toBe('Discounts');
+
+      const resTrial = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 45,
+          durationDays: 45,
+          requestType: 'Trial Period',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+          reason: '45 days trial extension',
+        });
+      expect(resTrial.status).toBe(201);
+      expect(resTrial.body.success).toBe(true);
+      expect(resTrial.body.task.taskType || resTrial.body.task.task_type).toBe('Trial Periods');
+    });
+
+    it('handles Offline Payments with Cash and proofs for sellers', async () => {
+      jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval')
+        .mockImplementation(async (taskData) => persistedApprovalTask(taskData));
+      const resCash = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 5000,
+          paymentAmount: 5000,
+          paymentType: 'Cash',
+          requestType: 'Offline Payments',
+          proofFileName: 'cash_receipt.png',
+          proofFileUrl: 'https://cdn.procucev.com/receipt.png',
+          proofFileSize: 2048,
+          proofFileType: 'image/png',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+          reason: 'Cash verified',
+        });
+      expect(resCash.status).toBe(201);
+      expect(resCash.body.success).toBe(true);
+      expect(resCash.body.task.taskType || resCash.body.task.task_type).toBe('Offline Payments');
+
+      const resNEFT = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 10000,
+          paymentAmount: 10000,
+          paymentType: 'NEFT/RTGS',
+          transactionId: 'TXN998877',
+          requestType: 'Offline Payments',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resNEFT.status).toBe(201);
+      expect(resNEFT.body.success).toBe(true);
+
+      const resOfflineRef = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 8000,
+          paymentAmount: 8000,
+          paymentReference: 'CHQ-554433',
+          paymentType: 'Cheque',
+          requestType: 'Offline Payments',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resOfflineRef.status).toBe(201);
+      expect(resOfflineRef.body.success).toBe(true);
+
+      const resProofDefaults = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 2000,
+          paymentAmount: 2000,
+          paymentType: 'UPI',
+          requestType: 'Offline Payments',
+          proofFileName: 'proof.jpg',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resProofDefaults.status).toBe(201);
+
+      const resDiscAmountOnly = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 12,
+          requestType: 'Discounts',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resDiscAmountOnly.status).toBe(201);
+
+      const resTrialAmountOnly = await request(app)
+        .post(`/api/vendors/${mockVendor.id}/request-credit-approval`)
+        .set('Authorization', `Bearer ${cmToken}`)
+        .send({
+          amount: 60,
+          requestType: 'Trial Periods',
+          approverName: 'Sudheer Sir',
+          initiatorName: 'Krishna',
+        });
+      expect(resTrialAmountOnly.status).toBe(201);
+    });
+
+    it('covers accountDocumentController error helper branches and corrupt JSON fallback', async () => {
+      const accountDocumentController = require('../src/controllers/accountDocumentController');
+      const resMock = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn().mockReturnThis(),
+      };
+      const nextMock = jest.fn();
+
+      accountDocumentController.sendAccountDocumentError(resMock, nextMock, { code: 'PERSISTENCE_UNAVAILABLE' });
+      expect(resMock.status).toHaveBeenCalledWith(503);
+
+      accountDocumentController.sendAccountDocumentError(resMock, nextMock, { code: 'VALIDATION_FAILED', message: 'Schema invalid' });
+      expect(resMock.status).toHaveBeenCalledWith(400);
+
+      // findBuyerSafe with corrupt JSON in pool row
+      const origHasStorage = pool.hasStorage;
+      const origQuery = pool.query;
+      try {
+        pool.hasStorage = () => true;
+        pool.query = jest.fn().mockResolvedValue({
+          rows: [{ id: 'buyer-corrupt-raw', is_active: 1, raw: '{malformed json' }],
+        });
+        const buyer = await accountDocumentController.findBuyerSafe('buyer-corrupt-raw');
+        expect(buyer).toBeDefined();
+        expect(buyer.id).toBe('buyer-corrupt-raw');
+      } finally {
+        pool.hasStorage = origHasStorage;
+        pool.query = origQuery;
+      }
     });
 
     it('handles unexpected exceptions and invokes next(err)', async () => {
@@ -1004,6 +1192,25 @@ describe('Account Documents & Credit Workflows API', () => {
           channel: 'SMS',
           recipient: '12345', // non 10-digit
           message: 'Fallback SMS',
+        }
+      }, resComm, jest.fn());
+
+      await vendorDossierExtensions.recordVendorCommunication({
+        params: { id: mockVendor.id },
+        user: { role: 'category_manager', email: 'cm@test.com' },
+        body: {
+          channel: 'PHONE',
+          recipient: '9876543210',
+          subject: 'Discussion call',
+          message: 'Call completed successfully',
+          callOutcome: 'Connected',
+          duration: '10 mins',
+          notes: 'Customer agreed on terms',
+          nextFollowupDate: '2026-12-01',
+          followupPriority: 'High',
+          followupAssigneeId: 'usr-1',
+          followupAssigneeName: 'Krishna',
+          followupNotes: 'Follow up about contract',
         }
       }, resComm, jest.fn());
     });

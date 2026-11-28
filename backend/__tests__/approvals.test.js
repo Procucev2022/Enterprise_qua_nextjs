@@ -263,6 +263,32 @@ describe('Approvals API & Controller', () => {
       expect(result.rows[0]).not.toHaveProperty('total');
     });
 
+    it('filters by the 7 request types supporting database module aliases and variants', async () => {
+      const types = [
+        'Buyer Credit Addition',
+        'Buyer Credit Deletion',
+        'Seller Credit Addition',
+        'Seller Credit Deletion',
+        'Discounts',
+        'Trial Periods',
+        'Offline Payments',
+      ];
+
+      for (const type of types) {
+        querySpy.mockResolvedValueOnce({ rows: [{ ...approvalRow({ module: type }), total: '1' }] });
+        const res = await approvalQueries.getApprovals({ module: type });
+        expect(res.rows).toHaveLength(1);
+        const [sql, params] = querySpy.mock.calls[querySpy.mock.calls.length - 1];
+        const variants = approvalQueries.getModuleFilterVariants(type);
+        if (variants.length === 1) {
+          expect(sql).toContain('lower(module) = $1');
+        } else {
+          expect(sql).toContain('lower(module) IN');
+        }
+        expect(params).toEqual(expect.arrayContaining([type.toLowerCase()]));
+      }
+    });
+
     it('falls back to the created_at sort for an unknown sort field and treats "all" as no filter', async () => {
       querySpy.mockResolvedValueOnce({ rows: [] }).mockResolvedValueOnce({ rows: [{ total: '0' }] });
 
@@ -355,6 +381,11 @@ describe('Approvals API & Controller', () => {
     it('refuses a wrong approver password', async () => {
       await expect(approvalQueries.processApprovalAction('appr-1', { ...body, password: 'wrong' }, actor))
         .rejects.toMatchObject({ code: 'APPROVER_PASSWORD_INVALID', statusCode: 401 });
+    });
+
+    it('refuses an invalid or expired approver OTP', async () => {
+      await expect(approvalQueries.processApprovalAction('appr-1', { ...body, otp: '123456', password: '' }, actor))
+        .rejects.toMatchObject({ code: 'APPROVER_OTP_INVALID', statusCode: 401, message: APPROVAL_MESSAGES.OTP_INVALID });
     });
 
     it('decides a PostgreSQL management approval inside one transaction and writes its audit event', async () => {
@@ -577,6 +608,123 @@ describe('Approvals API & Controller', () => {
         .toEqual({ uuid: null, name: 'Only Name', email: null, role: null });
       expect(approvalController.extractActor({ headers: { 'x-user-name': 'Spoofed' } })).toBeNull();
     });
+
+    it('getApprovers returns the configured approvers and handles errors', async () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.getApprovers({}, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, approvers: expect.any(Array) }));
+
+      // error branch when res.json throws
+      const resErr = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('Serialization failed');
+        }),
+      };
+      await approvalController.getApprovers({}, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+    });
+
+    it('getUsers returns assignees from internalTaskQueries and handles errors', async () => {
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      const assigneesSpy = jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValueOnce([{ id: 'u1', name: 'User 1' }]);
+      await approvalController.getUsers({}, res);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: true, users: expect.any(Array) }));
+
+      // error branch
+      const resErr = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockRejectedValueOnce(new Error('Users fail'));
+      await approvalController.getUsers({}, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+      assigneesSpy.mockRestore();
+    });
+
+    it('processAction rejects requests when actor cannot be extracted', async () => {
+      const req = {
+        params: { id: 'appr-dummy' },
+        body: { action: 'APPROVE', remarks: 'Valid remarks', password: 'Procucev@2026', approverName: 'Sudheer Sir' },
+        user: null,
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.processAction(req, res);
+      expect(res.status).toHaveBeenCalledWith(401);
+    });
+
+    it('sendApprovalOtp sends OTP email to approver and saves OTP', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      const saveOtpSpy = jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      const sendOtpEmailSpy = jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValueOnce({ success: true });
+
+      const req = {
+        body: { approverName: 'Srinu Sir', id: 'appr-1' },
+        user: { uuid: 'u-1', fullName: 'Category Manager', email: 'cm@procucev.com', role: 'category_manager' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await approvalController.sendApprovalOtp(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          email: 'srinivas.mukku@procucev.com',
+          expiresInSeconds: 600,
+        })
+      );
+      expect(saveOtpSpy).toHaveBeenCalled();
+      expect(sendOtpEmailSpy).toHaveBeenCalledWith(
+        'srinivas.mukku@procucev.com',
+        expect.any(String),
+        600,
+        expect.objectContaining({ approverName: 'Srinu Sir' })
+      );
+    });
+
+    it('sendApprovalOtp handles email sending rejection gracefully', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      jest.spyOn(mailerService, 'sendOtpEmail').mockRejectedValueOnce(new Error('SMTP down'));
+
+      const req = {
+        body: { approverName: 'Rao Sir' },
+        user: { uuid: 'u-1', fullName: 'CM', email: 'cm@procucev.com', role: 'category_manager' },
+      };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await approvalController.sendApprovalOtp(req, res);
+
+      expect(res.json).toHaveBeenCalledWith(
+        expect.objectContaining({
+          success: true,
+          email: 'mnrao@procucev.com',
+        })
+      );
+    });
+
+    it('sendApprovalOtp validates input and rejects missing actor or invalid approver', async () => {
+      const resNoActor = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user: null }, resNoActor);
+      expect(resNoActor.status).toHaveBeenCalledWith(401);
+
+      const user = { uuid: 'u-1', fullName: 'CM', role: 'category_manager' };
+      const resNoName = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user, body: {} }, resNoName);
+      expect(resNoName.status).toHaveBeenCalledWith(400);
+
+      const resBadName = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await approvalController.sendApprovalOtp({ user, body: { approverName: 'Unknown Person' } }, resBadName);
+      expect(resBadName.status).toHaveBeenCalledWith(400);
+
+      const resErr = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('Crash');
+        }),
+      };
+      await approvalController.sendApprovalOtp({ user, body: { approverName: 'Sudheer Sir' } }, resErr);
+      expect(resErr.status).toHaveBeenCalledWith(500);
+    });
   });
 
   describe('HTTP routes', () => {
@@ -695,6 +843,7 @@ describe('Approvals API & Controller', () => {
     it.each([
       ['ACTOR_REQUIRED', 401, undefined],
       ['APPROVAL_ALREADY_DECIDED', 409, APPROVAL_MESSAGES.ALREADY_DECIDED],
+      ['APPROVER_OTP_INVALID', 401, APPROVAL_MESSAGES.OTP_INVALID],
       ['APPROVER_PASSWORD_INVALID', 401, APPROVAL_MESSAGES.PASSWORD_INVALID],
       ['APPROVER_PASSWORD_NOT_CONFIGURED', 503, APPROVAL_MESSAGES.PASSWORD_CONFIGURATION_UNAVAILABLE],
       ['PERSISTENCE_UNAVAILABLE', 503, APPROVAL_MESSAGES.DATABASE_UNAVAILABLE],
@@ -721,6 +870,123 @@ describe('Approvals API & Controller', () => {
 
       expect(res.status).toBe(500);
       expect(res.body.error).toBe('Failed to process approval action.');
+    });
+
+    it('returns approvers list via GET /api/approvals/approvers', async () => {
+      const res = await request(app)
+        .get('/api/approvals/approvers')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.approvers)).toBe(true);
+      expect(res.body.approvers.length).toBeGreaterThan(0);
+    });
+
+    it('answers 500 when getApprovers encounters an error', async () => {
+      const req = {};
+      const res = {
+        json: jest.fn().mockImplementationOnce(() => {
+          throw new Error('json rendering error');
+        }),
+        status: jest.fn().mockReturnThis(),
+      };
+      await approvalController.getApprovers(req, res);
+      expect(logger.error).toHaveBeenCalledWith('Failed to retrieve approvers list', expect.any(Error), 'APPROVAL_CONTROLLER');
+      expect(res.status).toHaveBeenCalledWith(500);
+    });
+
+    it('returns users list via GET /api/approvals/users', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockResolvedValueOnce([
+        { id: 'usr_govardhan', name: 'Govardhan', role: 'Category Manager' },
+      ]);
+      const res = await request(app)
+        .get('/api/approvals/users')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(Array.isArray(res.body.users)).toBe(true);
+      expect(res.body.users).toHaveLength(1);
+    });
+
+    it('answers 500 when getUsers encounters an error', async () => {
+      jest.spyOn(internalTaskQueries, 'getInternalAssignees').mockRejectedValueOnce(new Error('db err'));
+      const res = await request(app)
+        .get('/api/approvals/users')
+        .set(authHeader('admin'));
+
+      expect(res.status).toBe(500);
+      expect(res.body.success).toBe(false);
+      expect(res.body.error).toBe('Failed to retrieve users list.');
+    });
+
+    it('returns 401 in processAction when session actor cannot be extracted', async () => {
+      const req = {
+        params: { id: 'appr-1' },
+        body: withApprovalCredentials({ action: 'APPROVE' }),
+        user: null,
+      };
+      const res = {
+        status: jest.fn().mockReturnThis(),
+        json: jest.fn(),
+      };
+      await approvalController.processAction(req, res);
+      expect(res.status).toHaveBeenCalledWith(401);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({ success: false }));
+    });
+
+    it('POST /api/approvals/send-otp issues an OTP to the approver email', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      const mailerService = require('../src/services/mailerService');
+      jest.spyOn(authSessionQueries, 'saveOtp').mockResolvedValueOnce(true);
+      jest.spyOn(mailerService, 'sendOtpEmail').mockResolvedValueOnce({ success: true });
+
+      const res = await request(app)
+        .post('/api/approvals/send-otp')
+        .set(authHeader('admin'))
+        .send({ approverName: 'Srinu Sir', id: 'appr-101' });
+
+      expect(res.status).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.email).toBe('srinivas.mukku@procucev.com');
+    });
+
+    it('decides an approval using valid OTP when password matches OTP and deletes OTP', async () => {
+      const authSessionQueries = require('../src/db/authSessionQueries');
+      jest.spyOn(authSessionQueries, 'findOtp').mockResolvedValueOnce({
+        code: '654321',
+        expiresAt: Date.now() + 600000,
+      });
+      const deleteSpy = jest.spyOn(authSessionQueries, 'deleteOtp').mockResolvedValueOnce(true);
+
+      const saved = { id: 'd1-appr-otp', request_number: 'REQ-OTP-1', status: 'Approved', approver_name: 'Srinu Sir' };
+
+      // Using D1 mock to execute
+      const batch = jest.fn().mockResolvedValue([
+        { results: [saved], meta: { changes: 1 } },
+        { results: [{ id: 'event-1' }], meta: { changes: 1 } },
+      ]);
+      const previousEnv = globalThis.__CF_ENV__;
+      globalThis.__CF_ENV__ = {
+        DB: {
+          prepare: (sql) => ({ bind: (...params) => ({ sql, params }) }),
+          batch,
+        },
+      };
+
+      try {
+        const result = await approvalQueries.processApprovalAction(
+          'REQ-OTP-1',
+          { action: 'APPROVE', remarks: 'OTP approved', password: 'wrong-pass', otp: '654321', approverName: 'Srinu Sir' },
+          { uuid: 'u1', name: 'CM' }
+        );
+        expect(result).toEqual(saved);
+        expect(deleteSpy).toHaveBeenCalledWith('approval_otp:srinu_sir');
+      } finally {
+        if (previousEnv === undefined) delete globalThis.__CF_ENV__;
+        else globalThis.__CF_ENV__ = previousEnv;
+      }
     });
   });
 });

@@ -327,9 +327,10 @@ const EVENT_OUTBOX_TYPES = Object.freeze({
 
 const EVENT_OUTBOX_DEFERRED_STATUS = Object.freeze({
   BUYER_ONBOARDING: 'onboarding',
+  VENDOR_PLAN: 'planning',
 });
 const EVENT_OUTBOX_MAX_ATTEMPTS = 8;
-const EVENT_OUTBOX_MAX_BATCH_SIZE = 10;
+const EVENT_OUTBOX_MAX_BATCH_SIZE = 25;
 const EVENT_OUTBOX_LEASE_MS = 5 * 60 * 1000;
 const EVENT_OUTBOX_RETRY_BASE_MS = 1000;
 const EVENT_OUTBOX_RETRY_MAX_MS = 15 * 60 * 1000;
@@ -345,6 +346,48 @@ const EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE = D1_NOTIFICATION_INSERT_BATCH_SIZE;
 const RFQ_AUTO_CLOSE_AFTER_MS = 48 * 60 * 60 * 1000;
 const RFQ_AUTO_CLOSE_POLL_INTERVAL_MS = 60 * 1000;
 const RFQ_AUTO_CLOSE_REASON = 'Official closure 48 hours after release';
+const RFQ_QUOTES_SEALED_REASON = 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.';
+
+function parseRfqTimestampMs(value) {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) && value > 0 ? value : 0;
+  const trimmed = String(value).trim();
+  if (!trimmed) return 0;
+  let parsed = Date.parse(trimmed);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    parsed = Date.parse(trimmed.replace(' ', 'T').replace(/\s+UTC$/i, 'Z'));
+  }
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : 0;
+}
+
+function isRfqConcluded(rfq) {
+  return Boolean(
+    rfq && (
+      rfq.status === 'Closed' ||
+      rfq.status === 'PO Generated' ||
+      rfq.poFinalised ||
+      rfq.poNumber ||
+      rfq.status === 'Expired'
+    )
+  );
+}
+
+function resolveRfqBiddingWindowEndMs(rfq) {
+  if (!rfq) return 0;
+  const createdAtMs = parseRfqTimestampMs(rfq.createdAt);
+  const closingDeadlineMs = parseRfqTimestampMs(rfq.closingDeadline);
+  const defaultEndMs = createdAtMs > 0 ? createdAtMs + RFQ_AUTO_CLOSE_AFTER_MS : 0;
+  return Math.max(defaultEndMs, closingDeadlineMs);
+}
+const RFQ_CLOSURE_MESSAGES = Object.freeze({
+  REOPEN_FORBIDDEN: 'After close, this RFQ cannot be opened again.',
+  BUYER_CLOSE_REASON: 'Closed by buyer',
+  CM_CLOSE_REASON: 'Closed by procurement team',
+  VENDOR_NOTIFICATION_TITLE: 'RFQ Closed: {rfqNumber}',
+  VENDOR_NOTIFICATION_MESSAGE: 'Requisition {rfqNumber} ({rfqTitle}) has been closed by the buyer. Bidding is now concluded and no further quotations will be accepted.',
+  VENDOR_SMS_MESSAGE: 'RFQ {rfqNumber} is closed by the buyer. Bidding is concluded.',
+  VENDOR_WHATSAPP_MESSAGE: 'Update on RFQ {rfqNumber} ({rfqTitle}): This RFQ has been closed by the buyer. Bidding is now concluded and no further quotations are needed.',
+});
 const RFQ_COMPARISON_NOTIFICATION_DELAY_MS = 5 * 60 * 1000;
 const RFQ_COMPARISON_RETRY_DELAY_MS = 60 * 1000;
 const RFQ_COMPARISON_MAX_ATTEMPTS = 5;
@@ -356,6 +399,7 @@ const RFQ_CHASER_MAX_ATTEMPTS = 5;
 const RFQ_CHASER_RETRY_BASE_MS = 30 * 1000;
 const RFQ_CHASER_RETRY_MAX_MS = 15 * 60 * 1000;
 const RFQ_CHASER_ERROR_MAX_LENGTH = 2000;
+const RFQ_CHASER_BATCH_UPDATE_SIZE = 80;
 // Database row in the admin infrastructure list. It is the only row: it starts as
 // CHECKING and is replaced by the live result of pool.checkDatabaseHealth() (see
 // storeService.refreshInfrastructureHealth). No other service is listed.
@@ -373,6 +417,16 @@ const INFRASTRUCTURE_HEALTH = Object.freeze({
     CONNECTION_FAILED: 'Database connection failed.',
   }),
 });
+
+const DOSSIER_MESSAGES = Object.freeze({
+  BUYER_NOT_FOUND: 'Buyer account {id} not found.',
+  SELLER_NOT_FOUND: 'Seller {id} not found.',
+  UNAUTHORIZED_BUYER_ACCESS: 'You do not have permission to access this buyer profile.',
+  UNAUTHORIZED_SELLER_ACCESS: 'You do not have permission to access this supplier dossier.',
+  UPLOADED_VENDORS_LOAD_FAILED: 'Failed to retrieve buyer uploaded vendors.',
+  BUYER_UPLOADS_LOAD_FAILED: 'Failed to retrieve associated buyers for seller.',
+  ACTIVE_RFQS_LOAD_FAILED: 'Failed to retrieve active RFQs for seller.',
+});
 const DATABASE_QUERY_LOGGING = Object.freeze({
   SLOW_QUERY_THRESHOLD_MS_DEFAULT: 200,
   D1_SUCCESS_SAMPLE_RATE_DEFAULT: 0.01,
@@ -389,6 +443,11 @@ const PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG = Object.freeze({
   DEFAULT_LIMIT: 100,
   MAX_LIMIT: 500,
   MAX_SIGNALS: 45,
+});
+const PINCODE_LOOKUP_CONFIG = Object.freeze({
+  MIN_PREFIX_LENGTH: 3,
+  MAX_PINCODE_DIGITS: 6,
+  MAX_UNION_PARAMS_D1: 85,
 });
 /**
  * Unnecessary / deprecated tables automatically purged during migrations and deployments.
@@ -439,21 +498,51 @@ const STORE_HYDRATION_CONFIG = Object.freeze({
     '/api/approvals',
     '/api/auth',
     '/api/bot',
+    '/api/buyer-accounts/active',
     '/api/buyer-profile',
+    '/api/category-manager/dashboard',
     '/api/crypto',
     '/api/db',
     '/api/document-vault',
     '/api/enterprise-inquiries',
     '/api/internal-tasks',
+    '/api/notifications',
     '/api/payment-dues',
     '/api/pincode',
     '/api/subscriptions',
     '/api/tickets',
+    '/api/user-preferences',
     '/api/vendor-ingestion',
+    '/api/vendors/heartbeat',
+    '/api/vendors/presence',
+    '/api/vendors/public',
+    '/api/vendors/rfq-credits',
+    '/api/vendors/subscription-pricing',
+    '/api/vendors/upload-history',
     '/api/zoho',
+  ]),
+  DIRECT_GET_PATH_PATTERNS: Object.freeze([
+    /^\/api\/rfqs\/[^/]+\/vendor-candidates$/,
+    /^\/api\/vendors\/[^/]+$/,
+    /^\/api\/vendors\/[^/]+\/rfq-credits$/,
+    /^\/api\/vendors\/[^/]+\/payment-links$/,
+    /^\/api\/vendors\/[^/]+\/payment-links\/[^/]+\/invoice$/,
+    /^\/api\/vendors\/bulk-import\/[^/]+$/,
+    /^\/api\/buyer-accounts\/[^/]+\/credit-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/communications$/,
+    /^\/api\/buyer-accounts\/[^/]+\/payment-history$/,
+    /^\/api\/buyer-accounts\/[^/]+\/uploaded-vendors$/,
+    /^\/api\/buyer-accounts\/[^/]+\/documents$/,
+    /^\/api\/vendors\/[^/]+\/credit-history$/,
+    /^\/api\/vendors\/[^/]+\/communications$/,
+    /^\/api\/vendors\/[^/]+\/payment-history$/,
+    /^\/api\/vendors\/[^/]+\/buyer-uploads$/,
+    /^\/api\/vendors\/[^/]+\/active-rfqs$/,
+    /^\/api\/vendors\/[^/]+\/documents$/,
   ]),
   UNAVAILABLE_MESSAGE: 'The application data store is temporarily unavailable. Please retry shortly.',
 });
+const CHANNEL_DISPATCH_CONCURRENCY = 4;
 const QUALIFICATION_PILLARS = [
   { id: 'M1', name: 'Commercial Terms', weight: 25, color: '#3b82f6' },
   { id: 'M2', name: 'Technical Capabilities', weight: 15, color: '#06b6d4' },
@@ -600,6 +689,9 @@ const APPROVAL_MESSAGES = Object.freeze({
   ALREADY_DECIDED: 'This approval was already decided. Refresh the list before taking another action.',
   PASSWORD_INVALID: 'The approver password is invalid. Check the selected approver and try again.',
   PASSWORD_CONFIGURATION_UNAVAILABLE: 'Approver password verification is not configured. Contact an administrator.',
+  OTP_SENT: 'Verification OTP sent to the approver email.',
+  OTP_INVALID: 'Invalid or expired OTP code. Please request a new OTP.',
+  APPROVER_EMAIL_NOT_CONFIGURED: 'No email address is configured for this approver.',
 });
 
 const REGISTRATION_MESSAGES = Object.freeze({
@@ -672,6 +764,8 @@ const IDENTITY_MASTER_DATA = {
   VERIFICATION_VERIFIED: 'EMAIL_VERIFIED',
   VERIFICATION_PENDING: 'PENDING_EMAIL_VERIFICATION',
 };
+
+const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 
 // Indian phone numbers are stored normalised as +91XXXXXXXXXX in the shared
 // schema, and the Java login path compares them byte-for-byte.
@@ -883,6 +977,8 @@ const RFQ_CATEGORY_CLASSIFICATION = {
     pumps: 'Engineering Spares - Mechanical',
     motors: 'Engineering Spares - Electrical',
     'general procurement': 'Others – New Product',
+    'others - new product': 'Others – New Product',
+    'others - new service': 'Others – New Service',
   },
 
   // Keywords that describe raw/component materials rather than product purpose.
@@ -1494,6 +1590,8 @@ const EMAIL_INGESTION_CONFIG = {
   // Passed to Gemini as base64. Kept as a subset of GEMINI_INLINE_MIME_TYPES so a
   // type can never be forwarded that the extractor would then refuse.
   INLINE_ATTACHMENT_MIME_TYPES: ['application/pdf', 'image/png', 'image/jpeg', 'image/webp'],
+  SIGNATURE_IMAGE_MAX_BYTES: 50 * 1024,
+  SIGNATURE_FILE_NAME_PATTERN: /^(?:image\d*|logo\d*|signature\d*|banner\d*|icon\d*|footer\d*|header\d*|outlook\w*|spacer\w*|facebook|twitter|linkedin|instagram|youtube)\.(?:png|jpe?g|gif|webp|bmp|ico)$/i,
   // A line matching any of these starts the quoted thread beneath a forwarded
   // requisition; everything from there down is dropped before extraction.
   QUOTE_MARKERS: [
@@ -1902,18 +2000,73 @@ const GMAIL_GATEWAY_LABELS = Object.freeze({
   UNREAD: 'UNREAD',
 });
 
+const VENDOR_MAILBOX_CHANNELS = Object.freeze({
+  INVITE: 'invite',
+  DIRECT: 'direct',
+});
+
+const VENDOR_INVITE_ORIGINS = Object.freeze({
+  AUTO_MATCHED_NETWORK: 'auto_matched_network',
+  BUYER_UPLOADED: 'buyer_uploaded',
+  CM_ASSIGNED: 'cm_assigned',
+  CM_CREATED: 'cm_created',
+});
+
 const VENDOR_EMAIL_GATEWAY_CONFIG = {
   DEFAULT_POLL_MS: 60000,
   MIN_POLL_MS: 30000,
   DEFAULT_MAX_PER_POLL: 10,
-  // Dedicated vendor quotation mailbox. Read from VENDOR_EMAIL_GATEWAY_ADDRESS (or
-  // VENDOR_EMAIL_GATEWAY_USER) at access time and never defaulted. An empty string means
-  // the vendor mailbox is not configured.
+  // Dual vendor mailboxes. Loaded dynamically from environment variables; never hardcoded.
+  get INVITE_ADDRESS() {
+    return String(process.env.VENDOR_INVITE_EMAIL_ADDRESS || '').trim();
+  },
+  get DIRECT_RFQ_ADDRESS() {
+    return String(process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS || '').trim();
+  },
+  // Dedicated vendor direct quotation mailbox. Read from VENDOR_DIRECT_RFQ_EMAIL_ADDRESS
+  // or legacy VENDOR_EMAIL_GATEWAY_ADDRESS / VENDOR_EMAIL_GATEWAY_USER at access time and
+  // never defaulted. An empty string means the vendor mailbox is not configured.
   get GATEWAY_ADDRESS() {
-    return String(process.env.VENDOR_EMAIL_GATEWAY_ADDRESS || process.env.VENDOR_EMAIL_GATEWAY_USER || '').trim();
+    return String(
+      process.env.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+      process.env.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+      process.env.VENDOR_EMAIL_GATEWAY_USER ||
+      ''
+    ).trim();
   },
   DEFAULT_FROM_NAME: 'Procucev Enterprise',
 };
+
+/**
+ * Returns configured vendor mailboxes loaded strictly from environment variables.
+ */
+function getConfiguredVendorMailboxes(env = process.env) {
+  const safeEnv = env || process.env || {};
+  const inviteAddress = String(
+    safeEnv.VENDOR_INVITE_EMAIL_ADDRESS ||
+    safeEnv.VENDOR_INVITE_GMAIL_SENDER_EMAIL ||
+    ''
+  ).trim();
+  const directRfqAddress = String(
+    safeEnv.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS ||
+    safeEnv.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL ||
+    safeEnv.VENDOR_EMAIL_GATEWAY_ADDRESS ||
+    safeEnv.VENDOR_EMAIL_GATEWAY_USER ||
+    ''
+  ).trim();
+  return {
+    inviteAddress,
+    directRfqAddress,
+  };
+}
+
+const STRICT_BUYER_RFQ_MAILBOX = 'rfq@procucev.com';
+const STRICT_VENDOR_INVITATION_MAILBOX = 'invitations@procucev.com';
+const NON_BUYER_MAILBOX_BLOCKLIST = Object.freeze([
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  'gmtrfq@procucev.com',
+]);
+const V0_QUOTES_DISPATCH_WINDOW_MS = 48 * 60 * 60 * 1000;
 
 // ==============================================================================
 // RFQ MULTI-CHANNEL CHASER TIMING (Version 1 / mode_1 flow)
@@ -2077,9 +2230,26 @@ function unwrapAccountData(obj) {
   return obj;
 }
 
+const BUYER_TRIAL_TRANSACTION_TYPE = 'TRIAL_GRANTED';
+const BUYER_TRIAL_GRANTED_DESCRIPTION = 'TRIAL_GRANTED: {days} Days Unlimited Trial';
+
+/**
+ * Check if an account has an active trial period based on canonical trialEndDate.
+ */
+function isTrialActive(account) {
+  const data = unwrapAccountData(account);
+  if (!data || typeof data !== 'object') return false;
+  if (data.trialActive === false) return false;
+  const trialEnd = data.trialEndDate || data.trial_end_date;
+  if (!trialEnd) return false;
+  const endTime = new Date(trialEnd).getTime();
+  return Number.isFinite(endTime) && endTime > Date.now();
+}
+
 /**
  * Check if a buyer account has database-configured unlimited RFQ creation access.
  * Reads database-level flags without hardcoding any identity credentials.
+ * Automatically grants time-based unlimited RFQ access while a trial period is active.
  */
 function hasUnlimitedRfqAccess(account) {
   const data = unwrapAccountData(account);
@@ -2088,7 +2258,8 @@ function hasUnlimitedRfqAccess(account) {
     data.unlimitedRfqAccess === true ||
     data.unlimitedAccess === true ||
     data.isUnlimited === true ||
-    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited'
+    String(data.subscriptionPlan || '').trim().toLowerCase() === 'unlimited' ||
+    isTrialActive(data)
   );
 }
 
@@ -2305,6 +2476,14 @@ const EMAIL_GATEWAY_MESSAGES = {
   INVALID_RFQ_REFERENCED: 'The referenced RFQ {rfqNumber} was not found in the system.',
   VENDOR_NOT_FOUND_FOR_QUOTE: 'No vendor profile found for sender {address}.',
   VENDOR_GATEWAY_REQUIRES_RFQ: 'Vendor email gateway only processes quotation replies for existing RFQs.',
+  SKIPPED_NON_BUYER_MAILBOX: 'Email was not addressed directly to the buyer RFQ mailbox and was skipped.',
+  VENDOR_MISSING_RFQ_REFERENCE: 'Email from registered vendor {address} did not include a resolvable RFQ reference; buyer RFQ creation was blocked.',
+  VENDOR_NOT_INVITED_TO_RFQ: 'Vendor {address} was not invited to RFQ {rfqNumber}.',
+  VENDOR_INVITE_PORTAL_REDIRECT_DETAIL:
+    'Reply to network invitation mailbox for RFQ {rfqNumber} declined for email quoting; portal submission link dispatched to {address}.',
+  VENDOR_INVITE_NO_RFQ:
+    'Network invitation mailbox requires a valid RFQ reference and only accepts quote submissions through the Procucev portal.',
+  EXISTING_VENDOR_BLOCKED: 'This sender address belongs to a vendor account and cannot create buyer RFQs.',
   CREDITS_EXHAUSTED_DETAIL: 'Quotation email from {vendorName} for RFQ {rfqNumber} acknowledged: 5 free quotation credits exhausted. Subscription upgrade email sent.',
   CREDITS_EXHAUSTED_SUBJECT: 'Action Required – Upgrade Plan to Submit Quotation for RFQ {rfqNumber}',
   // Gemini being rate-limited, erroring or unconfigured says nothing about the
@@ -2321,12 +2500,35 @@ const EMAIL_GATEWAY_DELIVERY_KIND = Object.freeze({
   VENDOR_CREDITS_EXHAUSTED: 'VENDOR_CREDITS_EXHAUSTED',
   VENDOR_QUOTE_FAILURE: 'VENDOR_QUOTE_FAILURE',
   VENDOR_PORTAL_REDIRECT: 'VENDOR_PORTAL_REDIRECT',
+  VENDOR_INVITE_PORTAL_REDIRECT: 'VENDOR_INVITE_PORTAL_REDIRECT',
   BUYER_UNAUTHORIZED_SENDER: 'BUYER_UNAUTHORIZED_SENDER',
   VENDOR_UNAUTHORIZED_SENDER: 'VENDOR_UNAUTHORIZED_SENDER',
   VENDOR_QUOTE_ACK: 'VENDOR_QUOTE_ACK',
   VENDOR_INQUIRY_ACK: 'VENDOR_INQUIRY_ACK',
   BUYER_QUOTE_RECEIVED: 'BUYER_QUOTE_RECEIVED',
   BUYER_PROFILE_COMPLETION_REMINDER: 'BUYER_PROFILE_COMPLETION_REMINDER',
+});
+
+const VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION = Object.freeze({
+  SUBJECT: 'Portal Submission Required – Download & Quote RFQ #{rfqNumber} in Procucev',
+  SUBJECT_FALLBACK: 'Portal Submission Required – Submit Your Quotation in Procucev',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Submit Your Quotation in the Portal',
+  BUTTON_REGISTERED: 'Download RFQ & Submit Quote in Portal',
+  BUTTON_UNREGISTERED: 'Activate Account, Download RFQ & Quote in Portal',
+  PORTAL_ONLY_NOTICE:
+    'Direct email quotation replies are not enabled for Procucev Network invitations. No quotation or bid has been recorded from your email reply.',
+  PORTAL_ACTION_INSTRUCTION:
+    'Please open the Procucev Vendor Portal using the link below to download the complete RFQ specifications and submit your quotation directly.',
+});
+
+const VENDOR_CM_ONBOARDING_NOTIFICATION = Object.freeze({
+  SUBJECT: '[Action Required] Welcome to Procucev – Your Vendor Account Login Credentials',
+  HEADLINE: 'PROCUCEV ENTERPRISE',
+  SUBLINE: 'Category Manager Supplier Onboarding & Credentials',
+  DEFAULT_ORGANIZATION_NAME: 'Procucev Category Management',
+  CHANGE_PASSWORD_NOTE:
+    'Please sign in at the portal link above and change your temporary password immediately after logging in.',
 });
 
 /**
@@ -2381,6 +2583,8 @@ const RFQ_NOTIFICATION_MESSAGES = Object.freeze({
     'The email provider accepted the vendor category update request.',
   VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED:
     'The vendor category update email was not confirmed as sent. Retry shortly; the provider may have accepted the message before the response was lost.',
+  VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE:
+    'Unable to deliver the vendor category update email right now because outbound mail provider authentication is unavailable or cooling down. Please refresh mail credentials and retry.',
   BACKGROUND_EMAIL_PROVIDER_NOT_ACCEPTED: 'The email provider did not confirm acceptance.',
 });
 
@@ -2670,12 +2874,10 @@ const IDENTITY_OTP_CONFIG = {
 // GMTServiceImpl.getOrgByUserId in the Java p2pservices app, which own the
 // `organization` and `org_division_category` rows this feature reads and writes.
 const BUYER_PROFILE_CONFIG = {
-  // Cardinality caps the old Angular screen enforced for a ClientInitiator: at
-  // most 5 divisions, at most 10 minor categories in total. They exist because
-  // the RFQ distribution engine fans out per selected category, so an unbounded
-  // selection would broadcast every RFQ to the entire vendor base.
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+  // Unlimited major and minor procurement category selections supported.
+  // Frontend may enforce display limits, but backend accepts any count.
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 
   // The rupee sign is rewritten before storage, exactly as updateBuyer does.
   // `organization.annual_turnover` is latin1 in the shared schema, so a literal ₹
@@ -2864,6 +3066,7 @@ const VENDOR_INGESTION_JOB_STATUS = {
   PENDING: 'PENDING',
   PROCESSING: 'PROCESSING',
   COMPLETED: 'COMPLETED',
+  PARTIAL_FAILURE: 'PARTIAL_FAILURE',
   FAILED: 'FAILED',
 };
 
@@ -2970,22 +3173,21 @@ const VENDOR_INGESTION_CONFIG = {
   // 200,000 PO rows at a generous ~250 bytes/row is ~50MB; this leaves
   // headroom above that without risking an unbounded buffer.
   MAX_UPLOAD_BYTES: Number(process.env.VENDOR_INGESTION_MAX_UPLOAD_BYTES || 75 * 1024 * 1024),
-  // Vendors classified per AI batch. The job is chunked so a large run reports
-  // progress and can be resumed, rather than holding one long request open.
-  AI_BATCH_SIZE: 8,
+  // Vendors classified per AI batch. Increased to 50 so normal vendor batches (10-40) finish in 1 batch.
+  AI_BATCH_SIZE: 50,
   // A model reply that is not valid JSON of the expected shape is retried this
   // many times in total before the vendor is marked FAILED. Retrying is safe:
   // classification writes no category until a reply validates.
   AI_MAX_ATTEMPTS: 2,
   // A background AI job whose progress has not moved for this long is treated as
   // abandoned (its worker was stopped mid-run), so a new run may start.
-  AI_JOB_STALE_AFTER_MS: 10 * 60 * 1000,
+  AI_JOB_STALE_AFTER_MS: 60 * 1000,
   // PO lines summarised into one vendor's purchasing profile. Enough to
   // characterise what a supplier sells without sending an entire spend history,
   // which is what makes this one call per vendor rather than one per PO row.
   AI_MAX_PO_LINES_PER_VENDOR: 60,
   AI_MAX_DESCRIPTION_CHARS: 240,
-  MAX_MINOR_CATEGORIES_PER_VENDOR: 10,
+  MAX_MINOR_CATEGORIES_PER_VENDOR: null,
   // Recipients per dispatch request, so one campaign cannot hold the event loop
   // on a few thousand sequential SMTP sends.
   MAX_RECIPIENTS_PER_DISPATCH: 500,
@@ -3034,6 +3236,14 @@ const VENDOR_INGESTION_MESSAGES = {
   PO_LIMIT: 'A PO dump may hold at most {max} line items.',
   MAPPING_NOT_FOUND: 'That vendor is not part of this ingestion session.',
   AI_JOB_FAILED: 'AI categorization stopped unexpectedly before every supplier was classified. Run the categorization again to resume.',
+  AI_JOB_PARTIAL_FAILED:
+    'AI categorization finished with errors: {imported} PO-matched supplier(s) mapped, {failed} failed. Review error details or retry failed classifications.',
+  AI_JOB_NONE_CLASSIFIED:
+    'AI categorization did not classify any of the {total} PO-matched supplier(s). Verify AI configuration and retry categorization.',
+  INGESTION_JOB_PARTIAL_FAILED:
+    'Upload finished with errors: {imported} record(s) imported, {failed} failed. Review the error report and re-upload corrected rows.',
+  INGESTION_JOB_NO_RECORDS_PROCESSED:
+    'Upload failed: 0 of {total} uploaded record(s) could be processed. Check the file columns and error details before trying again.',
   MAPPING_NO_PO_HISTORY:
     'This supplier has no pre-purchase order history inside the selected period, so it cannot be categorised automatically. It is flagged for self-mapping.',
   CATEGORY_MASTER_EMPTY:
@@ -3052,6 +3262,19 @@ const VENDOR_INGESTION_MESSAGES = {
   DISPATCH_ALREADY_SENT:
     '{count} of the selected suppliers have already received this email and will be skipped. Use Retry Failed to re-attempt only the failures.',
   DISPATCH_NOTHING_TO_RETRY: 'There are no failed emails to retry for this session.',
+  DUPLICATE_EMAIL_EXISTING: 'Duplicate email ({value}) — already exists in Buyer Directory',
+  DUPLICATE_EMAIL_FILE: 'Duplicate email ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_GSTIN_EXISTING: 'Duplicate GSTIN ({value}) — already exists in Buyer Directory',
+  DUPLICATE_GSTIN_FILE: 'Duplicate GSTIN ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_CODE_EXISTING: 'Duplicate vendor code ({value}) — already exists in Buyer Directory',
+  DUPLICATE_CODE_FILE: 'Duplicate vendor code ({value}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_COMPANY_PHONE_EXISTING: 'Duplicate company & phone ({company} / {phone}) — already exists in Buyer Directory',
+  DUPLICATE_COMPANY_PHONE_FILE: 'Duplicate company & phone ({company} / {phone}) — already present in uploaded file (row {firstRow})',
+  DUPLICATE_EMAIL_BATCH_SKIPPED: 'Skipped duplicate email in uploaded batch: {value}',
+  DUPLICATE_PO_EXISTING: 'Duplicate PO record ({summary}) — already uploaded previously',
+  DUPLICATE_PO_FILE: 'Duplicate PO record ({summary}) — already present in uploaded file (row {firstRow})',
+  PO_DUMP_ALL_DUPLICATES:
+    'Upload cannot be successful because all {count} PO line item(s) are duplicates of existing records. Please upload a file with new data.',
   SESSION_LOAD_FAILED: 'Could not load your ingestion session. Please try again.',
   SESSION_SAVE_FAILED: 'Could not save your ingestion progress. Please try again.',
 };
@@ -3458,6 +3681,91 @@ function resolveVendorLocationFields(input) {
   return { location, address, city, state, pincode };
 }
 
+/**
+ * Extracts up to 6 numeric digits from a PIN code input, returning empty string below MIN_PREFIX_LENGTH.
+ */
+function normalizePincodeDigits(value) {
+  const digits = String(value || '').replace(/\D/g, '').trim();
+  if (digits.length < PINCODE_LOOKUP_CONFIG.MIN_PREFIX_LENGTH) return '';
+  return digits.slice(0, PINCODE_LOOKUP_CONFIG.MAX_PINCODE_DIGITS);
+}
+
+/**
+ * Computes a locale-independent exclusive upper bound for a digit-only PIN prefix range scan.
+ */
+function exclusiveDigitPrefixUpperBound(prefix) {
+  const clean = String(prefix || '').replace(/\D/g, '');
+  if (!clean) return '';
+  for (let i = clean.length - 1; i >= 0; i -= 1) {
+    const code = clean.charCodeAt(i);
+    if (code < 57) {
+      return clean.slice(0, i) + String.fromCharCode(code + 1);
+    }
+  }
+  return `${clean}z`;
+}
+
+/**
+ * Computes the exclusive upper bound for a SQLite `COLLATE NOCASE` prefix
+ * range scan (`col COLLATE NOCASE >= prefix AND col COLLATE NOCASE < upper`).
+ *
+ * SQLite's `COLLATE NOCASE` folds ASCII `A..Z` (65..90) down to `a..z`
+ * (97..122), so code point 91 (`'['`) immediately follows code point 64 (`'@'`).
+ */
+function exclusiveNocasePrefixUpperBound(prefix) {
+  const folded = String(prefix || '').replace(/[A-Z]/g, (ch) => ch.toLowerCase());
+  if (!folded) return '';
+  for (let i = folded.length - 1; i >= 0; i -= 1) {
+    const code = folded.charCodeAt(i);
+    if (code < 0xFFFF) {
+      const nextCode = code === 64 ? 91 : code + 1;
+      return folded.slice(0, i) + String.fromCharCode(nextCode);
+    }
+  }
+  return `${folded}\uFFFF`;
+}
+
+/**
+ * Counts shared leading digits between two numeric PIN strings.
+ */
+function commonPincodePrefixLength(pinA, pinB) {
+  const a = String(pinA || '').replace(/\D/g, '');
+  const b = String(pinB || '').replace(/\D/g, '');
+  const maxLen = Math.min(a.length, b.length);
+  let len = 0;
+  while (len < maxLen && a[len] === b[len]) {
+    len += 1;
+  }
+  return len;
+}
+
+/**
+ * Resolves a vendor's 6-digit PIN from explicit `pincode` or address fallback fields.
+ */
+function resolveVendorPinDigits(vendor) {
+  if (!vendor) return '';
+  const direct = String(vendor.pincode || '').replace(/\D/g, '');
+  if (direct.length === PINCODE_LOOKUP_CONFIG.MAX_PINCODE_DIGITS) return direct;
+  const rawAddr = [vendor.location, vendor.address, vendor.factoryAddress].filter(Boolean).join(' ');
+  return rawAddr ? (extractIndianAddressLocation(rawAddr).pincode || direct) : direct;
+}
+
+/**
+ * Deterministic proximity tie-breaker comparing two vendors against a target delivery pincode.
+ */
+function compareVendorPincodeProximity(a, b, destPincode) {
+  const dest = normalizePincodeDigits(destPincode);
+  if (!dest) return 0;
+  const aPin = resolveVendorPinDigits(a);
+  const bPin = resolveVendorPinDigits(b);
+  const prefixDiff = commonPincodePrefixLength(bPin, dest) - commonPincodePrefixLength(aPin, dest);
+  if (prefixDiff !== 0) return prefixDiff;
+  if (aPin.length === 6 && bPin.length === 6 && dest.length === 6) {
+    return Math.abs(Number(aPin) - Number(dest)) - Math.abs(Number(bPin) - Number(dest));
+  }
+  return 0;
+}
+
 
 
 
@@ -3466,11 +3774,11 @@ function parseSearchTokens(search) {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[\n\r,;]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[\n\r,;]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )
@@ -3489,6 +3797,38 @@ const VENDOR_DIRECTORY_SESSION_STATUS = Object.freeze({
   ACTIVE: 'ACTIVE',
   CLOSED: 'CLOSED',
 });
+
+const VENDOR_ACTIVE_STATUSES = Object.freeze({
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+});
+
+const VENDOR_STATUS_MESSAGES = Object.freeze({
+  INVALID_ACTIVE_FLAG: 'Specify whether the vendor should be active or inactive (isActive boolean).',
+  BULK_VENDOR_IDS_REQUIRED: 'Select at least one vendor to update active status.',
+  VENDOR_ROLE_FORBIDDEN: 'Vendors cannot change their own active status.',
+  INACTIVE_EVALUATION_BLOCKED: 'This vendor is marked inactive and cannot receive new evaluation requests. Reactivate the vendor first to request an evaluation.',
+  INACTIVE_RFQ_INVITE_BLOCKED: 'This vendor is marked inactive and cannot be invited to future RFQs.',
+  MARKED_INACTIVE_SUCCESS: 'Vendor marked inactive. Historical records are preserved and the supplier is excluded from future flows.',
+  MARKED_ACTIVE_SUCCESS: 'Vendor reactivated and restored to future sourcing flows.',
+  BULK_NO_VENDORS_UPDATED: 'None of the selected vendors could be updated. Please verify your roster permissions or refresh the directory.',
+  BULK_OWNERSHIP_DENIED: 'You do not have permission to change the status of the selected vendor(s).',
+  BULK_VENDOR_NOT_FOUND: 'Selected vendor record(s) could not be found in storage. Please refresh and retry.',
+});
+
+/** Returns true when a vendor record has been disabled / marked inactive. */
+function isVendorInactive(vendor) {
+  if (!vendor || typeof vendor !== 'object') return false;
+  if (vendor.isActive === false || vendor.disabled === true || vendor.active === false) {
+    return true;
+  }
+  return String(vendor.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+/** Returns true when a vendor object is present and eligible for active workflows. */
+function isVendorActive(vendor) {
+  return Boolean(vendor) && !isVendorInactive(vendor);
+}
 
 const VENDOR_DIRECTORY_LOGOUT_REASONS = Object.freeze({
   MANUAL: 'MANUAL',
@@ -3509,24 +3849,81 @@ const VENDOR_DIRECTORY_AUTH_CONFIG = Object.freeze({
 
 
 const INTERNAL_TASK_CATEGORIES = Object.freeze({
+  CALL_TASK: 'CALL_TASK',
+  EMAIL_TASK: 'EMAIL_TASK',
+  SMS_TASK: 'SMS_TASK',
+  DEMO_SCHEDULE: 'DEMO_SCHEDULE',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  SITE_VISITING_MEETING_CLIENTS: 'SITE_VISITING_MEETING_CLIENTS',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   COMMUNICATION: 'COMMUNICATION',
   DEMO_SCHEDULING: 'DEMO_SCHEDULING',
-  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
   BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
-  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   ONBOARDING: 'ONBOARDING',
 });
 
+const INTERNAL_TASK_CATEGORY_LIST = Object.freeze([
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
+  'CREDIT_MANAGEMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
+  'INTERNAL_OPERATIONS',
+]);
+
 const INTERNAL_TASK_CATEGORY_LABELS = Object.freeze({
-  COMMUNICATION: 'Communication Tasks',
-  DEMO_SCHEDULING: 'Demo Scheduling',
+  CALL_TASK: 'Call Task',
+  EMAIL_TASK: 'Email Task',
+  SMS_TASK: 'SMS Task',
+  DEMO_SCHEDULE: 'Demo schedule',
   CREDIT_MANAGEMENT: 'Credit Management',
-  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
-  INTERNAL_OPERATIONS: 'Internal Operations',
-  ONBOARDING: 'Onboarding Process',
+  SITE_VISITING_MEETING_CLIENTS: 'Site visiting/Meeting Clients',
+  INTERNAL_OPERATIONS: 'Internal operations',
+  COMMUNICATION: 'Call Task',
+  DEMO_SCHEDULING: 'Demo schedule',
+  BUSINESS_DEVELOPMENT: 'Site visiting/Meeting Clients',
+  ONBOARDING: 'Internal operations',
 });
 
 const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
+  CALL_TASK: Object.freeze([
+    'Phone Call',
+    'Outgoing Call',
+    'Incoming Call',
+    'Follow-up Call',
+  ]),
+  EMAIL_TASK: Object.freeze([
+    'Email',
+    'Send Proposal',
+    'Send Corporate Email',
+    'Email Follow-up',
+  ]),
+  SMS_TASK: Object.freeze([
+    'SMS',
+    'SMS Alert',
+    'SMS Follow-up',
+    'WhatsApp Notification',
+  ]),
+  DEMO_SCHEDULE: Object.freeze([
+    'Schedule Demo',
+    'Product Demo',
+  ]),
+  CREDIT_MANAGEMENT: Object.freeze([
+    'Add Credits',
+    'Delete Credits',
+    'Credit Approval Request',
+  ]),
+  SITE_VISITING_MEETING_CLIENTS: Object.freeze([
+    'Site Visit',
+    'Client Meeting',
+    'Vendor Facility Inspection',
+  ]),
+  INTERNAL_OPERATIONS: Object.freeze([
+    'Operational Task',
+    'Client Onboarding',
+    'Internal Review',
+  ]),
   COMMUNICATION: Object.freeze([
     'Phone Call',
     'SMS',
@@ -3538,16 +3935,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
   DEMO_SCHEDULING: Object.freeze([
     'Schedule Demo',
   ]),
-  CREDIT_MANAGEMENT: Object.freeze([
-    'Add Credits',
-    'Delete Credits',
-  ]),
   BUSINESS_DEVELOPMENT: Object.freeze([
     'Send Proposal',
     'Send Corporate Email',
-  ]),
-  INTERNAL_OPERATIONS: Object.freeze([
-    'Operational Task',
   ]),
   ONBOARDING: Object.freeze([
     'Client Onboarding',
@@ -3555,13 +3945,9 @@ const INTERNAL_TASK_CATEGORY_TYPES = Object.freeze({
 });
 
 const INTERNAL_TASK_STATUSES = Object.freeze([
-  'New',
-  'Assigned',
-  'In Progress',
-  'Pending Approval',
-  'Completed',
-  'Rejected',
-  'Cancelled',
+  'Open',
+  'Pending',
+  'Closed',
 ]);
 
 const INTERNAL_TASK_PRIORITIES = Object.freeze([
@@ -3569,6 +3955,21 @@ const INTERNAL_TASK_PRIORITIES = Object.freeze([
   'Medium',
   'High',
   'Critical',
+]);
+
+const DEFAULT_INTERNAL_ASSIGNEES = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+]);
+
+const INTERNAL_TASK_USERS = Object.freeze([
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+  'Srinu Sir',
 ]);
 
 const DEMO_STATUSES = Object.freeze([
@@ -3666,14 +4067,20 @@ const SELLER_QUOTE_CREDITS_ALLOWED = Object.freeze([1, 2, 3, 4, 5]);
 
 const APPROVAL_REQUEST_TYPES = Object.freeze([
   'Buyer Credit Addition',
+  'Buyer Credit Deletion',
   'Seller Credit Addition',
+  'Seller Credit Deletion',
+  'Discounts',
+  'Trial Periods',
+  'Offline Payments',
+]);
+
+const ALL_LEGACY_APPROVAL_REQUEST_TYPES = Object.freeze([
+  ...APPROVAL_REQUEST_TYPES,
   'Credit Notes',
   'Purchase Requests',
   'Payment Approvals',
-  'Discounts',
   'Account Approvals',
-  'Trial Periods',
-  'Offline Payments',
   'Unit Bookings',
   'Cancellations & Refunds',
   'Packages',
@@ -3686,6 +4093,11 @@ const APPROVAL_STATUSES = Object.freeze(['Pending', 'Approved', 'Rejected']);
 // Daily RFQ report recipients are not stored here. dailyRfqReportService reads them from
 // DAILY_RFQ_REPORT_EMAILS (comma-separated) at call time. An empty value means the report has
 // no recipients, and the run is reported as not_configured rather than as delivered.
+const EXCLUDED_DAILY_REPORT_RECIPIENTS = Object.freeze([
+  'anshul.goel@procucev.com',
+  'gmtrfq@procucev.com',
+]);
+
 const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_SCHEDULE_HOUR: 6, // 6:00 AM
   DEFAULT_SCHEDULE_MINUTE: 0,
@@ -3693,6 +4105,7 @@ const DAILY_RFQ_REPORT_CONFIG = Object.freeze({
   DEFAULT_TIMEZONE: 'Asia/Kolkata',
   MAX_TIMEZONE_LENGTH: 100,
   DEFAULT_ENABLED: true,
+  EXCLUDED_RECIPIENTS: EXCLUDED_DAILY_REPORT_RECIPIENTS,
   INGESTION_CHANNEL_LABELS: Object.freeze({
     web_portal: 'Web Portal',
     email_gateway: 'Email Gateway',
@@ -3713,6 +4126,13 @@ const APPROVER_CONFIG = Object.freeze([
     passwordEnvironmentVariable: 'SRINU_APPROVER_PASSWORD',
   },
   {
+    id: 'rao_sir',
+    name: 'Rao Sir',
+    title: 'Management Authority',
+    email: process.env.RAO_APPROVER_EMAIL || null,
+    passwordEnvironmentVariable: 'RAO_APPROVER_PASSWORD',
+  },
+  {
     id: 'sudheer_sir',
     name: 'Sudheer Sir',
     title: 'Management Authority',
@@ -3723,6 +4143,19 @@ const APPROVER_CONFIG = Object.freeze([
 
 // Approver names are the single source for validation enums. Derived, never typed twice.
 const CREDIT_APPROVAL_APPROVERS = Object.freeze(APPROVER_CONFIG.map((approver) => approver.name));
+
+const OFFLINE_PAYMENT_TYPES = Object.freeze([
+  'NEFT / RTGS',
+  'Cheque',
+  'UPI',
+  'Cash',
+]);
+
+const BUYER_SOURCING_MODES = Object.freeze([
+  'Mode 1',
+  'Mode 2',
+  'Mode 3',
+]);
 
 // Matches an approver by exact name or id, case-insensitively. Substring matching is not used.
 function findApproverConfig(approverName) {
@@ -3753,6 +4186,24 @@ function verifyApproverPassword(approverName, submittedPassword) {
   const expectedHash = crypto.createHash('sha256').update(expectedPassword, 'utf8').digest();
   const submittedHash = crypto.createHash('sha256').update(submittedPassword, 'utf8').digest();
   return crypto.timingSafeEqual(expectedHash, submittedHash);
+}
+
+const DEFAULT_APPROVER_EMAILS = Object.freeze({
+  srinu_sir: 'srinivas.mukku@procucev.com',
+  rao_sir: 'mnrao@procucev.com',
+  sudheer_sir: 'sudheer.kangala@procucev.com',
+});
+
+function resolveApproverEmail(approverName) {
+  const approver = findApproverConfig(approverName);
+  if (!approver) return null;
+  const envVar = approver.passwordEnvironmentVariable.replace('_PASSWORD', '_EMAIL');
+  return process.env[envVar] || approver.email || DEFAULT_APPROVER_EMAILS[approver.id] || null;
+}
+
+function buildApprovalOtpKey(approverId) {
+  const clean = String(approverId || '').toLowerCase().trim();
+  return `approval_otp:${clean}`;
 }
 
 // ==============================================================================
@@ -3852,9 +4303,24 @@ const RFQ_ATTACHMENT_EXTENSION_MIME_MAP = Object.freeze({
   '.tsv': 'text/tab-separated-values',
   '.json': 'application/json',
   '.doc': 'application/msword',
+  '.docm': 'application/vnd.ms-word.document.macroenabled.12',
   '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   '.xls': 'application/vnd.ms-excel',
+  '.xlsm': 'application/vnd.ms-excel.sheet.macroenabled.12',
   '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+});
+
+const QUOTE_DOCUMENT_EXTRACTOR_CONFIG = Object.freeze({
+  MAX_ATTACHMENTS: 10,
+  MAX_INLINE_PARTS: 3,
+  MAX_ZIP_ENTRIES: 80,
+  MAX_UNCOMPRESSED_ENTRY_BYTES: 8 * 1024 * 1024,
+  MAX_TOTAL_UNCOMPRESSED_BYTES: 20 * 1024 * 1024,
+  MAX_TEXT_CHARS: Number(process.env.QUOTE_ATTACHMENT_MAX_TEXT_CHARS || 60000),
+  MAX_PDF_STREAM_BYTES: 2 * 1024 * 1024,
+  MAX_OLE2_STREAM_BYTES: 12 * 1024 * 1024,
+  MAX_OLE2_SECTORS: 32768,
+  OLE2_MAX_CHAIN_STEPS: 65536,
 });
 
 /**
@@ -3880,7 +4346,218 @@ function resolveAttachmentContentType(declaredMimeType, fileName) {
   return normalized || 'application/octet-stream';
 }
 
+/**
+ * Folds typographic en-dashes (–) and em-dashes (—) in category labels to a plain ASCII hyphen (-),
+ * aligning taxonomy labels ("Others – New Product") with stored database category strings ("Others - New Product").
+ */
+function foldCategoryDashes(value) {
+  return String(value ?? '').replace(/[–—]/g, '-');
+}
+
+/**
+ * Expands lower-case category values to include their plain-hyphen variant whenever any entry
+ * contains an en-dash or em-dash, without adding duplicate entries for already-hyphenated labels.
+ */
+function expandCategoryDashVariants(values) {
+  const expanded = new Set();
+  for (const value of Array.isArray(values) ? values : []) {
+    const lower = String(value || '').trim().toLowerCase();
+    if (!lower) continue;
+    expanded.add(lower);
+    const folded = foldCategoryDashes(lower);
+    if (folded !== lower) expanded.add(folded);
+  }
+  return Array.from(expanded);
+}
+
+/**
+ * Sentinel / placeholder labels that must never be persisted or treated as real procurement categories.
+ */
+const VENDOR_CATEGORY_PLACEHOLDERS = Object.freeze([
+  'vendor master',
+  'uncategorized',
+  'uncategorised',
+  'uncategorized (no past pos)',
+  'uncategorised (no past pos)',
+  'pending category',
+  'unassigned',
+  'none',
+  'na',
+  'n/a',
+  '-',
+  '—',
+  'category not assigned',
+  'not assigned',
+  'category unassigned',
+  'division unassigned',
+  'category required',
+]);
+
+const VENDOR_CATEGORY_PLACEHOLDER_SET = new Set(VENDOR_CATEGORY_PLACEHOLDERS);
+
+const VENDOR_CATEGORY_VALIDATION_MESSAGES = Object.freeze({
+  CATEGORY_REQUIRED:
+    'Every vendor must have a valid Division (majorCategory) and Category. Placeholder values such as "Vendor Master" or "Uncategorized" are not allowed.',
+  EVALUATION_REQUIRES_CATEGORY:
+    'Assign a Division and Category to this vendor before requesting an evaluation.',
+  BULK_BUYER_CATEGORY_REQUIRED:
+    'Category is required — a vendor cannot be imported without a category.',
+  UPDATE_REQUIRES_CATEGORY:
+    'Select a valid Division and at least one Category tag before saving.',
+});
+
+/** Returns true when a category value is empty or a non-category placeholder label. */
+function isPlaceholderVendorCategory(value) {
+  if (typeof value !== 'string') return !value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return VENDOR_CATEGORY_PLACEHOLDER_SET.has(normalized);
+}
+
+/** Trims, removes blank/placeholder labels, and deduplicates category tags case-insensitively. */
+function normalizeVendorCategoryList(values) {
+  const sourceList = Array.isArray(values) ? values : [];
+  const seen = new Set();
+  const cleaned = [];
+  for (const raw of sourceList) {
+    if (typeof raw !== 'string') continue;
+    const trimmed = raw.trim();
+    if (!trimmed || isPlaceholderVendorCategory(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+  }
+  return cleaned;
+}
+
+/** Resolves valid major/minor category fields across incoming vendor payloads and fallback fields. */
+function resolveValidVendorCategories(payload = {}) {
+  const safePayload = payload && typeof payload === 'object' ? payload : {};
+  const rawMajor = [safePayload.majorCategory, safePayload.category]
+    .find((candidate) => typeof candidate === 'string' && !isPlaceholderVendorCategory(candidate));
+  const cleanMajor = rawMajor ? rawMajor.trim() : '';
+  const cleanMinors = normalizeVendorCategoryList([
+    ...(Array.isArray(safePayload.minorCategories) ? safePayload.minorCategories : []),
+    ...(Array.isArray(safePayload.categories) ? safePayload.categories : []),
+    ...(Array.isArray(safePayload.clientMappedCategories) ? safePayload.clientMappedCategories : []),
+    ...(Array.isArray(safePayload.vendorSelectedCategories) ? safePayload.vendorSelectedCategories : []),
+  ]);
+  return {
+    majorCategory: cleanMajor,
+    minorCategories: cleanMinors,
+    hasCategory: Boolean(cleanMajor || cleanMinors.length > 0),
+  };
+}
+
+function normalizeVendorRating(rating, score) {
+  const numRating = typeof rating === 'number' ? rating : (typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null);
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) return Math.round(numRating * 50) / 10;
+    if (numRating > 5.0) return Math.round((numRating / 20) * 10) / 10;
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : (typeof score === 'string' && score.trim() !== '' ? Number(score) : null);
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) return numScore;
+    return Math.round((numScore / 20) * 10) / 10;
+  }
+  return null;
+}
+
+const STANDARDIZED_COMMUNICATION_CATEGORIES = Object.freeze([
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+]);
+
+const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = Object.freeze({
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+});
+
+const SCENARIO_TO_STANDARDIZED_CATEGORY = Object.freeze({
+  credit_quote: 'Credit / Quote (Buyer / Seller)',
+  followup_new: 'Follow-up / New',
+  demo_schedule: 'Demo Schedule',
+  send_proposal: 'Send Proposal',
+  send_corporate_email: 'Send Corporate Email',
+  onboarding_process: 'Onboarding Process',
+  registration_task: 'Registration Task',
+  internal_operations: 'Internal Operations (Others)',
+  'Credit / Quote (Buyer / Seller)': 'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New': 'Follow-up / New',
+  'Demo Schedule': 'Demo Schedule',
+  'Send Proposal': 'Send Proposal',
+  'Send Corporate Email': 'Send Corporate Email',
+  'Onboarding Process': 'Onboarding Process',
+  'Registration Task': 'Registration Task',
+  'Internal Operations (Others)': 'Internal Operations (Others)',
+});
+
+function resolveStandardizedCommunicationCategory(scenarioIdOrCategory) {
+  if (!scenarioIdOrCategory) return 'Follow-up / New';
+  const raw = String(scenarioIdOrCategory).trim();
+  if (SCENARIO_TO_STANDARDIZED_CATEGORY[raw]) return SCENARIO_TO_STANDARDIZED_CATEGORY[raw];
+  const lower = raw.toLowerCase();
+  if (lower.includes('credit') || lower.includes('quote')) return 'Credit / Quote (Buyer / Seller)';
+  if (lower.includes('demo')) return 'Demo Schedule';
+  if (lower.includes('proposal')) return 'Send Proposal';
+  if (lower.includes('corporate') || lower.includes('partnership')) return 'Send Corporate Email';
+  if (lower.includes('onboard')) return 'Onboarding Process';
+  if (lower.includes('regist') || lower.includes('activate')) return 'Registration Task';
+  if (lower.includes('internal') || lower.includes('operation')) return 'Internal Operations (Others)';
+  return 'Follow-up / New';
+}
+
+const USER_PREFERENCE_CONFIG = Object.freeze({
+  MAX_KEY_LENGTH: 128,
+  MAX_VALUE_BYTES: 32768,
+  KEY_PATTERN: /^[a-z0-9][a-z0-9._:-]{0,127}$/i,
+  MESSAGES: Object.freeze({
+    INVALID_KEY: 'Preference key must be 1–128 alphanumeric, underscore, dot, colon, or hyphen characters.',
+    VALUE_REQUIRED: 'Preference value is required.',
+    VALUE_TOO_LARGE: 'Preference value exceeds the 32 KB limit.',
+    UNAVAILABLE: 'User preferences storage is currently unavailable. Please retry in a moment.',
+  }),
+});
+
+const VENDOR_UPLOAD_HISTORY_CONFIG = Object.freeze({
+  DEFAULT_LIMIT: 30,
+  MAX_LIMIT: 50,
+  MAX_RECORDS_PER_BATCH: 100,
+  MAX_FILENAME_LENGTH: 512,
+  MESSAGES: Object.freeze({
+    FILENAME_REQUIRED: 'Upload fileName is required.',
+    INVALID_ID: 'Upload history batch ID is invalid.',
+    UNAVAILABLE: 'Vendor upload history storage is currently unavailable. Please retry in a moment.',
+  }),
+});
+
+const API_NO_STORE_HEADERS = Object.freeze({
+  CACHE_CONTROL: 'private, no-cache, no-store, must-revalidate',
+  PRAGMA: 'no-cache',
+  EXPIRES: '0',
+});
+
 module.exports = {
+  USER_PREFERENCE_CONFIG,
+  VENDOR_UPLOAD_HISTORY_CONFIG,
+  API_NO_STORE_HEADERS,
+  normalizeVendorRating,
   BUYER_FREE_TRIAL_RFQ_CREDITS,
   SMS_MESSAGES,
   ACTION_CENTER_MESSAGES,
@@ -3893,22 +4570,33 @@ module.exports = {
   TICKET_CREATE_FIELD_ALIASES,
   REQUEST_ID_CONFIG,
   APPROVER_CONFIG,
+  DEFAULT_APPROVER_EMAILS,
+  findApproverConfig,
+  resolveApproverEmail,
+  buildApprovalOtpKey,
   isApproverPasswordConfigured,
   verifyApproverPassword,
+  EXCLUDED_DAILY_REPORT_RECIPIENTS,
   DAILY_RFQ_REPORT_CONFIG,
   ACCOUNT_DOCUMENT_CATEGORIES,
   ACCOUNT_DOCUMENT_ALLOWED_MIME_TYPES,
   ACCOUNT_DOCUMENT_ALLOWED_EXTENSIONS,
   ACCOUNT_DOCUMENT_MAX_BYTES,
   CREDIT_APPROVAL_APPROVERS,
+  OFFLINE_PAYMENT_TYPES,
+  BUYER_SOURCING_MODES,
   SELLER_QUOTE_CREDITS_ALLOWED,
   APPROVAL_REQUEST_TYPES,
+  ALL_LEGACY_APPROVAL_REQUEST_TYPES,
   APPROVAL_STATUSES,
   INTERNAL_TASK_CATEGORIES,
+  INTERNAL_TASK_CATEGORY_LIST,
   INTERNAL_TASK_CATEGORY_LABELS,
   INTERNAL_TASK_CATEGORY_TYPES,
   INTERNAL_TASK_STATUSES,
   INTERNAL_TASK_PRIORITIES,
+  DEFAULT_INTERNAL_ASSIGNEES,
+  INTERNAL_TASK_USERS,
   DEMO_STATUSES,
   CREDIT_ACCOUNT_TYPES,
   CREDIT_APPROVER_ROLES,
@@ -3966,9 +4654,11 @@ module.exports = {
   DATABASE_QUERY_LOGGING,
   DATABASE_QUERY_CACHE,
   PUBLIC_VENDOR_MAJOR_LOOKUP_CONFIG,
+  PINCODE_LOOKUP_CONFIG,
   DEPRECATED_DATABASE_TABLES,
   GRAPHQL_CONFIG,
   STORE_HYDRATION_CONFIG,
+  CHANNEL_DISPATCH_CONCURRENCY,
   D1_OVERLOAD_CONFIG,
   D1_RETRY_CONFIG,
   SYSTEM_ACTOR_EMAIL,
@@ -3984,6 +4674,7 @@ module.exports = {
   IDENTITY_ROLE_MAP,
   IDENTITY_MASTER_DATA,
   IDENTITY_PHONE_CONFIG,
+  PLACEHOLDER_MOBILE_NUMBER,
   IDENTITY_OTP_CONFIG,
   BUYER_PROFILE_CONFIG,
   BUYER_PROFILE_MESSAGES,
@@ -3992,6 +4683,7 @@ module.exports = {
   RFQ_INGESTION_CONFIG,
   RFQ_ATTACHMENT_CONFIG,
   RFQ_ATTACHMENT_EXTENSION_MIME_MAP,
+  QUOTE_DOCUMENT_EXTRACTOR_CONFIG,
   resolveAttachmentContentType,
   GEMINI_CONFIG,
   GEMINI_INLINE_MIME_TYPES,
@@ -4002,9 +4694,14 @@ module.exports = {
   EMAIL_GATEWAY_CONFIG,
   EMAIL_RFQ_SCENARIOS,
   GMAIL_GATEWAY_LABELS,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_ORIGINS,
   VENDOR_EMAIL_GATEWAY_CONFIG,
+  getConfiguredVendorMailboxes,
   EMAIL_GATEWAY_MESSAGES,
   EMAIL_GATEWAY_DELIVERY_KIND,
+  VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
   EMAIL_GATEWAY_STATE,
   EMAIL_GATEWAY_SMTP_PORTS,
   UNAUTHORIZED_BUYER_NOTIFICATION,
@@ -4058,6 +4755,9 @@ module.exports = {
   BUYER_SUBSCRIPTION_TO_SOURCING_MODE,
   resolveBuyerSourcingMode,
   SUBSCRIPTION_MODE_ENTITLEMENTS,
+  isTrialActive,
+  BUYER_TRIAL_TRANSACTION_TYPE,
+  BUYER_TRIAL_GRANTED_DESCRIPTION,
   hasUnlimitedRfqAccess,
   hasUnlimitedQuoteAccess,
   hasUnlimitedDownloadAccess,
@@ -4107,6 +4807,15 @@ module.exports = {
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_POLL_INTERVAL_MS,
   RFQ_AUTO_CLOSE_REASON,
+  RFQ_QUOTES_SEALED_REASON,
+  parseRfqTimestampMs,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
+  RFQ_CLOSURE_MESSAGES,
+  STRICT_BUYER_RFQ_MAILBOX,
+  STRICT_VENDOR_INVITATION_MAILBOX,
+  NON_BUYER_MAILBOX_BLOCKLIST,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   RFQ_COMPARISON_NOTIFICATION_DELAY_MS,
   RFQ_COMPARISON_RETRY_DELAY_MS,
   RFQ_COMPARISON_MAX_ATTEMPTS,
@@ -4118,6 +4827,7 @@ module.exports = {
   RFQ_CHASER_RETRY_BASE_MS,
   RFQ_CHASER_RETRY_MAX_MS,
   RFQ_CHASER_ERROR_MAX_LENGTH,
+  RFQ_CHASER_BATCH_UPDATE_SIZE,
   DEFAULT_CATEGORY_TAXONOMY,
   MAJOR_CATEGORY_ALIASES: RFQ_CATEGORY_CLASSIFICATION.MAJOR_CATEGORY_ALIASES,
   QUA_AI_EMAIL_TEMPLATES,
@@ -4130,11 +4840,33 @@ module.exports = {
   looksLikeCombinedAddress,
   extractIndianAddressLocation,
   resolveVendorLocationFields,
+  normalizePincodeDigits,
+  exclusiveDigitPrefixUpperBound,
+  exclusiveNocasePrefixUpperBound,
+  commonPincodePrefixLength,
+  resolveVendorPinDigits,
+  compareVendorPincodeProximity,
+  foldCategoryDashes,
+  expandCategoryDashVariants,
+  VENDOR_CATEGORY_PLACEHOLDERS,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
   parseSearchTokens,
   PAYMENT_DUES_ACKNOWLEDGEMENT_STATUSES,
   PAYMENT_DUES_CHANNELS,
   ACTION_CENTER_CHANNELS,
   ACTION_CENTER_ENTITY_TYPES,
   ACTION_CENTER_COMM_STATUSES,
+  DOSSIER_MESSAGES,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  isVendorInactive,
+  isVendorActive,
+  STANDARDIZED_COMMUNICATION_CATEGORIES,
+  STANDARDIZED_COMMUNICATION_SCENARIO_IDS,
+  SCENARIO_TO_STANDARDIZED_CATEGORY,
+  resolveStandardizedCommunicationCategory,
 };
 

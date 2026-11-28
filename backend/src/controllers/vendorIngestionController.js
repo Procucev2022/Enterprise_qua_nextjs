@@ -181,6 +181,19 @@ async function startCategorizationJob(req, res, next) {
   }
 }
 
+/**
+ * Execute vendor-PO join and AI category classification directly in a single request.
+ * Returns the completed job, session status, and category mappings without polling.
+ */
+async function categorizeDirect(req, res, next) {
+  try {
+    const result = await vendorIngestionService.runDirectCategorization(req.user, req.params.sessionId);
+    return res.json({ success: true, data: result });
+  } catch (err) {
+    return respondWithError(err, res, next, 'Unexpected error running direct AI categorization');
+  }
+}
+
 async function reRunAi(req, res, next) {
   try {
     const result = await vendorIngestionService.reRunCategorization(
@@ -416,6 +429,10 @@ async function getActiveJobStatus(req, res, next) {
       null,
       req.query.type || null
     );
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+    }
     return res.json({ success: true, data: { job } });
   } catch (err) {
     return respondWithError(err, res, next, 'Failed to retrieve active job status');
@@ -424,6 +441,10 @@ async function getActiveJobStatus(req, res, next) {
 
 async function getJobById(req, res, next) {
   try {
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0');
+      res.setHeader('Pragma', 'no-cache');
+    }
     const job = await largeFileIngestionService.getJobStatus(
       req.user,
       req.params.sessionId,
@@ -440,11 +461,15 @@ async function getJobById(req, res, next) {
 
 async function cancelIngestionJob(req, res, next) {
   try {
-    const success = await largeFileIngestionService.cancelJob(
-      req.user,
-      req.params.sessionId,
-      req.body?.jobId || null
-    );
+    const hasOptions = Boolean(req.body?.discardVendorMaster || req.body?.discardIncomplete);
+    const args = [req.user, req.params.sessionId, req.body?.jobId || null];
+    if (hasOptions) {
+      args.push({
+        discardVendorMaster: Boolean(req.body?.discardVendorMaster),
+        discardIncomplete: Boolean(req.body?.discardIncomplete),
+      });
+    }
+    const success = await largeFileIngestionService.cancelJob(...args);
     return res.json({ success: true, data: { cancelled: success } });
   } catch (err) {
     return respondWithError(err, res, next, 'Failed to cancel ingestion job');
@@ -462,6 +487,7 @@ module.exports = {
   runJoin,
   categorizeBatch,
   startCategorizationJob,
+  categorizeDirect,
   reRunAi,
   listVendors,
   reviewVendorCategory,

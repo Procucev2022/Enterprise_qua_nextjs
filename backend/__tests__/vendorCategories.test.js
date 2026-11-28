@@ -1,16 +1,17 @@
 const request = require('supertest');
 const app = require('../src/app');
 const authService = require('../src/services/authService');
+const storeService = require('../src/services/storeService');
 const { authHeader } = require('./testHelpers');
 
 // Category updates are now ownership-scoped to the vendor matching the
 // record's own email (see vendorController.assertVendorOwnership), so v-001
 // must be edited as its actual owner (rajesh@apexindustrial.in), not the
 // generic 'vendor' test user.
-function v001AuthHeader() {
+function v001AuthHeader(email = 'rajesh-cat@apexindustrial.in') {
   const token = authService.generateSessionToken({
     id: 'usr-vendor-v001',
-    email: 'rajesh@apexindustrial.in',
+    email,
     name: 'Rajesh Nair',
     role: 'vendor',
     orgId: 'org-vendor-v001',
@@ -20,19 +21,18 @@ function v001AuthHeader() {
 }
 
 describe('Vendor Category Dual-Stream Reconciliation API', () => {
-  // The vendor is created by the test. It used to reference the seeded 'v-001'
-  // record by its fixed id; nothing is seeded now, so the id is whatever the
-  // server allocates.
+  jest.setTimeout(20000);
   let ownedVendorId;
 
   beforeAll(async () => {
+    storeService.vendors = storeService.vendors.filter((v) => v.email !== 'rajesh-cat@apexindustrial.in');
     const created = await request(app).post('/api/vendors').set(v001AuthHeader()).send({
       name: 'Apex Industrial Dynamics Pvt Ltd',
-      email: 'rajesh@apexindustrial.in',
+      email: 'rajesh-cat@apexindustrial.in',
       majorCategory: 'Engineering Spares - Mechanical',
     });
     ownedVendorId = created.body.data.id;
-  });
+  }, 20000);
 
   test('PUT /api/vendors/:id/categories reconciles categories', async () => {
     const res = await request(app)

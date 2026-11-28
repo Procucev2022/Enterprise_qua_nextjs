@@ -72,6 +72,18 @@ describe('buyerProfileController 100% Branch Coverage', () => {
     await buyerProfileController.getMyProfile({ user: { email: 'b@corp.com' } }, mockRes(), next);
     expect(next).toHaveBeenCalledWith(expect.any(Error));
 
+    // getProfileCompletion success
+    jest.spyOn(buyerProfileService, 'getProfile').mockResolvedValue({ companyName: 'Acme' });
+    const resComp = mockRes();
+    await buyerProfileController.getProfileCompletion({ user: { email: 'b@corp.com' } }, resComp, next);
+    expect(resComp.statusCode).toBe(200);
+    expect(resComp.data.data).toHaveProperty('isComplete');
+
+    // getProfileCompletion error
+    buyerProfileService.getProfile.mockRejectedValue(new Error('completion crash'));
+    await buyerProfileController.getProfileCompletion({ user: { email: 'b@corp.com' } }, mockRes(), next);
+    expect(next).toHaveBeenCalledWith(expect.any(Error));
+
     // updateMyProfile success
     jest.spyOn(buyerProfileService, 'saveProfile').mockResolvedValue({
       profile: { companyName: 'Acme Updated' },

@@ -22,7 +22,6 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
-  Download,
   AlertCircle,
   TrendingUp,
   Settings,
@@ -33,6 +32,7 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import { useApp } from '@/lib/store';
+import { fetchBuyerDirectoryKPIStats } from '@/lib/buyerProfileClient';
 import BuyerDossierDrawer from './components/BuyerDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
 
@@ -79,12 +79,12 @@ import {
   BUYER_DIRECTORY_COLUMN_PREF_KEY,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { exportReportToExcel } from '@/lib/reportsClient';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 
 interface BuyersDirectoryProps {
   onSelectRFQ?: (rfq: RFQItem) => void;
   initialBuyerId?: string;
-  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents';
+  initialTab?: 'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors';
 }
 
 export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTab }: BuyersDirectoryProps) {
@@ -107,83 +107,33 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
 
 
 
-  // Context preservation: load saved directory state from sessionStorage on mount
-  useEffect(() => {
-    try {
-      const saved = sessionStorage.getItem('buyer_directory_state');
-      if (saved) {
-        const parsed = JSON.parse(saved);
-        if (parsed.searchTerm !== undefined) setSearchTerm(parsed.searchTerm);
-        if (parsed.selectedMode !== undefined) setSelectedMode(parsed.selectedMode);
-        if (parsed.selectedStatus !== undefined) setSelectedStatus(parsed.selectedStatus);
-        if (parsed.selectedPlan !== undefined) setSelectedPlan(parsed.selectedPlan);
-        if (parsed.selectedSource !== undefined) setSelectedSource(parsed.selectedSource);
-        if (parsed.currentPage !== undefined) setCurrentPage(parsed.currentPage);
-        if (parsed.sortColumn !== undefined) setSortColumn(parsed.sortColumn);
-        if (parsed.sortOrder !== undefined) setSortOrder(parsed.sortOrder);
-      }
-    } catch {
-      // ignore
-    }
-  }, []);
-
-  // Context preservation: persist current state on updates
-  useEffect(() => {
-    try {
-      sessionStorage.setItem(
-        'buyer_directory_state',
-        JSON.stringify({
-          searchTerm,
-          selectedMode,
-          selectedStatus,
-          selectedPlan,
-          selectedSource,
-          currentPage,
-          sortColumn,
-          sortOrder,
-        })
-      );
-    } catch {
-      // ignore
-    }
-  }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, currentPage, sortColumn, sortOrder]);
-
-  // Column Customization state
+  // Column Customization state (hydrated from backend user preferences API)
   const [columns, setColumns] = useState<BuyerDirectoryColumnConfig[]>(DEFAULT_BUYER_DIRECTORY_COLUMNS);
   const [showColumnSettings, setShowColumnSettings] = useState(false);
   const [draggedColIndex, setDraggedColIndex] = useState<number | null>(null);
 
-  // Load column preferences from localStorage
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(BUYER_DIRECTORY_COLUMN_PREF_KEY);
-      if (saved) {
-        const parsed: BuyerDirectoryColumnConfig[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const validKeys = new Set(DEFAULT_BUYER_DIRECTORY_COLUMNS.map((c) => c.key));
-          const validated = parsed.filter((c) => validKeys.has(c.key));
-          // Append any missing new columns from DEFAULT_BUYER_DIRECTORY_COLUMNS
-          const presentKeys = new Set(validated.map((c) => c.key));
-          DEFAULT_BUYER_DIRECTORY_COLUMNS.forEach((defCol) => {
-            if (!presentKeys.has(defCol.key)) {
-              validated.push(defCol);
-            }
-          });
-          setColumns(validated);
+    let cancelled = false;
+    void getUserPreference<BuyerDirectoryColumnConfig[]>(BUYER_DIRECTORY_COLUMN_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const validKeys = new Set(DEFAULT_BUYER_DIRECTORY_COLUMNS.map((c) => c.key));
+      const validated = saved.filter((c) => validKeys.has(c.key));
+      const presentKeys = new Set(validated.map((c) => c.key));
+      DEFAULT_BUYER_DIRECTORY_COLUMNS.forEach((defCol) => {
+        if (!presentKeys.has(defCol.key)) {
+          validated.push(defCol);
         }
-      }
-    } catch {
-      // use defaults on parse error
-    }
+      });
+      setColumns(validated);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const saveColumns = useCallback((newCols: BuyerDirectoryColumnConfig[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(BUYER_DIRECTORY_COLUMN_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(BUYER_DIRECTORY_COLUMN_PREF_KEY, newCols);
   }, []);
 
   const handleToggleColumn = useCallback(
@@ -231,6 +181,18 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     setCurrentPage(1);
   }, [searchTerm, selectedMode, selectedStatus, selectedPlan, selectedSource, sortColumn, sortOrder]);
 
+  // Escape key support to close column settings modal
+  useEffect(() => {
+    if (!showColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings]);
+
   // Dossier Drawer / Modal state
   const [activeBuyer, setActiveBuyer] = useState<BuyerAccount | null>(null);
 
@@ -245,7 +207,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       }
     }
   }, [initialBuyerId, initialTab, buyerAccounts]);
-  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents'>('profile');
+  const [dossierTab, setDossierTab] = useState<'profile' | 'rfqs' | 'credits' | 'communications' | 'payments' | 'documents' | 'uploaded-vendors'>('profile');
 
   // Pre-calculate per-buyer RFQ counts and actual spend from the live RFQs collection
   const buyerMetricsMap = useMemo(() => {
@@ -315,15 +277,46 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     [buyerAccounts, isSubscriptionBuyer]
   );
 
+  // Live Database KPI counts (Removes 500-cap)
+  const [dbKPIStats, setDbKPIStats] = useState<{
+    totalBuyers: number;
+    verifiedBuyers: number;
+    subscriptionBuyers: number;
+    modeCounts?: Record<string, number>;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchBuyerDirectoryKPIStats().then((res) => {
+      if (
+        active &&
+        res &&
+        res.success &&
+        typeof res.totalBuyers === 'number' &&
+        !isNaN(res.totalBuyers)
+      ) {
+        setDbKPIStats({
+          totalBuyers: res.totalBuyers,
+          verifiedBuyers: typeof res.verifiedBuyers === 'number' ? res.verifiedBuyers : 0,
+          subscriptionBuyers: typeof res.subscriptionBuyers === 'number' ? res.subscriptionBuyers : 0,
+          modeCounts: res.modeCounts,
+        });
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // KPI Metrics Calculation (5 Summary Cards)
-  const totalBuyers = buyerAccounts.length;
+  const totalBuyers = dbKPIStats ? dbKPIStats.totalBuyers : buyerAccounts.length;
   const verifiedBuyers = useMemo(
-    () => buyerAccounts.filter(isVerifiedBuyer).length,
-    [buyerAccounts]
+    () => (dbKPIStats ? dbKPIStats.verifiedBuyers : buyerAccounts.filter(isVerifiedBuyer).length),
+    [dbKPIStats, buyerAccounts]
   );
   const subscriptionBuyers = useMemo(
-    () => buyerAccounts.filter(isSubscriptionBuyer).length,
-    [buyerAccounts, isSubscriptionBuyer]
+    () => (dbKPIStats ? dbKPIStats.subscriptionBuyers : buyerAccounts.filter(isSubscriptionBuyer).length),
+    [dbKPIStats, buyerAccounts, isSubscriptionBuyer]
   );
   const totalRFQs = rfqs.length;
   const paidRFQs = useMemo(
@@ -356,6 +349,9 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
 
   // Mode distribution
   const modeCounts = useMemo(() => {
+    if (dbKPIStats?.modeCounts) {
+      return dbKPIStats.modeCounts;
+    }
     const counts: Record<string, number> = {
       [RFQ_MODES.MODE_0]: 0,
       [RFQ_MODES.MODE_1]: 0,
@@ -368,7 +364,7 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
       else counts[RFQ_MODES.MODE_0]++;
     });
     return counts;
-  }, [buyerAccounts]);
+  }, [dbKPIStats, buyerAccounts]);
 
   // Filtered Buyers
   const filteredBuyers = useMemo(() => {
@@ -715,30 +711,6 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
     }
   };
 
-  const handleExportDirectory = useCallback(() => {
-    const rows = sortedBuyers.map((b) => {
-      const metrics = buyerMetricsMap.get(b.id);
-      const rfqCount = metrics?.rfqCount ?? (b.totalRFQsCreated || 0);
-      const spendNumeric = metrics?.spendNumeric ?? 0;
-      const spendDisplay = spendNumeric > 0 ? formatCurrency(spendNumeric) : String(b.totalSpend || '₹0').replace('$', '₹');
-      return {
-        OrganizationName: b.organizationName,
-        ContactPerson: b.contactPerson || '',
-        Email: b.corporateEmail,
-        ...(b.mobileNumber ? { Phone: b.mobileNumber } : {}),
-        City: b.city || '',
-        PlantLocation: b.primaryPlantLocation || '',
-        SourcingMode: RFQ_MODE_LABELS[b.sourcingMode] || 'Mode 0',
-        Plan: b.subscriptionPlan || 'standard',
-        RemainingFreeRFQs: b.remainingFreeRFQs ?? 5,
-        TotalRFQsCreated: rfqCount,
-        TotalSpend: spendDisplay,
-        Status: b.status || 'ACTIVE',
-      };
-    });
-    exportReportToExcel(rows, `Buyers_Directory_${new Date().toISOString().split('T')[0]}`, 'BuyersDirectory');
-  }, [sortedBuyers, buyerMetricsMap]);
-
   // Handle column header sort click
   const handleSortClick = (key: BuyerDirectoryColumnKey) => {
     if (key === 'actions') return;
@@ -930,16 +902,8 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
           <option value="Email">{UI_STRINGS.buyerDirectory.sourceEmail}</option>
         </select>
 
-        {/* Export Directory and Gear icon aligned to right */}
+        {/* Gear icon aligned to right */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleExportDirectory}
-            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>Export Directory</span>
-          </button>
-
           <button
             type="button"
             onClick={() => setShowColumnSettings(true)}
@@ -959,8 +923,14 @@ export default function BuyersDirectory({ onSelectRFQ, initialBuyerId, initialTa
           aria-modal="true"
           aria-label="Customize Columns"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowColumnSettings(false);
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />

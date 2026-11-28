@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { useApp, clearSessionCache } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
@@ -11,6 +11,7 @@ import type { UserRole } from '@/lib/types';
 import RoleNavigation from '@/app/components/RoleNavigation';
 import SupportChatWidget from '@/app/components/SupportChatWidget';
 import InitialSetupModal from '@/app/buyer/initial-setup-modal';
+import BuyerProfileCompletionModal from '@/app/buyer/buyer-profile-completion-modal';
 
 interface WorkspaceShellProps {
   /** Role whose routes this shell wraps; used to keep the sidebar in sync. */
@@ -29,6 +30,11 @@ interface WorkspaceShellProps {
 export default function WorkspaceShell({ role, children }: WorkspaceShellProps) {
   const router = useRouter();
   const pathname = usePathname();
+  const [mounted, setMounted] = useState<boolean>(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
   const {
     isLoggedIn,
     currentRole,
@@ -38,6 +44,7 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     setCurrentUserSession,
     showToast,
     ensureRouteData,
+    initialSetupModalOpen,
   } = useApp();
 
   const mustChangeVendorPassword =
@@ -112,8 +119,9 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
     router.replace(LOGIN_ROUTE);
   };
 
-  // Avoid rendering another role's screens for the frame before the redirect.
-  if (!isLoggedIn || sessionRole !== role || mustChangeVendorPassword || mustCompleteBuyerOnboarding) {
+  // Avoid rendering another role's screens for the frame before the redirect,
+  // and ensure server and client match during hydration before mounting.
+  if (!mounted || !isLoggedIn || sessionRole !== role || mustChangeVendorPassword || mustCompleteBuyerOnboarding) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <p className="text-xs text-slate-500 dark:text-gray-400">{UI_STRINGS.auth.redirecting}</p>
@@ -126,10 +134,11 @@ export default function WorkspaceShell({ role, children }: WorkspaceShellProps) 
       <RoleNavigation onLogout={handleLogout} />
 
       <main className="flex-1 min-w-0 overflow-y-auto overflow-x-hidden">
-        <div className="max-w-[1600px] mx-auto px-2 sm:px-3 py-2 sm:py-2.5">{children}</div>
+        <div className="w-full max-w-[1600px] min-w-0 mx-auto px-2 sm:px-3 py-2 sm:py-2.5">{children}</div>
       </main>
 
       {role === 'buyer' && <InitialSetupModal />}
+      {role === 'buyer' && !initialSetupModalOpen && <BuyerProfileCompletionModal />}
       <SupportChatWidget />
     </div>
   );

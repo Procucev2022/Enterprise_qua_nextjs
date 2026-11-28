@@ -29,6 +29,7 @@ interface BuyerDetailsModalProps {
   buyerName?: string | null;
   buyerAccountId?: string | null;
   rfq?: RFQItem | null;
+  onOpenDossier?: () => void;
 }
 
 export default function BuyerDetailsModal({
@@ -37,6 +38,7 @@ export default function BuyerDetailsModal({
   buyerName,
   buyerAccountId,
   rfq,
+  onOpenDossier,
 }: BuyerDetailsModalProps) {
   const { buyerAccounts = [] } = useApp() || {};
   const [copiedField, setCopiedField] = useState<string | null>(null);
@@ -311,14 +313,30 @@ export default function BuyerDetailsModal({
               </p>
             </div>
           </div>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close modal"
-            className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-gray-200 transition-colors"
-          >
-            <X size={20} />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {onOpenDossier && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenDossier();
+                }}
+                className="inline-flex items-center gap-1 px-2.5 py-1 text-[11px] font-semibold text-indigo-700 dark:text-indigo-300 bg-indigo-50 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 rounded-lg hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition cursor-pointer"
+                title={UI_STRINGS.actionCenter.paymentDues.modals.view360Dossier}
+              >
+                <span>{UI_STRINGS.actionCenter.paymentDues.modals.view360Dossier}</span>
+                <Globe size={11} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close modal"
+              className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 hover:text-slate-600 dark:hover:text-gray-200 transition-colors"
+            >
+              <X size={20} />
+            </button>
+          </div>
         </div>
 
         {(profileLoadError || profileSyncWarning) && (
@@ -671,7 +689,22 @@ export default function BuyerDetailsModal({
         </div>
 
         {/* Modal Footer */}
-        <div className="flex items-center justify-end gap-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-gray-950/80 px-5 py-3">
+        <div className="flex items-center justify-between gap-2 border-t border-slate-200 dark:border-slate-800 bg-slate-50/80 dark:bg-gray-950/80 px-5 py-3">
+          <div>
+            {onOpenDossier && (
+              <button
+                type="button"
+                onClick={() => {
+                  onClose();
+                  onOpenDossier();
+                }}
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold text-indigo-700 dark:text-indigo-300 bg-indigo-50 hover:bg-indigo-100 dark:bg-indigo-950/60 border border-indigo-200/60 dark:border-indigo-800/60 transition-colors cursor-pointer"
+              >
+                <span>{UI_STRINGS.actionCenter.paymentDues.modals.view360Dossier}</span>
+                <Globe size={12} />
+              </button>
+            )}
+          </div>
           <button
             type="button"
             onClick={onClose}

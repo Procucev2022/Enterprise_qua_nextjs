@@ -267,11 +267,12 @@ export function validateManualRFQForm(form: ManualRFQForm): ManualRFQValidation 
  */
 export function toExtractedEntity(item: ManualRFQLineItem): ExtractedEntity {
   const rawTargetDate = clean(item.targetDate);
+  const qty = Number(item.quantity) || 0;
   return {
     id: item.id,
     itemName: clean(item.itemName),
-    quantity: Number(item.quantity) || 0,
-    unit: clean(item.unit),
+    quantity: qty,
+    unit: clean(item.unit) || (qty > 0 ? 'Nos' : ''),
     targetDate: isPastDateString(rawTargetDate) ? '' : rawTargetDate,
     technicalSpecs: clean(item.technicalSpecs),
     confidence: MANUAL_ENTRY_CONFIDENCE,
@@ -384,12 +385,43 @@ export function fromExtractedEntity(entity: ExtractedEntity): ManualRFQLineItem 
 
   const rawTargetDate = clean(entity.targetDate);
   const targetDate = isPastDateString(rawTargetDate) ? '' : rawTargetDate;
+
+  const rawQty = entity.quantity ?? (entity as any)?.qty ?? (entity as any)?.Quantity;
+  let parsedQty: number | null = null;
+  if (typeof rawQty === 'number' && Number.isFinite(rawQty) && rawQty > 0) {
+    parsedQty = rawQty;
+  } else if (rawQty !== null && rawQty !== undefined) {
+    const cleaned = String(rawQty).replace(/,/g, '').trim().replace(/^(?:qty|quantity)?[\s:=~-]*/i, '').replace(/^\(([0-9.]+)\)/, '$1');
+    const match = cleaned.match(/^([+-]?(?:\d+(?:\.\d+)?|\.\d+))/);
+    if (match) {
+      const n = Number(match[1]);
+      if (Number.isFinite(n) && n > 0) parsedQty = n;
+    }
+  }
+
+  let rawUnit = clean(entity.unit || (entity as any)?.uom || (entity as any)?.unitOfMeasure || (entity as any)?.UOM || (entity as any)?.Unit);
+  if (!rawUnit && rawQty) {
+    const unitMatch = String(rawQty).match(/[0-9.]+\s*[-/]?\s*([a-zA-Z./]{1,15})(?:[^\w./]|$)/);
+    if (unitMatch && unitMatch[1]) {
+      rawUnit = unitMatch[1].trim();
+    }
+  }
+  if (!rawUnit && entity.itemName) {
+    const unitMatch = String(entity.itemName).match(/[0-9.]+\s*[-/]?\s*([a-zA-Z./]{1,15})(?:[^\w./]|$)/);
+    if (unitMatch && unitMatch[1]) {
+      rawUnit = unitMatch[1].trim();
+    }
+  }
+  if (!rawUnit && (parsedQty !== null || rawQty !== null && rawQty !== undefined || clean(entity.itemName))) {
+    rawUnit = 'Nos';
+  }
+
   return {
     id: entity.id || `manual-item-${Date.now()}-${rowCounter}`,
     itemName: clean(entity.itemName),
     technicalSpecs: clean(entity.technicalSpecs),
-    quantity: Number(entity.quantity) > 0 ? Number(entity.quantity) : null,
-    unit: clean(entity.unit),
+    quantity: parsedQty,
+    unit: rawUnit,
     targetDate,
     majorCategory,
     minorCategory,

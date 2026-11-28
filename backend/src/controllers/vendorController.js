@@ -6,6 +6,8 @@ const domainQueries = require('../db/domainQueries');
 const pool = require('../db/pool');
 const { isD1Overloaded } = require('../db/d1Bridge');
 const identityQueries = require('../db/identityQueries');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
 const eventOutboxService = require('../services/eventOutboxService');
 const { generateVendorOnboardingEmail } = require('../services/emailService');
 const zohoPaymentService = require('../services/zohoPaymentService');
@@ -39,7 +41,16 @@ const {
   BUYER_LOCKED_STATUTORY_FIELDS,
   VENDOR_ASSIGNMENT_LIMITS,
   VENDOR_DIRECTORY_QUERY_CONFIG,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
   formatMessage,
+  foldCategoryDashes,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  isVendorInactive,
+  normalizeVendorRating,
 } = require('../config/constants');
 const vendorPresenceService = require('../services/vendorPresenceService');
 
@@ -49,7 +60,54 @@ const vendorPresenceService = require('../services/vendorPresenceService');
  * and rate vendors elsewhere but have no business editing a vendor's own
  * registration details.
  */
-async function checkVendorOwnership(user, vendorOrEmail) {
+async function buildBuyerOwnershipContext(user) {
+  const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
+  const resolvedOrgId = await resolveBuyerOrgIdForScope(user, buyerAccount);
+  const buyerScope = buyerScopeIdsFor(user, buyerAccount, resolvedOrgId);
+  const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
+  // A buyer can have more than one buyer_accounts row under the same
+  // corporate_email (re-registration, org re-provisioning, etc.), and
+  // `is_active` is a single global pointer rather than a per-user flag —
+  // getBuyerAccountByEmail above only ever resolves the current active (or
+  // most recently touched) row. A vendor imported while a different one of
+  // the buyer's own rows was active still carries that other row's id as its
+  // buyerId/buyerAccountId, so scope must include every row sharing this
+  // email, not just the one currently resolved, or the buyer gets locked out
+  // of editing their own historical vendors the moment the active row changes.
+  let allOwnAccountIds = [];
+  if (typeof domainQueries.getBuyerAccountsByEmailFromDB === 'function' && user?.email) {
+    try {
+      const ownAccounts = await domainQueries.getBuyerAccountsByEmailFromDB(user.email);
+      allOwnAccountIds = ownAccounts.flatMap((acc) => [acc?.id, acc?.corporateEmail, acc?.organizationId]);
+    } catch (err) {
+      logger.warn('Failed to load all buyer accounts for ownership scope; continuing with the single resolved account', {
+        error: err,
+      }, 'VENDOR_CONTROLLER');
+    }
+  }
+  const scopeSet = new Set(
+    [...buyerScope, buyerAccount?.email, ...allOwnAccountIds]
+      .map((id) => String(id || '').trim().toLowerCase())
+      .filter(Boolean)
+  );
+  const sId = buyerId ? String(buyerId).toLowerCase() : '';
+  const uEmail = user.email ? String(user.email).toLowerCase() : '';
+  const buyerCompany = buyerAccount?.organizationName || user.orgName || user.name || 'Buyer';
+  const orgName = String(buyerCompany).trim().toLowerCase();
+  return {
+    buyerAccount,
+    resolvedOrgId,
+    buyerScope,
+    buyerCompany,
+    buyerId,
+    scopeSet,
+    sId,
+    uEmail,
+    orgName,
+  };
+}
+
+function checkVendorOwnershipWithContext(user, vendorOrEmail, buyerContext = null) {
   if (!user) return false;
   if (user.role === 'admin') return true;
 
@@ -58,12 +116,8 @@ async function checkVendorOwnership(user, vendorOrEmail) {
     return true;
   }
 
-  if (user.role === 'buyer') {
-    const buyerAccount = await storeService.getBuyerAccountByEmail(user.email);
-    const buyerId = buyerAccount ? buyerAccount.id : user.sub || user.email;
-    const sId = buyerId ? String(buyerId).toLowerCase() : '';
-    const uEmail = user.email ? String(user.email).toLowerCase() : '';
-    const orgName = buyerAccount?.organizationName ? String(buyerAccount.organizationName).toLowerCase() : '';
+  if (user.role === 'buyer' && buyerContext) {
+    const { scopeSet, sId, uEmail, orgName } = buyerContext;
 
     if (typeof vendorOrEmail === 'object' && vendorOrEmail !== null) {
       const vBuyerId = vendorOrEmail.buyerId ? String(vendorOrEmail.buyerId).toLowerCase() : '';
@@ -71,8 +125,9 @@ async function checkVendorOwnership(user, vendorOrEmail) {
       const vBuyerEmail = vendorOrEmail.buyerEmail ? String(vendorOrEmail.buyerEmail).toLowerCase() : '';
       const vCompany = vendorOrEmail.addedByBuyerCompany ? String(vendorOrEmail.addedByBuyerCompany).toLowerCase() : '';
 
-      const matchesBuyerId = (vBuyerId && vBuyerId === sId) || (vBuyerAccountId && vBuyerAccountId === sId);
-      const matchesBuyerEmail = (vBuyerEmail && (vBuyerEmail === uEmail || vBuyerEmail === sId));
+      const matchesBuyerId = (vBuyerId && (vBuyerId === sId || scopeSet.has(vBuyerId))) ||
+        (vBuyerAccountId && (vBuyerAccountId === sId || scopeSet.has(vBuyerAccountId)));
+      const matchesBuyerEmail = Boolean(vBuyerEmail && (vBuyerEmail === uEmail || vBuyerEmail === sId || scopeSet.has(vBuyerEmail)));
       const matchesCompany = Boolean(vCompany && orgName && vCompany === orgName);
 
       if (matchesBuyerId || matchesBuyerEmail || matchesCompany) {
@@ -80,7 +135,11 @@ async function checkVendorOwnership(user, vendorOrEmail) {
       }
 
       // If it belongs to a different buyer explicitly, deny
-      if ((vBuyerId && vBuyerId !== sId) || (vBuyerAccountId && vBuyerAccountId !== sId) || (vBuyerEmail && vBuyerEmail !== uEmail && vBuyerEmail !== sId)) {
+      if (
+        (vBuyerId && !scopeSet.has(vBuyerId) && vBuyerId !== sId) ||
+        (vBuyerAccountId && !scopeSet.has(vBuyerAccountId) && vBuyerAccountId !== sId) ||
+        (vBuyerEmail && !scopeSet.has(vBuyerEmail) && vBuyerEmail !== uEmail && vBuyerEmail !== sId)
+      ) {
         return false;
       }
 
@@ -123,13 +182,19 @@ async function checkVendorOwnership(user, vendorOrEmail) {
   return false;
 }
 
-async function assertVendorOwnership(req, res, vendorOrEmail) {
+async function checkVendorOwnership(user, vendorOrEmail, precomputedContext = null) {
+  const buyerContext =
+    user && user.role === 'buyer' ? precomputedContext || (await buildBuyerOwnershipContext(user)) : null;
+  return checkVendorOwnershipWithContext(user, vendorOrEmail, buyerContext);
+}
+
+async function assertVendorOwnership(req, res, vendorOrEmail, precomputedContext = null) {
   const user = req.user;
   if (!user) {
     res.status(401).json({ success: false, error: 'Authentication required.' });
     return false;
   }
-  const isOwner = await checkVendorOwnership(user, vendorOrEmail);
+  const isOwner = await checkVendorOwnership(user, vendorOrEmail, precomputedContext);
   if (isOwner) return true;
 
   res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
@@ -213,8 +278,9 @@ function splitBuyerLockedFields(body) {
 // resolved server-side from the authenticated buyer's own account below.
 const VENDOR_BUYER_CREATE_FIELDS = [
   'name', 'brandName', 'email', 'phone', 'contactPerson', 'contactDesignation',
-  'gstin', 'gst', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
+  'gstin', 'gst', 'gstNumber', 'pan', 'msme', 'annualTurnover', 'location', 'city', 'state',
   'country', 'pincode', 'majorCategory', 'minorCategories', 'products',
+  'rating', 'score',
 ];
 
 function pickVendorBuyerCreateFields(body) {
@@ -327,8 +393,7 @@ function sanitizePublicVendor(vendor) {
   const rawObj = vendor.raw && typeof vendor.raw === 'object' ? vendor.raw : {};
   const v = { ...rawObj, ...vendor };
   const majorCategory = v._majorCategory || v.major_category || v.majorCategory || rawObj.majorCategory || 'General Industrial';
-  const rating = typeof v.rating === 'number' ? v.rating :
-    (typeof v.score === 'number' ? Math.round((v.score / 20) * 10) / 10 : null);
+  const rating = normalizeVendorRating(v.rating, v.score);
   const city = v.city || null;
   const state = v.state || null;
   const location = [city, state].filter(Boolean).join(', ') || v.location || city || state || 'India';
@@ -393,7 +458,7 @@ function parseCategoryFilterList(rawValue) {
  * dash from turning a valid category filter into an empty result.
  */
 function normalizeCategoryDashes(value) {
-  return String(value ?? '').replace(/[–—]/g, '-');
+  return foldCategoryDashes(value);
 }
 
 /**
@@ -421,9 +486,11 @@ function validateVendorDirectoryQuery(rawQuery) {
   for (const key of ['buyerId', 'search', 'email', 'category', 'minor', 'state', 'city']) {
     if (q[key] !== undefined) normalized[key] = q[key];
   }
-  // Pincode: digits only (spaces stripped, e.g. "560 001"); an empty value means no filter.
-  if (q.pincode !== undefined && String(q.pincode).trim() !== '') {
-    normalized.pincode = String(q.pincode).replace(/\s+/g, '');
+  // Pincode / preferredPincode: digits only (spaces stripped, e.g. "560 001"); empty means no filter.
+  for (const pinKey of ['pincode', 'preferredPincode']) {
+    if (q[pinKey] !== undefined && String(q[pinKey]).trim() !== '') {
+      normalized[pinKey] = String(q[pinKey]).replace(/\s+/g, '');
+    }
   }
   for (const listKey of ['majors', 'minors']) {
     if (q[listKey] !== undefined) {
@@ -433,6 +500,14 @@ function validateVendorDirectoryQuery(rawQuery) {
   if (q.publicOnly !== undefined && String(q.publicOnly).trim() !== '') {
     normalized.publicOnly = String(q.publicOnly).trim().toLowerCase();
   }
+  if (q.activeOnly !== undefined && String(q.activeOnly).trim() !== '') {
+    normalized.activeOnly = String(q.activeOnly).trim().toLowerCase();
+  }
+  for (const subKey of ['subscription', 'subscriptionOnly']) {
+    if (q[subKey] !== undefined && String(q[subKey]).trim() !== '') {
+      normalized[subKey] = String(q[subKey]).trim().toLowerCase();
+    }
+  }
   return validatePayload(VALIDATION_SCHEMAS.vendorDirectoryQuery, normalized);
 }
 
@@ -440,17 +515,18 @@ function mergeUniquePublicVendors(targetMap, candidates, cap) {
   if (!Array.isArray(candidates)) return;
   for (const vendor of candidates) {
     if (targetMap.size >= cap) break;
-    if (!vendor || !storeService.isProcucevVendor(vendor)) continue;
+    if (!vendor || isVendorInactive(vendor) || !storeService.isProcucevVendor(vendor)) continue;
     const key = vendor.id || vendor.vendorCode || String(vendor.email || '').toLowerCase();
     if (!key || targetMap.has(key)) continue;
     targetMap.set(key, vendor);
   }
 }
 
-async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
+async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit, preferredPincode = '') {
   if (!Array.isArray(majors) || majors.length === 0 || poolMap.size >= poolLimit) return;
+  const pinOpts = preferredPincode ? [{ pincode: preferredPincode }] : [];
   if (majors.length === 1) {
-    const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    const rows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, rows, poolLimit);
     return;
   }
@@ -458,7 +534,7 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
   // out secondary line-item divisions under a single SQL LIMIT.
   const perMajorLimit = Math.max(20, Math.ceil(poolLimit / majors.length));
   const buckets = await Promise.all(
-    majors.map((major) => domainQueries.getPublicVendorsByMajorCategoryFromDB([major], perMajorLimit))
+    majors.map((major) => domainQueries.getPublicVendorsByMajorCategoryFromDB([major], perMajorLimit, ...pinOpts))
   );
   const maxLen = buckets.reduce((max, arr) => Math.max(max, Array.isArray(arr) ? arr.length : 0), 0);
   for (let idx = 0; idx < maxLen && poolMap.size < poolLimit; idx += 1) {
@@ -470,7 +546,7 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
     }
   }
   if (poolMap.size < poolLimit) {
-    const combined = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit);
+    const combined = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, combined, poolLimit);
   }
 }
@@ -479,19 +555,20 @@ async function fetchMajorPoolsFromDB(majors, poolMap, poolLimit) {
  * Fetches indexed public Procucev network candidates matching RFQ minor/major categories.
  * Minor matches lead the pool; parent-major vendors top up the pool when minor matches are sparse.
  */
-async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize }) {
+async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize, preferredPincode = '' }) {
   const poolLimit = Math.min(
     VENDOR_DIRECTORY_QUERY_CONFIG.MAX_POOL_LIMIT,
     Math.max(pageSize, VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT * VENDOR_DIRECTORY_QUERY_CONFIG.MIN_MINOR_POOL_FACTOR)
   );
   const minorTarget = VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_LIMIT;
+  const pinOpts = preferredPincode ? [{ pincode: preferredPincode }] : [];
   const poolMap = new Map();
 
   if (minors.length > 0) {
     const inferredMajors = storeService._majorCategoriesForMinors(minors, { allMajors: true });
     const lookupMajors = dedupeCategoryStrings([...majors, ...inferredMajors]);
     const searchTerms = storeService.minorSearchTerms(minors);
-    const batchMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(searchTerms, lookupMajors, poolLimit);
+    const batchMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(searchTerms, lookupMajors, poolLimit, ...pinOpts);
     mergeUniquePublicVendors(poolMap, batchMinorRows, poolLimit);
 
     if (minors.length > 1 && poolMap.size < poolLimit) {
@@ -503,7 +580,8 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
         const singleMinorRows = await domainQueries.getPublicVendorsByMinorCategoryFromDB(
           storeService.minorSearchTerms([minor]),
           storeService._majorCategoriesForMinors([minor], { allMajors: true }),
-          perMinorLimit
+          perMinorLimit,
+          ...pinOpts
         );
         mergeUniquePublicVendors(poolMap, singleMinorRows, poolLimit);
       }
@@ -514,15 +592,15 @@ async function fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize })
     ).length;
 
     if (minorMatchedCount < minorTarget && poolMap.size < poolLimit && lookupMajors.length === 0 && !isD1Overloaded()) {
-      const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2);
+      const legacyMinorRows = await domainQueries.getPublicVendorsMatchingCategories(searchTerms, minorTarget * 2, ...pinOpts);
       mergeUniquePublicVendors(poolMap, legacyMinorRows, poolLimit);
     }
 
     if (poolMap.size < pageSize && lookupMajors.length > 0) {
-      await fetchMajorPoolsFromDB(lookupMajors, poolMap, poolLimit);
+      await fetchMajorPoolsFromDB(lookupMajors, poolMap, poolLimit, preferredPincode);
     }
   } else {
-    await fetchMajorPoolsFromDB(majors, poolMap, poolLimit);
+    await fetchMajorPoolsFromDB(majors, poolMap, poolLimit, preferredPincode);
   }
 
   return Array.from(poolMap.values()).slice(0, pageSize);
@@ -574,6 +652,8 @@ async function getVendors(req, res, next) {
     }
     const cleanQuery = queryValidation.sanitizedData;
     const publicOnly = ['true', '1'].includes(String(cleanQuery.publicOnly || '').trim().toLowerCase());
+    const activeOnly = ['true', '1'].includes(String(cleanQuery.activeOnly || '').trim().toLowerCase());
+    const subscriptionOnly = ['true', '1'].includes(String(cleanQuery.subscription || cleanQuery.subscriptionOnly || '').trim().toLowerCase());
     const minors = dedupeCategoryStrings([
       ...parseCategoryFilterList(cleanQuery.minors),
       ...parseCategoryFilterList(cleanQuery.minor),
@@ -606,7 +686,7 @@ async function getVendors(req, res, next) {
     // Pagination is opt-in (passing `page`) so existing callers that expect
     // the full array (vendor-console metrics, GraphQL, etc.) are unaffected.
     const { page } = rawQuery;
-    const { search, email, category, state, city, pincode } = cleanQuery;
+    const { search, email, category, state, city, pincode, preferredPincode } = cleanQuery;
 
     // Any paginated request is answered straight from Postgres with
     // LIMIT/OFFSET — it must never route through storeService.getVendors(),
@@ -630,7 +710,12 @@ async function getVendors(req, res, next) {
       );
       try {
         if (publicOnly && (minors.length > 0 || majors.length > 0) && !search && !email && !state && !city && !pincode && pageNumber === 1) {
-          const candidates = await fetchPublicCategoryCandidatesFromDB({ minors, majors, pageSize });
+          const candidates = await fetchPublicCategoryCandidatesFromDB({
+            minors,
+            majors,
+            pageSize,
+            ...(preferredPincode ? { preferredPincode } : {}),
+          });
           logger.info('Fetched indexed public vendor category candidates', {
             minorsCount: minors.length,
             majorsCount: majors.length,
@@ -656,12 +741,15 @@ async function getVendors(req, res, next) {
           ...(city ? { city: String(city).trim() } : {}),
           ...(pincode ? { pincode } : {}),
           ...(publicOnly ? { publicOnly: true } : {}),
+          ...(activeOnly ? { activeOnly: true } : {}),
+          ...(subscriptionOnly ? { subscriptionOnly: true } : {}),
           scopedBuyerId: !publicOnly && buyerId && buyerId !== 'all' ? buyerId : '',
         });
+        const filteredRows = (publicOnly || activeOnly) ? rows.filter((v) => !isVendorInactive(v)) : rows;
         return res.json({
           success: true,
           source: 'persisted',
-          data: rows.map(withoutTemporaryPassword),
+          data: filteredRows.map(withoutTemporaryPassword),
           pagination: { page: pageNumber, pageSize, total, totalPages: Math.max(1, Math.ceil(total / pageSize)) },
         });
       } catch (err) {
@@ -687,13 +775,25 @@ async function getVendors(req, res, next) {
       }
     }
 
-    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly);
+    const hasFilters = Boolean(search || email || category || state || city || pincode || minors.length > 0 || majors.length > 0 || publicOnly || activeOnly || subscriptionOnly);
     const limitQuery = (!hasFilters && rawQuery.limit)
       ? Math.min(Number(rawQuery.limit), 500)
       : null;
     let vendors = await storeService.getVendors(publicOnly ? null : buyerId, limitQuery);
     if (publicOnly) {
-      vendors = vendors.filter((v) => storeService.isProcucevVendor(v));
+      vendors = vendors.filter((v) => !isVendorInactive(v) && storeService.isProcucevVendor(v));
+    } else if (activeOnly) {
+      vendors = vendors.filter((v) => !isVendorInactive(v));
+    }
+    if (subscriptionOnly) {
+      vendors = vendors.filter((v) => {
+        const raw = v.raw && typeof v.raw === 'object' ? v.raw : {};
+        const plan = String(
+          v.subscriptionPlan || v.subscribedPlan || v.plan || raw.subscriptionPlan || raw.subscribedPlan || raw.plan || ''
+        ).toLowerCase().trim();
+        const isSub = v.isSubscribed === true || v.isSubscribed === 'true' || raw.isSubscribed === true || raw.isSubscribed === 'true' || raw.isSubscribed === 1;
+        return Boolean((plan && !['none', 'free', 'free_tier', 'free_trial', 'premium'].includes(plan)) || isSub);
+      });
     }
     if (search) {
       const tokens = parseSearchTokens(search);
@@ -857,6 +957,8 @@ async function createVendor(req, res, next) {
       buyerId = null;
       addedByBuyerCompany = null;
       body.source = 'procucev_network';
+      body.createdByRole = 'category_manager';
+      body.isCmCreated = true;
       clearDummyPanFields(body);
     } else if (req.user.role === 'buyer') {
       const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
@@ -872,9 +974,28 @@ async function createVendor(req, res, next) {
     } else {
       return res.status(403).json({ success: false, error: 'You do not have permission to create a vendor profile.' });
     }
-    if (!body.name || !body.majorCategory) {
-      logger.warn('Failed to create vendor: Missing name or majorCategory', { body }, 'VENDOR_CONTROLLER');
-      return res.status(400).json({ success: false, error: 'Vendor name and majorCategory are required.' });
+    const resolvedCreateGstin = String(body.gstin || body.gst || body.gstNumber || '').trim().toUpperCase();
+    if (resolvedCreateGstin) {
+      body.gstin = resolvedCreateGstin;
+      body.gst = resolvedCreateGstin;
+    }
+    const cleanVendorName = String(body.name || '').trim();
+    const cleanCategories = resolveValidVendorCategories(body);
+    const hasOnlyPlaceholderMinors =
+      Array.isArray(body.minorCategories) &&
+      body.minorCategories.length > 0 &&
+      cleanCategories.minorCategories.length === 0;
+    if (!cleanVendorName || !cleanCategories.majorCategory || hasOnlyPlaceholderMinors) {
+      logger.warn('Failed to create vendor: Missing name or valid category', { body }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED });
+    }
+    body.name = cleanVendorName;
+    body.majorCategory = cleanCategories.majorCategory;
+    if (cleanCategories.minorCategories.length > 0) {
+      body.minorCategories = cleanCategories.minorCategories;
+      if (body.clientMappedCategories === undefined) {
+        body.clientMappedCategories = [...cleanCategories.minorCategories];
+      }
     }
     if (req.user.role === 'vendor' && !validateAndNormalizeVendorPanUpdate(body, res)) {
       return;
@@ -926,13 +1047,28 @@ async function createVendor(req, res, next) {
     // provisioning outcome — success or failure — reflected in `created`
     // before the response is sent.
     const onboarding = created.email
-      ? await storeService.provisionVendorOnboarding(created, req.user && req.user.email)
+      ? await storeService.provisionVendorOnboarding(
+        created,
+        req.user && req.user.email,
+        req.user.role === 'category_manager'
+          ? { isCmCreated: true, mailboxChannel: 'direct' }
+          : undefined
+      )
       : null;
     const persistedVendor = storeService.getVendorById(created.id, 'all') || created;
     const vendor = withoutTemporaryPassword(persistedVendor);
+    if (req.user.role === 'buyer') {
+      const organizationId = req.user.orgId || req.user.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after buyer vendor creation', { error: markErr, organizationId }, 'VENDOR_CONTROLLER');
+        });
+      }
+    }
     res.status(201).json({
       success: true,
       data: vendor,
+      onboardingStatus: onboarding?.status || (created.email ? 'skipped' : 'no_email'),
       ...(onboarding?.error ? { warning: onboarding.error } : {}),
     });
   } catch (err) {
@@ -941,10 +1077,90 @@ async function createVendor(req, res, next) {
   }
 }
 
+function sanitizeVendorCategoryUpdates(updates, existing, userRole, res) {
+  if (!updates || typeof updates !== 'object') return true;
+  const hasMajorUpdate = Object.prototype.hasOwnProperty.call(updates, 'majorCategory');
+  const hasMinorUpdate = Object.prototype.hasOwnProperty.call(updates, 'minorCategories');
+
+  if (hasMajorUpdate) {
+    if (isPlaceholderVendorCategory(updates.majorCategory)) {
+      res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED });
+      return false;
+    }
+    updates.majorCategory = String(updates.majorCategory).trim();
+  }
+
+  if (hasMinorUpdate) {
+    const rawMinors = Array.isArray(updates.minorCategories) ? updates.minorCategories : [];
+    const cleanedMinors = normalizeVendorCategoryList(rawMinors);
+    if (rawMinors.length > 0 && cleanedMinors.length === 0) {
+      res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED });
+      return false;
+    }
+    updates.minorCategories = cleanedMinors;
+    if (userRole === 'buyer' && updates.clientMappedCategories === undefined) {
+      updates.clientMappedCategories = [...cleanedMinors];
+    }
+  }
+
+  if (hasMajorUpdate || hasMinorUpdate) {
+    const effectiveMajor = hasMajorUpdate ? updates.majorCategory : existing?.majorCategory;
+    const effectiveMinors = hasMinorUpdate ? updates.minorCategories : existing?.minorCategories;
+    if (isPlaceholderVendorCategory(effectiveMajor) && normalizeVendorCategoryList(effectiveMinors).length === 0) {
+      res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.UPDATE_REQUIRES_CATEGORY });
+      return false;
+    }
+  }
+  return true;
+}
+
 async function updateVendor(req, res, next) {
   try {
     const { id } = req.params;
-    const existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    const hasActiveFlag = Boolean(req.body && typeof req.body.isActive === 'boolean');
+    let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    if (!existing && req.user?.role === 'buyer' && isSyntheticFallbackVendorId(id)) {
+      const { kept, dropped } = splitBuyerLockedFields(req.body);
+      if (dropped.length > 0) {
+        logger.info(`Ignored buyer changes to locked statutory fields on vendor ${id}`, { id, droppedFields: dropped }, 'VENDOR_CONTROLLER');
+      }
+      if (!validateAndNormalizeVendorPanUpdate(kept, res)) return;
+      if (!sanitizeVendorCategoryUpdates(kept, null, req.user.role, res)) return;
+      if (hasActiveFlag) {
+        Object.assign(kept, storeService.buildVendorActiveStatusUpdates(null, kept.isActive, req.user.email));
+      }
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      const resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      const buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
+      const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
+      const resolved = await resolveFallbackVendorRecord({
+        id,
+        user: req.user,
+        buyerAccount,
+        buyerScope,
+        resolvedOrgId,
+        buyerCompany,
+        bodyData: req.body || {},
+        updates: kept,
+        requireEmail: false,
+        allowUnassignedCategory: hasActiveFlag,
+      });
+      if (resolved.missingCategory) {
+        return res.status(400).json({
+          success: false,
+          code: 'VENDOR_CATEGORY_REQUIRED',
+          error: VENDOR_CATEGORY_VALIDATION_MESSAGES.UPDATE_REQUIRES_CATEGORY,
+        });
+      }
+      if (!resolved.vendor) {
+        logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
+        return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+      }
+      if (resolved.promoted) {
+        return res.json({ success: true, data: withoutTemporaryPassword(resolved.vendor) });
+      }
+      existing = resolved.vendor;
+    }
     if (!existing) {
       logger.warn(`Vendor not found for update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -962,12 +1178,376 @@ async function updateVendor(req, res, next) {
         logger.info(`Ignored buyer changes to locked statutory fields on vendor ${id}`, { id, droppedFields: dropped }, 'VENDOR_CONTROLLER');
       }
     }
+    if (req.user.role !== 'vendor' && typeof updates.isActive === 'boolean') {
+      Object.assign(updates, storeService.buildVendorActiveStatusUpdates(existing, updates.isActive, req.user.email));
+    }
     if (!validateAndNormalizeVendorPanUpdate(updates, res)) return;
+    if (!sanitizeVendorCategoryUpdates(updates, existing, req.user.role, res)) return;
     logger.info(`Updating vendor ${id}`, { id, updatedFields: Object.keys(updates || {}) }, 'VENDOR_CONTROLLER');
     const updated = await storeService.updateVendorDurably(existing.id, updates);
     res.json({ success: true, data: withoutTemporaryPassword(updated) });
   } catch (err) {
     logger.error(`Error updating vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+function pickFallbackField(primary, secondary) {
+  return primary || secondary || null;
+}
+
+async function syncVendorMasterRecordStatus({ id, vendor, resolvedOrgId, isActive, actorEmail }) {
+  const masterRecordId =
+    (vendor && vendor.masterRecordId) ||
+    (typeof id === 'string' && id.startsWith(SYNTHETIC_MASTER_PREFIX) ? id.slice(SYNTHETIC_MASTER_PREFIX.length) : '');
+  if (!masterRecordId || !resolvedOrgId) {
+    return null;
+  }
+  const statusUpdates = storeService.buildVendorActiveStatusUpdates(vendor || null, isActive, actorEmail);
+  try {
+    return await vendorIngestionQueries.updateVendorMasterRecordActiveStatus(masterRecordId, resolvedOrgId, statusUpdates);
+  } catch (err) {
+    logger.warn('Failed to synchronize active status onto vendor_master_records', {
+      error: err,
+      masterRecordId,
+      resolvedOrgId,
+      isActive,
+    }, 'VENDOR_CONTROLLER');
+    return null;
+  }
+}
+
+function buildBuyerMasterStatusFallbackVendor({
+  masterRec,
+  isActive,
+  user,
+  buyerAccount,
+  buyerCompany,
+  metadataHint = {},
+}) {
+  const statusUpdates = storeService.buildVendorActiveStatusUpdates(masterRec, isActive, user.email);
+  const attributedBuyerId = [buyerAccount?.id, user.sub, user.id, user.email].find(Boolean) || null;
+  const email = pickFallbackField(masterRec.email, metadataHint.vendorEmail);
+  const name = [masterRec.companyName, metadataHint.vendorName, email, masterRec.vendorCode, 'Supplier'].find(Boolean);
+  return {
+    id: `${SYNTHETIC_MASTER_PREFIX}${masterRec.id}`,
+    masterRecordId: masterRec.id,
+    vendorCode: pickFallbackField(masterRec.vendorCode, metadataHint.vendorCode),
+    name,
+    email,
+    contactPerson: pickFallbackField(masterRec.contactPerson, metadataHint.contactPerson),
+    phone: pickFallbackField(masterRec.phone, metadataHint.phone),
+    location: pickFallbackField(masterRec.address, metadataHint.location),
+    city: pickFallbackField(masterRec.city, metadataHint.city),
+    state: pickFallbackField(masterRec.state, metadataHint.state),
+    pincode: pickFallbackField(masterRec.pincode, metadataHint.pincode),
+    gstin: pickFallbackField(masterRec.gstin, metadataHint.gstin),
+    source: 'vendor_master_ingestion',
+    addedByBuyerCompany: pickFallbackField(buyerCompany, buyerAccount?.organizationName),
+    buyerId: attributedBuyerId,
+    buyerAccountId: attributedBuyerId,
+    buyerEmail: pickFallbackField(buyerAccount?.corporateEmail, user.email),
+    isExistingInDatabase: true,
+    ...statusUpdates,
+  };
+}
+
+async function resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint = {}, buyerContext = null }) {
+  const existing = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+  if (existing) {
+    return { vendor: existing, promoted: false, ownershipDenied: false };
+  }
+  if (user?.role === 'buyer' && isSyntheticFallbackVendorId(id)) {
+    const ctx = buyerContext || (await buildBuyerOwnershipContext(user));
+    const { buyerAccount, resolvedOrgId, buyerScope, buyerCompany } = ctx;
+    const initialStatusFields = storeService.buildVendorActiveStatusUpdates(null, isActive, user.email);
+
+    if (id.startsWith(SYNTHETIC_MASTER_PREFIX)) {
+      const rawMasterId = id.slice(SYNTHETIC_MASTER_PREFIX.length);
+      const candidateOrgIds = [
+        resolvedOrgId,
+        user?.orgId,
+        user?.organizationId,
+        buyerAccount?.organizationId,
+        buyerAccount?.id,
+      ].filter(Boolean);
+      let masterRec = null;
+      for (const orgCandidate of candidateOrgIds) {
+        masterRec = await vendorIngestionQueries.findVendorMasterRecord(rawMasterId, orgCandidate).catch(() => null);
+        if (masterRec) break;
+      }
+      const candidateEmail = masterRec ? String(masterRec.email || metadataHint.vendorEmail || '').trim().toLowerCase() : '';
+      if (masterRec && candidateEmail) {
+        const buyerOwned = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
+        if (buyerOwned && checkVendorOwnershipWithContext(user, buyerOwned, ctx)) {
+          return { vendor: buyerOwned, promoted: false, ownershipDenied: false };
+        }
+        const globalCollision = await storeService.getVendorByIdWithDBFallback(candidateEmail, 'all', { fresh: true });
+        if (globalCollision) {
+          await syncVendorMasterRecordStatus({
+            id,
+            vendor: masterRec,
+            resolvedOrgId,
+            isActive,
+            actorEmail: user.email,
+          });
+          const masterVendor = buildBuyerMasterStatusFallbackVendor({
+            masterRec,
+            isActive,
+            user,
+            buyerAccount,
+            buyerCompany,
+            metadataHint,
+          });
+          storeService.addAuditLog({
+            userEmail: user.email || SYSTEM_ACTOR_EMAIL,
+            action: isActive
+              ? `Marked vendor ${masterVendor.name} (${candidateEmail}) ACTIVE and eligible for future workflows`
+              : `Marked vendor ${masterVendor.name} (${candidateEmail}) INACTIVE (historical data preserved; excluded from future flows)`,
+          });
+          return { vendor: masterVendor, promoted: true, ownershipDenied: false };
+        }
+      }
+    }
+
+    const resolved = await resolveFallbackVendorRecord({
+      id,
+      user,
+      buyerAccount,
+      buyerScope,
+      resolvedOrgId,
+      buyerCompany,
+      bodyData: metadataHint,
+      updates: initialStatusFields,
+      requireEmail: false,
+      allowUnassignedCategory: true,
+    });
+    if (resolved.vendor && !resolved.promoted && !checkVendorOwnershipWithContext(user, resolved.vendor, ctx)) {
+      return { vendor: null, promoted: false, ownershipDenied: true };
+    }
+    if (resolved.promoted && id.startsWith(SYNTHETIC_MASTER_PREFIX) && resolvedOrgId) {
+      await syncVendorMasterRecordStatus({
+        id,
+        vendor: resolved.vendor,
+        resolvedOrgId,
+        isActive,
+        actorEmail: user.email,
+      });
+    }
+    return { vendor: resolved.vendor || null, promoted: Boolean(resolved.promoted), ownershipDenied: false };
+  }
+  return { vendor: null, promoted: false, ownershipDenied: false };
+}
+
+async function updateVendorStatus(req, res, next) {
+  try {
+    const { id } = req.params;
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (user.role === 'vendor') {
+      return res.status(403).json({ success: false, error: VENDOR_STATUS_MESSAGES.VENDOR_ROLE_FORBIDDEN });
+    }
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.vendorActiveStatusUpdate, req.body || {});
+    if (!validation.isValid) {
+      logger.warn('Rejected invalid vendor active status update', { id, fields: Object.keys(validation.errors) }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: Object.values(validation.errors)[0] || VENDOR_STATUS_MESSAGES.INVALID_ACTIVE_FLAG,
+        errors: validation.errors,
+      });
+    }
+
+    const { isActive, ...metadataHint } = validation.sanitizedData;
+    const buyerContext = user.role === 'buyer' ? await buildBuyerOwnershipContext(user) : null;
+    const resolved = await resolveOrPromoteVendorForStatusChange({ id, user, isActive, metadataHint, buyerContext });
+    if (resolved.ownershipDenied) {
+      return res.status(403).json({ success: false, error: 'You do not have permission to modify this vendor profile.' });
+    }
+    if (!resolved.vendor) {
+      logger.warn(`Vendor not found for status update: ${id}`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+    }
+
+    if (resolved.promoted) {
+      logger.info(`Promoted and marked fallback vendor ${resolved.vendor.id} as ${isActive ? 'ACTIVE' : 'INACTIVE'}`, {
+        vendorId: resolved.vendor.id,
+        originalId: id,
+        isActive,
+      }, 'VENDOR_CONTROLLER');
+      return res.json({
+        success: true,
+        message: isActive ? VENDOR_STATUS_MESSAGES.MARKED_ACTIVE_SUCCESS : VENDOR_STATUS_MESSAGES.MARKED_INACTIVE_SUCCESS,
+        data: withoutTemporaryPassword(resolved.vendor),
+      });
+    }
+
+    if (!(await assertVendorOwnership(req, res, resolved.vendor, buyerContext))) return;
+    logger.info(`Updating vendor ${resolved.vendor.id} active status to ${isActive ? 'ACTIVE' : 'INACTIVE'}`, {
+      vendorId: resolved.vendor.id,
+      isActive,
+      actorEmail: user.email,
+    }, 'VENDOR_CONTROLLER');
+    const updated = await storeService.updateVendorActiveStatusDurably(resolved.vendor.id, isActive, user.email);
+    if (updated && buyerContext?.resolvedOrgId) {
+      await syncVendorMasterRecordStatus({
+        id,
+        vendor: updated,
+        resolvedOrgId: buyerContext.resolvedOrgId,
+        isActive,
+        actorEmail: user.email,
+      });
+    }
+    return res.json({
+      success: true,
+      message: isActive ? VENDOR_STATUS_MESSAGES.MARKED_ACTIVE_SUCCESS : VENDOR_STATUS_MESSAGES.MARKED_INACTIVE_SUCCESS,
+      data: withoutTemporaryPassword(updated),
+    });
+  } catch (err) {
+    logger.error(`Error updating vendor status ${req.params.id}`, err, 'VENDOR_CONTROLLER');
+    next(err);
+  }
+}
+
+async function bulkUpdateVendorStatus(req, res, next) {
+  try {
+    const user = req.user;
+    if (!user) {
+      return res.status(401).json({ success: false, error: 'Authentication required.' });
+    }
+    if (user.role === 'vendor') {
+      return res.status(403).json({ success: false, error: VENDOR_STATUS_MESSAGES.VENDOR_ROLE_FORBIDDEN });
+    }
+
+    const validation = validatePayload(VALIDATION_SCHEMAS.vendorBulkActiveStatusUpdate, req.body || {});
+    if (!validation.isValid) {
+      logger.warn('Rejected invalid bulk vendor status request', { fields: Object.keys(validation.errors) }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: Object.values(validation.errors)[0] || VENDOR_STATUS_MESSAGES.BULK_VENDOR_IDS_REQUIRED,
+        errors: validation.errors,
+      });
+    }
+
+    const { vendorIds, isActive, vendors: vendorHints } = validation.sanitizedData;
+    const cleanedIds = Array.from(new Set(vendorIds.map((rawId) => String(rawId || '').trim()).filter(Boolean)));
+    if (cleanedIds.length === 0) {
+      return res.status(400).json({ success: false, error: VENDOR_STATUS_MESSAGES.BULK_VENDOR_IDS_REQUIRED });
+    }
+
+    const hintById = new Map();
+    for (const hint of Array.isArray(vendorHints) ? vendorHints : []) {
+      if (hint && typeof hint === 'object' && hint.id) {
+        hintById.set(String(hint.id).trim(), hint);
+      }
+    }
+
+    const buyerContext = user.role === 'buyer' ? await buildBuyerOwnershipContext(user) : null;
+    const updatedIds = [];
+    const updatedVendors = [];
+    const idMappings = {};
+    const skippedIds = [];
+    const skippedReasons = {};
+
+    for (const id of cleanedIds) {
+      const resolved = await resolveOrPromoteVendorForStatusChange({
+        id,
+        user,
+        isActive,
+        metadataHint: hintById.get(id) || {},
+        buyerContext,
+      });
+      if (!resolved.vendor) {
+        skippedIds.push(id);
+        skippedReasons[id] = resolved.ownershipDenied ? 'FORBIDDEN' : 'NOT_FOUND';
+        continue;
+      }
+      if (resolved.promoted) {
+        updatedIds.push(resolved.vendor.id);
+        idMappings[id] = resolved.vendor.id;
+        updatedVendors.push(withoutTemporaryPassword(resolved.vendor));
+        continue;
+      }
+      const isOwner = user.role === 'buyer'
+        ? checkVendorOwnershipWithContext(user, resolved.vendor, buyerContext)
+        : await checkVendorOwnership(user, resolved.vendor);
+      if (!isOwner) {
+        skippedIds.push(id);
+        skippedReasons[id] = 'FORBIDDEN';
+        continue;
+      }
+      const updated = await storeService.updateVendorActiveStatusDurably(resolved.vendor.id, isActive, user.email, {
+        preloadedVendor: resolved.vendor,
+        skipAuditLog: true,
+      });
+      if (updated) {
+        if (buyerContext?.resolvedOrgId) {
+          await syncVendorMasterRecordStatus({
+            id,
+            vendor: updated,
+            resolvedOrgId: buyerContext.resolvedOrgId,
+            isActive,
+            actorEmail: user.email,
+          });
+        }
+        updatedIds.push(updated.id);
+        idMappings[id] = updated.id;
+        updatedVendors.push(withoutTemporaryPassword(updated));
+      } else {
+        skippedIds.push(id);
+        skippedReasons[id] = 'UPDATE_FAILED';
+      }
+    }
+
+    if (updatedIds.length === 0) {
+      const allForbidden = skippedIds.length > 0 && skippedIds.every((sid) => skippedReasons[sid] === 'FORBIDDEN');
+      logger.warn('Bulk vendor active status update modified zero vendors', {
+        isActive,
+        requestedCount: cleanedIds.length,
+        skippedIds,
+        skippedReasons,
+      }, 'VENDOR_CONTROLLER');
+      return res.status(allForbidden ? 403 : 404).json({
+        success: false,
+        isActive,
+        error: allForbidden ? VENDOR_STATUS_MESSAGES.BULK_OWNERSHIP_DENIED : VENDOR_STATUS_MESSAGES.BULK_NO_VENDORS_UPDATED,
+        updatedCount: 0,
+        updatedIds: [],
+        skippedIds,
+        skippedReasons,
+        data: [],
+      });
+    }
+
+    storeService.addAuditLog({
+      userEmail: user.email || SYSTEM_ACTOR_EMAIL,
+      action: isActive
+        ? `Bulk marked ${updatedIds.length} vendor(s) ACTIVE and eligible for future workflows`
+        : `Bulk marked ${updatedIds.length} vendor(s) INACTIVE (historical data preserved; excluded from future flows)`,
+    });
+
+    logger.info(`Bulk updated status (${isActive ? 'ACTIVE' : 'INACTIVE'}) for ${updatedIds.length} vendors`, {
+      isActive,
+      updatedCount: updatedIds.length,
+      skippedCount: skippedIds.length,
+    }, 'VENDOR_CONTROLLER');
+
+    return res.json({
+      success: true,
+      isActive,
+      message: isActive
+        ? `Successfully marked ${updatedIds.length} vendor${updatedIds.length === 1 ? '' : 's'} active.`
+        : `Successfully marked ${updatedIds.length} vendor${updatedIds.length === 1 ? '' : 's'} inactive.`,
+      updatedCount: updatedIds.length,
+      updatedIds,
+      idMappings,
+      skippedIds,
+      data: updatedVendors,
+    });
+  } catch (err) {
+    logger.error('Error during bulk vendor status update', err, 'VENDOR_CONTROLLER');
     next(err);
   }
 }
@@ -1002,6 +1582,10 @@ async function deleteVendor(req, res, next) {
   }
 }
 
+function canDeleteMissingVendorId(user, id) {
+  return (user.role === 'buyer' || user.role === 'admin') && (id.startsWith('v-') || id.startsWith('vm-'));
+}
+
 async function bulkDeleteVendors(req, res, next) {
   try {
     const { vendorIds, ids } = req.body || {};
@@ -1018,34 +1602,62 @@ async function bulkDeleteVendors(req, res, next) {
 
     const deletedIds = [];
     const skippedIds = [];
+    const cleanedIds = Array.from(new Set(targetIds.map((rawId) => String(rawId || '').trim()).filter(Boolean)));
 
-    for (const rawId of targetIds) {
-      const id = String(rawId).trim();
-      if (!id) continue;
-      let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
-      if (!existing) {
-        existing = storeService.getVendorById(id, 'all');
+    const useBatchDbPath =
+      pool.hasStorage() &&
+      cleanedIds.length > 1 &&
+      typeof domainQueries.getVendorsByIdsFromDB === 'function' &&
+      typeof storeService.deleteVendorsDurably === 'function';
+
+    if (useBatchDbPath) {
+      const dbVendors = await domainQueries.getVendorsByIdsFromDB(cleanedIds);
+      const vendorById = new Map(dbVendors.map((vendor) => [vendor.id, vendor]));
+      const idsToDelete = [];
+
+      for (const id of cleanedIds) {
+        const existing = vendorById.get(id) || storeService.getVendorById(id, 'all');
+        if (!existing) {
+          if (canDeleteMissingVendorId(user, id)) {
+            idsToDelete.push(id);
+          } else {
+            skippedIds.push(id);
+          }
+        } else if (await checkVendorOwnership(user, existing)) {
+          idsToDelete.push(existing.id);
+        } else {
+          skippedIds.push(id);
+        }
       }
 
-      if (!existing) {
-        if (
-          (user.role === 'buyer' || user.role === 'admin') &&
-          (id.startsWith('v-') || id.startsWith('vm-'))
-        ) {
-          await storeService.deleteVendorDurably(id, user.email);
-          deletedIds.push(id);
+      if (idsToDelete.length > 0) {
+        await storeService.deleteVendorsDurably(idsToDelete, user.email);
+        deletedIds.push(...idsToDelete);
+      }
+    } else {
+      for (const id of cleanedIds) {
+        let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+        if (!existing) {
+          existing = storeService.getVendorById(id, 'all');
+        }
+
+        if (!existing) {
+          if (canDeleteMissingVendorId(user, id)) {
+            await storeService.deleteVendorDurably(id, user.email);
+            deletedIds.push(id);
+            continue;
+          }
+          skippedIds.push(id);
           continue;
         }
-        skippedIds.push(id);
-        continue;
-      }
 
-      if (await checkVendorOwnership(user, existing)) {
-        const deleted = await storeService.deleteVendorDurably(existing.id, user.email);
-        if (deleted) deletedIds.push(existing.id);
-        else skippedIds.push(id);
-      } else {
-        skippedIds.push(id);
+        if (await checkVendorOwnership(user, existing)) {
+          const deleted = await storeService.deleteVendorDurably(existing.id, user.email);
+          if (deleted) deletedIds.push(existing.id);
+          else skippedIds.push(id);
+        } else {
+          skippedIds.push(id);
+        }
       }
     }
 
@@ -1093,18 +1705,45 @@ async function reviseRating(req, res, next) {
     }
     // Resolve buyer scope for buyer-owned vendors (v-hist-, v-buyer-, etc.)
     let buyerId = null;
+    let buyerScope = null;
+    let buyerCompany = 'Buyer';
+    let buyerAccount = null;
+    let resolvedOrgId = null;
     if (req.user.role === 'buyer') {
-      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
       if (buyerAccount) {
         buyerId = buyerAccount.id;
       } else {
         // Fallback: try to find by sub or email directly
         buyerId = req.user.sub || req.user.email;
       }
+      buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
       logger.info(`Resolved buyer scope for rating revision`, { email: req.user.email, buyerId, buyerAccountExists: !!buyerAccount }, 'VENDOR_CONTROLLER');
     }
     logger.info(`Revising rating for vendor ${id}`, { id, ratingFields: Object.keys(ratingData || {}), buyerId }, 'VENDOR_CONTROLLER');
-    const result = await storeService.reviseVendorRatingDurably(id, ratingData, buyerId);
+    const scopedArg = buyerScope && buyerScope.length > 0 ? buyerScope : buyerId;
+    let result = await storeService.reviseVendorRatingDurably(id, ratingData, scopedArg);
+    if (!result && req.user.role === 'buyer') {
+      const resolved = await resolveFallbackVendorRecord({
+        id,
+        user: req.user,
+        buyerAccount,
+        buyerScope: buyerScope && buyerScope.length > 0 ? buyerScope : (buyerId ? [buyerId] : ['all']),
+        resolvedOrgId,
+        buyerCompany,
+        bodyData: ratingData,
+        updates: { rating: Number(ratingData.qualityScore) },
+        requireEmail: false,
+        allowUnassignedCategory: true,
+      });
+      if (resolved.vendor) {
+        result =
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, scopedArg)) ||
+          (await storeService.reviseVendorRatingDurably(resolved.vendor.id, ratingData, 'all'));
+      }
+    }
     if (!result) {
       logger.warn(`Vendor not found for rating revision: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1114,6 +1753,338 @@ async function reviseRating(req, res, next) {
     logger.error(`Error revising rating for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
     next(err);
   }
+}
+
+const SYNTHETIC_MASTER_PREFIX = 'v-master-';
+const SYNTHETIC_LOCAL_HISTORY_PREFIX = 'v-hist-local-';
+
+function isSyntheticFallbackVendorId(id) {
+  return typeof id === 'string' && (id.startsWith(SYNTHETIC_MASTER_PREFIX) || id.startsWith('v-hist-'));
+}
+
+async function resolveBuyerOrgIdForScope(user, buyerAccount) {
+  let resolvedOrgId = user?.orgId || user?.organizationId || buyerAccount?.organizationId || null;
+  if (
+    user?.role === 'buyer' &&
+    !resolvedOrgId &&
+    (user?.sub || user?.id) &&
+    typeof buyerProfileQueries.findProfileByUserId === 'function'
+  ) {
+    const profileLookup = await buyerProfileQueries.findProfileByUserId(user.sub || user.id).catch(() => null);
+    if (profileLookup?.found && profileLookup.profile?.organizationId) {
+      resolvedOrgId = profileLookup.profile.organizationId;
+    }
+  }
+  if (!resolvedOrgId && buyerAccount?.id) {
+    resolvedOrgId = buyerAccount.id;
+  }
+  return resolvedOrgId;
+}
+
+async function empanelFallbackVendorForEvaluation({
+  candidate,
+  buyerAccount,
+  resolvedOrgId,
+  user,
+  buyerCompany,
+  requireEmail = true,
+  allowUnassignedCategory = false,
+}) {
+  const email = String(candidate.email || '').trim().toLowerCase();
+  if (requireEmail && !email) return null;
+  const attributedBuyerId = buyerAccount?.id || resolvedOrgId || user?.sub || user?.id || user?.email || null;
+  // Never overwrite or claim an existing vendor owned by another buyer. The preceding
+  // getVendorByIdWithDBFallback lookup already synced any DB match into storeService.vendors.
+  if (email) {
+    const existing = storeService.getVendorById(email, 'all');
+    if (existing) {
+      const isOwner = checkVendorOwnershipWithContext(user, existing, {
+        scopeSet: new Set(buyerScopeIdsFor(user, buyerAccount, resolvedOrgId).map((s) => String(s).toLowerCase())),
+        sId: String(attributedBuyerId || '').toLowerCase(),
+        uEmail: String(user?.email || '').toLowerCase(),
+        orgName: String(buyerCompany || '').toLowerCase(),
+      });
+      if (isOwner) return existing;
+      return null;
+    }
+  }
+
+  const cleanCategories = resolveValidVendorCategories(candidate);
+  return storeService.empanelIngestedVendor(
+    {
+      ...candidate,
+      name: candidate.name || email || candidate.vendorCode || 'Supplier',
+      email: email || null,
+      contactPerson: candidate.contactPerson || null,
+      phone: candidate.phone || null,
+      location: candidate.location || null,
+      city: candidate.city || null,
+      state: candidate.state || null,
+      pincode: candidate.pincode || null,
+      gstin: String(candidate.gstin || candidate.gstNumber || candidate.gst || '').trim().toUpperCase() || null,
+      gst: String(candidate.gstin || candidate.gstNumber || candidate.gst || '').trim().toUpperCase() || null,
+      vendorCode: candidate.vendorCode || null,
+      majorCategory: cleanCategories.majorCategory || '',
+      minorCategories: cleanCategories.minorCategories,
+      clientMappedCategories: [...cleanCategories.minorCategories],
+      source: candidate.source || 'buyer_uploaded',
+      addedByBuyerCompany: buyerCompany || buyerAccount?.organizationName || null,
+      buyerId: attributedBuyerId,
+      buyerAccountId: attributedBuyerId,
+      buyerEmail: buyerAccount?.corporateEmail || user?.email || null,
+    },
+    user?.email || null,
+    ...(allowUnassignedCategory ? [{ allowUnassignedCategory: true }] : [])
+  );
+}
+
+async function resolveFallbackVendorRecord({
+  id,
+  user,
+  buyerAccount,
+  buyerScope,
+  resolvedOrgId,
+  buyerCompany,
+  bodyData = {},
+  updates = null,
+  requireEmail = true,
+  allowUnassignedCategory = false,
+}) {
+  let vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
+  if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX)) {
+    const byMasterId = storeService.getVendorById(id, buyerScope);
+    if (byMasterId) return { vendor: byMasterId, missingEmail: false, missingCategory: false, promoted: false };
+  }
+
+  const sanitizedVendorEmail = String(bodyData.vendorEmail || updates?.email || bodyData.email || '').trim().toLowerCase();
+  const checkForeignOwnership = (foreign) => {
+    if (!foreign) return false;
+    const uEmail = String(user?.email || '').trim().toLowerCase();
+    const bCompany = String(buyerCompany || '').trim().toLowerCase();
+    const vEmail = String(foreign.email || '').trim().toLowerCase();
+    const vCompany = String(foreign.addedByBuyerCompany || '').trim().toLowerCase();
+    if (user?.role === 'buyer' && ((uEmail && vEmail && vEmail === uEmail) || (bCompany && vCompany && vCompany === bCompany))) {
+      return true;
+    }
+    return checkVendorOwnershipWithContext(user, foreign, {
+      scopeSet: new Set(buyerScope.map((s) => String(s).toLowerCase())),
+      sId: String(resolvedOrgId || '').toLowerCase(),
+      uEmail: String(user?.email || '').toLowerCase(),
+      orgName: String(buyerCompany).trim().toLowerCase(),
+    });
+  };
+
+  if (!sanitizedVendorEmail) {
+    const foreignCheckById = await storeService.getVendorByIdWithDBFallback(id, 'all', { fresh: true });
+    if (foreignCheckById) {
+      if (checkForeignOwnership(foreignCheckById)) {
+        return { vendor: foreignCheckById, missingEmail: !foreignCheckById.email && requireEmail, missingCategory: false, promoted: false };
+      }
+      return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    }
+  }
+
+  if (sanitizedVendorEmail) {
+    vendor = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, buyerScope, { fresh: true });
+    if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
+    // Trigger cross-buyer DB sync without exposing foreign buyer record in buyerScope
+    const foreignCheck = await storeService.getVendorByIdWithDBFallback(sanitizedVendorEmail, 'all', { fresh: true });
+    if (foreignCheck) {
+      if (checkForeignOwnership(foreignCheck)) return { vendor: foreignCheck, missingEmail: false, missingCategory: false, promoted: false };
+      return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+    }
+  }
+
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && typeof vendorIngestionQueries.findVendorMasterRecord === 'function') {
+    const rawMasterId = id.slice(SYNTHETIC_MASTER_PREFIX.length);
+    const candidateOrgIds = buyerScope;
+    let masterRec = null;
+    for (const orgCandidate of candidateOrgIds) {
+      masterRec = await vendorIngestionQueries.findVendorMasterRecord(rawMasterId, orgCandidate).catch(() => null);
+      if (masterRec) break;
+    }
+    if (!masterRec && typeof vendorIngestionQueries.findVendorMasterRecordById === 'function') {
+      masterRec = await vendorIngestionQueries.findVendorMasterRecordById(rawMasterId).catch(() => null);
+    }
+    if (!masterRec && user?.role === 'buyer' && (updates?.name || bodyData.vendorName || bodyData.name)) {
+      const fallbackMasterName = updates?.name || bodyData.vendorName || bodyData.name;
+      const fallbackGstin = String(updates?.gstin || updates?.gst || bodyData.gstin || '').trim().toUpperCase() || null;
+      const payloadCategories = resolveValidVendorCategories({ ...bodyData, ...(updates || {}) });
+      masterRec = {
+        id: rawMasterId,
+        masterRecordId: rawMasterId,
+        companyName: fallbackMasterName,
+        email: sanitizedVendorEmail,
+        contactPerson: updates?.contactPerson || bodyData.contactPerson,
+        phone: updates?.phone || bodyData.phone,
+        location: updates?.location || bodyData.location,
+        city: updates?.city || bodyData.city,
+        state: updates?.state || bodyData.state,
+        pincode: updates?.pincode || bodyData.pincode,
+        gstin: fallbackGstin,
+        gst: fallbackGstin,
+        vendorCode: updates?.vendorCode || bodyData.vendorCode,
+        majorCategory: payloadCategories.majorCategory,
+        minorCategories: payloadCategories.minorCategories,
+        source: 'vendor_master_ingestion',
+      };
+    }
+    if (masterRec) {
+      const candidateEmail = String(masterRec.email || sanitizedVendorEmail || '').trim().toLowerCase();
+      if (requireEmail && !candidateEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
+      if (candidateEmail) {
+        vendor = await storeService.getVendorByIdWithDBFallback(candidateEmail, buyerScope, { fresh: true });
+        if (vendor) return { vendor, missingEmail: false, missingCategory: false, promoted: false };
+        const foreignMasterMatch = await storeService.getVendorByIdWithDBFallback(candidateEmail, 'all', { fresh: true });
+        if (foreignMasterMatch) {
+          if (checkForeignOwnership(foreignMasterMatch)) return { vendor: foreignMasterMatch, missingEmail: false, missingCategory: false, promoted: false };
+          return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+        }
+      }
+      const mapping =
+        masterRec.sessionId && typeof vendorIngestionQueries.findCategoryMappingByVendorRecord === 'function'
+          ? await vendorIngestionQueries
+            .findCategoryMappingByVendorRecord(masterRec.sessionId, resolvedOrgId || masterRec.organizationId, masterRec.id)
+            .catch(() => null)
+          : null;
+      const isRejectedMapping =
+        mapping?.status === 'SELF_MAP_REQUIRED' || mapping?.reviewAction === 'REJECTED';
+      const mappingCategories = mapping
+        ? resolveValidVendorCategories({
+          majorCategory:
+            mapping.buyerMajorCategory || (!isRejectedMapping ? mapping.aiSuggestion?.majorCategory : ''),
+          minorCategories:
+            Array.isArray(mapping.buyerMinorCategories) && mapping.buyerMinorCategories.length > 0
+              ? mapping.buyerMinorCategories
+              : !isRejectedMapping
+                ? mapping.aiSuggestion?.minorCategories || []
+                : [],
+        })
+        : { majorCategory: '', minorCategories: [], hasCategory: false };
+      const payloadCategories = resolveValidVendorCategories({ ...bodyData, ...(updates || {}) });
+      const resolvedMasterGstin = String(
+        masterRec.gstin ||
+        masterRec.gstNumber ||
+        masterRec.gst ||
+        bodyData.gstin ||
+        bodyData.gst ||
+        bodyData.gstNumber ||
+        updates?.gstin ||
+        updates?.gst ||
+        updates?.gstNumber ||
+        ''
+      ).trim().toUpperCase() || null;
+      const effectiveCandidate = {
+        ...masterRec,
+        ...(updates || {}),
+        masterRecordId: masterRec.id,
+        name: updates?.name || bodyData.vendorName || bodyData.name || masterRec.companyName,
+        email: candidateEmail || null,
+        gstin: resolvedMasterGstin,
+        gst: resolvedMasterGstin,
+        majorCategory: payloadCategories.majorCategory || mappingCategories.majorCategory || '',
+        minorCategories:
+          payloadCategories.minorCategories.length > 0
+            ? payloadCategories.minorCategories
+            : mappingCategories.minorCategories,
+        source: 'vendor_master_ingestion',
+      };
+      if (!allowUnassignedCategory && !resolveValidVendorCategories(effectiveCandidate).hasCategory) {
+        return { vendor: null, missingEmail: false, missingCategory: true, promoted: false };
+      }
+      vendor = await empanelFallbackVendorForEvaluation({
+        candidate: effectiveCandidate,
+        buyerAccount,
+        resolvedOrgId,
+        user,
+        buyerCompany,
+        requireEmail,
+        allowUnassignedCategory,
+      });
+      return { vendor, missingEmail: false, missingCategory: false, promoted: Boolean(vendor) };
+    }
+  }
+
+  if (id.startsWith(SYNTHETIC_MASTER_PREFIX) && user?.role === 'buyer') {
+    const hasMasterIdentity = Boolean(sanitizedVendorEmail || bodyData.vendorName || bodyData.name || updates?.name);
+    if (hasMasterIdentity) {
+      if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
+      const effectiveCandidate = {
+        ...(updates || {}),
+        name: updates?.name || bodyData.vendorName || bodyData.name || sanitizedVendorEmail || id,
+        email: sanitizedVendorEmail || null,
+        contactPerson: updates?.contactPerson || bodyData.contactPerson || null,
+        phone: updates?.phone || bodyData.phone || null,
+        location: updates?.location || bodyData.location || null,
+        city: updates?.city || bodyData.city || null,
+        state: updates?.state || bodyData.state || null,
+        pincode: updates?.pincode || bodyData.pincode || null,
+        gstin: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+        gst: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+        vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
+        majorCategory: updates?.majorCategory ?? bodyData.majorCategory,
+        minorCategories: updates?.minorCategories ?? bodyData.minorCategories,
+        clientMappedCategories: updates?.clientMappedCategories ?? bodyData.clientMappedCategories,
+        source: 'vendor_master_ingestion',
+        masterRecordId: id.slice(SYNTHETIC_MASTER_PREFIX.length),
+      };
+      if (!allowUnassignedCategory && !resolveValidVendorCategories(effectiveCandidate).hasCategory) {
+        return { vendor: null, missingEmail: false, missingCategory: true, promoted: false };
+      }
+      vendor = await empanelFallbackVendorForEvaluation({
+        candidate: effectiveCandidate,
+        buyerAccount,
+        resolvedOrgId,
+        user,
+        buyerCompany,
+        requireEmail,
+        allowUnassignedCategory,
+      });
+      return { vendor, missingEmail: false, missingCategory: false, promoted: Boolean(vendor) };
+    }
+  }
+
+  if (id.startsWith('v-hist-') && user?.role === 'buyer') {
+    if (requireEmail && !sanitizedVendorEmail) return { vendor: null, missingEmail: true, missingCategory: false, promoted: false };
+    const effectiveCandidate = {
+      ...(updates || {}),
+      name: updates?.name || bodyData.vendorName || bodyData.name || sanitizedVendorEmail || id,
+      email: sanitizedVendorEmail || null,
+      contactPerson: updates?.contactPerson || bodyData.contactPerson || null,
+      phone: updates?.phone || bodyData.phone || null,
+      location: updates?.location || bodyData.location || null,
+      city: updates?.city || bodyData.city || null,
+      state: updates?.state || bodyData.state || null,
+      pincode: updates?.pincode || bodyData.pincode || null,
+      gstin: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+      gst: String(updates?.gstin || updates?.gst || bodyData.gstin || bodyData.gst || bodyData.gstNumber || '').trim().toUpperCase() || null,
+      vendorCode: updates?.vendorCode || bodyData.vendorCode || null,
+      majorCategory: updates?.majorCategory ?? bodyData.majorCategory,
+      minorCategories: updates?.minorCategories ?? bodyData.minorCategories,
+      clientMappedCategories: updates?.clientMappedCategories ?? bodyData.clientMappedCategories,
+      source: 'buyer_uploaded',
+    };
+    if (!allowUnassignedCategory && !resolveValidVendorCategories(effectiveCandidate).hasCategory) {
+      return { vendor: null, missingEmail: false, missingCategory: true, promoted: false };
+    }
+    vendor = await empanelFallbackVendorForEvaluation({
+      candidate: effectiveCandidate,
+      buyerAccount,
+      resolvedOrgId,
+      user,
+      buyerCompany,
+      requireEmail,
+      allowUnassignedCategory,
+    });
+    return { vendor, missingEmail: false, missingCategory: false, promoted: Boolean(vendor) };
+  }
+
+  return { vendor: null, missingEmail: false, missingCategory: false, promoted: false };
+}
+
+async function resolveVendorForEvaluationRequest(params) {
+  return resolveFallbackVendorRecord({ ...params, requireEmail: true });
 }
 
 async function requestEvaluation(req, res, next) {
@@ -1133,14 +2104,35 @@ async function requestEvaluation(req, res, next) {
     }
 
     // A buyer may request an evaluation only from a supplier on that buyer's roster. The roster and this check read the
-    // same buyer identifiers, and a supplier that is stored but not in the in-memory list is read from storage.
+    // same buyer identifiers, and a supplier that is stored in vendor_master_records or storage is resolved cleanly.
     const buyerAccount = req.user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
-    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount) : 'all';
+    const resolvedOrgId = req.user.role === 'buyer' ? await resolveBuyerOrgIdForScope(req.user, buyerAccount) : null;
+    const buyerScope = req.user.role === 'buyer' ? buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId) : 'all';
     const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
     const buyerName = buyerAccount?.contactPerson || req.user.name || '';
     const buyerEmail = req.user.email || '';
 
-    const vendor = await storeService.getVendorByIdWithDBFallback(id, buyerScope, { fresh: true });
+    const { vendor, missingEmail, missingCategory } = await resolveVendorForEvaluationRequest({
+      id,
+      user: req.user,
+      buyerAccount,
+      buyerScope,
+      resolvedOrgId,
+      buyerCompany,
+      bodyData: bodyValidation.sanitizedData,
+    });
+    if (missingEmail) {
+      logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
+    }
+    if (missingCategory) {
+      logger.warn(`Cannot request evaluation: Vendor ${id} has no category assigned`, { id }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        code: 'VENDOR_CATEGORY_REQUIRED',
+        error: VENDOR_CATEGORY_VALIDATION_MESSAGES.EVALUATION_REQUIRES_CATEGORY,
+      });
+    }
     if (!vendor) {
       logger.warn(`Vendor not found for evaluation request: ${id}`, { id, role: req.user.role }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1159,6 +2151,15 @@ async function requestEvaluation(req, res, next) {
       });
     }
 
+    if (isVendorInactive(vendor)) {
+      logger.warn(`Rejected evaluation request for inactive vendor ${vendor.id}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        code: 'VENDOR_INACTIVE',
+        error: VENDOR_STATUS_MESSAGES.INACTIVE_EVALUATION_BLOCKED,
+      });
+    }
+
     if (!vendor.email) {
       logger.warn(`Cannot request evaluation: Vendor ${id} has no email`, { id }, 'VENDOR_CONTROLLER');
       return res.status(400).json({ success: false, error: 'Vendor does not have a registered email address to receive an evaluation request.' });
@@ -1166,12 +2167,21 @@ async function requestEvaluation(req, res, next) {
 
     logger.info(`Sending evaluation request for vendor ${vendor.name} (${vendor.id}) by ${buyerCompany}`, { vendorId: vendor.id, buyerCompany }, 'VENDOR_CONTROLLER');
 
-    const result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+    let result = await storeService.requestVendorEvaluationDurably(vendor.id, {
       buyerCompany,
       buyerName,
       buyerEmail,
       notes: bodyValidation.sanitizedData.notes || '',
     }, buyerScope);
+
+    if (!result) {
+      result = await storeService.requestVendorEvaluationDurably(vendor.id, {
+        buyerCompany,
+        buyerName,
+        buyerEmail,
+        notes: bodyValidation.sanitizedData.notes || '',
+      }, 'all');
+    }
 
     return res.status(200).json({
       success: true,
@@ -1429,12 +2439,68 @@ async function downloadInvoice(req, res, next) {
 async function updateCategories(req, res, next) {
   try {
     const { id } = req.params;
-    const { clientMappedCategories, vendorSelectedCategories } = req.body;
+    const schemaCheck = validatePayload(VALIDATION_SCHEMAS.buyerVendorCategoryUpdate, req.body || {});
+    if (!schemaCheck.isValid) {
+      return res.status(400).json({ success: false, error: Object.values(schemaCheck.errors)[0], errors: schemaCheck.errors });
+    }
+    const {
+      majorCategory,
+      minorCategories,
+      clientMappedCategories,
+      vendorSelectedCategories,
+    } = schemaCheck.sanitizedData;
+    const isBuyerActor = req.user && req.user.role === 'buyer';
+    if (majorCategory !== undefined && isPlaceholderVendorCategory(majorCategory)) {
+      return res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED });
+    }
+    const cleanMinors = Array.isArray(minorCategories) ? normalizeVendorCategoryList(minorCategories) : undefined;
+    const cleanClientMapped = Array.isArray(clientMappedCategories)
+      ? normalizeVendorCategoryList(clientMappedCategories)
+      : cleanMinors !== undefined && isBuyerActor
+        ? [...cleanMinors]
+        : clientMappedCategories;
+
     // DB-fallback-aware, matching updateVendor's lookup — this.vendors is a
     // capped in-memory subset, so a buyer-uploaded vendor that's genuinely
     // persisted but not in that subset would otherwise 404 here even though
     // the profile PUT right before this one (same save action) succeeded.
-    const existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    let existing = await storeService.getVendorByIdWithDBFallback(id, 'all');
+    if (!existing && isBuyerActor && isSyntheticFallbackVendorId(id)) {
+      const buyerAccount = await storeService.getBuyerAccountByEmail(req.user.email);
+      const resolvedOrgId = await resolveBuyerOrgIdForScope(req.user, buyerAccount);
+      const buyerScope = buyerScopeIdsFor(req.user, buyerAccount, resolvedOrgId);
+      const buyerCompany = buyerAccount?.organizationName || req.user.orgName || req.user.name || 'Buyer';
+      const resolved = await resolveFallbackVendorRecord({
+        id,
+        user: req.user,
+        buyerAccount,
+        buyerScope,
+        resolvedOrgId,
+        buyerCompany,
+        bodyData: schemaCheck.sanitizedData,
+        updates: {
+          ...(majorCategory ? { majorCategory: majorCategory.trim() } : {}),
+          ...(cleanMinors !== undefined ? { minorCategories: cleanMinors } : {}),
+          ...(Array.isArray(cleanClientMapped) ? { clientMappedCategories: cleanClientMapped } : {}),
+        },
+        requireEmail: false,
+      });
+      if (resolved.missingCategory) {
+        return res.status(400).json({
+          success: false,
+          code: 'VENDOR_CATEGORY_REQUIRED',
+          error: VENDOR_CATEGORY_VALIDATION_MESSAGES.UPDATE_REQUIRES_CATEGORY,
+        });
+      }
+      if (!resolved.vendor) {
+        logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
+        return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
+      }
+      if (resolved.promoted) {
+        return res.json({ success: true, data: withoutTemporaryPassword(resolved.vendor) });
+      }
+      existing = resolved.vendor;
+    }
     if (!existing) {
       logger.warn(`Vendor not found for taxonomy update: ${id}`, { id }, 'VENDOR_CONTROLLER');
       return res.status(404).json({ success: false, error: `Vendor with ID ${id} not found.` });
@@ -1445,8 +2511,20 @@ async function updateCategories(req, res, next) {
     // fell through to a 403, so a buyer could never save category taxonomy
     // for a vendor they themselves uploaded.
     if (!(await assertVendorOwnership(req, res, existing))) return;
-    logger.info(`Updating category taxonomy for vendor ${id}`, { id, clientMappedCategories, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
-    const updated = await storeService.updateVendorCategoriesDurably(existing.id, { clientMappedCategories, vendorSelectedCategories });
+    if (isBuyerActor && (majorCategory !== undefined || cleanMinors !== undefined || cleanClientMapped !== undefined)) {
+      const effectiveMajor = majorCategory !== undefined ? majorCategory : existing.majorCategory;
+      const effectiveMinors = cleanMinors !== undefined ? cleanMinors : cleanClientMapped !== undefined ? cleanClientMapped : existing.minorCategories;
+      if (isPlaceholderVendorCategory(effectiveMajor) && normalizeVendorCategoryList(effectiveMinors).length === 0) {
+        return res.status(400).json({ success: false, error: VENDOR_CATEGORY_VALIDATION_MESSAGES.UPDATE_REQUIRES_CATEGORY });
+      }
+    }
+    logger.info(`Updating category taxonomy for vendor ${id}`, { id, majorCategory, minorCategories: cleanMinors, clientMappedCategories: cleanClientMapped, vendorSelectedCategories }, 'VENDOR_CONTROLLER');
+    const updated = await storeService.updateVendorCategoriesDurably(existing.id, {
+      ...(majorCategory !== undefined ? { majorCategory } : {}),
+      ...(cleanMinors !== undefined ? { minorCategories: cleanMinors } : {}),
+      clientMappedCategories: cleanClientMapped,
+      vendorSelectedCategories,
+    });
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error(`Error updating categories for vendor ${req.params.id}`, err, 'VENDOR_CONTROLLER');
@@ -1492,9 +2570,19 @@ async function bulkImportVendors(req, res, next) {
           error: 'Your account is not linked to a buyer organization yet, so vendors cannot be bulk-imported.',
         });
       }
-      buyerAttribution = { buyerId: buyerAccount.id, addedByBuyerCompany: buyerAccount.organizationName, source: 'buyer_excel' };
+      buyerAttribution = {
+        buyerId: buyerAccount.id,
+        buyerAccountId: buyerAccount.id,
+        buyerEmail: buyerAccount.corporateEmail || req.user.email,
+        addedByBuyerCompany: buyerAccount.organizationName,
+        source: 'buyer_excel',
+      };
     } else {
-      buyerAttribution = { source: 'category_manager_upload' };
+      buyerAttribution = {
+        source: 'category_manager_upload',
+        createdByRole: req.user.role || 'category_manager',
+        isCmCreated: true,
+      };
     }
 
     const rows = Array.isArray(req.body.vendors) ? req.body.vendors : null;
@@ -1541,12 +2629,28 @@ async function bulkImportVendors(req, res, next) {
     // `hasIssues`/`issues` instead, so the CM can see exactly what's
     // questionable about it without it being blocked or lost.
     const rowsToImport = [];
+    const preFailedResults = [];
     rows.forEach((row, idx) => {
       const rowNumber = row.rowNumber ?? idx + 1;
       const sanitizedRow = clearDummyPanFields({ ...row });
       const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.vendorBulkImportRow, sanitizedRow);
+      const cleanCategories = resolveValidVendorCategories(sanitizedRow);
+      if (req.user.role === 'buyer' && !cleanCategories.hasCategory) {
+        preFailedResults.push({
+          rowNumber,
+          status: 'failed',
+          email: sanitizedRow.email || undefined,
+          reason: VENDOR_CATEGORY_VALIDATION_MESSAGES.BULK_BUYER_CATEGORY_REQUIRED,
+          errors: [VENDOR_CATEGORY_VALIDATION_MESSAGES.BULK_BUYER_CATEGORY_REQUIRED],
+          hasIssues: true,
+          issues: [VENDOR_CATEGORY_VALIDATION_MESSAGES.BULK_BUYER_CATEGORY_REQUIRED],
+        });
+        return;
+      }
       rowsToImport.push({
         ...sanitizedRow,
+        ...(cleanCategories.majorCategory ? { majorCategory: cleanCategories.majorCategory } : {}),
+        ...(cleanCategories.minorCategories.length > 0 ? { minorCategories: cleanCategories.minorCategories } : {}),
         ...(buyerAttribution || {}),
         rowNumber,
         hasIssues: !isValid,
@@ -1565,7 +2669,7 @@ async function bulkImportVendors(req, res, next) {
         ? await storeService.bulkAddVendors(rowsToImport, req.user?.email || null)
         : { results: [], importedCount: 0, duplicateCount: 0, missingEmailCount: 0 };
 
-    const allResults = importResults.sort((a, b) => a.rowNumber - b.rowNumber);
+    const allResults = [...importResults, ...preFailedResults].sort((a, b) => a.rowNumber - b.rowNumber);
     const publicResults = allResults.map((result) => {
       if (!result.vendor) return result;
       return {
@@ -1585,6 +2689,15 @@ async function bulkImportVendors(req, res, next) {
       duplicate: duplicateCount,
       invalid: issuesCount,
     });
+
+    if (req.user.role === 'buyer' && importedCount > 0) {
+      const organizationId = req.user.orgId || req.user.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after bulk vendor import', { error: markErr, organizationId }, 'VENDOR_CONTROLLER');
+        });
+      }
+    }
 
     res.json({
       success: true,
@@ -1776,7 +2889,7 @@ async function getVendorRfqCredits(req, res, next) {
       });
     }
 
-    const creditsInfo = storeService.getVendorRfqCredits(vendor.id);
+    const creditsInfo = storeService.getVendorRfqCredits(vendor.id, vendor);
     res.json({
       success: true,
       data: creditsInfo,
@@ -2041,6 +3154,8 @@ module.exports = {
   getVendorRfqCredits,
   createVendor,
   updateVendor,
+  updateVendorStatus,
+  bulkUpdateVendorStatus,
   deleteVendor,
   bulkDeleteVendors,
   reviseRating,
@@ -2062,5 +3177,10 @@ module.exports = {
   authenticateVendorDirectory,
   getSubscriptionPricing,
   sanitizePublicVendor,
+  checkVendorOwnership,
+  checkVendorOwnershipWithContext,
+  resolveFallbackVendorRecord,
+  empanelFallbackVendorForEvaluation,
+  resolveOrPromoteVendorForStatusChange,
   ...vendorDossierExtensions,
 };

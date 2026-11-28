@@ -148,6 +148,11 @@ describe('Header', () => {
     const { rerender } = render(<Header />);
     expect(screen.getByText(UI_STRINGS.headerNav.vendorDirectory)).toBeInTheDocument();
 
+    mockCurrentPath = '/category-manager/vendor-console';
+    rerender(<Header />);
+    expect(screen.queryByText(UI_STRINGS.headerNav.vendorDirectory)).not.toBeInTheDocument();
+    mockCurrentPath = '/login';
+
     (storeModule.useApp as jest.Mock).mockReturnValue({
       currentRole: 'buyer',
       isLoggedIn: true,
@@ -271,7 +276,10 @@ describe('Header', () => {
     // Real values from the verified session record
     expect(screen.getAllByText('Test Buyer').length).toBeGreaterThan(0);
     expect(screen.getByText('buyer.one@example.com')).toBeInTheDocument();
-    expect(screen.getByText('Password verified')).toBeInTheDocument();
+    expect(screen.queryByText('Password verified')).not.toBeInTheDocument();
+    expect(screen.queryByText('Email OTP verified')).not.toBeInTheDocument();
+    expect(screen.queryByText('Active Workspace')).not.toBeInTheDocument();
+    expect(screen.queryByText(/modules/i)).not.toBeInTheDocument();
     // Initials are derived from the real name
     expect(screen.getAllByText('TB').length).toBeGreaterThan(0);
 
@@ -350,18 +358,19 @@ describe('Header', () => {
     expect(screen.queryByText(UI_STRINGS.accountSecurity.panelTitle)).not.toBeInTheDocument();
   });
 
-  // Vendor, category manager and admin have no profile screen of their own, so
-  // the overlay stays reachable for them.
-  it('opens the account overlay for roles without a profile page and closes it from both controls', () => {
+  // Internal roles (category manager, admin) have no self-service profile page,
+  // so the security overlay stays reachable for them.
+  it('opens the account overlay for internal roles without a profile page and closes it from both controls', () => {
     (storeModule.useApp as jest.Mock).mockReturnValue({
       ...(storeModule.useApp as jest.Mock)(),
-      currentRole: 'vendor',
+      currentRole: 'category_manager',
     });
 
     render(<Header />);
 
     const profileBtn = screen.getByTitle('Signed-in account details');
     fireEvent.click(profileBtn);
+    expect(screen.queryByRole('button', { name: UI_STRINGS.headerNav.profile })).not.toBeInTheDocument();
     fireEvent.click(screen.getByText(UI_STRINGS.accountSecurity.menuLabel));
 
     // The overlay supplies the chrome; the forms come from AccountSecurityPanel,
@@ -458,8 +467,9 @@ describe('Header session identity', () => {
     expect(screen.getAllByText('buyer@procucev.com').length).toBeGreaterThan(1);
   });
 
-  it('names the one-time-code method the session was verified with', () => {
-    mountWith({
+  it('routes to the self-service profile page for buyer and vendor and omits security overlay', () => {
+    const { unmount } = mountWith({
+      currentRole: 'buyer',
       currentUserSession: {
         id: 'u1',
         email: 'buyer@procucev.com',
@@ -472,7 +482,31 @@ describe('Header session identity', () => {
     });
     openProfile();
 
-    expect(screen.getByText('Email OTP verified')).toBeInTheDocument();
+    expect(screen.queryByText('Email OTP verified')).not.toBeInTheDocument();
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.menuLabel)).not.toBeInTheDocument();
+    const buyerProfileBtn = screen.getByRole('button', { name: UI_STRINGS.headerNav.profile });
+    expect(buyerProfileBtn).toHaveAttribute('title', UI_STRINGS.headerNav.openProfileTitle);
+    fireEvent.click(buyerProfileBtn);
+    expect(mockPush).toHaveBeenCalledWith('/buyer/profile');
+    expect(screen.queryByText('User Name (Login ID):')).not.toBeInTheDocument();
+    unmount();
+
+    mountWith({
+      currentRole: 'vendor',
+      currentUserSession: {
+        id: 'v1',
+        email: 'vendor@procucev.com',
+        name: 'Vendor Partner',
+        role: 'vendor',
+        orgId: 'o2',
+        orgName: 'Vendor Corp',
+      },
+    });
+    openProfile();
+    expect(screen.queryByText(UI_STRINGS.accountSecurity.menuLabel)).not.toBeInTheDocument();
+    const vendorProfileBtn = screen.getByRole('button', { name: UI_STRINGS.headerNav.profile });
+    fireEvent.click(vendorProfileBtn);
+    expect(mockPush).toHaveBeenCalledWith('/vendor/vendor-profile');
   });
 
   // The session can be gone by the time the buyer presses Logout, and the
@@ -612,13 +646,13 @@ describe('Header Session Timer and Auto Logout', () => {
 
   it('triggers auto logout when session timer expires', () => {
     jest.useFakeTimers();
-    // Set localStorage expiration to 1 second in the future
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 1000));
+    const start = Date.now();
     render(<Header />);
 
-    // Fast-forward time past expiration
+    // Fast-forward past the 5-minute buyer inactivity window
+    jest.setSystemTime(start + 5 * 60 * 1000 - 1000);
     act(() => {
-      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(1000);
     });
 
     expect(mockSetIsLoggedIn).toHaveBeenCalledWith(false);
@@ -714,6 +748,12 @@ describe('Header Session Timer and Auto Logout', () => {
     // Click backdrop closes it
     fireEvent.click(dialog);
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Top-right user/buyer profile dropdown closes when clicking outside
+    fireEvent.click(screen.getByTitle('Signed-in account details'));
+    expect(screen.getByText('Logout')).toBeInTheDocument();
+    fireEvent.mouseDown(document.body);
+    expect(screen.queryByText('Logout')).not.toBeInTheDocument();
   });
 
   it('covers session timer keydown events and warning color intervals', () => {
@@ -727,15 +767,19 @@ describe('Header Session Timer and Auto Logout', () => {
       addAuditLog: mockAddAuditLog,
     });
     jest.useFakeTimers();
-    // 2 minutes left (amber)
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 120_000));
-    const { rerender } = render(<Header />);
+    const start = Date.now();
+    render(<Header />);
+
+    // Advance to 2 minutes left (amber warning interval <= 300s)
+    jest.setSystemTime(start + (3 * 60 * 60 - 121) * 1000);
+    act(() => {
+      jest.advanceTimersByTime(1000);
+    });
     let timer = screen.getByTestId('header-session-timer');
     expect(timer.className).toContain('text-amber');
 
-    // 30 seconds left (rose)
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() + 30_000));
-    rerender(<Header />);
+    // Advance to 30 seconds left (rose critical interval <= 60s)
+    jest.setSystemTime(start + (3 * 60 * 60 - 31) * 1000);
     act(() => {
       jest.advanceTimersByTime(1000);
     });
@@ -755,9 +799,9 @@ describe('Header Session Timer and Auto Logout', () => {
 
     // Auto logout where logout rejects to cover catch callback (func 13)
     (authClient.logout as jest.Mock).mockRejectedValueOnce(new Error('Logout network error'));
-    localStorage.setItem('procucev_session_expires_at', String(Date.now() - 1000));
+    jest.setSystemTime(Date.now() + 3 * 60 * 60 * 1000);
     act(() => {
-      jest.advanceTimersByTime(2000);
+      jest.advanceTimersByTime(1000);
     });
 
     jest.useRealTimers();

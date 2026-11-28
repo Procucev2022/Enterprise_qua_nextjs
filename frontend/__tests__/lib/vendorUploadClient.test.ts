@@ -1,12 +1,22 @@
 import * as XLSX from 'xlsx';
 import {
+  buildPoLineDedupeKey,
   bulkImportVendorRows,
+  downloadSkippedDuplicatePosCsv,
+  downloadSkippedDuplicatesCsv,
   downloadVendorUploadTemplate,
+  extractSkippedDuplicatePosFromJob,
+  extractSkippedDuplicatesFromJob,
   isAllowedVendorUploadFile,
   MAX_VENDOR_UPLOAD_FILE_BYTES,
   parseVendorUploadFile,
+  partitionDuplicatePoRows,
+  partitionDuplicateVendorMasterRows,
+  reconcileVendorJobProgress,
   sendBulkVendorInvitations,
 } from '@/lib/vendorUploadClient';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
+import type { IngestionJobState } from '@/lib/types';
 import { authClient } from '@/lib/authClient';
 import type { VendorUploadRow } from '@/lib/types';
 
@@ -560,6 +570,450 @@ describe('vendorUploadClient', () => {
       });
       const incompleteResult = await sendBulkVendorInvitations(['v-2']);
       expect(incompleteResult.results).toEqual([{ vendorId: 'v-2', status: 'failed' }]);
+    });
+
+    test('parses Cate-1..5 columns, strips placeholder categories, and enforces requireCategory when requested', async () => {
+      const { parseVendorUploadFile } = require('@/lib/vendorUploadClient');
+      const XLSX = require('xlsx');
+      const makeXlsx = (rows: Record<string, unknown>[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = { Sheets: { Sheet1: ws }, SheetNames: ['Sheet1'] };
+        const buffer = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+        const f = new File([buffer], 'cat-check.xlsx');
+        (f as File & { __buffer: ArrayBuffer }).__buffer = buffer;
+        return f;
+      };
+
+      const file = makeXlsx([
+        {
+          'Company Name': 'Multi Cat Co',
+          'Email Id': 'multi@vendor.test',
+          'Mobile No': '9876543210',
+          Category: 'Vendor Master',
+          'Cate-1': 'Valves',
+          'Cate-2': 'Pumps',
+          'Cate-3': 'None',
+        },
+        {
+          'Company Name': 'No Cat Co',
+          'Email Id': 'nocat@vendor.test',
+          'Mobile No': '9876543211',
+          Category: 'Uncategorized',
+        },
+      ]);
+
+      const parsedStrict = await parseVendorUploadFile(file, { requireCategory: true });
+      expect(parsedStrict.success).toBe(true);
+      if (!parsedStrict.success) return;
+
+      expect(parsedStrict.data.rows[0].isValid).toBe(true);
+      expect(parsedStrict.data.rows[0].vendor.majorCategory).toBe('Valves');
+      expect(parsedStrict.data.rows[0].vendor.minorCategories).toEqual(['Valves', 'Pumps']);
+
+      expect(parsedStrict.data.rows[1].isValid).toBe(false);
+      expect(parsedStrict.data.rows[1].errors.some((e: string) => /category/i.test(e))).toBe(true);
+    });
+  });
+
+  describe('partitionDuplicateVendorMasterRows', () => {
+    const vmStrings = UI_STRINGS.vendorPoIngestion.vendorMaster;
+
+    test('detects and skips intra-file duplicates by email, gstin, explicit code, and company+phone while keeping distinct companies sharing a phone', () => {
+      const makeRecord = (id: string, overrides: Record<string, string>) => ({
+        id,
+        vendorCode: overrides.vendorCode || id,
+        companyName: overrides.companyName || `Co ${id}`,
+        contactPerson: 'Contact',
+        email: overrides.email ?? `${id}@example.com`,
+        phone: overrides.phone ?? '+91 9811100000',
+        address: 'Mumbai',
+        gstNumber: overrides.gstNumber ?? '',
+      });
+
+      const candidates = [
+        { rowNumber: 2, explicitVendorCode: 'V-1', vendor: makeRecord('1', { vendorCode: 'V-1', companyName: 'Alpha', email: 'alpha@co.in', gstNumber: '27AAACA1111A1Z1', phone: '+91 9800011111' }) },
+        { rowNumber: 3, explicitVendorCode: '', vendor: makeRecord('2', { vendorCode: '1', companyName: 'Beta', email: 'beta@co.in', gstNumber: 'N/A', phone: '+91 9800011111' }) }, // different company sharing phone, placeholder GSTIN
+        { rowNumber: 4, explicitVendorCode: 'V-9', vendor: makeRecord('3', { vendorCode: 'V-9', companyName: 'Alpha Copy', email: 'ALPHA@co.in', gstNumber: '27XXXXX9999X1Z1', phone: '+91 9700000000' }) }, // dup email
+        { rowNumber: 5, explicitVendorCode: 'V-10', vendor: makeRecord('4', { vendorCode: 'V-10', companyName: 'Gamma', email: 'gamma@co.in', gstNumber: '27AAACA1111A1Z1', phone: '+91 9600000000' }) }, // dup GSTIN
+        { rowNumber: 6, explicitVendorCode: 'V-1', vendor: makeRecord('5', { vendorCode: 'V-1', companyName: 'Delta', email: 'delta@co.in', gstNumber: '29BBBBB2222B1Z2', phone: '+91 9500000000' }) }, // dup explicit code
+        { rowNumber: 7, explicitVendorCode: '', vendor: makeRecord('6', { vendorCode: '2', companyName: 'Beta', email: '', gstNumber: 'none', phone: '9800011111' }) }, // dup company+phone & placeholder gstin/invalid empty email
+      ];
+
+      const { uniqueRecords, skippedDuplicates } = partitionDuplicateVendorMasterRows(candidates, []);
+      expect(uniqueRecords.map((r) => r.companyName)).toEqual(['Alpha', 'Beta']);
+      expect(skippedDuplicates).toHaveLength(4);
+      expect(skippedDuplicates[0]).toMatchObject({
+        rowNumber: 4,
+        matchedAgainst: 'FILE',
+        reason: formatString(vmStrings.duplicateReasonEmailFile, { value: 'ALPHA@co.in', firstRow: 2 }),
+      });
+      expect(skippedDuplicates[1]).toMatchObject({
+        rowNumber: 5,
+        matchedAgainst: 'FILE',
+        reason: formatString(vmStrings.duplicateReasonGstinFile, { value: '27AAACA1111A1Z1', firstRow: 2 }),
+      });
+      expect(skippedDuplicates[2]).toMatchObject({
+        rowNumber: 6,
+        matchedAgainst: 'FILE',
+        reason: formatString(vmStrings.duplicateReasonCodeFile, { value: 'V-1', firstRow: 2 }),
+      });
+      expect(skippedDuplicates[3]).toMatchObject({
+        rowNumber: 7,
+        matchedAgainst: 'FILE',
+        reason: formatString(vmStrings.duplicateReasonCompanyPhoneFile, { company: 'Beta', phone: '9800011111', firstRow: 3 }),
+      });
+    });
+
+    test('detects duplicates against existing Buyer Directory vendors while ignoring purely numeric auto-codes', () => {
+      const existing = [
+        { vendorCode: '1', name: 'Existing Numeric Co', email: 'one@ext.in', phone: '+91 9111111111', gstin: '27EXTCA1234A1Z1' },
+        { vendorCode: 'EXT-77', companyName: 'Custom Code Co', email: 'custom@ext.in', phone: '9222222222', gstNumber: '' },
+        { name: 'No Email Existing', email: null, phone: '+91 9333333333', gstNumber: null },
+      ];
+
+      const makeRecord = (id: string, overrides: Record<string, string>) => ({
+        id,
+        vendorCode: overrides.vendorCode || id,
+        companyName: overrides.companyName || `Co ${id}`,
+        contactPerson: 'Contact',
+        email: overrides.email ?? `${id}@new.in`,
+        phone: overrides.phone ?? '+91 9444444444',
+        address: 'Pune',
+        gstNumber: overrides.gstNumber ?? '',
+      });
+
+      const candidates = [
+        { rowNumber: 2, explicitVendorCode: '1', vendor: makeRecord('1', { vendorCode: '1', companyName: 'Brand New Serial 1', email: 'brandnew@new.in', phone: '9888888881' }) },
+        { rowNumber: 3, explicitVendorCode: '', vendor: makeRecord('2', { vendorCode: '2', companyName: 'Dup Email', email: 'ONE@EXT.IN', phone: '9888888882' }) },
+        { rowNumber: 4, explicitVendorCode: '', vendor: makeRecord('3', { vendorCode: '3', companyName: 'Dup GSTIN', email: 'gstdup@new.in', gstNumber: '27EXTCA1234A1Z1', phone: '9888888883' }) },
+        { rowNumber: 5, explicitVendorCode: 'EXT-77', vendor: makeRecord('4', { vendorCode: 'EXT-77', companyName: 'Dup Custom Code', email: 'codedup@new.in', phone: '9888888884' }) },
+        { rowNumber: 6, explicitVendorCode: '', vendor: makeRecord('5', { vendorCode: '4', companyName: 'No Email Existing', email: 'invalid-no-at', phone: '9333333333' }) },
+      ];
+
+      const { uniqueRecords, skippedDuplicates } = partitionDuplicateVendorMasterRows(candidates, existing);
+      expect(uniqueRecords.map((r) => r.companyName)).toEqual(['Brand New Serial 1']);
+      expect(skippedDuplicates).toHaveLength(4);
+      expect(skippedDuplicates.every((d) => d.matchedAgainst === 'EXISTING_VENDOR')).toBe(true);
+      expect(skippedDuplicates[0].reason).toBe(formatString(vmStrings.duplicateReasonEmailExisting, { value: 'ONE@EXT.IN' }));
+      expect(skippedDuplicates[1].reason).toBe(formatString(vmStrings.duplicateReasonGstinExisting, { value: '27EXTCA1234A1Z1' }));
+      expect(skippedDuplicates[2].reason).toBe(formatString(vmStrings.duplicateReasonCodeExisting, { value: 'EXT-77' }));
+      expect(skippedDuplicates[3].reason).toBe(
+        formatString(vmStrings.duplicateReasonCompanyPhoneExisting, { company: 'No Email Existing', phone: '9333333333' })
+      );
+    });
+  });
+
+  describe('extractSkippedDuplicatesFromJob and reconcileVendorJobProgress', () => {
+    const baseJob: IngestionJobState = {
+      id: 'job-1',
+      jobType: 'VENDOR_MASTER',
+      fileName: 'vendors.xlsx',
+      status: 'COMPLETED',
+      totalRecords: 8,
+      processedRecords: 8,
+      importedRecords: 8,
+      skippedRecords: 0,
+      failedRecords: 0,
+    };
+
+    test('extracts structured duplicate rows and applies fallback display defaults', () => {
+      const skipped = extractSkippedDuplicatesFromJob({
+        ...baseJob,
+        errorDetails: [
+          { status: 'validation_error', reason: 'Bad mobile' },
+          {
+            rowNumber: 3,
+            vendorCode: 'V-9',
+            companyName: 'Alpha Co',
+            email: 'a@co.in',
+            phone: '+91 9811111111',
+            gstNumber: '27AAACA1111A1Z1',
+            status: 'duplicate_skipped',
+            matchedAgainst: 'EXISTING_VENDOR',
+            reason: 'Dup email',
+          },
+          {
+            vendorName: 'Fallback Name Co',
+            matchedAgainst: 'FILE',
+          },
+        ],
+      });
+
+      expect(skipped).toHaveLength(2);
+      expect(skipped[0]).toMatchObject({
+        rowNumber: 3,
+        vendorCode: 'V-9',
+        companyName: 'Alpha Co',
+        matchedAgainst: 'EXISTING_VENDOR',
+        reason: 'Dup email',
+      });
+      expect(skipped[1]).toMatchObject({
+        rowNumber: 0,
+        vendorCode: undefined,
+        companyName: 'Fallback Name Co',
+        email: '—',
+        matchedAgainst: 'FILE',
+        reason: UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesSkippedBannerHint,
+      });
+      expect(extractSkippedDuplicatesFromJob(baseJob)).toEqual([]);
+    });
+
+    test('reconciles Excel and CSV duplicate offsets without double-counting or inflating stored totals', () => {
+      // Mismatched filename or missing summary passes through untouched
+      expect(
+        reconcileVendorJobProgress(baseJob, {
+          fileName: 'other.xlsx',
+          totalCount: 10,
+          skippedCount: 2,
+          isExcelOnly: true,
+          allSkippedClientSide: false,
+        })
+      ).toEqual(baseJob);
+
+      // Excel upload sent 8 unique rows out of 10 uploaded (2 duplicates skipped client-side):
+      // stored/processing total stays 8 while uploadedRecords = 10 and skippedRecords = 2.
+      const reconciledExcel = reconcileVendorJobProgress(baseJob, {
+        fileName: 'vendors.xlsx',
+        totalCount: 10,
+        skippedCount: 2,
+        isExcelOnly: true,
+        allSkippedClientSide: false,
+      });
+      expect(reconciledExcel).toMatchObject({
+        uploadedRecords: 10,
+        totalRecords: 8,
+        processedRecords: 8,
+        importedRecords: 8,
+        skippedRecords: 2,
+      });
+
+      // CSV upload fallback when client detected duplicates against local buyerVendors that server missed
+      const reconciledCsv = reconcileVendorJobProgress(
+        { ...baseJob, fileName: 'vendors.csv', totalRecords: 10, processedRecords: 10, importedRecords: 10, skippedRecords: 0 },
+        {
+          fileName: 'vendors.csv',
+          totalCount: 10,
+          skippedCount: 3,
+          isExcelOnly: false,
+          allSkippedClientSide: false,
+        }
+      );
+      expect(reconciledCsv).toMatchObject({
+        uploadedRecords: 10,
+        totalRecords: 7,
+        processedRecords: 7,
+        importedRecords: 7,
+        skippedRecords: 3,
+      });
+
+      // Handles zero/undefined fields cleanly on Excel & null summary
+      expect(reconcileVendorJobProgress(baseJob, null)).toEqual(baseJob);
+      expect(
+        reconcileVendorJobProgress(
+          { ...baseJob, totalRecords: 0, processedRecords: 0, importedRecords: 0, skippedRecords: 0 },
+          { fileName: 'vendors.xlsx', totalCount: 5, skippedCount: 2, isExcelOnly: true, allSkippedClientSide: false }
+        )
+      ).toMatchObject({ uploadedRecords: 5, totalRecords: 3, processedRecords: 0, skippedRecords: 2 });
+      expect(
+        reconcileVendorJobProgress(
+          { ...baseJob, fileName: 'vendors.csv', totalRecords: 0, processedRecords: 0, importedRecords: 4, skippedRecords: 0 },
+          { fileName: 'vendors.csv', totalCount: 4, skippedCount: 1, isExcelOnly: false, allSkippedClientSide: false }
+        )
+      ).toMatchObject({ uploadedRecords: 4, totalRecords: 3, processedRecords: 3, importedRecords: 3, skippedRecords: 1 });
+    });
+
+    test('detects GSTIN, company+phone, and existing buyer directory duplicates in parseVendorUploadFile and exports CSV', async () => {
+      const file = xlsxFile([
+        { 'Company Name': 'Alpha Corp', 'Email Id': 'alpha@co.in', 'Mobile No': '9811111111', GSTIN: '27AAACA1111A1Z1' },
+        { 'Company Name': 'Beta GST Copy', 'Email Id': 'beta@co.in', 'Mobile No': '9822222222', GSTIN: '27AAACA1111A1Z1' },
+        { 'Company Name': 'Existing Co', 'Email Id': 'newmail@co.in', 'Mobile No': '9833333333', GSTIN: '29BBBBB2222B1Z2' },
+      ]);
+      const parsed = await parseVendorUploadFile(file, {
+        existingVendors: [{ name: 'Existing Co', email: 'existing@buyer.in', phone: '9833333333' }],
+      });
+      expect(parsed.success).toBe(true);
+      if (!parsed.success) return;
+      expect(parsed.data.rows[0].isDuplicate).toBeUndefined();
+      expect(parsed.data.rows[1]).toMatchObject({ isDuplicate: true, matchedAgainst: 'FILE' });
+      expect(parsed.data.rows[2]).toMatchObject({ isDuplicate: true, matchedAgainst: 'EXISTING_VENDOR' });
+
+      const originalCreateObjectURL = URL.createObjectURL;
+      const originalRevokeObjectURL = URL.revokeObjectURL;
+      const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      URL.createObjectURL = jest.fn().mockReturnValue('blob:dup-url');
+      URL.revokeObjectURL = jest.fn();
+      try {
+        downloadSkippedDuplicatesCsv([]);
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+
+        downloadSkippedDuplicatesCsv([
+          {
+            rowNumber: 3,
+            vendorCode: 'V-3',
+            companyName: 'Dup, "Co"',
+            email: 'dup@co.in',
+            phone: '9811111111',
+            gstNumber: '27AAACA1111A1Z1',
+            matchedAgainst: 'EXISTING_VENDOR',
+            reason: 'Already in buyer directory',
+          },
+        ]);
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:dup-url');
+      } finally {
+        URL.createObjectURL = originalCreateObjectURL;
+        URL.revokeObjectURL = originalRevokeObjectURL;
+        clickSpy.mockRestore();
+      }
+    });
+
+    test('deduplicates PO dump rows against existing uploaded POs and intra-file duplicates, extracts server PO duplicate details, and downloads CSV', () => {
+      expect(buildPoLineDedupeKey({})).toBe('');
+      expect(
+        buildPoLineDedupeKey({
+          poNumber: '  po-101 ',
+          poDate: '15/06/2025',
+          vendorName: 'Vendor VND-9',
+          vendorCode: 'VND-9',
+          itemDescription: 'Ball Bearings',
+          specification: 'SKF 6205',
+          quantity: 10,
+          spend: 25000,
+        })
+      ).toBe('PO-101|2025-06-15|vnd-9|ball bearings|skf 6205|10|25000');
+
+      const makePo = (id: string, overrides: Record<string, unknown> = {}) => ({
+        id,
+        poNumber: '',
+        poDate: '',
+        vendorIdentifier: 'Apex Supplies',
+        vendorName: 'Apex Supplies',
+        itemName: 'Ball Bearings 6205',
+        itemDescription: 'Ball Bearings 6205',
+        specs: 'SKF',
+        specification: 'SKF',
+        quantity: 0,
+        unit: '',
+        uom: '',
+        unitPrice: 0,
+        totalSpend: 0,
+        spend: 0,
+        department: '',
+        ...overrides,
+      });
+
+      const partitioned = partitionDuplicatePoRows(
+        [
+          { rowNumber: 2, record: makePo('po-1') },
+          { rowNumber: 3, record: makePo('po-2', { poNumber: 'PO-500', poDate: '2025-07-01', itemName: 'Gate Valve', itemDescription: 'Gate Valve', specs: '2 inch', specification: '2 inch', quantity: 5, spend: 12000, totalSpend: 12000 }) },
+          { rowNumber: 4, record: makePo('po-3', { poNumber: 'po-500', poDate: '01/07/2025', itemName: 'Gate Valve', itemDescription: 'Gate Valve', specs: '2 inch', specification: '2 inch', quantity: 5, spend: 12000, totalSpend: 12000 }) },
+          { rowNumber: 5, record: makePo('po-4', { vendorIdentifier: '', vendorName: '', itemName: '', itemDescription: '' }) },
+        ],
+        [
+          {
+            vendorName: '  apex  supplies ',
+            itemDescription: 'ball bearings 6205',
+            specification: 'skf',
+          },
+        ]
+      );
+
+      expect(partitioned.uniqueRecords.map((r) => r.id)).toEqual(['po-2', 'po-4']);
+      expect(partitioned.skippedDuplicates).toHaveLength(2);
+      expect(partitioned.skippedDuplicates[0]).toMatchObject({
+        rowNumber: 2,
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Ball Bearings 6205',
+        specification: 'SKF',
+        matchedAgainst: 'EXISTING_PO',
+      });
+      expect(partitioned.skippedDuplicates[1]).toMatchObject({
+        rowNumber: 4,
+        poNumber: 'po-500',
+        quantity: 5,
+        spend: 12000,
+        matchedAgainst: 'FILE',
+      });
+
+      const extracted = extractSkippedDuplicatePosFromJob({
+        id: 'job-po-1',
+        jobType: 'PO_DUMP',
+        fileName: 'pos.xlsx',
+        status: 'COMPLETED',
+        totalRecords: 0,
+        processedRecords: 0,
+        importedRecords: 0,
+        skippedRecords: 2,
+        failedRecords: 0,
+        errorDetails: [
+          {
+            rowNumber: 2,
+            poNumber: 'PO-500',
+            poDate: '2025-07-01',
+            vendorName: 'Apex Supplies',
+            itemDescription: 'Gate Valve',
+            specification: '2 inch',
+            quantity: 5,
+            spend: 12000,
+            status: 'duplicate_skipped',
+            matchedAgainst: 'EXISTING_PO',
+            reason: 'Already uploaded previously',
+          },
+          {
+            rowNumber: 0,
+            matchedAgainst: 'FILE',
+          },
+          {
+            reason: 'Non-duplicate validation failure',
+          },
+        ],
+      });
+      expect(extracted).toHaveLength(2);
+      expect(extracted[0]).toMatchObject({
+        rowNumber: 2,
+        poNumber: 'PO-500',
+        vendorName: 'Apex Supplies',
+        itemDescription: 'Gate Valve',
+        quantity: 5,
+        spend: 12000,
+        matchedAgainst: 'EXISTING_PO',
+      });
+      expect(extracted[1]).toMatchObject({
+        rowNumber: 0,
+        vendorName: '—',
+        itemDescription: '—',
+        matchedAgainst: 'FILE',
+        reason: UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerHint,
+      });
+
+      const originalCreateObjectURL = URL.createObjectURL;
+      const originalRevokeObjectURL = URL.revokeObjectURL;
+      const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+      URL.createObjectURL = jest.fn().mockReturnValue('blob:po-dup-url');
+      URL.revokeObjectURL = jest.fn();
+      try {
+        downloadSkippedDuplicatePosCsv([]);
+        expect(URL.createObjectURL).not.toHaveBeenCalled();
+
+        downloadSkippedDuplicatePosCsv([
+          ...extracted,
+          {
+            rowNumber: 5,
+            vendorName: 'Quoted, "Vendor"',
+            itemDescription: 'Bolts',
+            matchedAgainst: 'FILE',
+            reason: 'Duplicate in file',
+          },
+        ]);
+        expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+        expect(clickSpy).toHaveBeenCalledTimes(1);
+        expect(URL.revokeObjectURL).toHaveBeenCalledWith('blob:po-dup-url');
+      } finally {
+        URL.createObjectURL = originalCreateObjectURL;
+        URL.revokeObjectURL = originalRevokeObjectURL;
+        clickSpy.mockRestore();
+      }
     });
   });
 });

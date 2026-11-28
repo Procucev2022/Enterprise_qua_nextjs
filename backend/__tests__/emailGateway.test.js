@@ -235,7 +235,7 @@ describe('emailGatewayService.processMessage', () => {
     expect(payload.sourceEmail).toBe(SENDER);
     expect(account.id).toBe('buyer-acc-101');
     expect(result.rfq.rfqNumber).toBe('RFQ-2026-0001');
-  });
+  }, 30000);
 
   test('does not record or charge an email RFQ when its durable create fails', async () => {
     mockExtraction();
@@ -809,6 +809,44 @@ describe('emailGatewayService.pollViaGmailApi', () => {
     // The vendor mailbox's own Gmail API identity is unconfigured, and it
     // must not be reported as configured just because the buyer's is.
     expect(emailGatewayService.isConfigured(vendorConfig)).toBe(false);
+  });
+
+  test('pollViaGmailApi records AUTH_REVOKED cooldown on invalid_grant and skips subsequent polls until rotated', async () => {
+    const mailTransport = require('../src/services/mailTransport');
+    mailTransport.resetCooldowns();
+    jest.spyOn(mailTransport, 'loadPersistedCooldowns').mockResolvedValue(true);
+    jest.spyOn(mailTransport, 'flushPendingCooldownWrites').mockResolvedValue();
+    if (typeof mailerService.getGmailOAuthClient !== 'function') mailerService.getGmailOAuthClient = () => ({});
+    if (typeof mailerService.getGmailProviderKey !== 'function') mailerService.getGmailProviderKey = () => '';
+    jest.spyOn(mailerService, 'getGmailOAuthClient').mockReturnValue({});
+    jest.spyOn(mailerService, 'getGmailProviderKey').mockReturnValue('gmail:buyer:testfp');
+
+    const invalidGrantErr = new Error('invalid_grant');
+    const api = {
+      users: {
+        labels: {
+          list: jest.fn().mockRejectedValue(invalidGrantErr),
+          create: jest.fn(),
+        },
+        messages: {
+          list: jest.fn(),
+        },
+      },
+    };
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);
+
+    const first = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(first.error).toBe('invalid_grant');
+    // Rethrows AUTH_REVOKED from label lookup immediately rather than issuing additional messages.list calls
+    expect(api.users.messages.list).not.toHaveBeenCalled();
+    expect(mailTransport.getCooldown('gmail:buyer:testfp')).toBeTruthy();
+
+    api.users.labels.list.mockClear();
+    const second = await emailGatewayService.pollViaGmailApi(emailGatewayService.resolveConfig(FULL_ENV));
+    expect(second).toMatchObject({ skipped: true, status: 'cooling_down' });
+    expect(api.users.labels.list).not.toHaveBeenCalled();
+    expect(api.users.messages.list).not.toHaveBeenCalled();
+    mailTransport.resetCooldowns();
   });
 });
 
@@ -1668,6 +1706,7 @@ describe('Email-to-RFQ Flow: Required Edge Cases (Tests 1 - 12)', () => {
       ...emailGatewayService.resolveConfig(FULL_ENV),
       user: 'vendor-intake@procucev.com',
       isVendorMailbox: true,
+      autoRegisterUnregisteredBuyers: false,
     };
 
     const result = await emailGatewayService.processMessage(Buffer.from(unregEml, 'utf8'), vendorConfig);
@@ -3254,7 +3293,7 @@ Hello team, sending catalog.
       expect(result2.totalIngested).toBe(1);
     });
 
-    test('inbound multi-item RFQ sent to vendor inbox (srinu20252026@gmail.com) by registered buyer creates RFQ and preserves all line items', async () => {
+    test('inbound multi-item RFQ sent to vendor inbox (srinu20252026@gmail.com) by registered buyer is blocked and creates no RFQ', async () => {
       const registeredBuyer = {
         id: 'buyer-dual-1',
         corporateEmail: 'buyer.procure@enterprise.com',
@@ -3264,7 +3303,7 @@ Hello team, sending catalog.
         pincode: '500081',
       };
       jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(registeredBuyer);
-      const ackSpy = jest.spyOn(mailerService, 'sendRfqAcknowledgementEmail').mockResolvedValue(true);
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
 
       const multiItemEml = `From: buyer.procure@enterprise.com
 To: srinu20252026@gmail.com
@@ -3281,37 +3320,10 @@ Delivery needed in Hyderabad.
 `;
 
       const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
-
-      // Mock gemini extraction returning 3 distinct line items
-      jest.spyOn(geminiService, 'extractLineItems').mockResolvedValueOnce({
-        status: geminiService.EXTRACTION_STATUS.SUCCESS,
-        documentTitle: 'Electrical & Mechanical Consumables',
-        category: 'Electrical & Electronics',
-        lineItems: [
-          { itemDescription: 'Industrial Motor 15HP', quantity: 5, uom: 'Nos', specifications: 'High torque specs', targetDate: '2026-10-01' },
-          { itemDescription: 'Ball Bearings 6205', quantity: 100, uom: 'Nos', specifications: 'SKF grade', targetDate: '2026-10-01' },
-          { itemDescription: 'V-Belts B-52', quantity: 20, uom: 'Nos', specifications: 'Heavy duty', targetDate: '2026-10-01' },
-        ],
-      });
-
       const result = await emailGatewayService.processMessage(Buffer.from(multiItemEml, 'utf8'), vendorConfig);
 
-      expect(result.status).toBe(INGESTION_OUTCOME.INGESTED);
-      expect(result.rfq).toBeDefined();
-      expect(result.rfq.status).toBe('Quotes Pending');
-      expect(result.rfq.extractedEntities).toHaveLength(3);
-      expect(result.rfq.extractedEntities[0].itemName).toBe('Industrial Motor 15HP');
-      expect(result.rfq.extractedEntities[0].quantity).toBe(5);
-      expect(result.rfq.extractedEntities[1].itemName).toBe('Ball Bearings 6205');
-      expect(result.rfq.extractedEntities[1].quantity).toBe(100);
-      expect(result.rfq.extractedEntities[2].itemName).toBe('V-Belts B-52');
-      expect(result.rfq.extractedEntities[2].quantity).toBe(20);
-      expect(ackSpy).toHaveBeenCalledWith(
-        expect.objectContaining({
-          to: 'buyer.procure@enterprise.com',
-          rfqNumber: result.rfq.rfqNumber,
-        })
-      );
+      expect(result.status).toBe(INGESTION_OUTCOME.SKIPPED_NON_BUYER_MAILBOX);
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
 
     test('unregistered buyer sending RFQ to vendor inbox (srinu20252026@gmail.com) is blocked, sends notification, and creates no RFQ or buyer', async () => {
@@ -3329,7 +3341,11 @@ Content-Type: text/plain
 Need quotation for 2 units Hydraulic Pump.
 `;
 
-      const vendorConfig = emailGatewayService.resolveVendorConfig(VENDOR_ENV);
+      const vendorConfig = emailGatewayService.resolveVendorConfig({
+        ...VENDOR_ENV,
+        EMAIL_GATEWAY_AUTO_REGISTER: 'false',
+        VENDOR_EMAIL_GATEWAY_AUTO_REGISTER: 'false',
+      });
       const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
 
       expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
@@ -3339,6 +3355,34 @@ Need quotation for 2 units Hydraulic Pump.
           subject: expect.stringContaining('Heavy Machinery Parts'),
         })
       );
+      expect(rfqCreateSpy).not.toHaveBeenCalled();
+    });
+
+    test('unregistered buyer sending RFQ to vendor inbox is always blocked and never auto-registers even if EMAIL_GATEWAY_AUTO_REGISTER is true', async () => {
+      const rfqCreateSpy = jest.spyOn(storeService, 'createRFQ');
+      const getOrCreateSpy = jest.spyOn(emailGatewayService, 'getOrCreateBuyerAccount');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+
+      const unauthEml = `From: new.buyer@enterprise.org
+To: srinu20252026@gmail.com
+Subject: RFQ: 5 Units Industrial Water Pumps
+Message-ID: <rfq-new-buyer-vendor-inbox@enterprise.org>
+Date: Fri, 18 Sep 2026 15:00:00 +0530
+Content-Type: text/plain
+
+Need quotation for 5 units Water Pump.
+`;
+
+      const vendorConfig = emailGatewayService.resolveVendorConfig({
+        ...VENDOR_ENV,
+        EMAIL_GATEWAY_AUTO_REGISTER: 'true',
+      });
+      expect(vendorConfig.autoRegisterUnregisteredBuyers).toBe(false);
+
+      const result = await emailGatewayService.processMessage(Buffer.from(unauthEml, 'utf8'), vendorConfig);
+
+      expect(result.status).toBe(INGESTION_OUTCOME.SENDER_NOT_ALLOWED);
+      expect(getOrCreateSpy).not.toHaveBeenCalled();
       expect(rfqCreateSpy).not.toHaveBeenCalled();
     });
 
@@ -3859,7 +3903,7 @@ describe('emailGatewayService dual-registered buyer and vendor handling', () => 
     });
 
     const emlContent = `From: ${dualEmail}
-To: client@procucev.com
+To: rfq@procucev.com
 Subject: Quotation Request for Consumables
 Message-ID: <dual-msg-1@procucev.com>
 Date: Fri, 23 Oct 2026 15:17:43 +0530

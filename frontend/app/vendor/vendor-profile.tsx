@@ -3,6 +3,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
+import { createBackdropClickHandler } from '@/lib/constants';
 import { findMajorForMinor, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import {
@@ -13,8 +14,6 @@ import {
   Mail,
   Phone,
   Search,
-  CheckSquare,
-  Square,
   ChevronDown,
   ChevronRight,
   Save,
@@ -32,7 +31,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
-import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan } from '@/lib/validationSchemas';
+import { validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode, isDummyPan, usablePan, validateGstin, isGstValid } from '@/lib/validationSchemas';
 
 export default function VendorProfilePage() {
   const {
@@ -48,7 +47,7 @@ export default function VendorProfilePage() {
     ensureCategoryTaxonomy,
   } = useApp();
 
-  const MAX_CATEGORIES = 10;
+  // Unlimited categories supported per vendor profile.
 
   // Loads the category master once. The store function is recreated on every render, so
   // listing it as a dependency would refetch on each render while the request fails.
@@ -278,46 +277,14 @@ export default function VendorProfilePage() {
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => Boolean(usablePan(pan));
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+  // No longer need local isGstValid - using imported comprehensive validation
 
-  // Toggle Major Category
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-    } else {
-      setSelectedMajor((prev) => [...prev, majorName]);
-      const allMinor = getMinorCategories(majorName);
-      const remainingSlots = MAX_CATEGORIES - totalSelectedMinorCount;
-      if (remainingSlots <= 0) {
-        showToast('Limit Reached', `Maximum ${MAX_CATEGORIES} categories allowed. Please uncheck some categories first.`, 'warning');
-        return;
-      }
-      const allowedMinors = allMinor.slice(0, remainingSlots);
-      setSelectedMinor((prev) => ({ ...prev, [majorName]: allowedMinors }));
-    }
-  };
-
-  // Toggle Minor Category (Strict Max 10 Check)
+  // Toggle Minor Category (unlimited selections)
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
     const isCurrentlyChecked = currentList.includes(minorName);
 
     if (!isCurrentlyChecked) {
-      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-        showToast(
-          'Maximum 10 Categories Reached',
-          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${minorName}".`,
-          'warning'
-        );
-        return;
-      }
-
       setSelectedMajor((majors) => (majors.includes(majorName) ? majors : [...majors, majorName]));
       setSelectedMinor((prev) => ({
         ...prev,
@@ -412,15 +379,6 @@ export default function VendorProfilePage() {
         return;
       }
 
-      if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-        showToast(
-          'Maximum 10 Categories Reached',
-          `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to select "${matchedMinor}".`,
-          'warning'
-        );
-        return;
-      }
-
       setSelectedMajor((majors) => (majors.includes(matchedMajor) ? majors : [...majors, matchedMajor]));
       setSelectedMinor((prev) => ({
         ...prev,
@@ -443,15 +401,6 @@ export default function VendorProfilePage() {
       showToast('Category Exists', `"${trimmed}" is already added under ${otherGroup}.`, 'info');
       setExpandedMajor((prev) => ({ ...prev, [otherGroup]: true }));
       setCustomCategoryInput('');
-      return;
-    }
-
-    if (totalSelectedMinorCount >= MAX_CATEGORIES) {
-      showToast(
-        'Maximum 10 Categories Reached',
-        `You have selected ${totalSelectedMinorCount}/${MAX_CATEGORIES} categories. Please uncheck a category to add "${trimmed}".`,
-        'warning'
-      );
       return;
     }
 
@@ -1024,21 +973,17 @@ export default function VendorProfilePage() {
             <div>
               <div className="flex items-center gap-2">
                 <h2 className="text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                  <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy (Max 10 Categories)
+                  <Sliders className="text-emerald-600 dark:text-emerald-400" size={18} /> Section 3: Dual-Stream Category Reconciliation &amp; Taxonomy
                 </h2>
               </div>
               <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                Manage your self-selected supply capabilities (up to 10 categories). The system reconciles buyer-mapped categories and routes RFQs across both streams.
+                Manage your self-selected supply capabilities. The system reconciles buyer-mapped categories and routes RFQs across both streams.
               </p>
             </div>
 
             <div className="flex items-center gap-2">
-              <span className={`text-xs font-mono font-bold px-3 py-1 rounded-full border ${
-                totalSelectedMinorCount >= MAX_CATEGORIES
-                  ? 'bg-amber-50 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300 border-amber-300'
-                  : 'bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200'
-              }`}>
-                {totalSelectedMinorCount} / {MAX_CATEGORIES} Categories Selected
+              <span className="text-xs font-mono font-bold px-3 py-1 rounded-full border bg-emerald-50 dark:bg-emerald-950/60 text-emerald-700 dark:text-emerald-300 border-emerald-200">
+                {totalSelectedMinorCount} Categories Selected
               </span>
             </div>
           </div>
@@ -1095,10 +1040,10 @@ export default function VendorProfilePage() {
               <div className="p-3 rounded-lg bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 space-y-2">
                 <div className="flex items-center justify-between">
                   <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300 flex items-center gap-1.5">
-                    ⚙️ Vendor Self-Selected <span className="text-slate-400 text-[10px] font-normal">(Max 10)</span>
+                    ⚙️ Vendor Self-Selected
                   </span>
                   <span className="text-[10px] font-mono font-bold text-emerald-600 dark:text-emerald-400">
-                    {flatSelectedCategories.length} / {MAX_CATEGORIES} Selected
+                    {flatSelectedCategories.length} Selected
                   </span>
                 </div>
 
@@ -1109,7 +1054,7 @@ export default function VendorProfilePage() {
                         <tr>
                           <th className="px-3 py-2 text-left w-10">#</th>
                           <th className="px-3 py-2 text-left">Category / Capability Name</th>
-                          <th className="px-3 py-2 text-left">Major Category</th>
+                          <th className="px-3 py-2 text-left">Division</th>
                           <th className="px-3 py-2 text-center">Status</th>
                           <th className="px-3 py-2 text-right w-32">Actions</th>
                         </tr>
@@ -1352,17 +1297,17 @@ export default function VendorProfilePage() {
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-3.5 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-3 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
-                      <button type="button" className="text-emerald-600 dark:text-emerald-400">
-                        {isMajorSelected ? <CheckSquare size={18} /> : <Square size={18} className="text-slate-400" />}
-                      </button>
+                  <div className="p-3.5 flex items-center justify-between gap-3">
+                    <div 
+                      className="flex items-center gap-3 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))}
+                    >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                           {cat.majorCategory}
                         </h3>
                         <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                          {cat.minorCategories.length} Minor Categories available
+                          {cat.minorCategories.length} Categories available
                         </p>
                       </div>
                     </div>
@@ -1373,10 +1318,12 @@ export default function VendorProfilePage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))
-                        }
-                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }));
+                        }}
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 transition-colors"
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cat.majorCategory}`}
                       >
                         {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
                       </button>
@@ -1388,10 +1335,10 @@ export default function VendorProfilePage() {
                     <div className="p-3.5 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2.5">
                       <div className="flex items-center justify-between text-[11px] pt-2">
                         <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider">
-                          Minor Supply Items (Click to select/unselect)
+                          Supply Categories (Click to select/unselect)
                         </span>
                         <span className="text-[10px] text-slate-400 font-mono">
-                          {totalSelectedMinorCount} / {MAX_CATEGORIES} total profile limit
+                          {selectedMinorsInCat.length} selected in division • {totalSelectedMinorCount} total
                         </span>
                       </div>
 
@@ -1473,7 +1420,10 @@ export default function VendorProfilePage() {
 
       {/* Category View Modal */}
       {viewCategory && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs">
+        <div
+          onClick={createBackdropClickHandler(setViewCategory, null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50 backdrop-blur-xs"
+        >
           <div className="bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-slate-800 max-w-md w-full p-6 shadow-2xl space-y-4">
             <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-3">
               <div className="flex items-center gap-2">
@@ -1494,7 +1444,7 @@ export default function VendorProfilePage() {
                 <p className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">{viewCategory.name}</p>
               </div>
               <div>
-                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Major Category</span>
+                <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Division</span>
                 <p className="font-semibold text-slate-700 dark:text-gray-300 mt-0.5">{viewCategory.major}</p>
               </div>
               <div>

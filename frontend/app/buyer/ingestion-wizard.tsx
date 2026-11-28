@@ -12,7 +12,10 @@ import {
   RFQ_DOCUMENT_LIMITS,
   VENDOR_ASSIGNMENT_LIMITS,
   entitledSourcingModes,
+  isVendorActive,
+  createBackdropClickHandler,
 } from '@/lib/constants';
+import { FEATURE_FLAGS } from '@/lib/featureFlags';
 import { UI_STRINGS, formatString, extractionReasonMessage } from '@/lib/uiStrings';
 import {
   createRFQ,
@@ -39,6 +42,7 @@ import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import {
   extractRfqCategoryFilters,
   extractRfqCategorySignals,
+  checkVendorRfqCategoryMatch,
   matchVendorAgainstSignals,
   selectTopProcucevVendorsForMode3,
   selectVendorsForCategories,
@@ -88,7 +92,13 @@ import {
   Search,
   ExternalLink,
   Zap,
+  Clock,
 } from 'lucide-react';
+
+export let ENABLE_MODE_3 = FEATURE_FLAGS.ENABLE_MODE_3;
+export const setEnableMode3 = (val: boolean) => {
+  ENABLE_MODE_3 = val;
+};
 
 const EXTRACTION = UI_STRINGS.rfqExtraction;
 const MODAL = UI_STRINGS.manualRfqModal;
@@ -289,6 +299,101 @@ export function isV2OrV3SourcingMode(mode: string | null | undefined): boolean {
   return V2_V3_SOURCING_MODES.includes(String(mode || ''));
 }
 
+/**
+ * Whether a vendor card in the Mode 1 / Mode 2 roster panel can be toggled by the buyer.
+ * Category-matched vendors are always selectable; Category Mismatch vendors are selectable
+ * strictly when they belong to the buyer's own internal roster (buyer-uploaded).
+ */
+export function isRosterVendorSelectable(vendor: VendorEntry, isCategoryMismatch: boolean): boolean {
+  return !isCategoryMismatch || isBuyerUploaded(vendor);
+}
+
+/**
+ * Resolves whether a Mode 1 / Mode 2 roster vendor card is currently selected.
+ * Non-internal Category Mismatch vendors can never be selected.
+ */
+export function isRosterVendorSelected(params: {
+  vendor: VendorEntry;
+  isCategoryMismatch: boolean;
+  hasExplicitSelection: boolean;
+  selectedVendorIds: string[];
+  defaultSelectedIds: string[];
+}): boolean {
+  const { vendor, isCategoryMismatch, hasExplicitSelection, selectedVendorIds, defaultSelectedIds } = params;
+  if (!isRosterVendorSelectable(vendor, isCategoryMismatch) || !vendor.id) return false;
+  const activeIds = hasExplicitSelection ? selectedVendorIds : defaultSelectedIds;
+  return activeIds.includes(vendor.id);
+}
+
+/**
+ * Resolves the card container and selection checkbox Tailwind classes for a Mode 1 / Mode 2
+ * roster vendor card so internal Category Mismatch vendors reuse the exact Matched card
+ * checkbox and selected state styling while non-internal mismatches stay visually disabled.
+ */
+export function getRosterVendorCardClasses(params: {
+  isSelected: boolean;
+  isCategoryMismatch: boolean;
+  isSelectable: boolean;
+  accent: 'blue' | 'emerald';
+}): { cardClass: string; checkboxClass: string } {
+  const { isSelected, isCategoryMismatch, isSelectable, accent } = params;
+  const cursorClass = isSelectable ? 'cursor-pointer' : 'cursor-not-allowed';
+
+  if (!isSelectable) {
+    return {
+      cardClass: `${cursorClass} border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs`,
+      checkboxClass: 'bg-amber-500 border-amber-500 text-white opacity-80',
+    };
+  }
+
+  if (isSelected) {
+    const selectedStyles = accent === 'blue'
+      ? {
+          card: 'border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs',
+          checkbox: 'bg-blue-600 border-blue-600 text-white',
+        }
+      : {
+          card: 'border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs',
+          checkbox: 'bg-emerald-600 border-emerald-600 text-white',
+        };
+    return {
+      cardClass: `${cursorClass} ${selectedStyles.card}`,
+      checkboxClass: selectedStyles.checkbox,
+    };
+  }
+
+  return {
+    cardClass: isCategoryMismatch
+      ? `${cursorClass} border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs`
+      : `${cursorClass} border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60`,
+    checkboxClass: 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800',
+  };
+}
+
+/**
+ * Selection checkbox indicator shared across Mode 1 and Mode 2 vendor cards.
+ * Disabled (non-internal mismatch) cards show a non-interactive warning icon.
+ */
+export function RosterVendorCheckbox({
+  isSelectable,
+  isSelected,
+  checkboxClass,
+}: {
+  isSelectable: boolean;
+  isSelected: boolean;
+  checkboxClass: string;
+}) {
+  return (
+    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${checkboxClass}`}>
+      {!isSelectable ? (
+        <AlertCircle size={12} strokeWidth={2.5} />
+      ) : isSelected ? (
+        <Check size={12} strokeWidth={3} />
+      ) : null}
+    </span>
+  );
+}
+
 interface IngestionWizardProps {
   onComplete: () => void;
   onCancel: () => void;
@@ -320,16 +425,36 @@ export default function IngestionWizard({
     activeBuyerAccount,
   } = useApp();
 
+  // All buyer vendors come exclusively from backend API state (never localStorage).
+  const reconciledBuyerVendors = useMemo<VendorEntry[]>(
+    () => buyerVendors || [],
+    [buyerVendors]
+  );
+
+  // Exclude inactive/disabled vendors from all future RFQ creation and invitation flows
+  const activeReconciledVendors = useMemo<VendorEntry[]>(
+    () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
+    [reconciledBuyerVendors]
+  );
+
   const effectivePlan = forceSubscription ?? activeBuyerAccount?.subscriptionPlan ?? storeSubscription ?? 'free_trial';
   const effectiveRemaining =
     forceRemainingFreeRFQs !== undefined
       ? forceRemainingFreeRFQs
       : (activeBuyerAccount?.remainingFreeRFQs ?? storeRemaining ?? 5);
-  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan);
+  const isTrialActive = Boolean(
+    activeBuyerAccount?.trialEndDate &&
+    new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+    activeBuyerAccount.trialActive !== false
+  );
+  const isPaidPlan = ['version_1', 'version_2', 'version_3'].includes(effectivePlan) || isTrialActive || Boolean(activeBuyerAccount?.unlimitedRfqAccess);
 
   let entitledModes: ReturnType<typeof entitledSourcingModes> = entitledSourcingModes(null);
   try {
-    entitledModes = entitledSourcingModes(effectivePlan, effectiveRemaining);
+    const hasUnlimited = isTrialActive || Boolean(activeBuyerAccount?.unlimitedRfqAccess);
+    entitledModes = hasUnlimited
+      ? entitledSourcingModes(effectivePlan, effectiveRemaining, true)
+      : entitledSourcingModes(effectivePlan, effectiveRemaining);
   } catch {
     entitledModes = ['mode_0', 'mode_1'];
   }
@@ -341,26 +466,13 @@ export default function IngestionWizard({
   const [form, setForm] = useState<ManualRFQForm>(createEmptyManualRFQForm);
   const isQuotaExhausted = !isPaidPlan && effectiveRemaining <= 0 && form.sourcingMode !== 'mode_0';
 
-  // Auto-prefill delivery location and pincode from active buyer profile
-  useEffect(() => {
-    if (activeBuyerAccount) {
-      const defaultLoc = activeBuyerAccount.city && activeBuyerAccount.state
-        ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
-        : (activeBuyerAccount.primaryPlantLocation || '');
-      const defaultPin = activeBuyerAccount.pincode || '';
-      setForm((prev) => {
-        if (!prev.deliveryLocation && !prev.deliveryPincode && (defaultLoc || defaultPin)) {
-          return {
-            ...prev,
-            deliveryLocation: prev.deliveryLocation || defaultLoc,
-            deliveryPincode: prev.deliveryPincode || defaultPin,
-          };
-        }
-        return prev;
-      });
-    }
-  }, [activeBuyerAccount]);
-
+  // Delivery location and pincode must come from the uploaded document, via
+  // "Extract Line Items with AI" — not be silently pre-filled from the buyer
+  // profile the moment the page loads, before any document is even uploaded.
+  // The buyer profile is only consulted as a fallback inside
+  // handleExtractFromFiles, for whichever of these fields the document
+  // itself doesn't state. See the deliveryLocation/deliveryPincode fallback
+  // chain there.
   const [mode1VendorSearch, setMode1VendorSearch] = useState('');
   const [isAddVendorModalOpen, setIsAddVendorModalOpen] = useState(false);
   const [vendorFormName, setVendorFormName] = useState('');
@@ -549,6 +661,47 @@ export default function IngestionWizard({
     router = null;
   }
   const [selectedVendorIds, setSelectedVendorIds] = useState<string[]>([]);
+  const [hasExplicitVendorSelection, setHasExplicitVendorSelection] = useState(false);
+
+  const toggleRosterVendorSelection = (
+    vendor: VendorEntry,
+    isCategoryMismatch: boolean,
+    defaultSelectedIds: string[]
+  ) => {
+    if (!isRosterVendorSelectable(vendor, isCategoryMismatch) || !vendor.id) return;
+    const targetId = vendor.id;
+    setSelectedVendorIds((prev) => {
+      const base = !hasExplicitVendorSelection && prev.length === 0 ? defaultSelectedIds : prev;
+      return base.includes(targetId)
+        ? base.filter((id) => id !== targetId)
+        : [...base, targetId];
+    });
+    setHasExplicitVendorSelection(true);
+  };
+
+  const renderRosterSelectionSummary = (
+    allMyVendors: VendorEntry[],
+    matchingVendors: VendorEntry[],
+    accentClass: string
+  ) => {
+    const activeIds = new Set(allMyVendors.map((v) => v.id).filter(Boolean));
+    const effectiveSelectedIds = selectedVendorIds.filter((id) => activeIds.has(id));
+    if (hasExplicitVendorSelection || effectiveSelectedIds.length > 0) {
+      const matchedIds = new Set(matchingVendors.map((v) => v.id).filter(Boolean));
+      const hasMismatchSelected = effectiveSelectedIds.some((id) => !matchedIds.has(id));
+      const summaryText = hasMismatchSelected || matchingVendors.length === 0
+        ? formatString(MODAL.vendorsSelectedSummary, {
+            selected: effectiveSelectedIds.length,
+            total: allMyVendors.length,
+          })
+        : formatString(MODAL.matchedVendorsSelectedSummary, {
+            selected: effectiveSelectedIds.length,
+            total: matchingVendors.length,
+          });
+      return <span className={`font-semibold ${accentClass}`}>{summaryText}</span>;
+    }
+    return <span>{formatString(MODAL.allMatchedVendorsDispatchNotice, { count: matchingVendors.length })}</span>;
+  };
   // V3 (Autonomous) only — the top-ranked Procucev network vendors for this RFQ
   // (by category relevance + delivery location) and the buyer's picks from them.
   const [procucevV3Ranked, setProcucevV3Ranked] = useState<RankedProcucevVendor[]>([]);
@@ -612,7 +765,7 @@ export default function IngestionWizard({
     ).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList(result.candidates);
+        setAllVendorsList(result.candidates.filter((v) => isVendorActive(v)));
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoading(false);
@@ -634,7 +787,7 @@ export default function IngestionWizard({
     }).then((result) => {
       if (seq !== allVendorsFetchSeqRef.current) return;
       if (result.success) {
-        setAllVendorsList((prev) => [...prev, ...result.candidates]);
+        setAllVendorsList((prev) => [...prev, ...result.candidates.filter((v) => isVendorActive(v))]);
         setAllVendorsPagination(result.pagination);
       }
       setAllVendorsLoadingMore(false);
@@ -648,7 +801,7 @@ export default function IngestionWizard({
   // Re-runs when the mode, category, or delivery location changes.
   const procucevV3FetchSeqRef = useRef(0);
   useEffect(() => {
-    if (form.sourcingMode !== 'mode_3') {
+    if (!ENABLE_MODE_3 || form.sourcingMode !== 'mode_3') {
       setProcucevV3Ranked([]);
       return;
     }
@@ -656,8 +809,9 @@ export default function IngestionWizard({
     const { majors, minors } = extractRfqCategoryFilters(form);
     const seq = ++procucevV3FetchSeqRef.current;
     setProcucevV3Loading(true);
+    const cleanPreferredPincode = String(form.deliveryPincode || '').replace(/\D/g, '').slice(0, 6);
     // Pull an indexed public candidate pool covering every RFQ division and minor category;
-    // the server widens sparse minors with parent majors and the client selects the top 10.
+    // the server prioritizes delivery pincode proximity and widens sparse minors cleanly.
     void withVendorFetchSignal(controller.signal, () =>
       fetchAllVendors({
         page: 1,
@@ -667,12 +821,13 @@ export default function IngestionWizard({
         publicOnly: true,
         ...(majors.length > 0 ? { majors } : {}),
         ...(minors.length > 0 ? { minors } : {}),
+        ...(cleanPreferredPincode.length >= 3 ? { preferredPincode: cleanPreferredPincode } : {}),
       })
     ).then((result) => {
       if (seq !== procucevV3FetchSeqRef.current) return;
       if (result.success) {
         const ranked = selectTopProcucevVendorsForMode3(
-          result.candidates,
+          result.candidates.filter((v) => isVendorActive(v)),
           form,
           VENDOR_ASSIGNMENT_LIMITS.MODE3_TOP_VENDORS_LIMIT
         );
@@ -779,6 +934,11 @@ export default function IngestionWizard({
   const [showAiInfo, setShowAiInfo] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Supporting Documents State
+  const [isUploadingSupportingDocs, setIsUploadingSupportingDocs] = useState(false);
+  const [supportingDocsError, setSupportingDocsError] = useState<string | null>(null);
+  const supportingDocsInputRef = useRef<HTMLInputElement>(null);
 
   const [pincodeError, setPincodeError] = useState<string | null>(null);
   const [pincodeValidating, setPincodeValidating] = useState(false);
@@ -944,6 +1104,15 @@ export default function IngestionWizard({
         // extracted line items (not just the first row), and only when the
         // document actually provided one — never a guess.
         const derivedMajor = dominantMajorCategory(extracted, [ALL_CATEGORIES_OPTION]);
+        // Document first, buyer profile only as a fallback for whichever of
+        // these the document itself doesn't state — the profile is never
+        // consulted before an extraction actually runs.
+        const profileLocation = activeBuyerAccount
+          ? (activeBuyerAccount.city && activeBuyerAccount.state
+            ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}`
+            : (activeBuyerAccount.primaryPlantLocation || ''))
+          : '';
+        const profilePincode = activeBuyerAccount?.pincode || '';
         const derivedLocation = result.data.deliveryLocation || '';
         const derivedPincode = result.data.deliveryPincode || '';
         const derivedDate = result.data.targetDeliveryDate || extracted.find((e) => e.targetDate)?.targetDate || '';
@@ -966,14 +1135,23 @@ export default function IngestionWizard({
           estimatedBudget: prev.estimatedBudget ?? derivedBudget,
           majorCategory: prev.majorCategory || extractedMajor,
           minorCategory: prev.minorCategory || extractedMinor,
-          deliveryLocation: prev.deliveryLocation || derivedLocation,
-          deliveryPincode: prev.deliveryPincode || derivedPincode,
-          targetDeliveryDate: prev.targetDeliveryDate || derivedDate,
+          // Delivery terms prefer what this document actually states over
+          // whatever is already sitting in the form (a prior upload's
+          // extraction, say) — `prev.X || derivedX` always kept the OLD
+          // value and the newly extracted one was silently discarded on
+          // re-extraction, fixed only by clicking Clear Form first. Line
+          // items already behave this way (always replaced when the
+          // document has any). When THIS document states nothing for
+          // location/pincode, the buyer profile is the fallback; only after
+          // that does whatever was already in the form apply.
+          deliveryLocation: derivedLocation || profileLocation || prev.deliveryLocation,
+          deliveryPincode: derivedPincode || profilePincode || prev.deliveryPincode,
+          targetDeliveryDate: derivedDate || prev.targetDeliveryDate,
           lineItems: extracted.length > 0 ? extracted : prev.lineItems,
         }));
 
         setExtractionSummary({
-          model: result.extraction?.model || 'Gemini 2.5 AI',
+          model: result.extraction?.model || EXTRACTION.defaultModelLabel,
           accepted: result.classification?.accepted ?? extracted.length,
           needsReview: result.classification?.needsReview ?? 0,
           fileName: primaryFile.name,
@@ -1133,6 +1311,68 @@ export default function IngestionWizard({
     return attachments;
   };
 
+  /** Handles user selecting supporting documents via the file input or drag-and-drop */
+  const handleSupportingDocsSelected = async (fileList: FileList | File[]) => {
+    const files = Array.from(fileList);
+    if (files.length === 0) return;
+
+    setIsUploadingSupportingDocs(true);
+    setSupportingDocsError(null);
+
+    const newAttachments: RFQAttachment[] = [];
+    const errors: string[] = [];
+
+    for (const file of files) {
+      if (file.size > RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_BYTES) {
+        errors.push(`"${file.name}" exceeds the 15 MB file size limit (${formatFileSize(file.size)}).`);
+        continue;
+      }
+      try {
+        const res = await uploadRFQAttachment(file);
+        if (res.success && res.data) {
+          newAttachments.push(res.data);
+        } else {
+          errors.push(`${file.name}: ${res.error || 'Upload failed'}`);
+        }
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : 'Upload failed';
+        errors.push(`${file.name}: ${msg}`);
+      }
+    }
+
+    if (newAttachments.length > 0) {
+      setForm((prev) => {
+        const existing = prev.attachments || [];
+        const existingIds = new Set(existing.map((a) => a.id));
+        const toAdd = newAttachments.filter((a) => !existingIds.has(a.id));
+        return {
+          ...prev,
+          attachments: [...existing, ...toAdd],
+        };
+      });
+      showToast(
+        'Documents Attached',
+        `${newAttachments.length} supporting document(s) uploaded successfully.`,
+        'success'
+      );
+    }
+
+    if (errors.length > 0) {
+      setSupportingDocsError(errors.join(' | '));
+      showToast('Attachment Error', errors[0], 'warning');
+    }
+
+    setIsUploadingSupportingDocs(false);
+  };
+
+  /** Removes a supporting document from the form */
+  const handleRemoveSupportingDoc = (attachmentId: string) => {
+    setForm((prev) => ({
+      ...prev,
+      attachments: (prev.attachments || []).filter((a) => a.id !== attachmentId),
+    }));
+  };
+
   /** Form Submission / RFQ Dispatch */
   const handleSubmit = async () => {
     setSubmitAttempted(true);
@@ -1173,9 +1413,17 @@ export default function IngestionWizard({
 
       // Upload any staged files as attachments
       const storedAttachments = await uploadAttachments();
+      const allAttachments = [...form.attachments, ...storedAttachments];
+      const seenAttachmentIds = new Set<string>();
+      const deduplicatedAttachments = allAttachments.filter((att) => {
+        if (!att?.id) return true;
+        if (seenAttachmentIds.has(att.id)) return false;
+        seenAttachmentIds.add(att.id);
+        return true;
+      });
       const updatedForm: ManualRFQForm = {
         ...form,
-        attachments: [...form.attachments, ...storedAttachments],
+        attachments: deduplicatedAttachments,
       };
 
       type AssignedVendorEntry = {
@@ -1224,46 +1472,61 @@ export default function IngestionWizard({
 
       let mode1AssignedVendors: AssignedVendorEntry[] | undefined = undefined;
 
-      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(buyerVendors)) {
+      if ((form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') && Array.isArray(activeReconciledVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? buyerVendors.filter((v) => isBuyerUploaded(v))
-          : buyerVendors;
-        const { signals: dispatchSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
-        const candidatePool = selectedVendorIds.length > 0
-          ? pool.filter((v) => selectedVendorIds.includes(v.id))
+          ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
+          : activeReconciledVendors;
+        const { signals: dispatchSignals, rawSignals: dispatchRawSignals, minorOnly: dispatchMinorOnly } = extractRfqCategorySignals(updatedForm);
+        const hasManualSelection = hasExplicitVendorSelection || selectedVendorIds.length > 0;
+        const candidatePool = hasManualSelection
+          ? pool.filter((v) => Boolean(v.id) && selectedVendorIds.includes(v.id))
           : pool;
 
-        const matchingVendors: typeof candidatePool = [];
-        const mismatchedVendors: typeof candidatePool = [];
+        let finalMatching: typeof candidatePool = [];
 
-        for (const v of candidatePool) {
-          if (dispatchSignals.length === 0 || matchVendorAgainstSignals(v, dispatchSignals, dispatchMinorOnly).isMatch) {
-            matchingVendors.push(v);
-          } else {
-            mismatchedVendors.push(v);
+        if (hasManualSelection) {
+          // Explicitly selected internal vendors are always assigned regardless of category mismatch;
+          // Procucev Network / Vetted vendors remain excluded when category-mismatched.
+          finalMatching = candidatePool.filter((v) => {
+            if (dispatchSignals.length === 0 && dispatchRawSignals.length === 0) return true;
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: dispatchSignals,
+              rawSignals: dispatchRawSignals,
+              minorOnly: dispatchMinorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            return isRosterVendorSelectable(v, !matchEval.isMatch);
+          });
+        } else {
+          const matchingVendors: typeof candidatePool = [];
+
+          for (const v of candidatePool) {
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: dispatchSignals,
+              rawSignals: dispatchRawSignals,
+              minorOnly: dispatchMinorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            if (dispatchSignals.length === 0 || matchEval.isMatch) {
+              matchingVendors.push(v);
+            }
           }
-        }
 
-        if (mismatchedVendors.length > 0) {
-          showToast(
-            'Shortlist Adjusted',
-            `${mismatchedVendors.length} vendor(s) have category mismatches and were excluded from RFQ shortlist. Update request email dispatched.`,
-            'info'
-          );
-        }
+          finalMatching = dispatchSignals.length > 0
+            ? selectVendorsForCategories(
+              matchingVendors,
+              dispatchSignals,
+              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+              { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
+              dispatchMinorOnly
+            ).map((r) => r.vendor)
+            : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
 
-        let finalMatching = dispatchSignals.length > 0
-          ? selectVendorsForCategories(
-            matchingVendors,
-            dispatchSignals,
-            VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-            { location: updatedForm.deliveryLocation, pincode: updatedForm.deliveryPincode },
-            dispatchMinorOnly
-          ).map((r) => r.vendor)
-          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
-
-        if (finalMatching.length === 0 && matchingVendors.length > 0) {
-          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          if (finalMatching.length === 0 && matchingVendors.length > 0) {
+            finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          }
         }
 
         if (finalMatching.length > 0) {
@@ -1358,7 +1621,11 @@ export default function IngestionWizard({
     setExtractionDetail(null);
     setSubmitAttempted(false);
     setSubmitError(null);
+    setSupportingDocsError(null);
+    setSelectedVendorIds([]);
+    setHasExplicitVendorSelection(false);
     if (fileInputRef.current) fileInputRef.current.value = '';
+    if (supportingDocsInputRef.current) supportingDocsInputRef.current.value = '';
     showToast('Form Cleared', 'All fields, line items, and uploaded files have been reset.', 'info');
   };
 
@@ -1440,7 +1707,7 @@ export default function IngestionWizard({
               className="btn btn-primary btn-sm font-bold inline-flex items-center gap-1.5 disabled:opacity-50 shadow-sm"
             >
               {isExtracting ? <Loader2 size={13} className="animate-spin" /> : <Sparkles size={13} />}
-              {isExtracting ? 'Extracting with AI...' : 'Extract Line Items with AI'}
+              {isExtracting ? EXTRACTION.extractingButtonLabel : EXTRACTION.extractAction}
             </button>
           </div>
         </div>
@@ -1472,21 +1739,37 @@ export default function IngestionWizard({
             if (e.dataTransfer.files) handleFilesSelected(e.dataTransfer.files);
           }}
           className={`border-2 border-dashed rounded-xl p-4 text-center transition-all cursor-pointer group ${isDraggingDoc
-              ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
-              : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
+            ? 'border-indigo-600 bg-indigo-100/70 dark:bg-indigo-900/50 scale-[1.01]'
+            : 'border-indigo-300/80 dark:border-indigo-500/30 hover:border-indigo-500 bg-white/70 dark:bg-gray-900/40 hover:bg-indigo-50/50'
             }`}
         >
-          <div className="flex items-center justify-center gap-3">
-            <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
-              <FileSpreadsheet size={18} />
+          {isExtracting ? (
+            <div className="flex flex-col items-center justify-center gap-2 py-1" role="status" aria-live="polite">
+              <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400">
+                <Loader2 size={18} className="animate-spin" />
+              </div>
+              <h3 className="text-xs font-bold text-indigo-700 dark:text-indigo-300">
+                {EXTRACTION.extractingStatus}
+              </h3>
+              <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                {EXTRACTION.extractingHint}
+              </p>
             </div>
-            <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
-              <Mail size={18} />
-            </div>
-          </div>
-          <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
-            {isExtracting ? 'Gemini AI is parsing document contents...' : 'Drag and drop BOQ spreadsheets or .eml / .msg emails here'}
-          </h3>
+          ) : (
+            <>
+              <div className="flex items-center justify-center gap-3">
+                <div className="w-9 h-9 rounded-lg bg-indigo-100 dark:bg-indigo-600/20 border border-indigo-200 dark:border-indigo-500/30 flex items-center justify-center text-indigo-600 dark:text-indigo-400 group-hover:scale-110 transition-transform">
+                  <FileSpreadsheet size={18} />
+                </div>
+                <div className="w-9 h-9 rounded-lg bg-sky-100 dark:bg-sky-600/20 border border-sky-200 dark:border-sky-500/30 flex items-center justify-center text-sky-600 dark:text-sky-400 group-hover:scale-110 transition-transform">
+                  <Mail size={18} />
+                </div>
+              </div>
+              <h3 className="text-xs font-bold text-slate-800 dark:text-white mt-1.5">
+                {EXTRACTION.dropZoneIdlePrompt}
+              </h3>
+            </>
+          )}
         </div>
 
         {/* Uploaded Files List */}
@@ -1628,9 +1911,24 @@ export default function IngestionWizard({
             <input
               id="rfq-budget"
               type="number"
+              step="any"
               min={0}
+              inputMode="numeric"
               value={form.estimatedBudget ?? ''}
               onChange={(e) => patchForm('estimatedBudget', e.target.value === '' ? null : Number(e.target.value))}
+              onPaste={(e) => {
+                const paste = e.clipboardData?.getData('text') || '';
+                const cleaned = paste.replace(/[^0-9.]/g, '');
+                if (cleaned !== '') {
+                  e.preventDefault();
+                  patchForm('estimatedBudget', Number(cleaned));
+                }
+              }}
+              onKeyDown={(e) => {
+                if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                  e.preventDefault();
+                }
+              }}
               placeholder="e.g. 500000"
               className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white mono font-semibold focus:ring-2 focus:ring-indigo-500"
             />
@@ -1717,6 +2015,88 @@ export default function IngestionWizard({
               className="date-input-whole-field w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-slate-900 dark:text-white font-medium focus:ring-2 focus:ring-indigo-500"
             />
             <FieldError message={formErrors.targetDeliveryDate} />
+          </div>
+
+          {/* Supporting Documents */}
+          <div className="col-span-1 md:col-span-2 xl:col-span-3 pt-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-1.5">
+              <div>
+                <label htmlFor="rfq-supporting-docs" className="block font-semibold text-slate-700 dark:text-gray-300">
+                  Supporting Documents <span className="text-[9px] font-bold uppercase tracking-wide text-slate-400">({MODAL.optionalTag})</span>
+                </label>
+                <p className="text-[11px] text-slate-500 dark:text-gray-400">
+                  Attach drawings, specifications, technical sheets, or BOQs ({RFQ_DOCUMENT_LIMITS.SUPPORTED_EXTENSIONS.replace(/,/g, ', ')} up to {RFQ_DOCUMENT_LIMITS.MAX_FILE_SIZE_MB} MB each).
+                </p>
+              </div>
+              <div>
+                <button
+                  type="button"
+                  onClick={() => supportingDocsInputRef.current?.click()}
+                  disabled={isUploadingSupportingDocs}
+                  className="btn btn-secondary btn-sm font-semibold inline-flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 border-indigo-200 dark:border-indigo-800 hover:bg-indigo-50 dark:hover:bg-indigo-950/30"
+                >
+                  {isUploadingSupportingDocs ? (
+                    <Loader2 size={13} className="animate-spin text-indigo-600 dark:text-indigo-400" />
+                  ) : (
+                    <Paperclip size={13} />
+                  )}
+                  <span>{isUploadingSupportingDocs ? 'Uploading...' : 'Upload Supporting Documents'}</span>
+                </button>
+                <input
+                  ref={supportingDocsInputRef}
+                  id="rfq-supporting-docs"
+                  type="file"
+                  multiple
+                  accept={RFQ_DOCUMENT_LIMITS.SUPPORTED_EXTENSIONS}
+                  className="hidden"
+                  data-testid="rfq-supporting-docs-input"
+                  onChange={(e) => {
+                    if (e.target.files) {
+                      void handleSupportingDocsSelected(e.target.files);
+                    }
+                    e.target.value = '';
+                  }}
+                />
+              </div>
+            </div>
+
+            {supportingDocsError && (
+              <div role="alert" className="p-2.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-[11px] text-rose-700 dark:text-rose-300 flex items-center gap-2 mb-2">
+                <AlertCircle size={14} className="shrink-0 text-rose-600 dark:text-rose-400" />
+                <span>{supportingDocsError}</span>
+              </div>
+            )}
+
+            {form.attachments.length > 0 && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2 mt-2">
+                {form.attachments.map((file) => (
+                  <div
+                    key={file.id}
+                    className="flex items-center justify-between gap-2 p-2 rounded-lg bg-slate-50 dark:bg-gray-800/60 border border-slate-200 dark:border-gray-700"
+                  >
+                    <span className="flex items-center gap-2 min-w-0">
+                      <FileText size={14} className="text-indigo-600 dark:text-indigo-400 shrink-0" />
+                      <span className="min-w-0">
+                        <span className="block text-xs font-semibold text-slate-800 dark:text-gray-200 truncate" title={file.fileName}>
+                          {file.fileName}
+                        </span>
+                        <span className="block text-[10px] text-slate-400 dark:text-gray-500 mono">
+                          {formatFileSize(file.size)}
+                        </span>
+                      </span>
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveSupportingDoc(file.id)}
+                      aria-label={`Remove ${file.fileName}`}
+                      className="p-1 rounded text-slate-400 hover:text-rose-600 dark:hover:text-rose-400 shrink-0"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1816,11 +2196,13 @@ export default function IngestionWizard({
                             min={1}
                             aria-label={MODAL.colQty}
                             value={item.quantity ?? ''}
-                            onChange={(e) =>
+                            onChange={(e) => {
+                              const qtyVal = e.target.value === '' ? null : Number(e.target.value);
                               patchItem(item.id, {
-                                quantity: e.target.value === '' ? null : Number(e.target.value),
-                              })
-                            }
+                                quantity: qtyVal,
+                                ...(qtyVal !== null && qtyVal > 0 && !item.unit ? { unit: 'Nos' } : {}),
+                              });
+                            }}
                             placeholder={MODAL.qtyPlaceholder}
                             className="w-24 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-700 bg-white dark:bg-gray-800 mono font-semibold focus:ring-2 focus:ring-indigo-500"
                           />
@@ -1952,6 +2334,7 @@ export default function IngestionWizard({
                   data-testid={`mode-option-${mode.id}`}
                 >
                   {SOURCING_VERSION_LABELS[mode.id] || mode.shortLabel}
+                  {mode.id === 'mode_3' && !ENABLE_MODE_3 ? ` (${UI_STRINGS.sourcingModeVersions.comingSoonBadge})` : ''}
                 </option>
               ))}
             </select>
@@ -1983,21 +2366,29 @@ export default function IngestionWizard({
                       patchForm('sourcingMode', mode.id as SourcingMode);
                     }}
                     className={`h-9 px-3.5 py-1.5 rounded-xl text-xs font-semibold tracking-tight transition-all duration-150 shrink-0 flex items-center justify-center gap-1.5 border cursor-pointer select-none ${isSelected
-                        ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
-                        : !isEntitled
-                          ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
-                          : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
+                      ? 'bg-indigo-600 text-white border-indigo-600 shadow-xs shadow-indigo-600/20'
+                      : !isEntitled
+                        ? 'bg-slate-50 dark:bg-gray-800/60 text-slate-500 dark:text-gray-400 border-dashed border-slate-300 dark:border-gray-700 hover:border-amber-400 hover:text-amber-600 dark:hover:text-amber-400'
+                        : 'bg-white dark:bg-gray-800 text-slate-700 dark:text-gray-300 border-slate-200 dark:border-gray-700 hover:bg-slate-50 dark:hover:bg-gray-700/60 hover:border-slate-300 dark:hover:border-gray-600'
                       }`}
                   >
                     <span data-testid={`mode-${mode.id}`} aria-hidden="true" className="contents">
                       {isSelected && <Check size={13} className="shrink-0 stroke-[2.5]" />}
                       <span>{label}</span>
-                      {!isEntitled && (
+                      {mode.id === 'mode_3' && !ENABLE_MODE_3 ? (
+                        <span
+                          data-testid="mode-3-coming-soon-badge"
+                          className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5 ml-1"
+                        >
+                          <Clock size={9} />
+                          {UI_STRINGS.sourcingModeVersions.comingSoonBadge}
+                        </span>
+                      ) : !isEntitled ? (
                         <span className="badge badge-amber text-[9px] font-bold px-1.5 py-0.5 rounded-full inline-flex items-center gap-0.5">
                           <Sparkles size={9} />
                           Upgrade
                         </span>
-                      )}
+                      ) : null}
                     </span>
                   </button>
                 );
@@ -2021,7 +2412,7 @@ export default function IngestionWizard({
                     <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
                       <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                       <span className="badge badge-blue text-[10px] font-bold">
-                        {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                        {activeReconciledVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                       </span>
                     </h3>
                     <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
@@ -2055,7 +2446,7 @@ export default function IngestionWizard({
               </div>
 
               {(() => {
-                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2068,12 +2459,28 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: mode1Signals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const { signals: mode1Signals, rawSignals: mode1RawSignals, minorOnly: mode1MinorOnly } = extractRfqCategorySignals(form);
+                const matchingVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: mode1Signals,
+                      rawSignals: mode1RawSignals,
+                      minorOnly: mode1MinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : allMyVendors;
-                const mismatchedVendors = mode1Signals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch)
+                const mismatchedVendors = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                    !checkVendorRfqCategoryMatch(v, {
+                      signals: mode1Signals,
+                      rawSignals: mode1RawSignals,
+                      minorOnly: mode1MinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : [];
 
                 let pool = allMyVendors;
@@ -2091,8 +2498,9 @@ export default function IngestionWizard({
                   )
                   : pool;
 
-                const allIds = myVendors.map((v) => v.id);
+                const allIds = myVendors.map((v) => v.id).filter(Boolean);
                 const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                const defaultSelectedIds = matchingVendors.map((v) => v.id).filter(Boolean);
 
                 return (
                   <div className="space-y-2.5">
@@ -2104,8 +2512,8 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => setVendorCategoryFilterTab('all')}
                             className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'all'
-                                ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
-                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              ? 'bg-white dark:bg-gray-900 text-blue-700 dark:text-blue-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                               }`}
                           >
                             All ({allMyVendors.length})
@@ -2114,8 +2522,8 @@ export default function IngestionWizard({
                             type="button"
                             onClick={() => setVendorCategoryFilterTab('matched')}
                             className={`px-2.5 py-1 rounded-md transition-all ${vendorCategoryFilterTab === 'matched'
-                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                              ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                              : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                               }`}
                           >
                             Matched ({matchingVendors.length})
@@ -2125,8 +2533,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setVendorCategoryFilterTab('mismatched')}
                               className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${vendorCategoryFilterTab === 'mismatched'
-                                  ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
@@ -2137,22 +2545,23 @@ export default function IngestionWizard({
 
                       <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
                         <div className="text-slate-500 dark:text-gray-400">
-                          {selectedVendorIds.length > 0 ? (
-                            <span className="font-semibold text-blue-600 dark:text-blue-400">
-                              {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
-                            </span>
-                          ) : (
-                            <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
-                          )}
+                          {renderRosterSelectionSummary(allMyVendors, matchingVendors, 'text-blue-600 dark:text-blue-400')}
                         </div>
                         <button
                           type="button"
                           onClick={() => {
                             const selectableIds = myVendors.filter((v) => {
-                              if (mode1Signals.length === 0) return true;
-                              return matchVendorAgainstSignals(v, mode1Signals, mode1MinorOnly).isMatch;
-                            }).map((v) => v.id);
+                              if (mode1Signals.length === 0 && mode1RawSignals.length === 0) return true;
+                              return checkVendorRfqCategoryMatch(v, {
+                                signals: mode1Signals,
+                                rawSignals: mode1RawSignals,
+                                minorOnly: mode1MinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              }).isMatch;
+                            }).map((v) => v.id).filter(Boolean);
 
+                            setHasExplicitVendorSelection(true);
                             if (allSelected) {
                               setSelectedVendorIds([]);
                             } else {
@@ -2202,48 +2611,45 @@ export default function IngestionWizard({
                                 ? vendor.vendorSelectedCategories
                                 : [];
 
-                          const matchResult = mode1Signals.length > 0
-                            ? matchVendorAgainstSignals(vendor, mode1Signals, mode1MinorOnly)
+                          const matchResult = (mode1Signals.length > 0 || mode1RawSignals.length > 0)
+                            ? checkVendorRfqCategoryMatch(vendor, {
+                              signals: mode1Signals,
+                              rawSignals: mode1RawSignals,
+                              minorOnly: mode1MinorOnly,
+                              majorCategory: form.majorCategory,
+                              minorCategory: form.minorCategory,
+                            })
                             : { isMatch: true };
-                          const isCategoryMismatch = mode1Signals.length > 0 && !matchResult.isMatch;
+                          const isCategoryMismatch = (mode1Signals.length > 0 || mode1RawSignals.length > 0) && !matchResult.isMatch;
 
-                          const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+                          const isSelectable = isRosterVendorSelectable(vendor, isCategoryMismatch);
+                          const isSelected = isRosterVendorSelected({
+                            vendor,
+                            isCategoryMismatch,
+                            hasExplicitSelection: hasExplicitVendorSelection,
+                            selectedVendorIds,
+                            defaultSelectedIds,
+                          });
+                          const { cardClass, checkboxClass } = getRosterVendorCardClasses({
+                            isSelected,
+                            isCategoryMismatch,
+                            isSelectable,
+                            accent: 'blue',
+                          });
 
                           return (
                             <div
                               key={vendor.id || idx}
-                              onClick={() => {
-                                if (isCategoryMismatch) return;
-                                setSelectedVendorIds((prev) => {
-                                  if (prev.length === 0) {
-                                    return allIds.filter((id) => id !== vendor.id);
-                                  }
-                                  return prev.includes(vendor.id)
-                                    ? prev.filter((id) => id !== vendor.id)
-                                    : [...prev, vendor.id];
-                                });
-                              }}
-                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
-                                  ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                  : isSelected
-                                    ? 'cursor-pointer border-blue-500 bg-blue-50/30 dark:bg-blue-950/20 dark:border-blue-600 shadow-xs'
-                                    : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                                }`}
+                              onClick={() => toggleRosterVendorSelection(vendor, isCategoryMismatch, defaultSelectedIds)}
+                              className={`rounded-xl border p-3.5 space-y-2 transition-all ${cardClass}`}
                             >
                               <div className="flex items-start justify-between gap-1.5">
                                 <div className="flex items-center gap-2 min-w-0">
-                                  <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                      ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                      : isSelected
-                                        ? 'bg-blue-600 border-blue-600 text-white'
-                                        : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                                    }`}>
-                                    {isCategoryMismatch ? (
-                                      <AlertCircle size={12} strokeWidth={2.5} />
-                                    ) : isSelected ? (
-                                      <Check size={12} strokeWidth={3} />
-                                    ) : null}
-                                  </span>
+                                  <RosterVendorCheckbox
+                                    isSelectable={isSelectable}
+                                    isSelected={isSelected}
+                                    checkboxClass={checkboxClass}
+                                  />
                                   <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
                                     {vendor.name}
                                   </span>
@@ -2367,7 +2773,7 @@ export default function IngestionWizard({
           {form.sourcingMode === 'mode_2' && (
             <div className="mt-5 rounded-2xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                 if (allMyVendors.length === 0) {
                   return (
                     <div className="p-6 text-center rounded-xl bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-2">
@@ -2380,12 +2786,29 @@ export default function IngestionWizard({
                   );
                 }
 
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
-                const matchingVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
+                const matchingVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : allMyVendors;
-                const mismatchedVendors = rfqSignals.length > 0
-                  ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch)
+                const mismatchedVendors = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                  ? allMyVendors.filter((v) =>
+                    !checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  )
                   : [];
 
                 let pool = allMyVendors;
@@ -2404,8 +2827,9 @@ export default function IngestionWizard({
                   )
                   : pool;
 
-                const allIds = myVendors.map((v) => v.id);
+                const allIds = myVendors.map((v) => v.id).filter(Boolean);
                 const allSelected = allIds.length > 0 && allIds.every((id) => selectedVendorIds.includes(id));
+                const defaultSelectedIds = matchingVendors.map((v) => v.id).filter(Boolean);
 
                 return (
                   <>
@@ -2462,7 +2886,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                             <strong className="text-emerald-800 dark:text-emerald-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2485,8 +2909,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setMode2VendorCategoryFilterTab('all')}
                               className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'all'
-                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               All ({allMyVendors.length})
@@ -2495,8 +2919,8 @@ export default function IngestionWizard({
                               type="button"
                               onClick={() => setMode2VendorCategoryFilterTab('matched')}
                               className={`px-2.5 py-1 rounded-md transition-all ${mode2VendorCategoryFilterTab === 'matched'
-                                  ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
-                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                ? 'bg-white dark:bg-gray-900 text-emerald-700 dark:text-emerald-300 shadow-2xs font-bold'
+                                : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                 }`}
                             >
                               Matched ({matchingVendors.length})
@@ -2506,8 +2930,8 @@ export default function IngestionWizard({
                                 type="button"
                                 onClick={() => setMode2VendorCategoryFilterTab('mismatched')}
                                 className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1 ${mode2VendorCategoryFilterTab === 'mismatched'
-                                    ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
-                                    : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
+                                  ? 'bg-white dark:bg-gray-900 text-amber-700 dark:text-amber-300 shadow-2xs font-bold'
+                                  : 'text-slate-600 dark:text-gray-400 hover:text-slate-900'
                                   }`}
                               >
                                 <span>⚠️ Category Mismatch ({mismatchedVendors.length})</span>
@@ -2518,22 +2942,23 @@ export default function IngestionWizard({
 
                         <div className="flex items-center justify-between sm:justify-end gap-2 flex-1 text-[11px]">
                           <div className="text-slate-500 dark:text-gray-400">
-                            {selectedVendorIds.length > 0 ? (
-                              <span className="font-semibold text-emerald-600 dark:text-emerald-400">
-                                {selectedVendorIds.length} of {matchingVendors.length} matched vendor(s) selected
-                              </span>
-                            ) : (
-                              <span>All {matchingVendors.length} category-matched vendors will receive this RFQ</span>
-                            )}
+                            {renderRosterSelectionSummary(allMyVendors, matchingVendors, 'text-emerald-600 dark:text-emerald-400')}
                           </div>
                           <button
                             type="button"
                             onClick={() => {
                               const selectableIds = myVendors.filter((v) => {
-                                if (rfqSignals.length === 0) return true;
-                                return matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch;
-                              }).map((v) => v.id);
+                                if (rfqSignals.length === 0 && rfqRawSignals.length === 0) return true;
+                                return checkVendorRfqCategoryMatch(v, {
+                                  signals: rfqSignals,
+                                  rawSignals: rfqRawSignals,
+                                  minorOnly: rfqMinorOnly,
+                                  majorCategory: form.majorCategory,
+                                  minorCategory: form.minorCategory,
+                                }).isMatch;
+                              }).map((v) => v.id).filter(Boolean);
 
+                              setHasExplicitVendorSelection(true);
                               if (allSelected) {
                                 setSelectedVendorIds([]);
                               } else {
@@ -2576,48 +3001,45 @@ export default function IngestionWizard({
                                   ? vendor.vendorSelectedCategories
                                   : [];
 
-                            const matchResult = rfqSignals.length > 0
-                              ? matchVendorAgainstSignals(vendor, rfqSignals, rfqMinorOnly)
+                            const matchResult = (rfqSignals.length > 0 || rfqRawSignals.length > 0)
+                              ? checkVendorRfqCategoryMatch(vendor, {
+                                signals: rfqSignals,
+                                rawSignals: rfqRawSignals,
+                                minorOnly: rfqMinorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              })
                               : { isMatch: true };
-                            const isCategoryMismatch = rfqSignals.length > 0 && !matchResult.isMatch;
+                            const isCategoryMismatch = (rfqSignals.length > 0 || rfqRawSignals.length > 0) && !matchResult.isMatch;
 
-                            const isSelected = !isCategoryMismatch && (selectedVendorIds.includes(vendor.id) || selectedVendorIds.length === 0);
+                            const isSelectable = isRosterVendorSelectable(vendor, isCategoryMismatch);
+                            const isSelected = isRosterVendorSelected({
+                              vendor,
+                              isCategoryMismatch,
+                              hasExplicitSelection: hasExplicitVendorSelection,
+                              selectedVendorIds,
+                              defaultSelectedIds,
+                            });
+                            const { cardClass, checkboxClass } = getRosterVendorCardClasses({
+                              isSelected,
+                              isCategoryMismatch,
+                              isSelectable,
+                              accent: 'emerald',
+                            });
 
                             return (
                               <div
                                 key={vendor.id || idx}
-                                onClick={() => {
-                                  if (isCategoryMismatch) return;
-                                  setSelectedVendorIds((prev) => {
-                                    if (prev.length === 0) {
-                                      return allIds.filter((id) => id !== vendor.id);
-                                    }
-                                    return prev.includes(vendor.id)
-                                      ? prev.filter((id) => id !== vendor.id)
-                                      : [...prev, vendor.id];
-                                  });
-                                }}
-                                className={`rounded-xl border p-3.5 space-y-2 transition-all ${isCategoryMismatch
-                                    ? 'border-amber-300 dark:border-amber-700/80 bg-amber-50/40 dark:bg-amber-950/20 shadow-2xs'
-                                    : isSelected
-                                      ? 'cursor-pointer border-emerald-500 bg-emerald-50/30 dark:bg-emerald-950/20 dark:border-emerald-600 shadow-xs'
-                                      : 'cursor-pointer border-slate-200/80 dark:border-gray-800 bg-white dark:bg-gray-900 opacity-60'
-                                  }`}
+                                onClick={() => toggleRosterVendorSelection(vendor, isCategoryMismatch, defaultSelectedIds)}
+                                className={`rounded-xl border p-3.5 space-y-2 transition-all ${cardClass}`}
                               >
                                 <div className="flex items-start justify-between gap-1.5">
                                   <div className="flex items-center gap-2 min-w-0">
-                                    <span className={`flex h-5 w-5 shrink-0 items-center justify-center rounded border ${isCategoryMismatch
-                                        ? 'bg-amber-500 border-amber-500 text-white opacity-80'
-                                        : isSelected
-                                          ? 'bg-emerald-600 border-emerald-600 text-white'
-                                          : 'border-slate-300 dark:border-gray-600 bg-white dark:bg-gray-800'
-                                      }`}>
-                                      {isCategoryMismatch ? (
-                                        <AlertCircle size={12} strokeWidth={2.5} />
-                                      ) : isSelected ? (
-                                        <Check size={12} strokeWidth={3} />
-                                      ) : null}
-                                    </span>
+                                    <RosterVendorCheckbox
+                                      isSelectable={isSelectable}
+                                      isSelected={isSelected}
+                                      checkboxClass={checkboxClass}
+                                    />
                                     <span className="text-xs font-bold text-slate-900 dark:text-white truncate" title={vendor.name}>
                                       {vendor.name}
                                     </span>
@@ -2749,12 +3171,39 @@ export default function IngestionWizard({
             </div>
           )}
 
+          {/* ── Mode 3: Coming Soon State (When Feature Flag Disabled) ── */}
+          {form.sourcingMode === 'mode_3' && !ENABLE_MODE_3 && (
+            <div
+              data-testid="mode-3-coming-soon-panel"
+              className="mt-5 rounded-2xl border border-amber-200 dark:border-amber-900/60 bg-amber-50/50 dark:bg-amber-950/20 p-6 text-center space-y-3 animate-fade-in shadow-xs"
+            >
+              <div className="mx-auto w-12 h-12 rounded-2xl bg-amber-100 dark:bg-amber-900/40 text-amber-600 dark:text-amber-400 flex items-center justify-center shadow-xs">
+                <Clock size={24} />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonTitle}
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-gray-300 max-w-lg mx-auto">
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonDescription}
+                </p>
+              </div>
+              <div className="pt-1 flex items-center justify-center gap-2">
+                <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 border border-amber-300 dark:border-amber-700">
+                  <Sparkles size={13} />
+                  {UI_STRINGS.sourcingModeVersions.mode3ComingSoonTag}
+                </span>
+              </div>
+            </div>
+          )}
+
           {/* ── Mode 3: Autonomous Sourcing & Double-Blind Verification Protocol (Version 3) ── */}
-          {form.sourcingMode === 'mode_3' && (
+          {form.sourcingMode === 'mode_3' && ENABLE_MODE_3 && (
             <div className="mt-5 rounded-2xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-5 space-y-4 animate-fade-in shadow-xs">
               {(() => {
-                const allMyVendors = buyerVendors.filter(isBuyerUploaded);
-                const { signals: rfqSignals, minorOnly: rfqMinorOnly } = extractRfqCategorySignals(form);
+                const allMyVendors = activeReconciledVendors.filter(isBuyerUploaded);
+                const categorySignalSet = extractRfqCategorySignals(form);
+                const { signals: rfqSignals, rawSignals: rfqRawSignals, minorOnly: rfqMinorOnly } = categorySignalSet;
                 const lineItemMinors = Array.from(
                   new Set(
                     (form.lineItems || [])
@@ -2767,15 +3216,39 @@ export default function IngestionWizard({
                 let myVendors = allMyVendors;
                 if (lineItemMinors.length > 0) {
                   const minorMatched = allMyVendors.filter((v) =>
-                    lineItemMinors.some((m) => matchVendorAgainstSignals(v, [m], true).isMatch)
+                    lineItemMinors.some((m) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: [m],
+                        rawSignals: [m, form.majorCategory, form.minorCategory].filter(Boolean) as string[],
+                        minorOnly: true,
+                        majorCategory: form.majorCategory,
+                        minorCategory: m,
+                      }).isMatch
+                    )
                   );
                   if (minorMatched.length > 0) {
                     myVendors = minorMatched;
-                  } else if (rfqSignals.length > 0) {
-                    myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                  } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                    myVendors = allMyVendors.filter((v) =>
+                      checkVendorRfqCategoryMatch(v, {
+                        signals: rfqSignals,
+                        rawSignals: rfqRawSignals,
+                        minorOnly: rfqMinorOnly,
+                        majorCategory: form.majorCategory,
+                        minorCategory: form.minorCategory,
+                      }).isMatch
+                    );
                   }
-                } else if (rfqSignals.length > 0) {
-                  myVendors = allMyVendors.filter((v) => matchVendorAgainstSignals(v, rfqSignals, rfqMinorOnly).isMatch);
+                } else if (rfqSignals.length > 0 || rfqRawSignals.length > 0) {
+                  myVendors = allMyVendors.filter((v) =>
+                    checkVendorRfqCategoryMatch(v, {
+                      signals: rfqSignals,
+                      rawSignals: rfqRawSignals,
+                      minorOnly: rfqMinorOnly,
+                      majorCategory: form.majorCategory,
+                      minorCategory: form.minorCategory,
+                    }).isMatch
+                  );
                 }
 
                 return (
@@ -2836,7 +3309,7 @@ export default function IngestionWizard({
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">2. Multi-Signal Supplier Scoring</strong>
-                            Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                            Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                           </div>
                           <div className="p-2.5 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                             <strong className="text-indigo-800 dark:text-indigo-300 block mb-1">3. ≥80% Relevance Threshold</strong>
@@ -2914,7 +3387,7 @@ export default function IngestionWizard({
                                   return (
                                     <span
                                       className="font-semibold text-indigo-700 dark:text-indigo-300 truncate"
-                                      title={`Minor: ${displayMinor} | Major: ${v.majorCategory || 'General Industrial'}`}
+                                      title={`Category: ${displayMinor} | Division: ${v.majorCategory || 'General Industrial'}`}
                                     >
                                       {displayMinor}
                                     </span>
@@ -2975,8 +3448,8 @@ export default function IngestionWizard({
                                 aria-pressed={isSelected}
                                 onClick={() => toggleProcucevV3(r.vendor.id)}
                                 className={`text-left p-3 rounded-xl border space-y-1.5 shadow-2xs transition-colors ${isSelected
-                                    ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
-                                    : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
+                                  ? 'bg-indigo-50 dark:bg-indigo-950/50 border-indigo-400 dark:border-indigo-600'
+                                  : 'bg-white dark:bg-gray-900 border-indigo-200/70 dark:border-indigo-900/50 hover:border-indigo-300'
                                   }`}
                               >
                                 <div className="flex items-center justify-between gap-2">
@@ -3112,8 +3585,13 @@ export default function IngestionWizard({
         ) : (
           <button
             onClick={handleSubmit}
-            disabled={isDispatching}
-            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer"
+            disabled={isDispatching || (form.sourcingMode === 'mode_3' && !ENABLE_MODE_3)}
+            className="btn btn-primary font-black flex items-center gap-2 px-6 py-2.5 shadow-md hover:shadow-lg disabled:opacity-50 cursor-pointer disabled:cursor-not-allowed"
+            title={
+              form.sourcingMode === 'mode_3' && !ENABLE_MODE_3
+                ? UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip
+                : undefined
+            }
           >
             {isDispatching ? (
               <>
@@ -3366,7 +3844,10 @@ export default function IngestionWizard({
 
       {/* ── RFQ Dispatch Confirmation Modal ── */}
       {confirmationRfq && (
-        <div className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setConfirmationRfq, null)}
+          className="modal-overlay !z-[1200] fixed inset-0 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in"
+        >
           <div className="w-full max-w-xl p-6 sm:p-8 bg-white dark:bg-gray-900 text-slate-900 dark:text-white rounded-2xl shadow-2xl border border-slate-200 dark:border-gray-800 space-y-6 text-center animate-in zoom-in-95">
             <div className="w-16 h-16 bg-emerald-100 dark:bg-emerald-950/60 text-emerald-600 dark:text-emerald-400 rounded-full flex items-center justify-center mx-auto shadow-inner">
               <CheckCircle2 size={36} />

@@ -3,11 +3,21 @@ import { render, screen, fireEvent, waitFor, within, act } from '@testing-librar
 import VendorUploadModal from '@/app/category-manager/VendorUploadModal';
 import { useApp } from '@/lib/store';
 import * as vendorUploadClient from '@/lib/vendorUploadClient';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
 import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import type { VendorBulkInvitationResponse, VendorUploadRow } from '@/lib/types';
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
+}));
+
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn().mockImplementation(async (batch) => ({
+    id: `hist-saved-${Date.now()}`,
+    ...batch,
+  })),
+  deleteVendorUploadHistoryBatch: jest.fn().mockResolvedValue(true),
 }));
 
 jest.mock('@/lib/vendorUploadClient', () => ({
@@ -673,32 +683,29 @@ describe('VendorUploadModal', () => {
     HTMLAnchorElement.prototype.click = originalClick;
   });
 
-  test('toggles upload history panel and covers localStorage parse error branch', async () => {
-    // Simulate localStorage.getItem throwing
-    const getItemSpy = jest.spyOn(Storage.prototype, 'getItem').mockImplementation(() => {
-      throw new Error('storage error');
-    });
+  test('toggles upload history panel and covers upload history fetch error branch', async () => {
+    (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockRejectedValueOnce(
+      new Error('history fetch error')
+    );
 
     render(<VendorUploadModal isOpen onClose={onClose} />);
-    // Should survive localStorage error (renders without crash)
+    // Should survive fetch rejection (renders without crash)
     const historyBtns = screen.getAllByRole('button', { name: /Upload History/i });
     expect(historyBtns.length).toBeGreaterThan(0);
 
     // Toggle History panel open
     fireEvent.click(historyBtns[0]);
-    expect(screen.getByText('Previous Vendor Upload History')).toBeInTheDocument();
+    expect(await screen.findByText('Previous Vendor Upload History')).toBeInTheDocument();
     expect(screen.getByText('No previous uploads recorded on this browser.')).toBeInTheDocument();
 
     // Toggle History panel closed
     const hideBtn = screen.getAllByRole('button', { name: /Hide History/i });
     fireEvent.click(hideBtn[0]);
     expect(screen.queryByText('Previous Vendor Upload History')).not.toBeInTheDocument();
-
-    getItemSpy.mockRestore();
   });
 
-  test('shows skipped credential invitations in saved upload history', () => {
-    localStorage.setItem('procucev_vendor_upload_history', JSON.stringify([{
+  test('shows skipped credential invitations in saved upload history', async () => {
+    (vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock).mockResolvedValueOnce([{
       id: 'history-with-skipped-invite',
       fileName: 'vendors.xlsx',
       timestamp: '2026-11-08 10:00',
@@ -707,13 +714,15 @@ describe('VendorUploadModal', () => {
       duplicates: 1,
       failed: 1,
       onboardingSkipped: 2,
-    }]));
+    }]);
 
     render(<VendorUploadModal isOpen onClose={onClose} />);
 
     fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
 
-    expect(screen.getByText(formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: 2 }))).toBeInTheDocument();
+    expect(
+      await screen.findByText(formatString(UI_STRINGS.vendorBulkImport.historyOnboardingSkipped, { count: 2 }))
+    ).toBeInTheDocument();
     expect(screen.getByText('1 Duplicates')).toBeInTheDocument();
     expect(screen.getByText('1 Failed')).toBeInTheDocument();
   });
@@ -753,7 +762,7 @@ describe('VendorUploadModal', () => {
     fireEvent.drop(dropzone, { dataTransfer: { files: [file] } });
 
     await screen.findByText('dropped.xlsx');
-    expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
+    expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file, { requireCategory: true });
   });
 
   test('displays accurate upload counts and on-screen error messages for failed and duplicate vendor records', async () => {
@@ -836,12 +845,305 @@ describe('VendorUploadModal', () => {
     fireEvent.click(screen.getByText('Import 1 Vendor'));
     await screen.findByText(/Upload Completed/);
 
-    const savedHistory = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-    expect(savedHistory[0].records[0]).toMatchObject({
-      name: 'Veera Solutions Pvt LTD',
-      city: 'Bengaluru',
-      state: 'Karnataka',
-      pincode: '560037',
+    expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+      expect.objectContaining({
+        fileName: 'loc-vendors.xlsx',
+        records: expect.arrayContaining([
+          expect.objectContaining({
+            name: 'Veera Solutions Pvt LTD',
+            city: 'Bengaluru',
+            state: 'Karnataka',
+            pincode: '560037',
+            category: '',
+          }),
+        ]),
+      })
+    );
+  });
+
+  test('omits requireCategory when uploaded by a non-buyer category manager session', async () => {
+    const { authClient } = require('@/lib/authClient');
+    const sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'cm-1',
+      email: 'cm@procucev.com',
+      name: 'CM',
+      role: 'category_manager',
+      orgId: 'org-cm',
+      orgName: 'CM Org',
     });
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+
+    try {
+      render(<VendorUploadModal isOpen onClose={onClose} />);
+      const file = new File(['x'], 'cm-vendors.xlsx');
+      pickFile(file);
+      await screen.findByText('cm-vendors.xlsx');
+      expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(file);
+    } finally {
+      sessionSpy.mockRestore();
+    }
+  });
+
+  test('renders Add Vendor Bulk copy, required columns summary, category preview, and buyer-scoped history for buyers', async () => {
+    const { authClient } = require('@/lib/authClient');
+    const sessionSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      id: 'buyer-u-1',
+      email: 'buyer@bulkcorp.test',
+      name: 'Buyer Bulk',
+      role: 'buyer',
+      orgId: 'org-bulk',
+      orgName: 'Bulk Corp',
+    });
+    (useApp as jest.Mock).mockReturnValue({
+      showToast: mockShowToast,
+      refreshFromDB: mockRefreshFromDB,
+      activeBuyerAccount: { id: 'ba-bulk-1', corporateEmail: 'buyer@bulkcorp.test', organizationName: 'Bulk Corp' },
+    });
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: {
+        rows: [
+          validRow({
+            vendor: {
+              vendorCode: 'V-101',
+              name: 'Bulk Category Co',
+              email: 'bulk@cat.test',
+              phone: '9876543210',
+              majorCategory: 'Mechanical',
+              minorCategories: ['Valves'],
+              city: 'Pune',
+            },
+          }, 2),
+        ],
+        blankRowCount: 0,
+      },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      results: [{ rowNumber: 2, status: 'imported' }],
+    });
+
+    try {
+      render(<VendorUploadModal isOpen onClose={onClose} onImportComplete={onImportComplete} />);
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerModalTitle)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerModalSubtitle)).toBeInTheDocument();
+      expect(screen.getByText('Required Columns')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorBulkImport.buyerRequiredColumnsSummary)).toBeInTheDocument();
+
+      pickFile(new File(['x'], 'buyer-bulk.xlsx'));
+      await screen.findByText('buyer-bulk.xlsx');
+      expect(screen.getByText('Category')).toBeInTheDocument();
+      expect(screen.getByText('Mechanical')).toBeInTheDocument();
+
+      fireEvent.click(screen.getByText('Import 1 Vendor'));
+      await screen.findByText(/Upload Completed/);
+
+      expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          buyerId: 'ba-bulk-1',
+          buyerEmail: 'buyer@bulkcorp.test',
+        })
+      );
+    } finally {
+      sessionSpy.mockRestore();
+    }
+  });
+
+  test('supports duplicate removal, CSV export, auto-exclusion on import, all-duplicates summary, and import failure handling', async () => {
+    const dupRow = (n: number): VendorUploadRow => ({
+      rowNumber: n,
+      vendor: { name: `Dup Co ${n}`, email: `dup${n}@co.in`, phone: '9876543210' },
+      isValid: false,
+      errors: [`Duplicate email — already present in file`],
+      isDuplicate: true,
+      matchedAgainst: 'FILE',
+      duplicateReason: `Duplicate email (dup${n}@co.in)`,
+      missingEmail: false,
+    });
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:bulk-dup-url');
+    URL.revokeObjectURL = jest.fn();
+
+    const sessionSpy = jest.spyOn(vendorUploadClient as never, 'isAllowedVendorUploadFile');
+    sessionSpy.mockRestore();
+    const { authClient } = await import('@/lib/authClient');
+    const authSpy = jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
+      role: 'buyer',
+      email: 'buyer@co.in',
+      id: 'u-b',
+      name: 'Buyer',
+      orgId: 'org-b',
+      orgName: 'Buyer Corp',
+    });
+
+    try {
+      (useApp as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: mockRefreshFromDB,
+        buyerVendors: [{ id: 'ex-1', name: 'Existing Co', email: 'ex@co.in', phone: '9800000001' }],
+      });
+
+      (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+        success: true,
+        data: { rows: [validRow({}, 2), dupRow(3), dupRow(4)], blankRowCount: 0 },
+      });
+      (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+        total: 1,
+        imported: 1,
+        missingEmail: 0,
+        duplicates: 0,
+        failed: 0,
+        results: [{ rowNumber: 2, status: 'imported' }],
+      });
+
+      const { rerender } = render(<VendorUploadModal isOpen onClose={onClose} onImportComplete={onImportComplete} />);
+      pickFile(new File(['x'], 'with-dups.xlsx'));
+      await screen.findByText('with-dups.xlsx');
+      expect(vendorUploadClient.parseVendorUploadFile).toHaveBeenCalledWith(expect.any(File), {
+        requireCategory: true,
+        existingVendors: [expect.objectContaining({ email: 'ex@co.in' })],
+      });
+
+      const dupBanner = await screen.findByTestId('bulk-upload-duplicates-banner');
+      expect(dupBanner).toHaveTextContent('2 duplicate vendor row(s) detected');
+
+      // Filter to duplicates tab and download CSV
+      fireEvent.click(screen.getByRole('button', { name: 'duplicates' }));
+      expect(screen.getByText('Dup Co 3')).toBeInTheDocument();
+      fireEvent.click(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv));
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+
+      // Click Remove 2 Duplicates and import remaining 1 unique row
+      fireEvent.click(screen.getByRole('button', { name: 'Remove 2 Duplicates' }));
+      expect(screen.getByTestId('bulk-upload-duplicates-banner')).toHaveTextContent('2 duplicate vendor row(s) removed');
+      fireEvent.click(screen.getByText('Import 1 Vendor'));
+
+      await screen.findByText('Upload Completed');
+      expect(screen.getByText(/Uploaded: 3 · Excluded Duplicates: 2 · Total: 1 · Imported: 1 · Failed: 0 · Duplicates: 2/)).toBeInTheDocument();
+      expect(vendorUploadClient.bulkImportVendorRows).toHaveBeenCalledWith(
+        [expect.objectContaining({ rowNumber: 2 })],
+        expect.any(Function)
+      );
+
+      // Single duplicate without removal auto-excludes during import + removes non-duplicate row branch
+      fireEvent.click(screen.getByText('Upload Another File'));
+      const sparseDupRow: VendorUploadRow = {
+        rowNumber: 3,
+        vendor: { name: '', email: '', phone: '' },
+        isValid: false,
+        errors: [],
+        isDuplicate: true,
+        missingEmail: true,
+      };
+      (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+        success: true,
+        data: { rows: [validRow({}, 2), sparseDupRow, validRow({}, 4)], blankRowCount: 0 },
+      });
+      (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+        total: 1,
+        imported: 1,
+        missingEmail: 0,
+        duplicates: 0,
+        failed: 0,
+        results: [{ rowNumber: 2, status: 'imported' }],
+      });
+      pickFile(new File(['x'], 'one-dup.xlsx'));
+      await screen.findByText('one-dup.xlsx');
+      expect(screen.getByRole('button', { name: 'Remove 1 Duplicate' })).toBeInTheDocument();
+      // Remove non-duplicate row 4 cleanly before importing
+      fireEvent.click(screen.getByRole('button', { name: 'Remove row 4' }));
+      fireEvent.click(screen.getByText('Import 1 Unique Vendor'));
+      await screen.findByText('Upload Completed');
+
+      // All duplicates scenario handles zero unique rows cleanly without API failure
+      fireEvent.click(screen.getByText('Upload Another File'));
+      (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+        success: true,
+        data: { rows: [dupRow(2), dupRow(3)], blankRowCount: 0 },
+      });
+      (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockClear();
+      pickFile(new File(['x'], 'all-dups.xlsx'));
+      await screen.findByText('all-dups.xlsx');
+      fireEvent.click(screen.getByRole('button', { name: 'Remove row 2' }));
+      fireEvent.click(screen.getByText('Import 0 Unique Vendors'));
+      await screen.findByText('No Vendors Imported');
+      expect(vendorUploadClient.bulkImportVendorRows).not.toHaveBeenCalled();
+
+      // Non-Error API rejection shows fallback Upload Failed instead of silently completing
+      fireEvent.click(screen.getByText('Upload Another File'));
+      (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+        success: true,
+        data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+      });
+      (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockRejectedValueOnce('raw rejection');
+      rerender(<VendorUploadModal isOpen onClose={onClose} onImportComplete={onImportComplete} />);
+      pickFile(new File(['x'], 'fail.xlsx'));
+      await screen.findByText('fail.xlsx');
+      fireEvent.click(screen.getByText('Import 1 Vendor'));
+      await screen.findByText('Upload Failed');
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason)).toBeInTheDocument();
+    } finally {
+      authSpy.mockRestore();
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  test('closes modal on Escape key press, ignores non-Escape keys, and reports invitation progress callback', async () => {
+    (vendorUploadClient.parseVendorUploadFile as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { rows: [validRow({}, 2)], blankRowCount: 0 },
+    });
+    (vendorUploadClient.bulkImportVendorRows as jest.Mock).mockResolvedValue({
+      total: 1,
+      imported: 1,
+      missingEmail: 0,
+      duplicates: 0,
+      failed: 0,
+      onboardingSkipped: 1,
+      results: [{ rowNumber: 2, status: 'imported', vendorId: 'v-prog-1', onboardingEmailStatus: 'skipped' }],
+    });
+    (vendorUploadClient.sendBulkVendorInvitations as jest.Mock).mockImplementation(
+      async (_ids: string[], onProgress?: (completed: number, total: number) => void) => {
+        onProgress?.(1, 1);
+        return { sentCount: 1, queuedCount: 0, failedCount: 0, results: [{ vendorId: 'v-prog-1', status: 'sent' }] };
+      }
+    );
+
+    render(<VendorUploadModal isOpen onClose={onClose} />);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(onClose).not.toHaveBeenCalled();
+
+    pickFile(new File(['x'], 'prog.xlsx'));
+    await screen.findByText('prog.xlsx');
+
+    // Bottom "Choose Another File" button resets to select step
+    const chooseBtns = screen.getAllByText('Choose Another File');
+    fireEvent.click(chooseBtns[chooseBtns.length - 1]);
+    expect(screen.getByTestId('vendor-upload-dropzone')).toBeInTheDocument();
+
+    pickFile(new File(['x'], 'prog2.xlsx'));
+    await screen.findByText('prog2.xlsx');
+    fireEvent.click(screen.getByText('Import 1 Vendor'));
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: formatString(UI_STRINGS.vendorBulkImport.sendInvitationsButton, { count: 1 }),
+      })
+    );
+    await screen.findByText(formatString(UI_STRINGS.vendorBulkImport.invitationSummary, { sent: 1, queued: 0, failed: 0 }));
+
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
   });
 });

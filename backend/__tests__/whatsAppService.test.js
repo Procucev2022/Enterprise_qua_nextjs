@@ -455,5 +455,62 @@ describe('WhatsApp Service Unit Tests', () => {
       whatsAppService.clearWhatsAppThrottleForPhone('');
       expect(true).toBe(true);
     });
+
+    test('sendRFQClosedWhatsApp handles validation, unconfigured/test skip, Meta success, failure, and thrown error', async () => {
+      const invalidPhone = await whatsAppService.sendRFQClosedWhatsApp({ phone: '123', rfqNumber: 'RFQ-CL-1' });
+      expect(invalidPhone.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
+
+      const missingRfq = await whatsAppService.sendRFQClosedWhatsApp({ phone: '9876543210' });
+      expect(missingRfq.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
+
+      delete process.env.WHATSAPP_PHONE_NUMBER_ID;
+      delete process.env.WHATSAPP_ACCESS_TOKEN;
+      const notConfigured = await whatsAppService.sendRFQClosedWhatsApp({ phone: '9876543210', rfqNumber: 'RFQ-CL-1' });
+      expect(notConfigured.status).toBe(WHATSAPP_SEND_STATUS.NOT_CONFIGURED);
+
+      process.env.WHATSAPP_PHONE_NUMBER_ID = 'meta-phone-close';
+      process.env.WHATSAPP_ACCESS_TOKEN = 'meta-token-close';
+      const origNodeEnv = process.env.NODE_ENV;
+      process.env.NODE_ENV = 'test';
+      const skippedInTest = await whatsAppService.sendRFQClosedWhatsApp({
+        phone: '9876543210',
+        contactPerson: 'Ravi',
+        rfqNumber: 'RFQ-CL-1',
+        rfqTitle: 'Civil Package',
+      });
+      expect(skippedInTest.status).toBe(WHATSAPP_SEND_STATUS.SKIPPED);
+
+      process.env.NODE_ENV = 'production';
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => ({ messages: [{ id: 'wamid-close-1' }] }),
+      });
+      const sent = await whatsAppService.sendRFQClosedWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-CL-1',
+      });
+      expect(sent).toEqual({ success: true, status: WHATSAPP_SEND_STATUS.SENT, messageId: 'wamid-close-1' });
+
+      global.fetch = jest.fn().mockResolvedValueOnce({
+        ok: false,
+        status: 400,
+        json: async () => ({ error: { message: 'Meta rejected close message' } }),
+      });
+      const failed = await whatsAppService.sendRFQClosedWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-CL-1',
+      });
+      expect(failed).toEqual({ success: false, status: WHATSAPP_SEND_STATUS.LINK_ONLY, error: 'Meta rejected close message' });
+
+      global.fetch = jest.fn().mockRejectedValueOnce(new Error('Meta socket error'));
+      const errored = await whatsAppService.sendRFQClosedWhatsApp({
+        phone: '9876543210',
+        rfqNumber: 'RFQ-CL-1',
+      });
+      expect(errored).toEqual({ success: false, status: WHATSAPP_SEND_STATUS.LINK_ONLY, error: 'Meta socket error' });
+
+      process.env.NODE_ENV = origNodeEnv;
+    });
   });
 });

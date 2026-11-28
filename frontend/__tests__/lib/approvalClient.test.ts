@@ -2,6 +2,9 @@ import {
   fetchApprovals,
   fetchApprovalSummary,
   processApprovalAction,
+  fetchApprovalApprovers,
+  fetchApprovalUsers,
+  sendApprovalOtp,
 } from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { logger } from '@/lib/logger';
@@ -212,6 +215,203 @@ describe('approvalClient', () => {
           headers: { 'Content-Type': 'application/json' },
         })
       );
+    });
+  });
+
+  describe('fetchApprovals branch coverage', () => {
+    it('ignores "all" filter values and falls back when data is not array or total is not number', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: [{ id: '1' }] }), // total is undefined
+      });
+
+      const res = await fetchApprovals({
+        module: 'all',
+        status: 'all',
+        project: 'all',
+      });
+      expect(res.data).toHaveLength(1);
+      expect(res.total).toBe(1);
+
+      // Malformed data
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ data: null }),
+      });
+      const res2 = await fetchApprovals();
+      expect(res2.data).toEqual([]);
+      expect(res2.error).toBeDefined();
+
+      // Status < 500 rejection warning
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 400,
+      });
+      const warnSpy = jest.spyOn(logger, 'warn');
+      const res3 = await fetchApprovals();
+      expect(res3.data).toEqual([]);
+      expect(warnSpy).toHaveBeenCalledWith('Approval list request rejected', { status: 400 }, 'APPROVAL_CLIENT');
+    });
+  });
+
+  describe('fetchApprovalSummary branch coverage', () => {
+    it('handles unexpected response without summary and handles 400 status', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({}),
+      });
+      const res = await fetchApprovalSummary();
+      expect(res.summary).toBeNull();
+      expect(res.error).toBeDefined();
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 404,
+      });
+      const warnSpy = jest.spyOn(logger, 'warn');
+      const res2 = await fetchApprovalSummary();
+      expect(res2.summary).toBeNull();
+      expect(warnSpy).toHaveBeenCalledWith('Approval summary request rejected', { status: 404 }, 'APPROVAL_CLIENT');
+    });
+  });
+
+  describe('fetchApprovalApprovers', () => {
+    it('returns approvers from API when response is successful', async () => {
+      const mockApprovers = [{ id: 'appr-1', name: 'Approver One' }];
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ approvers: mockApprovers }),
+      });
+
+      const res = await fetchApprovalApprovers();
+      expect(res.approvers).toEqual(mockApprovers);
+    });
+
+    it('falls back to APPROVER_CONFIG when API returns non-ok or empty array', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: false,
+        status: 500,
+      });
+      const res1 = await fetchApprovalApprovers();
+      expect(res1.approvers.length).toBeGreaterThan(0);
+
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ approvers: [] }),
+      });
+      const res2 = await fetchApprovalApprovers();
+      expect(res2.approvers.length).toBeGreaterThan(0);
+    });
+
+    it('falls back to APPROVER_CONFIG on network exception', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('offline'));
+      const res = await fetchApprovalApprovers();
+      expect(res.approvers.length).toBeGreaterThan(0);
+    });
+  });
+
+  describe('fetchApprovalUsers', () => {
+    it('returns users from API when response is successful', async () => {
+      const mockUsers = [{ id: 'usr-1', name: 'User One', role: 'Category Manager' }];
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ users: mockUsers }),
+      });
+
+      const res = await fetchApprovalUsers();
+      expect(res.users).toEqual(mockUsers);
+    });
+
+    it('falls back to internal tasks assignees when approvals users fails', async () => {
+      const mockFallback = [{ id: 'usr-fb', name: 'Fallback User', role: 'Staff' }];
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url === '/api/approvals/users') {
+          return Promise.resolve({ ok: false, status: 404 });
+        }
+        if (url === '/api/internal-tasks/assignees') {
+          return Promise.resolve({
+            ok: true,
+            json: async () => ({ assignees: mockFallback }),
+          });
+        }
+        return Promise.resolve({ ok: false });
+      });
+
+      const res = await fetchApprovalUsers();
+      expect(res.users).toEqual(mockFallback);
+    });
+
+    it('falls back to default users list when both endpoints fail or return empty', async () => {
+      global.fetch = jest.fn().mockImplementation((url: string) => {
+        if (url === '/api/approvals/users') {
+          return Promise.resolve({ ok: false, status: 500 });
+        }
+        return Promise.resolve({ ok: false, status: 500 });
+      });
+
+      const res = await fetchApprovalUsers();
+      expect(res.users.some(u => u.name === 'Govardhan')).toBe(true);
+
+      // JSON has empty users
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ users: [] }),
+      });
+      const res2 = await fetchApprovalUsers();
+      expect(res2.users.some(u => u.name === 'Govardhan')).toBe(true);
+    });
+
+    it('falls back to default users list on fetch exception', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('fail'));
+      const res = await fetchApprovalUsers();
+      expect(res.users.some(u => u.name === 'Govardhan')).toBe(true);
+    });
+
+    describe('sendApprovalOtp', () => {
+      it('sends OTP request successfully', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: true,
+          json: async () => ({
+            success: true,
+            message: 'OTP sent successfully',
+            email: 'srinivas.mukku@procucev.com',
+            expiresInSeconds: 600,
+          }),
+        });
+
+        const res = await sendApprovalOtp('Srinu Sir', 'req-1');
+        expect(res).toEqual({
+          success: true,
+          message: 'OTP sent successfully',
+          email: 'srinivas.mukku@procucev.com',
+          expiresInSeconds: 600,
+        });
+        expect(global.fetch).toHaveBeenCalledWith(
+          '/api/approvals/send-otp',
+          expect.objectContaining({
+            method: 'POST',
+            body: JSON.stringify({ approverName: 'Srinu Sir', id: 'req-1' }),
+          })
+        );
+      });
+
+      it('handles server error response', async () => {
+        global.fetch = jest.fn().mockResolvedValue({
+          ok: false,
+          status: 400,
+          json: async () => ({ error: 'Invalid approver' }),
+        });
+
+        const res = await sendApprovalOtp('Unknown');
+        expect(res).toEqual({ success: false, error: 'Invalid approver' });
+      });
+
+      it('handles network failure', async () => {
+        global.fetch = jest.fn().mockRejectedValue(new Error('Network offline'));
+
+        const res = await sendApprovalOtp('Srinu Sir');
+        expect(res).toEqual({ success: false, error: 'Network offline' });
+      });
     });
   });
 });

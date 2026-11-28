@@ -24,7 +24,8 @@ import {
   X,
 } from 'lucide-react';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG } from '@/lib/constants';
+import { DOCUMENT_VAULT_CATEGORIES, DOCUMENT_VAULT_SOURCES, DOCUMENT_VAULT_CONFIG, USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import type { DocumentVaultItem, DocumentVaultSummary } from '@/lib/types';
 import ColumnSettingsPopup, { type ColumnDef } from './ColumnSettingsPopup';
 import {
@@ -45,7 +46,7 @@ const DOC_VAULT_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'status', label: 'Status', visible: true },
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
-const DOC_VAULT_COL_PREF_KEY = 'qua_doc_vault_col_prefs';
+const DOC_VAULT_COL_PREF_KEY = USER_PREFERENCE_KEYS.DOC_VAULT_COLUMNS;
 
 export default function DocumentVaultDashboard() {
   const strings = UI_STRINGS.actionCenter.documentVault;
@@ -77,21 +78,36 @@ export default function DocumentVaultDashboard() {
   const [toastMessage, setToastMessage] = useState<{ text: string; type: 'success' | 'error' } | null>(null);
 
   // Column settings & sort states
-  const [docColumns, setDocColumns] = useState<ColumnDef[]>(() => {
-    if (typeof window !== 'undefined') {
-      try {
-        const saved = localStorage.getItem(DOC_VAULT_COL_PREF_KEY);
-        if (saved) {
-          const parsed = JSON.parse(saved) as unknown;
-          if (Array.isArray(parsed) && parsed.length > 0) return parsed as ColumnDef[];
-        }
-      } catch { /* ignore */ }
-    }
-    return DOC_VAULT_DEFAULT_COLUMNS;
-  });
+  const [docColumns, setDocColumns] = useState<ColumnDef[]>(DOC_VAULT_DEFAULT_COLUMNS);
   const [showDocColumnSettings, setShowDocColumnSettings] = useState<boolean>(false);
   const [docSortField, setDocSortField] = useState<string>('uploadedAt');
   const [docSortOrder, setDocSortOrder] = useState<'asc' | 'desc'>('desc');
+
+  // Hydrate doc column preferences from backend user preferences API
+  useEffect(() => {
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(DOC_VAULT_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setDocColumns(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Close modals on Escape key
+  useEffect(() => {
+    if (!isModalOpen && !showDocColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (isModalOpen) setIsModalOpen(false);
+        if (showDocColumnSettings) setShowDocColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isModalOpen, showDocColumnSettings]);
 
   const showToast = useCallback((text: string, type: 'success' | 'error' = 'success') => {
     setToastMessage({ text, type });
@@ -732,9 +748,15 @@ export default function DocumentVaultDashboard() {
         <div
           role="dialog"
           aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setIsModalOpen(false);
+          }}
           className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-lg p-6 shadow-2xl relative"
+          >
             <h2 className="text-base font-bold text-slate-900 dark:text-white mb-1">
               {editingDoc ? strings.modal.editTitle : strings.modal.uploadTitle}
             </h2>
@@ -873,11 +895,11 @@ export default function DocumentVaultDashboard() {
         columns={docColumns}
         onSave={(newCols) => {
           setDocColumns(newCols);
-          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(newCols)); } catch { /* ignore */ }
+          void saveUserPreference(DOC_VAULT_COL_PREF_KEY, newCols);
         }}
         onReset={() => {
           setDocColumns(DOC_VAULT_DEFAULT_COLUMNS);
-          try { localStorage.setItem(DOC_VAULT_COL_PREF_KEY, JSON.stringify(DOC_VAULT_DEFAULT_COLUMNS)); } catch { /* ignore */ }
+          void deleteUserPreference(DOC_VAULT_COL_PREF_KEY);
         }}
         title="Document Vault Columns"
       />

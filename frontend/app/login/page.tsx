@@ -12,6 +12,7 @@ import {
   EXACT_10_DIGIT_MOBILE_PATTERN,
   sanitize10DigitMobile,
   GSTIN_PATTERN,
+  derivePanFromGstin,
   validateFormData,
   validatePincode,
   PostOfficeDetail,
@@ -155,6 +156,7 @@ function LoginPageContent() {
   const [regGstinError, setRegGstinError] = useState<string | null>(null);
   const [regCity, setRegCity] = useState('');
   const [regState, setRegState] = useState('');
+  const [regStreet, setRegStreet] = useState('');
   const [regPincode, setRegPincode] = useState('');
   const [regPincodeError, setRegPincodeError] = useState<string | null>(null);
   const [regPincodeValidating, setRegPincodeValidating] = useState(false);
@@ -531,10 +533,12 @@ function LoginPageContent() {
     try {
       const email = regEmail.trim().toLowerCase();
       const cleanGstin = regGstin.trim().toUpperCase();
-      const derivedPan = '';
+      const derivedPan = derivePanFromGstin(cleanGstin);
       const cleanCity = regCity.trim();
       const cleanState = regState.trim();
+      const cleanStreet = regStreet.trim();
       const cleanPincode = regPincode.trim();
+      const resolvedStreet = cleanStreet || (cleanCity && cleanState ? `${cleanCity}, ${cleanState}` : cleanCity);
       const plantLocation = `${cleanCity}, ${cleanState} (${cleanPincode})`;
 
       const response = await authClient.register({
@@ -544,12 +548,18 @@ function LoginPageContent() {
         mobile: regMobile.trim(),
         role: selectedRegRole,
         orgName: regOrgName.trim() || regName.trim(),
+        street: resolvedStreet,
+        streetAddress: resolvedStreet,
+        address: resolvedStreet,
+        registeredAddress: resolvedStreet,
         city: cleanCity,
         state: cleanState,
         pincode: cleanPincode,
         country: 'India',
         gstin: cleanGstin,
+        gstNumber: cleanGstin,
         pan: derivedPan,
+        panNumber: derivedPan,
         emailOtp,
         mobileOtp,
         code: mobileOtp || emailOtp,
@@ -561,32 +571,44 @@ function LoginPageContent() {
       }
 
       if (selectedRegRole === 'buyer') {
-        addBuyerAccount({
-          organizationName: regOrgName.trim() || response.user.orgName || regName.trim(),
-          brandName: regOrgName.trim() || regName.trim(),
-          corporateEmail: email,
-          contactPerson: regName.trim(),
-          mobileNumber: regMobile.trim(),
-          gstin: cleanGstin,
-          pan: derivedPan,
-          city: cleanCity,
-          state: cleanState,
-          pincode: cleanPincode,
-          zip_code: cleanPincode,
-          country: 'India',
-          primaryPlantLocation: plantLocation,
-          // Not asked at registration, so it is sent empty rather than a guessed sector.
-          industrySector: '',
-          sourcingMode: 'mode_2',
-          subscriptionPlan: 'free_trial',
-          remainingFreeRFQs: 5,
-          accountSource: 'web_registration',
-          status: 'ACTIVE_VERIFIED',
-          supportedMajorCategories: [],
-          supportedMinorCategories: [],
-          totalRFQsCreated: 0,
-          totalSpend: '₹0',
-        });
+        await Promise.resolve(
+          addBuyerAccount({
+            userId: response.user.id || undefined,
+            organizationId: response.user.orgId || undefined,
+            organizationName: regOrgName.trim() || response.user.orgName || regName.trim(),
+            brandName: regOrgName.trim() || regName.trim(),
+            corporateEmail: email,
+            contactPerson: regName.trim(),
+            mobileNumber: regMobile.trim(),
+            gstin: cleanGstin,
+            gstNumber: cleanGstin,
+            pan: derivedPan,
+            panNumber: derivedPan,
+            street: resolvedStreet,
+            streetAddress: resolvedStreet,
+            address1: resolvedStreet,
+            address: resolvedStreet,
+            registeredAddress: resolvedStreet,
+            city: cleanCity,
+            state: cleanState,
+            pincode: cleanPincode,
+            zip_code: cleanPincode,
+            zipCode: cleanPincode,
+            country: 'India',
+            primaryPlantLocation: plantLocation,
+            // Not asked at registration, so it is sent empty rather than a guessed sector.
+            industrySector: '',
+            sourcingMode: 'mode_2',
+            subscriptionPlan: 'free_trial',
+            remainingFreeRFQs: 5,
+            accountSource: 'web_registration',
+            status: 'ACTIVE_VERIFIED',
+            supportedMajorCategories: [],
+            supportedMinorCategories: [],
+            totalRFQsCreated: 0,
+            totalSpend: '₹0',
+          })
+        );
 
         // The plan and free-RFQ balance come from the stored account record, which the
         // store syncs into state. The page does not write its own values here.
@@ -1158,6 +1180,24 @@ function LoginPageContent() {
                               onChange={(e) => setRegState(e.target.value)}
                               className={plainInput}
                               required
+                            />
+                          </div>
+                        </div>
+
+                        <div>
+                          <label htmlFor="reg-address" className={fieldLabel}>
+                            {AUTH.registrationLabels.registeredAddress}
+                          </label>
+                          <div className="relative">
+                            <Building2 className={iconClass} size={14} />
+                            <input
+                              id="reg-address"
+                              type="text"
+                              placeholder={AUTH.fieldPlaceholders.registeredAddress}
+                              value={regStreet}
+                              onChange={(e) => setRegStreet(e.target.value)}
+                              className={iconFieldInput}
+                              style={ICON_PAD}
                             />
                           </div>
                         </div>

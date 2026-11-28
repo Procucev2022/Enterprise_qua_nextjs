@@ -11,11 +11,15 @@ const {
   BUYER_SUBSCRIPTION_PLANS,
   getSubscriptionPricingConfig,
   PERSISTENCE_MESSAGES,
+  DOSSIER_MESSAGES,
+  formatMessage,
 } = require('../config/constants');
 const identityQueries = require('../db/identityQueries');
 const domainQueries = require('../db/domainQueries');
+const buyerProfileQueries = require('../db/buyerProfileQueries');
+const vendorIngestionQueries = require('../db/vendorIngestionQueries');
 const pool = require('../db/pool');
-const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
+const { VALIDATION_SCHEMAS, validatePayload, derivePanFromGstin } = require('../config/validationSchemas');
 
 /** A stored number, or null when the record holds no usable value. */
 function numberOrNull(value) {
@@ -51,10 +55,110 @@ function mostFrequent(values) {
 
 /**
  * The buyer's real credit balance, or null when the record does not hold one.
- * Callers must not substitute a number for null.
+ * Callers must not substitute a number for null unless an account exists on record.
  */
 function knownCreditBalance(buyer) {
-  return numberOrNull(buyer.creditBalance);
+  if (!buyer) return null;
+  const balance = numberOrNull(buyer.creditBalance) ??
+                  numberOrNull(buyer.remainingFreeRFQs) ??
+                  numberOrNull(buyer.remainingFreeCredits) ??
+                  numberOrNull(buyer.available_credits) ??
+                  numberOrNull(buyer.credit_balance) ??
+                  numberOrNull(buyer.freeRFQsRemaining);
+  return balance;
+}
+
+/**
+ * Robustly resolve a buyer account from memory, database, or buyer profile.
+ * Supports resolution by account id, user id, buyer id, organization id, or corporate email.
+ */
+async function resolveBuyerAccount(identifier, req = null) {
+  if (!identifier) return null;
+  const domainQueries = require('../db/domainQueries');
+  const target = String(identifier).trim().toLowerCase();
+
+  // 1. Check database first when storage is configured so cross-isolate mutations are never shadowed by stale isolate memory
+  let buyer = null;
+  if (pool.hasStorage()) {
+    try {
+      buyer = await domainQueries.getBuyerAccountByIdFromDB(identifier);
+      if (!buyer && identifier.includes('@')) {
+        buyer = await domainQueries.getBuyerAccountByEmailFromDB(identifier);
+      }
+      if (!buyer) {
+        const queryRes = await pool.query(
+          `SELECT raw FROM buyer_accounts 
+           WHERE raw->>'userId' = $1 
+              OR raw->>'user_id' = $1 
+              OR raw->>'buyerId' = $1 
+              OR raw->>'organizationId' = $1 
+              OR lower(corporate_email) = lower($1)
+           ORDER BY is_active DESC, updated_at DESC LIMIT 1`,
+          [identifier],
+          { d1: true }
+        );
+        if (queryRes?.rows?.[0]?.raw) {
+          const raw = queryRes.rows[0].raw;
+          buyer = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        }
+      }
+    } catch {
+      buyer = null;
+    }
+  }
+
+  // 2. Fallback to in-memory store when storage is not configured or row wasn't matched directly
+  if (!buyer) {
+    buyer = storeService.getBuyerAccounts().find(
+      (b) => b.id === identifier ||
+             b.userId === identifier ||
+             b.buyerId === identifier ||
+             b.organizationId === identifier ||
+             (b.corporateEmail && b.corporateEmail.toLowerCase() === target)
+    );
+  }
+
+  // 3. If buyer role session and still not found, try session email
+  if (!buyer && req && req.user && req.user.role === 'buyer' && req.user.email) {
+    buyer = await storeService.getBuyerAccountByEmail(req.user.email);
+  }
+
+  // 4. Check buyer profile identity tables if still not found
+  if (!buyer && pool.hasStorage()) {
+    try {
+      const buyerProfileQueries = require('../db/buyerProfileQueries');
+      const lookup = await buyerProfileQueries.findProfileByIdentifier({
+        userId: identifier,
+        email: identifier.includes('@') ? identifier : undefined,
+        organizationId: identifier,
+      });
+      if (lookup?.found && lookup.profile) {
+        const p = lookup.profile;
+        const mirrorUser = {
+          role: 'buyer',
+          email: p.contactEmail || p.email,
+          sub: p.userId || identifier,
+          id: p.userId || identifier,
+          orgId: p.organizationId,
+        };
+        buyer = await storeService.ensureBuyerAccountForUser(mirrorUser);
+      }
+    } catch (err) {
+      logger.warn('Buyer profile fallback lookup failed in resolveBuyerAccount', { error: err.message, identifier }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+  }
+
+  // Sync into memory cache if found
+  if (buyer) {
+    const idx = storeService.buyerAccounts.findIndex((a) => a.id === buyer.id);
+    if (idx >= 0) {
+      storeService.buyerAccounts[idx] = buyer;
+    } else {
+      storeService.buyerAccounts.unshift(buyer);
+    }
+  }
+
+  return buyer || null;
 }
 
 /**
@@ -121,9 +225,10 @@ function assertBuyerAccountRole(req, res) {
 
 async function assertBuyerAccountAccess(req, res, id) {
   if (!assertBuyerAccountRole(req, res)) return false;
+  const domainQueries = require('../db/domainQueries');
   const buyer = pool.hasStorage()
-    ? await domainQueries.getBuyerAccountByIdFromDB(id)
-    : storeService.getBuyerAccounts().find((account) => account.id === id) || null;
+    ? (await domainQueries.getBuyerAccountByIdFromDB(id) || await resolveBuyerAccount(id, req))
+    : await resolveBuyerAccount(id, req);
   if (!buyer) {
     res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     return false;
@@ -222,8 +327,55 @@ async function createBuyerAccount(req, res, next) {
       logger.warn('Failed to create buyer account: Missing organizationName or corporateEmail', { body }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(400).json({ success: false, error: 'organizationName and corporateEmail are required.' });
     }
+    const normalizedEmail = String(body.corporateEmail).trim().toLowerCase();
+    const sessionUserId = req.user && (req.user.sub || req.user.id);
+    const sessionOrgId = req.user && (req.user.orgId || req.user.organizationId);
+    const sessionEmail = String((req.user && req.user.email) || '').trim().toLowerCase();
+    const isSelfRegistrationMirrorSync = !body.id && Boolean(sessionUserId) && sessionEmail === normalizedEmail;
+    const existing = isSelfRegistrationMirrorSync
+      ? await storeService.getBuyerAccountByEmail(normalizedEmail)
+      : null;
+    if (existing) {
+      const sanitizedUpdates = sanitizeBuyerAccountUpdates(body, res);
+      if (!sanitizedUpdates) return;
+      logger.info(`Merging buyer account update into existing mirror: ${body.organizationName}`, { id: existing.id, email: normalizedEmail }, 'BUYER_ACCOUNT_CONTROLLER');
+      const mergePayload = {
+        ...sanitizedUpdates,
+        userId: existing.userId || sessionUserId || undefined,
+        organizationId: sanitizedUpdates.organizationId || existing.organizationId || sessionOrgId || null,
+      };
+      const merged =
+        (existing.id ? await storeService.updateBuyerAccountDurably(existing.id, mergePayload) : null) ||
+        (await storeService.updateBuyerAccountDurably(normalizedEmail, mergePayload));
+      if (merged) {
+        await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
+        return res.status(201).json({ success: true, data: merged });
+      }
+    }
     logger.info(`Creating new buyer account: ${body.organizationName}`, { organizationName: body.organizationName, email: body.corporateEmail }, 'BUYER_ACCOUNT_CONTROLLER');
-    const created = await storeService.addBuyerAccountDurably(body);
+    const createPayload = isSelfRegistrationMirrorSync
+      ? {
+          ...body,
+          userId: body.userId || sessionUserId,
+          organizationId: body.organizationId || sessionOrgId || null,
+        }
+      : body;
+    let created;
+    try {
+      created = await storeService.addBuyerAccountDurably(createPayload);
+    } catch (createErr) {
+      if (createErr?.statusCode === 409 && isSelfRegistrationMirrorSync) {
+        const sanitizedUpdates = sanitizeBuyerAccountUpdates(createPayload, res);
+        if (!sanitizedUpdates) return;
+        const merged = await storeService.updateBuyerAccountDurably(normalizedEmail, sanitizedUpdates);
+        if (merged) {
+          await syncOrganizationFromBuyerAccount(merged, sessionUserId, sessionEmail || normalizedEmail);
+          return res.status(201).json({ success: true, data: merged });
+        }
+      }
+      throw createErr;
+    }
+    await syncOrganizationFromBuyerAccount(created, sessionUserId, sessionEmail || normalizedEmail);
     res.status(201).json({ success: true, data: created });
   } catch (err) {
     logger.error('Error creating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -250,6 +402,49 @@ function sanitizeBuyerAccountUpdates(updates, res) {
   return null;
 }
 
+/**
+ * Keep the canonical `organization` row aligned whenever statutory tax or
+ * address fields are saved through the buyer-account APIs.
+ */
+async function syncOrganizationFromBuyerAccount(account, userId = null, actorEmail = null) {
+  const organizationId = account && account.organizationId;
+  if (!pool.hasStorage() || !organizationId || typeof buyerProfileQueries.updateProfile !== 'function') {
+    return;
+  }
+  const patch = {};
+  if (account.organizationName) patch.companyName = account.organizationName;
+  if (account.brandName) patch.brandName = account.brandName;
+  if (account.contactPerson) patch.contactName = account.contactPerson;
+  if (account.contactDesignation) patch.contactDesignation = account.contactDesignation;
+  const street = account.street || account.streetAddress || account.address1 || account.address || account.registeredAddress || '';
+  if (street) patch.street = street;
+  if (account.city) patch.city = account.city;
+  if (account.state) patch.state = account.state;
+  const pincode = account.pincode || account.zip_code || account.zipCode || '';
+  if (pincode) patch.pincode = pincode;
+  if (account.country) patch.country = account.country;
+  const gstin = (account.gstin || account.gstNumber || account.gst || '').trim().toUpperCase();
+  if (gstin) patch.gstNumber = gstin;
+  const pan = (account.pan || account.panNumber || '').trim().toUpperCase() || derivePanFromGstin(gstin);
+  if (pan) patch.panNumber = pan;
+  if (Object.keys(patch).length === 0) return;
+
+  try {
+    await buyerProfileQueries.updateProfile({
+      organizationId,
+      userId: userId || account.userId || null,
+      patch,
+      actor: actorEmail || account.corporateEmail || 'buyer-account-sync',
+    });
+  } catch (err) {
+    logger.warn('Failed to synchronize organization profile from buyer account write', {
+      error: err.message,
+      organizationId,
+      accountId: account.id,
+    }, 'BUYER_ACCOUNT_CONTROLLER');
+  }
+}
+
 async function updateBuyerAccount(req, res, next) {
   try {
     const { id } = req.params;
@@ -262,6 +457,7 @@ async function updateBuyerAccount(req, res, next) {
       logger.warn(`Buyer account not found for update: ${id}`, { id }, 'BUYER_ACCOUNT_CONTROLLER');
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
+    await syncOrganizationFromBuyerAccount(updated, req.user && (req.user.sub || req.user.id), req.user && req.user.email);
     res.json({ success: true, data: updated });
   } catch (err) {
     logger.error('Error updating buyer account', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -517,6 +713,14 @@ async function ingestHistoricalData(req, res, next) {
       (await storeService.ensureBuyerAccountForUser?.(req.user)) ||
       (await storeService.getBuyerAccountByEmail(req.user.email));
     const result = await storeService.processHistoricalPurchaseData(period, vendorRecords || [], requestingBuyerAccount);
+    if (result?.success !== false && (result?.importedCount > 0 || (Array.isArray(vendorRecords) && vendorRecords.length > 0))) {
+      const organizationId = req.user?.orgId || req.user?.organizationId || requestingBuyerAccount?.organizationId || null;
+      if (organizationId && typeof vendorIngestionQueries.markVendorMasterUploaded === 'function') {
+        await vendorIngestionQueries.markVendorMasterUploaded(organizationId).catch((markErr) => {
+          logger.warn('Failed to mark organization vendorMasterUploaded after historical ingestion', { error: markErr, organizationId }, 'BUYER_ACCOUNT_CONTROLLER');
+        });
+      }
+    }
     res.json(result);
   } catch (err) {
     logger.error('Error ingesting historical purchase data', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -611,10 +815,7 @@ async function getCreditHistory(req, res, next) {
     const { id } = req.params;
     const domainQueries = require('../db/domainQueries');
 
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && req.user.role === 'buyer') {
-      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-    }
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -624,7 +825,102 @@ async function getCreditHistory(req, res, next) {
     const sourcingMode = buyer.sourcingMode || null;
     const subscriptionPlan = buyer.subscriptionPlan || null;
 
-    const transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(buyer.id, 100)) || [];
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
+    let transactions = [];
+    try {
+      transactions = (await domainQueries.getBuyerCreditTransactionsFromDB(candidateIds, 200)) || [];
+    } catch (dbErr) {
+      logger.warn('[buyerAccountController] Failed to fetch buyer credit transactions from DB:', { error: dbErr?.message || dbErr }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+
+    // Reconcile buyer's RFQs:
+    // If RFQs exist that do not have a recorded credit transaction, synthesize and persist them
+    try {
+      const rfqs = (await domainQueries.getRFQsFromDB(buyer.id, 1000)) || [];
+      const existingRfqIds = new Set(
+        transactions.map((t) => t.rfq_id || t.rfqId).filter(Boolean)
+      );
+
+      const missingRfqs = rfqs.filter((r) => r && r.id && !existingRfqIds.has(r.id));
+      if (missingRfqs.length > 0) {
+        for (const rfq of missingRfqs) {
+          const rfqDate = rfq.createdAt || rfq.created_at || new Date().toISOString();
+          const rfqTime = new Date(rfqDate).getTime();
+          const trialStart = buyer.trialStartDate ? new Date(buyer.trialStartDate).getTime() : 0;
+          const trialEnd = buyer.trialEndDate ? new Date(buyer.trialEndDate).getTime() : 0;
+          const isDuringTrial = trialEnd > 0 && rfqTime >= trialStart && rfqTime <= trialEnd;
+          if (isDuringTrial) {
+            continue;
+          }
+          const syntheticTx = {
+            id: `ctx-rfq-${rfq.id}`,
+            buyer_id: buyer.id,
+            rfq_id: rfq.id,
+            transaction_type: 'Credits Consumed',
+            credit_source: rfq.sourcingMode ? String(rfq.sourcingMode).toUpperCase() : 'MODE_1',
+            credits_added: 0,
+            credits_consumed: 1,
+            previous_balance: remainingFree || 0,
+            updated_balance: remainingFree || 0,
+            status: 'COMPLETED',
+            description: `Credit consumed for RFQ ${rfq.rfqNumber || rfq.id}: ${rfq.title || rfq.category || 'Requisition'}`,
+            idempotency_key: `rfq-credit-reconcile-${buyer.id}-${rfq.id}`,
+            created_at: rfqDate,
+          };
+          transactions.push(syntheticTx);
+
+          if (pool.hasStorage()) {
+            pool.query(
+              `INSERT INTO buyer_credit_transactions (
+                 id, buyer_id, rfq_id, transaction_type, credit_source, credits_added, credits_consumed,
+                 previous_balance, updated_balance, status, description, idempotency_key, created_at
+               ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+               ON CONFLICT (id) DO NOTHING`,
+              [
+                syntheticTx.id,
+                syntheticTx.buyer_id,
+                syntheticTx.rfq_id,
+                syntheticTx.transaction_type,
+                syntheticTx.credit_source,
+                0,
+                1,
+                syntheticTx.previous_balance,
+                syntheticTx.updated_balance,
+                syntheticTx.status,
+                syntheticTx.description,
+                syntheticTx.idempotency_key,
+                syntheticTx.created_at,
+              ],
+              {
+                d1: true,
+                d1Text: `INSERT OR IGNORE INTO buyer_credit_transactions (
+                  id, buyer_id, rfq_id, transaction_type, credit_source, credits_added, credits_consumed,
+                  previous_balance, updated_balance, status, description, idempotency_key, created_at
+                ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+              }
+            ).catch((err) => {
+              logger.warn('[buyerAccountController] Failed to backfill credit transaction for RFQ:', { rfqId: rfq.id, error: err?.message }, 'BUYER_ACCOUNT_CONTROLLER');
+            });
+          }
+        }
+      }
+    } catch (rfqErr) {
+      logger.warn('[buyerAccountController] Failed to reconcile RFQs for credit history:', { error: rfqErr?.message || rfqErr }, 'BUYER_ACCOUNT_CONTROLLER');
+    }
+
+    transactions.sort((a, b) => {
+      const dateA = new Date(a.created_at || a.createdAt || 0).getTime();
+      const dateB = new Date(b.created_at || b.createdAt || 0).getTime();
+      return dateB - dateA;
+    });
 
     let totalAllocated = 0;
     let totalConsumed = 0;
@@ -633,8 +929,10 @@ async function getCreditHistory(req, res, next) {
 
     for (const t of transactions) {
       const added = Number(t.credits_added || t.creditsAdded || 0);
-      const consumed = Number(t.credits_consumed || t.creditsConsumed || 0);
+      const rawConsumed = Number(t.credits_consumed || t.creditsConsumed || 0);
       const type = t.transaction_type || t.transactionType || '';
+      const isRfqConsumption = type.includes('Consumed') || type.includes('RFQ_CREATE');
+      const consumed = rawConsumed > 0 ? rawConsumed : (isRfqConsumption ? 1 : 0);
 
       if (type.includes('Allocated') || type.includes('Addition')) {
         totalAllocated += added;
@@ -646,10 +944,31 @@ async function getCreditHistory(req, res, next) {
       if (type.includes('Adjustment') || type.includes('Refund')) {
         adjustedCredits += added;
       }
-      if (consumed > 0) {
+      if (consumed > 0 || isRfqConsumption) {
         totalConsumed += consumed;
       }
     }
+
+    if (transactions.length > 0 && remainingFree !== null && totalAllocated < remainingFree + totalConsumed) {
+      totalAllocated = remainingFree + totalConsumed;
+    }
+
+    if (pool.hasStorage()) {
+      pool.query(
+        `UPDATE buyer_credit_transactions SET credits_consumed = 1 WHERE (transaction_type = 'RFQ_CREATE' OR transaction_type = 'Credits Consumed') AND credits_consumed = 0 AND buyer_id = $1`,
+        [buyer.id],
+        {
+          d1: true,
+          d1Text: `UPDATE buyer_credit_transactions SET credits_consumed = 1 WHERE (transaction_type = 'RFQ_CREATE' OR transaction_type = 'Credits Consumed') AND credits_consumed = 0 AND buyer_id = $1`,
+        }
+      ).catch(() => {});
+    }
+
+    const isTrial = Boolean(
+      buyer.trialEndDate &&
+      new Date(buyer.trialEndDate).getTime() > Date.now() &&
+      buyer.trialActive !== false
+    );
 
     const summary = {
       totalCreditsAllocated: totalAllocated,
@@ -659,23 +978,33 @@ async function getCreditHistory(req, res, next) {
       adjustedCredits,
       currentEntitlementMode: sourcingMode,
       currentSubscriptionPlan: subscriptionPlan,
+      trialActive: isTrial,
+      trialDays: buyer.trialDays || null,
+      trialStartDate: buyer.trialStartDate || null,
+      trialEndDate: buyer.trialEndDate || null,
     };
 
-    const formattedTransactions = transactions.map((t) => ({
-      id: t.id,
-      transactionId: t.id,
-      transactionDate: t.created_at || t.createdAt,
-      transactionType: t.transaction_type || t.transactionType,
-      creditSource: t.credit_source || t.creditSource || null,
-      creditsAdded: numberOrNull(t.credits_added ?? t.creditsAdded),
-      creditsConsumed: numberOrNull(t.credits_consumed ?? t.creditsConsumed),
-      previousBalance: numberOrNull(t.previous_balance ?? t.previousBalance),
-      updatedBalance: numberOrNull(t.updated_balance ?? t.updatedBalance),
-      relatedRfqId: t.rfq_id || t.rfqId || null,
-      paymentReference: t.payment_reference || t.paymentReference || null,
-      status: t.status || null,
-      description: t.description || null,
-    }));
+    const formattedTransactions = transactions.map((t) => {
+      const type = t.transaction_type || t.transactionType || '';
+      const rawConsumed = numberOrNull(t.credits_consumed ?? t.creditsConsumed);
+      const isRfqConsumption = type.includes('Consumed') || type.includes('RFQ_CREATE');
+      const creditsConsumed = rawConsumed !== null && rawConsumed > 0 ? rawConsumed : (isRfqConsumption ? 1 : (rawConsumed ?? 0));
+      return {
+        id: t.id,
+        transactionId: t.id,
+        transactionDate: t.created_at || t.createdAt,
+        transactionType: t.transaction_type || t.transactionType,
+        creditSource: t.credit_source || t.creditSource || null,
+        creditsAdded: numberOrNull(t.credits_added ?? t.creditsAdded),
+        creditsConsumed,
+        previousBalance: numberOrNull(t.previous_balance ?? t.previousBalance),
+        updatedBalance: numberOrNull(t.updated_balance ?? t.updatedBalance),
+        relatedRfqId: t.rfq_id || t.rfqId || null,
+        paymentReference: t.payment_reference || t.paymentReference || null,
+        status: t.status || null,
+        description: t.description || null,
+      };
+    });
 
     return res.json({
       success: true,
@@ -711,7 +1040,7 @@ async function addCredit(req, res, next) {
     // The guard above guarantees an authenticated caller, so the actor is the session.
     const actorEmail = req.user.email;
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -719,7 +1048,7 @@ async function addCredit(req, res, next) {
     const txId = `ctx-add-${crypto.randomBytes(6).toString('hex')}`;
     const tx = {
       id: txId,
-      buyerId: id,
+      buyerId: buyer.id,
       rfqId: null,
       transactionType: 'Admin Credit Addition',
       creditSource: source || null,
@@ -770,7 +1099,7 @@ async function requestCreditApproval(req, res, next) {
   try {
     if (!assertCategoryManagerOrAdmin(req, res)) return;
     const { id } = req.params;
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account "${id}" not found.` });
     }
@@ -787,66 +1116,233 @@ async function requestCreditApproval(req, res, next) {
       });
     }
 
-    const { amount, reason, approverName, idempotencyKey } = validation.sanitizedData;
+    const {
+      amount,
+      reason,
+      approverName,
+      approverId,
+      initiatorName,
+      initiatorId,
+      startDate,
+      endDate,
+      paymentDate,
+      paymentType,
+      transactionId,
+      buyerSourceMode,
+      paymentAmount,
+      proofFileName,
+      proofFileUrl,
+      proofFileType,
+      proofFileSize,
+      idempotencyKey,
+      requestType = 'Buyer Credit Addition',
+      discountPercentage,
+      durationDays,
+      paymentReference,
+      selectedMode,
+      billingDuration,
+      originalPrice,
+      discountAmount,
+      remainingAmount,
+      gstAmount,
+      finalPayableAmount,
+    } = validation.sanitizedData;
 
     // The maker is the signed-in account, not a name typed into the form.
     const makerEmail = req.user.email;
     const makerRole = req.user.role;
     const makerName = req.user.fullName || req.user.name || req.user.email;
+    const makerId = req.user.uuid || req.user.id || null;
 
     // The approver decides against the balance this request is made on. A buyer
     // with no balance on record is refused, not shown an assumed balance.
     const balance = knownCreditBalance(buyer);
-    if (balance === null) {
+    if (balance === null && (requestType === 'Buyer Credit Addition' || requestType === 'Buyer Credit Deletion')) {
       return res.status(422).json({
         success: false,
         error: `The credit balance for ${buyer.organizationName} is not on record, so the approver cannot see the balance this request is made against. Refresh the buyer account and try again.`,
       });
     }
 
+    const numAmount = typeof amount === 'number' && Number.isFinite(amount) ? amount : 0;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      if (numAmount <= 0) {
+        return res.status(400).json({
+          success: false,
+          error: 'A positive credit amount is required for Buyer Credit Deletion.',
+        });
+      }
+      if (balance !== null && numAmount > balance) {
+        return res.status(400).json({
+          success: false,
+          error: `Cannot delete ${numAmount} credits: ${buyer.organizationName} only has ${balance} credits available.`,
+        });
+      }
+    }
+
+    let taskCategory = 'CREDIT_MANAGEMENT';
+    let taskType = 'Add Credits';
+    let title = `Credit Allocation Request: ${numAmount} Credits for ${buyer.organizationName}`;
+    let description = reason || `Requested credit top-up for ${buyer.organizationName}`;
+    let valueImpact = `${numAmount} RFQ Credits (${buyer.organizationName})`;
+    let quantity = numAmount || 1;
+    let effectiveAmount = numAmount;
+
+    if (requestType === 'Buyer Credit Deletion') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Credit Deletion';
+      title = `Credit Deduction Request: ${numAmount} Credits from ${buyer.organizationName}`;
+      description = reason || `Requested credit deduction for ${buyer.organizationName}`;
+      valueImpact = `-${numAmount} RFQ Credits (${buyer.organizationName})`;
+      quantity = numAmount;
+      effectiveAmount = numAmount;
+    } else if (requestType === 'Discounts') {
+      taskCategory = 'CREDIT_MANAGEMENT';
+      taskType = 'Discounts';
+      const pct = discountPercentage !== undefined ? discountPercentage : (amount || 0);
+      title = `Discount Approval Request: ${pct}% for ${buyer.organizationName}`;
+      description = reason || `Requested ${pct}% discount for ${buyer.organizationName}`;
+      valueImpact = `${pct}% Subscription Discount (${buyer.organizationName})`;
+      effectiveAmount = pct;
+      quantity = 1;
+    } else if (requestType === 'Trial Periods') {
+      taskCategory = 'ONBOARDING';
+      taskType = 'Trial Periods';
+      const days = durationDays || amount || 30;
+      title = `Trial Period Request: ${days} Days for ${buyer.organizationName}`;
+      description = reason || `Requested ${days} days trial extension for ${buyer.organizationName}`;
+      valueImpact = `${days} Days Free Trial (${buyer.organizationName})`;
+      effectiveAmount = days;
+      quantity = 1;
+    } else if (requestType === 'Offline Payments') {
+      taskCategory = 'PAYMENT';
+      taskType = 'Offline Payments';
+      effectiveAmount = paymentAmount !== undefined ? paymentAmount : numAmount;
+      const ref = transactionId || paymentReference || (paymentType === 'Cash' ? 'Cash' : '');
+      const mode = buyerSourceMode || selectedMode || 'Mode 2';
+      title = `Offline Payment Verification: ₹${effectiveAmount.toLocaleString('en-IN')} for ${buyer.organizationName}`;
+      description = reason || `Offline payment verification (${paymentReference ? `Ref: ${paymentReference}` : (ref ? `Ref: ${ref}` : 'Offline')}) for ${buyer.organizationName}`;
+      valueImpact = `₹${effectiveAmount.toLocaleString('en-IN')} (${paymentReference ? `Ref: ${paymentReference}` : (paymentType ? `${paymentType}${ref && paymentType !== 'Cash' ? ` • ${ref}` : ''}` : 'Offline Payment')})`;
+      quantity = 1;
+    }
+
+    const discountPct = discountPercentage !== undefined ? discountPercentage : (requestType === 'Discounts' ? (amount || 0) : undefined);
+
+    const taskAttachments = [];
+    if (proofFileName) {
+      taskAttachments.push({
+        name: proofFileName,
+        url: proofFileUrl || '',
+        size: proofFileSize || 0,
+        type: proofFileType || 'image/jpeg',
+      });
+    }
+
+    const isCreditRequest = ['ADD_CREDIT', 'DELETE_CREDIT'].includes(taskType) ||
+      ['Add Credits', 'Delete Credits', 'Buyer Credit Addition', 'Buyer Credit Deletion'].includes(taskCategory) ||
+      ['Buyer Credit Addition', 'Buyer Credit Deletion'].includes(requestType) ||
+      String(requestType || '').toLowerCase().includes('credit');
+
+    const taskAssignedUserId = isCreditRequest ? (makerId || null) : (approverId || null);
+    const taskAssignedName = isCreditRequest ? (makerName || 'Requester') : approverName;
+    const taskAssignedTeam = isCreditRequest ? 'Requester Tracking' : 'Management Approvers';
+
     const task = await internalTaskQueries.createInternalTaskWithApproval(
       {
-        taskCategory: 'CREDIT_MANAGEMENT',
-        taskType: 'Add Credits',
-        title: `Credit Allocation Request: ${amount} Credits for ${buyer.organizationName}`,
-        description: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        taskCategory,
+        taskType,
+        title,
+        description,
         priority: 'High',
         status: 'Pending Approval',
         approvalStatus: 'PENDING',
-        assignedToName: approverName,
-        assignedTeam: 'Management Approvers',
+        assignedToUserId: taskAssignedUserId,
+        assignedToName: taskAssignedName,
+        assignedTeam: taskAssignedTeam,
+        createdByName: makerName,
+        createdByUserId: makerId || null,
         creditAccountType: 'buyer',
         creditAccountId: buyer.id,
         creditAccountName: buyer.organizationName,
-        creditQuantity: amount,
+        creditQuantity: effectiveAmount,
         creditReason: reason,
-        notes: `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
+        notes: isCreditRequest
+          ? `Initiated By: ${makerName}. Routed to Admin (${approverName}) for review and approval.`
+          : `Initiated By: ${makerName}. Requires review and approval by ${approverName}.`,
         relatedEntityType: 'BUYER',
         relatedEntityId: buyer.id,
         relatedEntityLabel: buyer.organizationName,
+        attachments: taskAttachments,
+        raw: {
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          assigned_approver: approverName,
+          assigned_approver_id: approverId,
+        },
       },
       {
+        uuid: makerId,
         fullName: makerName,
         name: makerName,
         email: makerEmail,
         role: makerRole,
       },
       {
-        module: 'Buyer Credit Addition',
+        module: requestType,
         idempotencyKey,
-        request_type: 'Buyer Credit Addition',
+        request_type: requestType,
         project: buyer.organizationName,
         applicant_name: buyer.organizationName,
         applicant_email: buyer.corporateEmail || '',
-        value_impact: `${amount} RFQ Credits (${buyer.organizationName})`,
-        amount,
-        quantity: amount,
+        value_impact: valueImpact,
+        amount: effectiveAmount,
+        quantity,
         available_balance: balance,
         maker_name: makerName,
         maker_role: makerRole,
         assigned_approver: approverName,
         status: 'Pending',
-        details: reason || `Requested credit top-up for ${buyer.organizationName}`,
+        details: requestType === 'Offline Payments'
+          ? [
+              reason,
+              `[${buyerSourceMode || selectedMode || 'Mode 2'} • ${paymentType || 'Offline'}${paymentType !== 'Cash' && (transactionId || paymentReference) ? ` • Txn ID: ${transactionId || paymentReference}` : ''}${paymentDate ? ` • Date: ${paymentDate}` : ''}${proofFileName ? ` • Proof: ${proofFileName}` : ''}]`,
+            ].filter(Boolean).join(' ')
+          : requestType === 'Trial Periods'
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${durationDays || effectiveAmount} Days | ${startDate || ''} to ${endDate || ''}]`,
+            ].filter(Boolean).join(' ')
+          : originalPrice !== undefined
+          ? [
+              reason,
+              `[${selectedMode || 'Mode 1'} • ${billingDuration || '12 Months'} | Original: ₹${Number(originalPrice).toLocaleString('en-IN')}, Discount: ${discountPct}%, Discount Amount: -₹${Number(discountAmount || 0).toLocaleString('en-IN')}, Remaining: ₹${Number(remainingAmount || 0).toLocaleString('en-IN')}, GST: +₹${Number(gstAmount || 0).toLocaleString('en-IN')}, Final: ₹${Number(finalPayableAmount || 0).toLocaleString('en-IN')}]`,
+            ].filter(Boolean).join(' ')
+          : (reason || description),
+        attachments: taskAttachments,
         buyer_id: buyer.id,
         history: [
           {
@@ -854,25 +1350,74 @@ async function requestCreditApproval(req, res, next) {
             actor_name: makerName,
             actor_role: makerRole,
             timestamp: new Date().toISOString(),
-            remarks: reason || `Submitted for credit approval by ${approverName}.`,
+            remarks: reason || (requestType === 'Buyer Credit Addition'
+              ? `Submitted for credit approval by ${approverName}.`
+              : `Submitted for ${requestType} approval by ${approverName}.`),
           },
         ],
         raw: {
           buyer_id: buyer.id,
-          amount,
-          quantity: amount,
+          amount: effectiveAmount,
+          quantity,
           available_balance: balance,
           assigned_approver: approverName,
-          request_type: 'Buyer Credit Addition',
+          assigned_approver_id: approverId,
+          initiator_name: makerName,
+          initiator_id: makerId,
+          request_type: requestType,
+          discount_percentage: discountPct,
+          duration_days: durationDays,
+          trial_days: durationDays,
+          start_date: startDate,
+          end_date: endDate,
+          payment_reference: paymentReference || transactionId,
+          payment_date: paymentDate,
+          payment_type: paymentType,
+          transaction_id: transactionId || paymentReference,
+          buyer_source_mode: buyerSourceMode || selectedMode,
+          payment_amount: effectiveAmount,
+          proof_file_name: proofFileName,
+          proof_file_url: proofFileUrl,
+          proof_file_type: proofFileType,
+          proof_file_size: proofFileSize,
+          selected_mode: selectedMode,
+          billing_duration: billingDuration,
+          original_price: originalPrice,
+          discount_amount: discountAmount,
+          remaining_amount: remainingAmount,
+          gst_amount: gstAmount,
+          final_payable_amount: finalPayableAmount,
         },
       }
     );
 
-    logger.info(`Credit approval request created: ${task.task_number} (${amount} credits for ${buyer.organizationName}) assigned to ${approverName}`, { buyerId: id, amount, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
+    if (proofFileName && proofFileUrl) {
+      try {
+        const accountDocumentQueries = require('../db/accountDocumentQueries');
+        await accountDocumentQueries.createAccountDocument(
+          {
+            accountType: 'buyer',
+            accountId: buyer.id,
+            documentName: `Offline Payment Proof - ${proofFileName}`,
+            category: 'Financial Documents',
+            description: `Payment proof uploaded for Offline Payment approval (${paymentType || 'Offline'}, ₹${effectiveAmount})`,
+            fileName: proofFileName,
+            fileUrl: proofFileUrl,
+            mimeType: proofFileType || 'image/jpeg',
+            fileSize: proofFileSize || 0,
+          },
+          { name: makerName, email: makerEmail, role: makerRole, uuid: makerId }
+        );
+      } catch (docErr) {
+        logger.warn('Could not auto-register offline payment document in vault', { error: docErr?.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
+    logger.info(`Approval request created for ${requestType}: ${task.task_number} (${valueImpact}) assigned to ${approverName}`, { buyerId: id, requestType, approverName }, 'BUYER_ACCOUNT_CONTROLLER');
 
     return res.status(201).json({
       success: true,
-      message: `Credit request submitted for approval by ${approverName}. Status: Pending Approval.`,
+      message: `${requestType} request submitted for approval by ${approverName}. Status: Pending Approval.`,
       task,
     });
   } catch (err) {
@@ -898,14 +1443,14 @@ async function updateSupportedCategories(req, res, next) {
       return res.status(400).json({ success: false, error: 'categories must be an array of strings.' });
     }
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    const buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
     const cleanCategories = Array.from(new Set(categories.map((c) => String(c).trim()).filter(Boolean)));
-    const updated = await storeService.updateBuyerAccountDurably(id, {
+    const updated = await storeService.updateBuyerAccountDurably(buyer.id, {
       supportedMajorCategories: cleanCategories,
     });
 
@@ -931,13 +1476,30 @@ async function getBuyerCommunications(req, res, next) {
     const { id } = req.params;
     const paymentDuesQueries = require('../db/paymentDuesQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    const comms = await paymentDuesQueries.getCommunicationHistory(id);
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+    const emails = [buyer.corporateEmail, buyer.email, buyer.contactEmail].filter(Boolean);
+    const phones = [buyer.phone, buyer.mobileNumber, buyer.contactPhone].filter(Boolean);
+
+    let comms = [];
+    try {
+      comms = (await paymentDuesQueries.getCommunicationHistory(candidateIds, { emails, phones })) || [];
+    } catch (dbErr) {
+      logger.warn('Failed to load communication history from database, returning empty list', { id, error: dbErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      comms = [];
+    }
     return res.json({ success: true, data: comms });
   } catch (err) {
     logger.error('Error fetching buyer communications', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -967,7 +1529,7 @@ async function recordBuyerCommunication(req, res, next) {
     const paymentDuesQueries = require('../db/paymentDuesQueries');
     const internalTaskQueries = require('../db/internalTaskQueries');
 
-    const buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
@@ -1001,6 +1563,10 @@ async function recordBuyerCommunication(req, res, next) {
     const shouldDispatchSms = isStaff && normalizedChannel === 'SMS' && Boolean(buyerPhone);
     const deliveryPending = shouldDispatchEmail || shouldDispatchSms;
 
+    const scenarioId = req.body?.scenarioId || req.body?.metadata?.scenarioId || req.body?.metadata?.templateType;
+    const { resolveStandardizedCommunicationCategory } = require('../config/constants');
+    const canonicalCategory = resolveStandardizedCommunicationCategory(scenarioId || req.body?.category || req.body?.metadata?.category);
+
     const record = await paymentDuesQueries.recordCommunication({
       accountId: id,
       accountType: 'buyer',
@@ -1014,6 +1580,9 @@ async function recordBuyerCommunication(req, res, next) {
       notes: commNotes || null,
       metadata: {
         ...(metadata || {}),
+        category: canonicalCategory,
+        templateType: scenarioId || canonicalCategory,
+        scenarioId: scenarioId || 'followup_new',
         callOutcome: callOutcome || null,
         duration: duration || null,
         nextFollowupDate: nextFollowupDate || null,
@@ -1168,6 +1737,14 @@ async function recordBuyerCommunication(req, res, next) {
       }
     }
 
+    if (scenarioId) {
+      try {
+        await internalTaskQueries.autoCompleteTasksForScenario('BUYER', id, scenarioId, req.user);
+      } catch (autoErr) {
+        logger.warn('Failed to auto-complete tasks for buyer scenario', { error: autoErr.message }, 'BUYER_ACCOUNT_CONTROLLER');
+      }
+    }
+
     return res.status(201).json({ success: true, data: deliveryRecord, completedTask, followupTask });
   } catch (err) {
     logger.error('Error recording buyer communication', err, 'BUYER_ACCOUNT_CONTROLLER');
@@ -1179,19 +1756,25 @@ async function getBuyerPaymentHistory(req, res, next) {
   try {
     if (!assertCategoryManagerOrBuyer(req, res)) return;
     const { id } = req.params;
-    let buyer = storeService.getBuyerAccounts().find((b) => b.id === id);
-    if (!buyer && req.user.role === 'buyer') {
-      buyer = await storeService.getBuyerAccountByEmail(req.user.email);
-    }
+    let buyer = await resolveBuyerAccount(id, req);
     if (!buyer) {
       return res.status(404).json({ success: false, error: `Buyer account ${id} not found.` });
     }
     if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
 
-    let links = await storeService.getPaymentLinksForBuyer(buyer.id);
+    const candidateIds = [
+      buyer.id,
+      buyer.userId,
+      buyer.buyerId,
+      buyer.organizationId,
+      id,
+      req.params?.id,
+    ].filter(Boolean);
+
+    let links = await storeService.getPaymentLinksForBuyer(candidateIds);
     const reconciled = await zohoReconciliationService.reconcilePendingLinks(links);
     if (reconciled > 0) {
-      links = await storeService.getPaymentLinksForBuyer(buyer.id);
+      links = await storeService.getPaymentLinksForBuyer(candidateIds);
     }
 
     const payments = [];
@@ -1267,6 +1850,95 @@ function getSubscriptionPricing(req, res) {
   }
 }
 
+async function getBuyerUploadedVendors(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrBuyer(req, res)) return;
+    const { id } = req.params;
+
+    let buyer = await resolveBuyerAccount(id, req);
+    if (!buyer) {
+      return res.status(404).json({ success: false, error: formatMessage(DOSSIER_MESSAGES.BUYER_NOT_FOUND, { id }) });
+    }
+    if (!assertCategoryManagerOrBuyer(req, res, buyer)) return;
+
+    let dbVendors = [];
+    if (pool.hasStorage()) {
+      dbVendors = await domainQueries.getVendorsUploadedByBuyerFromDB(
+        buyer.id,
+        buyer.corporateEmail || buyer.email,
+        buyer.organizationName || buyer.companyName
+      );
+    }
+
+    const inMemVendors = (storeService.vendors || []).filter((v) => {
+      if (!v) return false;
+      const bId = String(buyer.id).toLowerCase();
+      const bEmail = buyer.corporateEmail ? String(buyer.corporateEmail).toLowerCase() : '';
+      const bOrg = buyer.organizationName ? String(buyer.organizationName).toLowerCase() : '';
+      const vBuyerId = v.buyerId ? String(v.buyerId).toLowerCase() : '';
+      const vBuyerAccountId = v.buyerAccountId ? String(v.buyerAccountId).toLowerCase() : '';
+      const vBuyerEmail = v.buyerEmail ? String(v.buyerEmail).toLowerCase() : '';
+      const vAddedBy = v.addedByBuyerCompany ? String(v.addedByBuyerCompany).toLowerCase() : '';
+      return (
+        (vBuyerId && vBuyerId === bId) ||
+        (vBuyerAccountId && vBuyerAccountId === bId) ||
+        (bEmail && vBuyerEmail && vBuyerEmail === bEmail) ||
+        (bOrg && vAddedBy && vAddedBy === bOrg)
+      );
+    });
+
+    const vendorMap = new Map();
+    for (const v of [...dbVendors, ...inMemVendors]) {
+      if (v?.id && !vendorMap.has(v.id)) {
+        vendorMap.set(v.id, {
+          id: v.id,
+          name: v.name || v.brandName || 'Unnamed Vendor',
+          companyName: v.companyName || v.name || v.brandName || 'Unnamed Vendor',
+          contactPerson: v.contactPerson || v.name || 'Primary Contact',
+          email: v.email || '',
+          phone: v.phone || v.contactPhone || v.mobileNumber || v.mobile || '',
+          createdAt: v.createdAt || v.created_at || new Date().toISOString(),
+          status: v.status || 'PENDING EVALUATION',
+          majorCategory: v.majorCategory || v.category || 'General',
+          minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
+          location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : ''),
+          city: v.city || '',
+          state: v.state || '',
+          pincode: v.pincode || '',
+          source: v.source || 'buyer_uploaded',
+          score: v.score ?? v.score360 ?? null,
+          rating: v.rating ?? null,
+          gstin: v.gstin || v.gstNumber || '',
+          pan: v.pan || v.panNumber || '',
+          ...v,
+        });
+      }
+    }
+
+    const vendors = Array.from(vendorMap.values());
+    return res.status(200).json({
+      success: true,
+      count: vendors.length,
+      data: vendors,
+    });
+  } catch (err) {
+    logger.error('Error fetching buyer uploaded vendors', err, 'BUYER_ACCOUNT_CONTROLLER');
+    return next(err);
+  }
+}
+
+async function getBuyerDirectoryKPIStats(req, res, next) {
+  try {
+    if (!assertCategoryManagerOrAdmin(req, res)) return;
+    const directoryKPIQueries = require('../db/directoryKPIQueries');
+    const stats = await directoryKPIQueries.getBuyerDirectoryKPIStatsFromDB();
+    res.json({ success: true, ...stats });
+  } catch (err) {
+    logger.error('Error fetching buyer directory KPI stats', err, 'BUYER_ACCOUNT_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getBuyerAccounts,
   getActiveAccount,
@@ -1287,6 +1959,8 @@ module.exports = {
   getBuyerCommunications,
   recordBuyerCommunication,
   getBuyerPaymentHistory,
+  getBuyerUploadedVendors,
+  getBuyerDirectoryKPIStats,
   assertCategoryManagerOrAdmin,
   assertCategoryManagerOrBuyer,
 };

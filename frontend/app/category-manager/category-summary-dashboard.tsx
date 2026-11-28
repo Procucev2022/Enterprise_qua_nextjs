@@ -1,9 +1,10 @@
 'use client';
 
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
 import { RFQItem, VendorEntry, BuyerAccount } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { normalizeVendorRating } from '@/lib/constants';
 import {
   Layers,
   Search,
@@ -173,7 +174,8 @@ export function formatContactInfo(phone?: string, email?: string): string {
 }
 
 export function formatRating(rating?: number): string {
-  return typeof rating === 'number' && Number.isFinite(rating) ? String(rating) : EMPTY_VALUE;
+  const normalized = normalizeVendorRating(rating);
+  return normalized !== null ? String(normalized) : EMPTY_VALUE;
 }
 
 export function formatContactPerson(contactPerson?: string): string {
@@ -201,6 +203,22 @@ export default function CategorySummaryDashboard() {
   const [selectedKpiModal, setSelectedKpiModal] = useState<'categories' | 'rfqs' | 'quotes' | 'buyers' | 'vendors' | null>(null);
   const [selectedCategoryDetails, setSelectedCategoryDetails] = useState<CategoryMetric | null>(null);
   const [categoryDetailTab, setCategoryDetailTab] = useState<'rfqs' | 'quotes' | 'buyers' | 'vendors' | 'minors'>('rfqs');
+
+  // Close modals on Escape key
+  useEffect(() => {
+    if (!selectedKpiModal && !selectedCategoryDetails) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedCategoryDetails) {
+          setSelectedCategoryDetails(null);
+        } else if (selectedKpiModal) {
+          setSelectedKpiModal(null);
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedKpiModal, selectedCategoryDetails]);
 
   // Filtered RFQs for selected timeframe
   const rfqsInSelectedTimeframe = useMemo(() => {
@@ -364,8 +382,8 @@ export default function CategorySummaryDashboard() {
             </span>
           </div>
           <div className="flex items-baseline justify-between mt-1">
-            <span className="text-xl font-black text-slate-900 dark:text-white mono">{taxonomy.length} Major</span>
-            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">{totalMinorCategories} Minor</span>
+            <span className="text-xl font-black text-slate-900 dark:text-white mono">{taxonomy.length} Divisions</span>
+            <span className="text-[10px] text-indigo-600 dark:text-indigo-400 font-bold">{totalMinorCategories} Categories</span>
           </div>
         </button>
 
@@ -530,7 +548,7 @@ export default function CategorySummaryDashboard() {
                         <div className="flex items-center gap-2">
                           <button
                             type="button"
-                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${item.majorCategory} minor categories`}
+                            aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${item.majorCategory} categories`}
                             onClick={() =>
                               setExpandedMajor((prev) => ({ ...prev, [item.majorCategory]: !prev[item.majorCategory] }))
                             }
@@ -544,7 +562,7 @@ export default function CategorySummaryDashboard() {
                             </span>
                             <div className="flex items-center gap-2 mt-0.5">
                               <span className="text-[10px] text-slate-400 dark:text-gray-500 font-mono">
-                                {item.minorCount} Minor Categories
+                                {item.minorCount} Categories
                               </span>
                               <span
                                 className={`px-1.5 py-0.2 rounded text-[9px] font-extrabold ${
@@ -639,7 +657,7 @@ export default function CategorySummaryDashboard() {
                         <td colSpan={7} className="p-4 space-y-2">
                           <div className="flex items-center justify-between">
                             <span className="text-[10px] font-extrabold uppercase tracking-wider text-indigo-700 dark:text-indigo-300">
-                              Minor Categories in {item.majorCategory} ({catDetail.minorCategories.length})
+                              Categories in {item.majorCategory} ({catDetail.minorCategories.length})
                             </span>
                             <span className="text-[10px] text-slate-500 dark:text-gray-400">
                               RFQ counts reflect all-time activity, not the selected timeframe
@@ -674,8 +692,18 @@ export default function CategorySummaryDashboard() {
       {/* KPI MODAL: Interactive Drilldowns for the 5 Top KPI Cards               */}
       {/* ────────────────────────────────────────────────────────────────────────── */}
       {selectedKpiModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedKpiModal(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-4xl max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
+          >
             {/* Modal Header */}
             <div className="p-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/50">
               <div className="flex items-center gap-2.5">
@@ -686,7 +714,7 @@ export default function CategorySummaryDashboard() {
                 {selectedKpiModal === 'vendors' && <Building className="text-emerald-600 dark:text-emerald-400" size={20} />}
                 <div>
                   <h3 className="text-base font-extrabold text-slate-900 dark:text-white">
-                    {selectedKpiModal === 'categories' && `Active Categories Breakdown (${taxonomy.length} Major, ${totalMinorCategories} Minor)`}
+                    {selectedKpiModal === 'categories' && `Active Categories Breakdown (${taxonomy.length} Divisions, ${totalMinorCategories} Categories)`}
                     {selectedKpiModal === 'rfqs' && `RFQs Raised Breakdown — ${TIMEFRAME_LABELS[timeframe]} (${totalRfqsInTimeframe} RFQs)`}
                     {selectedKpiModal === 'quotes' && `Quotes Received Breakdown — ${TIMEFRAME_LABELS[timeframe]} (${totalQuotesReceivedInTimeframe} Quotes)`}
                     {selectedKpiModal === 'buyers' && `Active Enterprise Buyers (${buyerAccounts.length} Registered, ${activeBuyerPercent}% Active)`}
@@ -869,7 +897,7 @@ export default function CategorySummaryDashboard() {
                     <thead>
                       <tr className="border-b border-slate-200 dark:border-gray-800 text-[10px] font-bold uppercase text-slate-500">
                         <th className="p-2.5">Supplier Name</th>
-                        <th className="p-2.5">Major Category</th>
+                        <th className="p-2.5">Division</th>
                         <th className="p-2.5 text-center">Score</th>
                         <th className="p-2.5">Location</th>
                         <th className="p-2.5">Contact</th>
@@ -925,8 +953,18 @@ export default function CategorySummaryDashboard() {
       {/* CATEGORY DETAILS MODAL: Full breakdown for individual category row         */}
       {/* ────────────────────────────────────────────────────────────────────────── */}
       {selectedCategoryDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-          <div className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedCategoryDetails(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="glass-panel bg-white dark:bg-gray-900 rounded-2xl border border-slate-200 dark:border-gray-800 w-full max-w-5xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden"
+          >
             {/* Header */}
             <div className="p-5 border-b border-slate-200 dark:border-gray-800 flex items-center justify-between bg-slate-50/50 dark:bg-gray-950/50">
               <div className="flex items-center gap-3">
@@ -951,7 +989,7 @@ export default function CategorySummaryDashboard() {
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 dark:text-gray-400 mt-0.5">
-                    {selectedCategoryDetails.minorCount} Minor Categories · Telemetry scoped to active buyer demand and vendor network.
+                    {selectedCategoryDetails.minorCount} Categories · Telemetry scoped to active buyer demand and vendor network.
                   </p>
                 </div>
               </div>
@@ -1047,7 +1085,7 @@ export default function CategorySummaryDashboard() {
                     : 'border-transparent text-slate-500 hover:text-slate-900 dark:hover:text-white'
                 }`}
               >
-                <Layers size={14} /> Minor Categories ({categoryDetailObj?.minorCategories.length || 0})
+                <Layers size={14} /> Categories ({categoryDetailObj?.minorCategories.length || 0})
               </button>
             </div>
 

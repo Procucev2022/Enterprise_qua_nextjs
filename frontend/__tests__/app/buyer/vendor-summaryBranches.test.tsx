@@ -4,6 +4,7 @@ import VendorSummary, { isBuyerUploaded } from '@/app/buyer/vendor-summary';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import * as buyerProfileClient from '@/lib/buyerProfileClient';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
 import { setCategoryTaxonomy } from '@/lib/categoryTaxonomy';
 import { CATEGORY_TAXONOMY_FIXTURE } from '../../../test-fixtures/categoryTaxonomy';
 
@@ -16,10 +17,16 @@ jest.mock('@/lib/rfqClient', () => ({
 jest.mock('@/lib/buyerProfileClient', () => ({
   fetchBuyerProfile: jest.fn(),
 }));
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn(),
+  deleteVendorUploadHistoryBatch: jest.fn(),
+}));
 jest.mock('@/app/category-manager/VendorUploadModal', () => () => null);
 
 const mockFetchAllVendors = rfqClient.fetchAllVendors as jest.Mock;
 const mockFetchBuyerProfile = buyerProfileClient.fetchBuyerProfile as jest.Mock;
+const mockFetchVendorUploadHistory = vendorUploadHistoryClient.fetchVendorUploadHistory as jest.Mock;
 
 const UPLOAD_HISTORY_KEY = 'procucev_vendor_upload_history';
 
@@ -95,9 +102,9 @@ function storeWith(overrides: Record<string, unknown> = {}) {
 const renderSummary = () =>
   render(<VendorSummary onViewEvaluation={jest.fn()} onNavigateToWizard={jest.fn()} />);
 
-/** Seeds the upload history the modal reads from local storage. */
+/** Seeds the upload history the modal fetches from the backend API. */
 const seedUploadHistory = (batches: unknown[]) => {
-  localStorage.setItem(UPLOAD_HISTORY_KEY, JSON.stringify(batches));
+  mockFetchVendorUploadHistory.mockResolvedValue(batches);
 };
 
 const openUploadHistory = () => fireEvent.click(screen.getByRole('button', { name: /Upload History/i }));
@@ -107,6 +114,7 @@ beforeEach(() => {
   localStorage.clear();
   setCategoryTaxonomy(CATEGORY_TAXONOMY_FIXTURE);
   (useApp as jest.Mock).mockReturnValue(storeWith());
+  mockFetchVendorUploadHistory.mockResolvedValue([]);
   mockFetchAllVendors.mockResolvedValue({
     success: true,
     candidates: [],
@@ -138,7 +146,7 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     expect(checkbox.checked).toBe(false);
   });
 
-  it('counts a batch from its records when it has no total or imported figure, and filters nameless records', () => {
+  it('counts a batch from its records when it has no total or imported figure, and filters nameless records', async () => {
     seedUploadHistory([
       {
         id: 'batch-legacy',
@@ -152,7 +160,7 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     ]);
     renderSummary();
     openUploadHistory();
-    fireEvent.click(screen.getByRole('button', { name: /View Records/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /View Records/i }));
 
     expect(screen.getByText('Vendor Template Upload Batch Details')).toBeInTheDocument();
     const historyModal = screen.getByTestId('upload-history-modal');
@@ -163,11 +171,11 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     expect(within(historyModal).queryByText('Alpha Industrial')).not.toBeInTheDocument();
   });
 
-  it('shows dashes for a batch with no id, file name, timestamp, counts or records', () => {
+  it('shows dashes for a batch with no id, file name, timestamp, counts or records', async () => {
     seedUploadHistory([{}]);
     renderSummary();
     openUploadHistory();
-    fireEvent.click(screen.getByRole('button', { name: /View Records/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /View Records/i }));
 
     expect(screen.getByText(/Batch ID:/)).toHaveTextContent('Batch ID: — · Uploaded: —');
   });
@@ -201,56 +209,163 @@ describe('app/buyer/vendor-summary.tsx: uncovered branches', () => {
     expect(rating.value).toBe('');
   });
 
-  it('reconciles uploaded history batches into the buyer directory on mount and handles deduplication and corrupt history', () => {
-    seedUploadHistory([
+  it('ignores stale localStorage upload history so buyer directory shows only backend vendors consistently', async () => {
+    localStorage.setItem(
+      UPLOAD_HISTORY_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-stale-local',
+          fileName: 'Testing data.csv',
+          records: [
+            {
+              vendorName: 'Browser Only Ghost Co',
+              email: 'ghost@local.test',
+            },
+          ],
+        },
+      ])
+    );
+    mockFetchVendorUploadHistory.mockRejectedValueOnce(new Error('history fetch failed'));
+
+    renderSummary();
+    expect(screen.queryByText('Browser Only Ghost Co')).not.toBeInTheDocument();
+    expect(screen.getByText('Apex Supplies Ltd.')).toBeInTheDocument();
+  });
+
+  it('normalizes vendor minor categories from clientMappedCategories, poMinorCategories, vendorSelectedCategories, and itemsSupplied', () => {
+    const vendorsToNormalize = [
       {
-        id: 'batch-reconcile-1',
-        fileName: 'Testing data.csv',
-        records: [
-          {
-            vendorName: 'Reconciled Mfg Co',
-            email: 'reconciled@mfg.test',
-            phone: '9876543210',
-            gstin: '36ABCDE1234F1Z5',
-            city: 'Hyderabad',
-            state: 'Telangana',
-            pincode: '500037',
-            rating: 4.5,
-            majorCategory: 'Mechanical',
-            minorCategories: ['Pumps'],
-          },
-          {
-            email: 'emailonly@history.test',
-          },
-          {
-            name: 'Duplicate Email Co',
-            email: 'RECONCILED@MFG.TEST',
-          },
-          {
-            name: 'Failed Row Co',
-            email: 'failed@history.test',
-            status: 'FAILED',
-          },
-          {
-            name: '',
-            email: '',
-          },
+        id: 'v-norm-client',
+        name: 'Client Mapped Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        clientMappedCategories: ['Valves'],
+      },
+      {
+        id: 'v-norm-po',
+        name: 'PO Minor Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        poMinorCategories: ['Pumps'],
+      },
+      {
+        id: 'v-norm-self',
+        name: 'Vendor Selected Co',
+        source: 'buyer_uploaded',
+        majorCategory: '',
+        minorCategories: [],
+        vendorSelectedCategories: ['Cables'],
+      },
+      {
+        id: 'v-norm-items',
+        name: 'Items Supplied Co',
+        source: 'buyer_uploaded',
+        majorCategory: 'Civil Works',
+        minorCategories: [],
+        itemsSupplied: ['Plumbing Kit', 'Unknown Item'],
+      },
+    ];
+    (useApp as jest.Mock).mockReturnValue(storeWith({ buyerVendors: vendorsToNormalize }));
+    renderSummary();
+
+    expect(screen.getByText('Client Mapped Co')).toBeInTheDocument();
+    expect(screen.getByText('PO Minor Co')).toBeInTheDocument();
+    expect(screen.getByText('Vendor Selected Co')).toBeInTheDocument();
+    expect(screen.getByText('Items Supplied Co')).toBeInTheDocument();
+  });
+
+  it('displays PO category suggestions from poMajorCategory, RFQ records, and clientMappedCategories and applies them', () => {
+    const rfqSourcedVendor = {
+      id: 'v-rfq-sug',
+      name: 'RFQ Suggested Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Vendor Master',
+      minorCategories: [],
+    };
+    const poSourcedVendor = {
+      id: 'v-po-sug',
+      name: 'PO Suggested Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Mechanical',
+      minorCategories: ['Valves'],
+      poMajorCategory: 'Mechanical',
+      poMinorCategories: ['Pumps'],
+    };
+    const clientSugVendor = {
+      id: 'v-client-sug',
+      name: 'Client Sug Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Mechanical',
+      minorCategories: [],
+      clientMappedCategories: ['Custom NonTaxon Minor'],
+    };
+    const emptyRfqSugVendor = {
+      id: 'v-rfq-major-only',
+      name: 'RFQ Major Only Co',
+      source: 'buyer_uploaded',
+      majorCategory: '',
+      minorCategories: [],
+    };
+
+    const rfqs = [
+      {
+        id: 'rfq-s-1',
+        quotations: [{ vendorId: 'v-rfq-sug', vendorName: 'RFQ Suggested Co' }],
+        followUps: [],
+        extractedEntities: [
+          { majorCategory: 'Vendor Master', minorCategory: 'Uncategorized' },
+          { majorCategory: 'Mechanical', minorCategory: 'Valves' },
         ],
       },
       {
-        records: null,
+        id: 'rfq-s-2',
+        quotations: [],
+        followUps: [{ vendorId: 'v-rfq-major-only', vendorName: 'RFQ Major Only Co' }],
+        extractedEntities: [{ majorCategory: '', minorCategory: 'Valves' }],
       },
-    ]);
+    ];
 
-    renderSummary();
-    expect(screen.getByText('Reconciled Mfg Co')).toBeInTheDocument();
-    expect(screen.getByText('emailonly@history.test')).toBeInTheDocument();
-    expect(screen.queryByText('Failed Row Co')).not.toBeInTheDocument();
+    (useApp as jest.Mock).mockReturnValue(
+      storeWith({
+        buyerVendors: [rfqSourcedVendor, poSourcedVendor, clientSugVendor, emptyRfqSugVendor],
+        rfqs,
+      })
+    );
 
-    localStorage.setItem('procucev_vendor_upload_history', JSON.stringify({ not: 'an-array' }));
-    renderSummary();
+    const { rerender } = renderSummary();
 
-    localStorage.setItem('procucev_vendor_upload_history', '{invalid-json');
-    renderSummary();
+    // 1. PO Ingestion suggestion & Apply PO Suggestion button
+    fireEvent.click(screen.getByTestId('edit-category-vendor-v-po-sug'));
+    let modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Ingestion:/i)).toBeInTheDocument();
+    expect(within(modal).getByText(/Mechanical \(Pumps\)/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('apply-po-suggestion-button'));
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 2. RFQ Records suggestion
+    fireEvent.click(screen.getByTestId('add-category-vendor-v-rfq-sug'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Purchase Dump \/ RFQ Records:/i)).toBeInTheDocument();
+    expect(within(modal).getByText('Category Not Assigned')).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 3. RFQ suggestion with empty majorCategory ('Multi-Category')
+    fireEvent.click(screen.getByTestId('add-category-vendor-v-rfq-major-only'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Multi-Category \(Valves\)/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('apply-po-suggestion-button'));
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 4. PO Master Data suggestion (clientMappedCategories without taxonomy hit falls back to vendor.majorCategory)
+    fireEvent.click(screen.getByTestId('edit-category-vendor-v-client-sug'));
+    modal = screen.getByTestId('vendor-category-modal');
+    expect(within(modal).getByText(/Suggested from PO Master Data:/i)).toBeInTheDocument();
+    fireEvent.click(within(modal).getByTestId('close-vendor-category-modal'));
+
+    // 5. Storage / custom event listener triggers loadUploadHistory refresh
+    fireEvent(window, new Event('vendor_upload_history_updated'));
+    rerender(<VendorSummary onViewEvaluation={jest.fn()} onNavigateToWizard={jest.fn()} />);
   });
 });

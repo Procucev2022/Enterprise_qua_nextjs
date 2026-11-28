@@ -7,8 +7,8 @@
 
 import type { RfqCategoryFormInput, VendorEntry } from './types';
 import { isProcucevVendor } from '../app/buyer/vendor-summary';
-import { ALL_CATEGORIES_OPTION, VENDOR_ASSIGNMENT_LIMITS } from './constants';
-import { findMajorForMinor } from './categoryTaxonomy';
+import { ALL_CATEGORIES_OPTION, extractIndianAddressLocation, VENDOR_ASSIGNMENT_LIMITS } from './constants';
+import { findMajorForMinor, resolveMinorCategory } from './categoryTaxonomy';
 import { UI_STRINGS } from './uiStrings';
 
 export interface CategoryMatchResult {
@@ -271,8 +271,7 @@ export function matchVendorAgainstSignals(
       }
     }
 
-    // 5. Legacy only: taxonomy major/minor association. A minor-level RFQ never
-    // reaches a vendor through the parent major of its minor.
+    // 5. Taxonomy major/minor association and product keyword matching.
     if (!minorOnly) {
       const signalMajor = findMajorForMinor(signal);
       if (signalMajor && vendorMajor && normalizeCategory(signalMajor) === vendorMajor) {
@@ -285,7 +284,14 @@ export function matchVendorAgainstSignals(
         if (vMinorMajor && normalizeCategory(vMinorMajor) === normSignal) {
           matched.add(minorLabels[i]);
           highestScore = Math.max(highestScore, 93);
+        } else if (signalMajor && vMinorMajor && normalizeCategory(vMinorMajor) === normalizeCategory(signalMajor)) {
+          matched.add(minorLabels[i]);
+          highestScore = Math.max(highestScore, 90);
         }
+      }
+      if (vendor.products && typeof vendor.products === 'string' && matchesCategoryToken(vendor.products, normSignal)) {
+        matched.add(vendor.products);
+        highestScore = Math.max(highestScore, 85);
       }
     }
   }
@@ -298,6 +304,137 @@ export function matchVendorAgainstSignals(
     matchScore: isMatch ? highestScore : 0,
     matchedCategories: matchedList,
     matchedMajor: vendor.majorCategory || matchedList[0] || '',
+  };
+}
+
+export interface RfqVendorCategoryMatchResult {
+  isMatch: boolean;
+  isStrictMinorMatch: boolean;
+  matchScore: number;
+  matchedCategories: string[];
+  matchedMajor: string;
+}
+
+/**
+ * Checks if a vendor matches an RFQ's category requirements or is a genuine mismatch.
+ *
+ * An RFQ specifies category signals that can include:
+ * - specific minor categories (Tier 1 specificity)
+ * - major categories / divisions (Tier 2 division alignment)
+ * - line item categories and raw signals
+ *
+ * A vendor is MATCHED (eligible for RFQ and NOT a mismatch) if:
+ * 1. Vendor matches any RFQ minor category (strict or token match), OR
+ * 2. Vendor matches any raw/broad category signal (major or minor), OR
+ * 3. Vendor's majorCategory matches the parent major of any RFQ minor (taxonomy mapping), OR
+ * 4. Vendor's majorCategory matches the RFQ's majorCategory, OR
+ * 5. Vendor's clientMappedCategories, vendorSelectedCategories, or products match the RFQ categories.
+ *
+ * A vendor is ONLY a MISMATCH if they have category data that does NOT align with any RFQ category.
+ */
+export function checkVendorRfqCategoryMatch(
+  vendor: VendorEntry,
+  categorySignalSet: {
+    signals?: string[];
+    rawSignals?: string[];
+    minorOnly?: boolean;
+    majorCategory?: string | null;
+    minorCategory?: string | null;
+  }
+): RfqVendorCategoryMatchResult {
+  if (!vendor) {
+    return { isMatch: false, isStrictMinorMatch: false, matchScore: 0, matchedCategories: [], matchedMajor: '' };
+  }
+  const signals = categorySignalSet?.signals || [];
+  const rawSignals = (categorySignalSet?.rawSignals && categorySignalSet.rawSignals.length > 0)
+    ? categorySignalSet.rawSignals
+    : signals;
+  const minorOnly = Boolean(categorySignalSet?.minorOnly);
+
+  // If RFQ has no category signals at all, all vendors match
+  if (signals.length === 0 && rawSignals.length === 0) {
+    return {
+      isMatch: true,
+      isStrictMinorMatch: false,
+      matchScore: 100,
+      matchedCategories: [vendor.majorCategory || ALL_CATEGORIES_OPTION],
+      matchedMajor: vendor.majorCategory || '',
+    };
+  }
+
+  // 1. If minorOnly is true, check strict minor match first (Tier 1)
+  if (minorOnly && signals.length > 0) {
+    const strictMatch = matchVendorAgainstSignals(vendor, signals, true);
+    if (strictMatch.isMatch) {
+      return {
+        isMatch: true,
+        isStrictMinorMatch: true,
+        matchScore: strictMatch.matchScore,
+        matchedCategories: strictMatch.matchedCategories,
+        matchedMajor: strictMatch.matchedMajor,
+      };
+    }
+  }
+
+  // 2. Check broad category signals (rawSignals contains RFQ major and minor categories)
+  const broadSignals = rawSignals.length > 0 ? rawSignals : signals;
+  const broadMatch = matchVendorAgainstSignals(vendor, broadSignals, false);
+  if (broadMatch.isMatch) {
+    return {
+      isMatch: true,
+      isStrictMinorMatch: false,
+      matchScore: broadMatch.matchScore,
+      matchedCategories: broadMatch.matchedCategories,
+      matchedMajor: broadMatch.matchedMajor,
+    };
+  }
+
+  // 3. Check taxonomy parent major association for minor signals
+  if (minorOnly && signals.length > 0) {
+    const vendorMajor = vendor.majorCategory ? normalizeCategory(vendor.majorCategory) : '';
+    for (const sig of signals) {
+      let parentMajor = findMajorForMinor(sig);
+      if (!parentMajor) {
+        const resolved = resolveMinorCategory(sig);
+        if (resolved) parentMajor = findMajorForMinor(resolved);
+      }
+      if (
+        parentMajor &&
+        vendorMajor &&
+        (normalizeCategory(parentMajor) === vendorMajor ||
+          matchesCategoryToken(vendor.majorCategory || '', parentMajor))
+      ) {
+        return {
+          isMatch: true,
+          isStrictMinorMatch: false,
+          matchScore: 90,
+          matchedCategories: [vendor.majorCategory!],
+          matchedMajor: vendor.majorCategory!,
+        };
+      }
+    }
+  }
+
+  // 4. Check explicit majorCategory fallback if provided
+  if (categorySignalSet?.majorCategory && vendor.majorCategory) {
+    if (matchesCategoryToken(vendor.majorCategory, categorySignalSet.majorCategory)) {
+      return {
+        isMatch: true,
+        isStrictMinorMatch: false,
+        matchScore: 88,
+        matchedCategories: [vendor.majorCategory],
+        matchedMajor: vendor.majorCategory,
+      };
+    }
+  }
+
+  // No match across minor, major, taxonomy, or broad signals -> True category mismatch
+  return {
+    isMatch: false,
+    isStrictMinorMatch: false,
+    matchScore: 0,
+    matchedCategories: [],
+    matchedMajor: vendor.majorCategory || '',
   };
 }
 
@@ -317,22 +454,53 @@ export interface RankedProcucevVendor {
   matchedMinorCategory?: string | null;
 }
 
+function resolveVendorPinDigits(vendor: VendorEntry): string {
+  const direct = String(vendor.pincode || '').replace(/\D/g, '');
+  if (direct.length === 6) return direct;
+  const fallbackSource = [vendor.location, vendor.factoryAddress].filter(Boolean).join(' ');
+  return fallbackSource ? extractIndianAddressLocation(fallbackSource).pincode || direct : direct;
+}
+
+export function compareVendorPincodeProximity(
+  a: VendorEntry,
+  b: VendorEntry,
+  destPincode?: string | null
+): number {
+  const dest = String(destPincode || '').replace(/\D/g, '');
+  if (dest.length < 3) return 0;
+  const aPin = resolveVendorPinDigits(a);
+  const bPin = resolveVendorPinDigits(b);
+  let aPrefix = 0;
+  while (aPrefix < aPin.length && aPrefix < dest.length && aPin[aPrefix] === dest[aPrefix]) {
+    aPrefix += 1;
+  }
+  let bPrefix = 0;
+  while (bPrefix < bPin.length && bPrefix < dest.length && bPin[bPrefix] === dest[bPrefix]) {
+    bPrefix += 1;
+  }
+  if (bPrefix !== aPrefix) return bPrefix - aPrefix;
+  if (aPin.length === 6 && bPin.length === 6 && dest.length === 6) {
+    return Math.abs(Number(aPin) - Number(dest)) - Math.abs(Number(bPin) - Number(dest));
+  }
+  return 0;
+}
+
 /**
  * Score how well a vendor's location serves a delivery destination.
  *
- * A deterministic, data-only heuristic â€” no external geocoding â€” so it is
+ * A deterministic, data-only heuristic — no external geocoding — so it is
  * stable in tests and offline:
- *   â€¢ Same 6-digit PIN prefix (first 3 digits = same postal district): 100
- *   â€¢ Same first PIN digit (same broad postal region/zone): 70
- *   â€¢ City or state name appears in the vendor's location string: 85 / 60
- *   â€¢ Nothing matched / no data: 40 (neutral â€” never zero, so a strong
+ *   • Same 6-digit PIN prefix (first 3 digits = same postal district): 100
+ *   • Same first PIN digit (same broad postal region/zone): 70
+ *   • City or state name appears in the vendor's location string: 85 / 60
+ *   • Nothing matched / no data: 40 (neutral — never zero, so a strong
  *     category match is not wiped out by missing location data)
  */
 export function scoreVendorLocation(
   vendor: VendorEntry,
   destination: { location?: string | null; pincode?: string | null }
 ): { score: number; reason: string } {
-  const vendorPin = String(vendor.pincode || '').replace(/\D/g, '');
+  const vendorPin = resolveVendorPinDigits(vendor);
   const destPin = String(destination.pincode || '').replace(/\D/g, '');
 
   if (vendorPin.length === 6 && destPin.length === 6) {
@@ -427,7 +595,9 @@ export function rankProcucevVendorsForV3(
     if (aMinor !== bMinor) return bMinor - aMinor;
     if (b.overallScore !== a.overallScore) return b.overallScore - a.overallScore;
     if (b.categoryScore !== a.categoryScore) return b.categoryScore - a.categoryScore;
-    return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+    const ratingDiff = (b.vendor.rating || 0) - (a.vendor.rating || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+    return compareVendorPincodeProximity(a.vendor, b.vendor, destination.pincode);
   });
 
   return ranked.slice(0, Math.max(0, limit));
@@ -474,7 +644,9 @@ export function selectTopProcucevVendorsForMode3(
       .sort((a, b) => {
         if (b.overallScore !== a.overallScore) return b.overallScore - a.overallScore;
         if (b.locationScore !== a.locationScore) return b.locationScore - a.locationScore;
-        return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+        const ratingDiff = (b.vendor.rating || 0) - (a.vendor.rating || 0);
+        if (ratingDiff !== 0) return ratingDiff;
+        return compareVendorPincodeProximity(a.vendor, b.vendor, destination.pincode);
       })
       .slice(0, limit);
   }
@@ -574,7 +746,9 @@ export function selectVendorsForCategories(
         if (bLoc !== aLoc) return bLoc - aLoc;
       }
       if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-      return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+      const ratingDiff = (b.vendor.rating || 0) - (a.vendor.rating || 0);
+      if (ratingDiff !== 0) return ratingDiff;
+      return destination?.pincode ? compareVendorPincodeProximity(a.vendor, b.vendor, destination.pincode) : 0;
     });
     for (const item of catMatches.slice(0, maxPerCategory)) {
       const key = item.vendor.id || item.vendor.email;
@@ -592,7 +766,9 @@ export function selectVendorsForCategories(
       if (bLoc !== aLoc) return bLoc - aLoc;
     }
     if (b.matchScore !== a.matchScore) return b.matchScore - a.matchScore;
-    return (b.vendor.rating || 0) - (a.vendor.rating || 0);
+    const ratingDiff = (b.vendor.rating || 0) - (a.vendor.rating || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+    return destination?.pincode ? compareVendorPincodeProximity(a.vendor, b.vendor, destination.pincode) : 0;
   });
 }
 

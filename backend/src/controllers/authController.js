@@ -5,6 +5,8 @@ const { extractToken } = require('../middleware/auth');
 const vendorPresenceService = require('../services/vendorPresenceService');
 const vendorDirectorySessionQueries = require('../db/vendorDirectorySessionQueries');
 const loginLogsQueries = require('../db/loginLogsQueries');
+const identityQueries = require('../db/identityQueries');
+const pool = require('../db/pool');
 
 function getClientIp(req) {
   return req.ip || (req.headers && req.headers['x-forwarded-for']) || null;
@@ -22,6 +24,14 @@ function respondIfAuthStorageUnavailable(res, err) {
 
 async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
   try {
+    const role = String(user.role || '').toLowerCase().trim();
+    let userType = 'buyer';
+    if (role === 'category_manager' || role === 'admin' || role === 'staff' || role === 'categorymanager' || user.email?.endsWith('@procucev.com')) {
+      userType = 'category_manager';
+    } else if (role === 'vendor' || role === 'seller') {
+      userType = 'vendor';
+    }
+
     await loginLogsQueries.recordLoginLog({
       userId: user.id,
       userName: user.name,
@@ -30,7 +40,7 @@ async function recordSuccessfulLogin(user, ipAddress, authenticationMethod) {
       // login_logs.company_name is NOT NULL, so an account with no company on
       // record is stored as an empty value rather than a placeholder company.
       companyName: user.orgName || user.companyName || '',
-      userType: user.role === 'vendor' ? 'vendor' : 'buyer',
+      userType,
       ipAddress,
     });
   } catch (error) {
@@ -144,13 +154,16 @@ async function register(req, res, next) {
       role,
       orgName,
       street,
+      streetAddress,
       address,
+      registeredAddress,
       city,
       state,
       pincode,
       country,
       gstin,
       gstNumber,
+      gst,
       pan,
       panNumber,
       emailOtp,
@@ -158,6 +171,10 @@ async function register(req, res, next) {
       code,
     } = req.body || {};
     const ipAddress = getClientIp(req);
+    const resolvedStreet = street || streetAddress;
+    const resolvedAddress = address || registeredAddress;
+    const resolvedGstin = gstin || gstNumber || gst;
+    const resolvedPan = pan || panNumber;
 
     const { isValid, errors } = validatePayload(VALIDATION_SCHEMAS.register, {
       name,
@@ -166,16 +183,14 @@ async function register(req, res, next) {
       mobile,
       role,
       orgName,
-      street,
-      address,
+      street: resolvedStreet,
+      address: resolvedAddress,
       city,
       state,
       pincode,
       country,
-      gstin,
-      gstNumber,
-      pan,
-      panNumber,
+      gstin: resolvedGstin,
+      pan: resolvedPan,
       emailOtp,
       mobileOtp,
       code,
@@ -192,14 +207,14 @@ async function register(req, res, next) {
         mobile,
         role,
         orgName,
-        street,
-        address,
+        street: resolvedStreet,
+        address: resolvedAddress,
         city,
         state,
         pincode,
         country,
-        gstin: gstin || gstNumber,
-        pan: pan || panNumber,
+        gstin: resolvedGstin,
+        pan: resolvedPan,
         emailOtp,
         mobileOtp,
         code,
@@ -238,9 +253,36 @@ async function getSession(req, res, next) {
       return res.status(401).json({ success: false, error: verification.error || AUTH_MESSAGES.INVALID_SESSION_FALLBACK });
     }
 
+    let sessionUser = verification.user;
+    const subjectId = sessionUser && (sessionUser.sub || sessionUser.id);
+    if (pool.hasStorage() && subjectId && typeof identityQueries.findUserByUuid === 'function') {
+      try {
+        const freshUser = await identityQueries.findUserByUuid(subjectId);
+        if (freshUser) {
+          sessionUser = {
+            ...sessionUser,
+            id: freshUser.id || sessionUser.id || subjectId,
+            email: freshUser.email || sessionUser.email,
+            name: freshUser.name || sessionUser.name,
+            role: freshUser.role || sessionUser.role,
+            orgId: freshUser.orgId ?? sessionUser.orgId,
+            orgName: freshUser.orgName || sessionUser.orgName,
+            mobile: freshUser.mobile || sessionUser.mobile,
+            passwordChangeRequired: freshUser.resetPasswordRequired === true,
+            vendorMasterUploaded: freshUser.vendorMasterUploaded === true || sessionUser.vendorMasterUploaded === true,
+          };
+        }
+      } catch (refreshErr) {
+        logger.warn('Could not refresh live user attributes during session check', {
+          error: refreshErr.message,
+          userId: subjectId,
+        }, 'AUTH_CONTROLLER');
+      }
+    }
+
     res.json({
       success: true,
-      user: verification.user,
+      user: sessionUser,
     });
   } catch (err) {
     logger.error('Error fetching session', err, 'AUTH_CONTROLLER');

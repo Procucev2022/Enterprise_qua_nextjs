@@ -563,4 +563,38 @@ describe('ManualRFQModal: category directory lookup', () => {
     await waitFor(() => expect(fetchAllVendors).toHaveBeenCalled());
     expect(screen.getByRole('button', { name: MODAL.saveAction })).toBeInTheDocument();
   });
+
+  it('excludes inactive/disabled buyer and network vendors from Mode 1/2/3 supplier rosters and submitted RFQs', async () => {
+    const activeBuyerVendor = {
+      id: 'v-buyer-active',
+      name: 'Active Buyer Roster Co',
+      source: 'buyer_uploaded',
+      majorCategory: HOME_CATEGORY.majorCategory,
+      minorCategories: [HOME_CATEGORY.minorCategories[0]],
+    };
+    const inactiveBuyerVendor = {
+      id: 'v-buyer-inactive',
+      name: 'Disabled Buyer Roster Co',
+      source: 'buyer_uploaded',
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      majorCategory: HOME_CATEGORY.majorCategory,
+      minorCategories: [HOME_CATEGORY.minorCategories[0]],
+    };
+    mockedUseApp.mockReturnValue(storeWith({ buyerVendors: [activeBuyerVendor, inactiveBuyerVendor] }));
+    renderModal();
+    fillRow();
+    fillHeaderFields();
+    chooseMode('mode_1');
+
+    expect(screen.getByText(/Active Buyer Roster Co/)).toBeInTheDocument();
+    expect(screen.queryByText(/Disabled Buyer Roster Co/)).not.toBeInTheDocument();
+
+    clickSave();
+    await waitFor(() => expect(createRFQ).toHaveBeenCalledTimes(1));
+    const submittedIds = (createRFQ.mock.calls[0][0].assignedVendors || []).map((v: { id: string }) => v.id);
+    expect(submittedIds).toContain('v-buyer-active');
+    expect(submittedIds).not.toContain('v-buyer-inactive');
+  });
 });

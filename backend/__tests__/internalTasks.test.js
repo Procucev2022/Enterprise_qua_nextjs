@@ -227,6 +227,32 @@ describe('Internal Tasks API & Controller', () => {
     expect(res.status).toBe(201);
     expect(res.body.success).toBe(true);
     expect(res.body.task.title).toBe('Expedite L1 pricing approval for Solar Farm RFQ');
+
+    // Site visiting task creation
+    jest.spyOn(internalTaskQueries, 'createInternalTask').mockResolvedValueOnce({
+      id: 'tsk_site_1',
+      task_number: 'TASK-SITE-1',
+      title: 'Site Visit for Vendor Inspection',
+      task_category: 'SITE_VISITING_MEETING_CLIENTS',
+      task_type: 'Site Visit',
+      priority: 'Medium',
+      status: 'Open',
+    });
+
+    const siteVisitRes = await request(app)
+      .post('/api/internal-tasks')
+      .send({
+        title: 'Site Visit for Vendor Inspection',
+        taskCategory: 'SITE_VISITING_MEETING_CLIENTS',
+        taskType: 'Site Visit',
+        priority: 'Medium',
+        status: 'Open',
+      });
+
+    expect(siteVisitRes.status).toBe(201);
+    expect(siteVisitRes.body.success).toBe(true);
+    expect(siteVisitRes.body.task.task_category).toBe('SITE_VISITING_MEETING_CLIENTS');
+    expect(siteVisitRes.body.task.task_type).toBe('Site Visit');
   });
 
   test('GET /api/internal-tasks filters tasks and returns paginated rows', async () => {

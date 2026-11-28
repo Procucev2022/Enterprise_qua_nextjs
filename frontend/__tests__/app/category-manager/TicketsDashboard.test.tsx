@@ -4,7 +4,14 @@ import TicketsDashboard from '@/app/category-manager/components/TicketsDashboard
 import * as ticketClient from '@/lib/ticketClient';
 import { fetchInternalAssignees } from '@/lib/internalTaskClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
 import type { InternalTeamMember } from '@/lib/types';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
 
 jest.mock('@/lib/internalTaskClient', () => ({
   fetchInternalAssignees: jest.fn(),
@@ -943,20 +950,65 @@ describe('TicketsDashboard', () => {
     expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
-  it('loads saved column settings from localStorage on initial render', async () => {
+  it('loads saved column settings from backend user preferences on initial render', async () => {
     const customCols = [
       { key: 'status', label: 'Status', visible: true, required: true },
       { key: 'category', label: 'Category', visible: false },
     ];
-    localStorage.setItem('qua_tickets_col_prefs', JSON.stringify(customCols));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(customCols);
 
+    render(<TicketsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('TCK-1001')).toBeInTheDocument();
+      expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
+    });
+  });
+
+  it('handles backdrop click and escape key for create and escalate modals', async () => {
     render(<TicketsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('TCK-1001')).toBeInTheDocument();
     });
 
-    expect(screen.queryByRole('columnheader', { name: /Category/i })).not.toBeInTheDocument();
-  });
+    // 1. Create Ticket modal Escape and backdrop click
+    fireEvent.click(screen.getByRole('button', { name: /Create Ticket/i }));
+    let dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
 
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByRole('heading', { level: 3 }));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(screen.getByRole('button', { name: /Create Ticket/i }));
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // 2. Escalate modal Escape and backdrop click
+    const escalateButtons = screen.getAllByTitle('Escalate Ticket');
+    fireEvent.click(escalateButtons[0]);
+    dialog = screen.getByRole('dialog');
+    expect(dialog).toBeInTheDocument();
+
+    // Click inside does not close
+    fireEvent.click(within(dialog).getByRole('heading', { level: 3 }));
+    expect(dialog).toBeInTheDocument();
+
+    // Escape closes modal
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+
+    // Reopen and backdrop click closes
+    fireEvent.click(escalateButtons[0]);
+    dialog = screen.getByRole('dialog');
+    fireEvent.click(dialog);
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  });
 });

@@ -1,8 +1,13 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import IngestionWizard, { resolveConfirmationVendorCount, resolveOwnVendorCount, isV2OrV3SourcingMode } from '@/app/buyer/ingestion-wizard';
-import { AppProvider } from '@/lib/store';
-import { entitledSourcingModes } from '@/lib/constants';
+import IngestionWizard, {
+  resolveConfirmationVendorCount,
+  resolveOwnVendorCount,
+  isV2OrV3SourcingMode,
+  setEnableMode3,
+} from '@/app/buyer/ingestion-wizard';
+import { AppProvider, useApp } from '@/lib/store';
+import { entitledSourcingModes, VENDOR_UPLOAD_HISTORY_STORAGE_KEY } from '@/lib/constants';
 import { validatePincode } from '@/lib/validationSchemas';
 import {
   extractLineItemsFromDocument,
@@ -780,6 +785,61 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     expect(screen.getByText(/Extraction Complete/i)).toBeInTheDocument();
   });
 
+  it('refreshes delivery location, pincode, and target date from a re-extracted document without requiring Clear Form first', async () => {
+    renderWizard();
+
+    // First document: extraction fills delivery location/pincode/date.
+    uploadFile(new File(['binary'], 'RFQ_Mumbai.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Mumbai Order',
+        category: '',
+        targetDeliveryDate: '2026-09-15',
+        deliveryLocation: 'Navi Mumbai Plant',
+        deliveryPincode: '400701',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-1' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
+
+    expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Navi Mumbai Plant');
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('400701');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-09-15');
+
+    // Second document uploaded and extracted WITHOUT clicking Clear Form —
+    // its own, different delivery terms must win, not the first document's.
+    uploadFile(new File(['binary'], 'RFQ_Pune.xlsx', { type: '' }));
+    mockExtract.mockResolvedValueOnce({
+      success: true,
+      data: {
+        title: 'Pune Order',
+        category: '',
+        targetDeliveryDate: '2026-11-20',
+        deliveryLocation: 'Pune Depot',
+        deliveryPincode: '411001',
+        estimatedBudget: null,
+        extractedEntities: [entity({ id: 'ent-2', itemName: 'Gate Valve' })],
+        source: 'web_portal',
+      },
+      classification: undefined,
+      extraction: undefined,
+    });
+    clickExtract();
+    await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune Depot');
+    });
+    expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
+    expect(screen.getByLabelText(/Target Delivery Date/i)).toHaveValue('2026-11-20');
+  });
+
   it('falls back to a default message when extraction fails without an error string', async () => {
     renderWizard();
     uploadFile(new File(['binary'], 'BOQ_Pumps.xlsx', { type: '' }));
@@ -963,6 +1023,33 @@ describe('IngestionWizard (Direct Manual Form with Top Document Upload)', () => 
     fireEvent.change(qtyInput, { target: { value: '9' } });
     fireEvent.change(qtyInput, { target: { value: '' } });
     expect(qtyInput).toHaveValue(null);
+  });
+
+  it('supports multi-digit budget, comma-formatted paste, and handles currency key intercept', () => {
+    renderWizard();
+
+    const budgetInput = screen.getByPlaceholderText('e.g. 500000');
+    // Multi-digit entry
+    fireEvent.change(budgetInput, { target: { value: '5000000' } });
+    expect(budgetInput).toHaveValue(5000000);
+
+    // Paste with formatted Indian currency (commas and currency symbol)
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => '₹ 25,00,000' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Paste with non-numeric text
+    fireEvent.paste(budgetInput, {
+      clipboardData: { getData: () => 'N/A' },
+    });
+    expect(budgetInput).toHaveValue(2500000);
+
+    // Keydown for comma, rupee, and dollar
+    expect(fireEvent.keyDown(budgetInput, { key: ',' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '₹' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '$' })).toBe(false);
+    expect(fireEvent.keyDown(budgetInput, { key: '5' })).toBe(true);
   });
 
   it('adds the first line item from the empty-state button', () => {
@@ -1474,56 +1561,61 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
     });
 
     it('displays the dynamically retrieved Procucev vendor count in the confirmation modal for Version 0, 2, and 3', async () => {
-      // Simulate backend response with dynamically retrieved procucevVendorCount: 6 for Version 3
-      mockCreateRFQ.mockResolvedValueOnce({
-        success: true,
-        rfq: {
-          ...mockCreatedRFQ(),
-          sourcingMode: 'mode_3',
-          procucevVendorCount: 6,
-        },
-      });
+      setEnableMode3(true);
+      try {
+        // Simulate backend response with dynamically retrieved procucevVendorCount: 6 for Version 3
+        mockCreateRFQ.mockResolvedValueOnce({
+          success: true,
+          rfq: {
+            ...mockCreatedRFQ(),
+            sourcingMode: 'mode_3',
+            procucevVendorCount: 6,
+          },
+        });
 
-      renderWizard();
-      chooseSourcingMode('mode_3');
+        renderWizard();
+        chooseSourcingMode('mode_3');
 
-      // Fill in required fields
-      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
-        target: { value: 'Navi Mumbai Plant' },
-      });
-      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
-        target: { value: '400701' },
-      });
+        // Fill in required fields
+        fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), {
+          target: { value: 'Navi Mumbai Plant' },
+        });
+        fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), {
+          target: { value: '400701' },
+        });
 
-      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
-        target: { value: 'Precision Industrial Valve' },
-      });
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
-        target: { value: '8' },
-      });
-      fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
-        target: { value: 'Nos' },
-      });
+        const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), {
+          target: { value: 'Precision Industrial Valve' },
+        });
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), {
+          target: { value: '8' },
+        });
+        fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), {
+          target: { value: 'Nos' },
+        });
 
-      // Submit RFQ
-      completeRFQFields();
-      fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
+        // Submit RFQ
+        completeRFQFields();
+        fireEvent.click(screen.getByRole('button', { name: /Create & Dispatch RFQ/i }));
 
-      await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
-      expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
+        await waitFor(() => expect(mockCreateRFQ).toHaveBeenCalled());
+        expect(await screen.findByText('RFQ Dispatched Successfully!')).toBeInTheDocument();
 
-      // The dedicated "Procucev Vendors" box renders the server's 6 dynamically
-      // (NOT a hardcoded 'AI Blind').
-      expect(screen.queryByText('AI Blind')).not.toBeInTheDocument();
-      const procucevBox = screen.getByTestId('confirmation-procucev-vendor-box');
-      expect(procucevBox).toBeInTheDocument();
-      expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('6');
-      expect(within(procucevBox).getByText('Procucev Vendors')).toBeInTheDocument();
+        // The dedicated "Procucev Vendors" box renders the server's 6 dynamically
+        // (NOT a hardcoded 'AI Blind').
+        expect(screen.queryByText('AI Blind')).not.toBeInTheDocument();
+        const procucevBox = screen.getByTestId('confirmation-procucev-vendor-box');
+        expect(procucevBox).toBeInTheDocument();
+        expect(screen.getByTestId('confirmation-procucev-vendor-count')).toHaveTextContent('6');
+        expect(within(procucevBox).getByText('Procucev Vendors')).toBeInTheDocument();
 
-      // The "Your Invited Vendors" box counts only the buyer's own roster — none
-      // in this flow — so it reads 0 rather than duplicating the Procucev count.
-      expect(screen.getByTestId('confirmation-vendor-count')).toHaveTextContent('0');
+        // The "Your Invited Vendors" box counts only the buyer's own roster — none
+        // in this flow — so it reads 0 rather than duplicating the Procucev count.
+        expect(screen.getByTestId('confirmation-vendor-count')).toHaveTextContent('0');
+      } finally {
+        setEnableMode3(false);
+      }
     });
 
     it('shows the actual invited Procucev count for Version 0, not the directory-wide tally', async () => {
@@ -1684,6 +1776,13 @@ describe('IngestionWizard: Mode 1 private vendor roster preview', () => {
 });
 
 describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)', () => {
+  beforeAll(() => {
+    setEnableMode3(true);
+  });
+
+  afterAll(() => {
+    setEnableMode3(false);
+  });
   // Captured fresh per test so the fallback and restore use the genuine
   // jest.setup default fetch, never a leaked override from a prior describe.
   let realFetch: typeof global.fetch;
@@ -1776,6 +1875,7 @@ describe('IngestionWizard: Mode 3 Top Procucev Network Vendors (360° ranking)',
     // The geographically closer vendor (same PIN district as 400701) ranks first.
     const cards = screen.getAllByTestId('procucev-v3-vendor');
     expect(within(cards[0]).getByText('Nearby Pumps Pvt Ltd')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining('preferredPincode=400701'), expect.anything());
   });
 
   it('selects all / deselects all and dispatches the chosen Procucev vendors', async () => {
@@ -2246,12 +2346,17 @@ describe('IngestionWizard: comprehensive branch booster', () => {
     expect(screen.queryByText('How QUA AI Categorizes Line Items & Matches Suppliers')).not.toBeInTheDocument();
 
     // Mode 3: click "AI Matching Criteria"
-    fireEvent.click(screen.getByTestId('mode-mode_3'));
-    await waitFor(() => expect(screen.getByRole('button', { name: /AI Matching Criteria/i })).toBeInTheDocument());
-    const aiBtn3 = screen.getByRole('button', { name: /AI Matching Criteria/i });
-    fireEvent.click(aiBtn3);
-    expect(screen.getByText(/How QUA AI Categorizes Line Items & Matches Suppliers/i)).toBeInTheDocument();
-    expect(screen.getByText('🛡️ Double-Blind Active')).toBeInTheDocument();
+    setEnableMode3(true);
+    try {
+      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      await waitFor(() => expect(screen.getByRole('button', { name: /AI Matching Criteria/i })).toBeInTheDocument());
+      const aiBtn3 = screen.getByRole('button', { name: /AI Matching Criteria/i });
+      fireEvent.click(aiBtn3);
+      expect(screen.getByText(/How QUA AI Categorizes Line Items & Matches Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText('🛡️ Double-Blind Active')).toBeInTheDocument();
+    } finally {
+      setEnableMode3(false);
+    }
   });
 
   it('covers Quota Exhausted Banner and actions', async () => {
@@ -2375,7 +2480,7 @@ describe('IngestionWizard: comprehensive branch booster', () => {
 
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /Enter Line Items Manually/i })).toBeInTheDocument();
-    });
+    }, { timeout: 10000 });
 
     // Click "Enter Line Items Manually" recovery button
     fireEvent.click(screen.getByRole('button', { name: /Enter Line Items Manually/i }));
@@ -2737,8 +2842,10 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         return (origFetch as any)(url, init);
       }) as any;
 
-      renderWizard();
-      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      setEnableMode3(true);
+      try {
+        renderWizard();
+        fireEvent.click(screen.getByTestId('mode-mode_3'));
 
       fireEvent.change(screen.getByPlaceholderText(MODAL.titlePlaceholder), { target: { value: 'Mode 3 Test' } });
       fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Navi Mumbai Plant' } });
@@ -2806,8 +2913,10 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       // Done button with onComplete
       const doneBtn = screen.getByRole('button', { name: /Done/i });
       fireEvent.click(doneBtn);
-
+    } finally {
+      setEnableMode3(false);
       global.fetch = origFetch;
+    }
     });
 
     it('covers classification onProgress callback and detectedMajor from line items', async () => {
@@ -3086,10 +3195,48 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }
     });
 
-    it('covers activeBuyerAccount delivery location auto-prefill (lines 338-350)', async () => {
+    it('never auto-fills delivery location/pincode from the buyer profile before a document is uploaded and extracted', async () => {
+      const origFetch = global.fetch;
+      global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+        const urlStr = typeof url === 'string' ? url : url.toString();
+        if (urlStr.includes('/api/buyer-accounts/active')) {
+          return Promise.resolve({
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              data: {
+                id: 'ba-1',
+                corporateEmail: 'buyer1@test.com',
+                organizationName: 'Tata Motors',
+                contactPerson: 'CPO',
+                city: 'Pune',
+                state: 'Maharashtra',
+                pincode: '411001',
+                remainingFreeRFQs: 5,
+              },
+            }),
+          }) as any;
+        }
+        return (origFetch as any)(url, init);
+      }) as any;
+
+      renderWizard();
+      // Give the activeBuyerAccount fetch a chance to resolve and settle.
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('');
+
+      global.fetch = origFetch;
+    });
+
+    it('fills delivery location/pincode from the buyer profile only as an extraction-time fallback, per field (lines 338-350)', async () => {
       const origFetch = global.fetch;
 
-      // Case 1: city and state present
+      // Case 1: city and state present; document states neither field.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3115,13 +3262,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount1 } = renderWizard();
-      const locInput1 = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(locInput1.value).toBe('Pune, Maharashtra');
+      await act(async () => {
+        await Promise.resolve();
       });
+      uploadFile(new File(['binary'], 'RFQ_1.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce(
+        successResult([entity({ id: 'ent-1' })])
+      );
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(1));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Pune, Maharashtra');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('411001');
       unmount1();
 
-      // Case 2: city and state falsy, primaryPlantLocation present
+      // Case 2: city and state falsy, primaryPlantLocation present.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3148,13 +3302,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount2 } = renderWizard();
-      const locInput2 = screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(locInput2.value).toBe('Sanand Plant');
+      await act(async () => {
+        await Promise.resolve();
       });
+      uploadFile(new File(['binary'], 'RFQ_2.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce(
+        successResult([entity({ id: 'ent-2' })])
+      );
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(2));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Sanand Plant');
       unmount2();
 
-      // Case 3: only pincode present, location empty
+      // Case 3: document states its own location but not its pincode — the
+      // document's location must win and the profile only fills the pincode.
       global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
         const urlStr = typeof url === 'string' ? url : url.toString();
         if (urlStr.includes('/api/buyer-accounts/active')) {
@@ -3181,18 +3342,34 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       }) as any;
 
       const { unmount: unmount3 } = renderWizard();
-      const pinInput3 = screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder) as HTMLInputElement;
-      await waitFor(() => {
-        expect(pinInput3.value).toBe('560001');
+      await act(async () => {
+        await Promise.resolve();
       });
+      uploadFile(new File(['binary'], 'RFQ_3.xlsx', { type: '' }));
+      mockExtract.mockResolvedValueOnce({
+        success: true,
+        data: {
+          title: 'Doc 3 Order',
+          category: '',
+          targetDeliveryDate: '',
+          deliveryLocation: 'Document-stated Depot',
+          estimatedBudget: null,
+          extractedEntities: [entity({ id: 'ent-3' })],
+          source: 'web_portal',
+        },
+        classification: undefined,
+        extraction: undefined,
+      });
+      clickExtract();
+      await waitFor(() => expect(mockExtract).toHaveBeenCalledTimes(3));
+      expect(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder)).toHaveValue('Document-stated Depot');
+      expect(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder)).toHaveValue('560001');
       unmount3();
 
       global.fetch = origFetch;
     });
 
     it('covers AddVendorModal pincode debounce, formats, errors and submission rejections (lines 387-405, 3044, 3140-3142)', async () => {
-      jest.useFakeTimers();
-
       serveBootstrap([
         {
           id: 'v-existing',
@@ -3207,63 +3384,60 @@ describe('IngestionWizard: comprehensive branch booster', () => {
       fireEvent.click(screen.getByTestId('mode-mode_1'));
       await waitFor(() => {
         expect(screen.getByText('Existing Supplier')).toBeInTheDocument();
-      });
+      }, { timeout: 10000 });
 
       fireEvent.click(screen.getByRole('button', { name: /Add Vendor/i }));
       expect(screen.getByText('Add Approved Vendor')).toBeInTheDocument();
 
+      jest.useFakeTimers();
       const modalPin = screen.getByPlaceholderText('e.g. 411001');
 
       // The input onChange strips all non-digit characters (replace(/\D/g, '')),
       // so typing special chars like '!@#$%^' results in an empty state and no error.
       // Instead verify that a cleared / empty pincode shows no error.
       fireEvent.change(modalPin, { target: { value: '!@#$%^' } });
-      await waitFor(() => {
-        expect(screen.queryByText('Invalid PIN code format')).not.toBeInTheDocument();
+      await act(async () => {
+        jest.advanceTimersByTime(400);
       });
+      expect(screen.queryByText('Invalid PIN code format')).not.toBeInTheDocument();
 
       // Dummy pincode
       fireEvent.change(modalPin, { target: { value: '000000' } });
-      await waitFor(() => {
-        expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
+      await act(async () => {
+        jest.advanceTimersByTime(400);
       });
+      expect(screen.getByText('Invalid or dummy PIN code')).toBeInTheDocument();
 
       // 6 digits with validatePincode returning isValid: false with message
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: false, message: 'Custom invalid pin error' });
       fireEvent.change(modalPin, { target: { value: '411001' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Custom invalid pin error')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Custom invalid pin error')).toBeInTheDocument();
 
       // 6 digits with validatePincode returning isValid: false without message (fallback)
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: false, message: '' });
       fireEvent.change(modalPin, { target: { value: '411002' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Invalid PIN code')).toBeInTheDocument();
 
       // 6 digits with validatePincode throwing error (catch block)
       (validatePincode as jest.Mock).mockRejectedValueOnce(new Error('Network failure'));
       fireEvent.change(modalPin, { target: { value: '411003' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
 
       // Valid 6 digits with postOffices
       (validatePincode as jest.Mock).mockResolvedValueOnce({ isValid: true, postOffices: [{ name: 'Shivajinagar' } as any] });
       fireEvent.change(modalPin, { target: { value: '411005' } });
-      act(() => {
+      await act(async () => {
         jest.advanceTimersByTime(400);
       });
-      await waitFor(() => {
-        expect(screen.getByText('Valid')).toBeInTheDocument();
-      });
+      expect(screen.getByText('Valid')).toBeInTheDocument();
 
       // Clear pincode back to 2 digits (lines 410-414)
       fireEvent.change(modalPin, { target: { value: '41' } });
@@ -3452,16 +3626,20 @@ describe('IngestionWizard: comprehensive branch booster', () => {
         return (origFetch as any)(url, init);
       }) as any;
 
-      renderWizard();
-      fireEvent.click(screen.getByTestId('mode-mode_3'));
+      setEnableMode3(true);
+      try {
+        renderWizard();
+        fireEvent.click(screen.getByTestId('mode-mode_3'));
 
       // Verify line 2809/2814/2820 render
       await waitFor(() => {
         expect(screen.getByText('No ID Vendor')).toBeInTheDocument();
         expect(screen.getByText('General Industrial')).toBeInTheDocument();
       });
-
+    } finally {
+      setEnableMode3(false);
       global.fetch = origFetch;
+    }
     });
 
     it('covers confirmation modal sourcingMode variants, title fallbacks, and button actions (lines 3270-3388)', async () => {
@@ -3545,5 +3723,316 @@ describe('IngestionWizard: mandatory fields', () => {
 
     const headings = screen.getAllByRole('columnheader').map((heading) => heading.textContent ?? '');
     expect(headings.filter((text) => text.includes(UI_STRINGS.manualRfqModal.requiredMarker)).length).toBeGreaterThanOrEqual(6);
+  });
+});
+
+describe('IngestionWizard: backend vendor hydration and localStorage isolation', () => {
+  it('shows backend-hydrated buyer vendors across Mode 1, Mode 2, and Mode 3 and ignores stale localStorage upload history', async () => {
+    const backendVendors = [
+      {
+        id: 'v-wiz-backend-1',
+        name: 'Govardhan Solutions pvt LTD',
+        email: 'govardhan.kilari@procucev.com',
+        contactPerson: 'Govardhan',
+        phone: '9876543210',
+        city: 'Bengaluru - 560037',
+        majorCategory: FIXTURE_MAJOR,
+        minorCategories: [FIXTURE_MINOR],
+        source: 'buyer_uploaded',
+      },
+      {
+        id: 'v-wiz-backend-2',
+        name: 'Veera Industrial Corp',
+        email: 'veera@industrial.test',
+        majorCategory: 'Vendor Master',
+        minorCategories: [],
+        source: 'buyer_uploaded',
+      },
+    ];
+    localStorage.setItem(
+      VENDOR_UPLOAD_HISTORY_STORAGE_KEY,
+      JSON.stringify([
+        {
+          id: 'batch-stale-wizard',
+          records: [{ vendorName: 'Stale Browser Only Vendor', email: 'stale@wizard.test', majorCategory: FIXTURE_MAJOR }],
+        },
+      ])
+    );
+
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: RequestInfo | URL, init?: any) => {
+      const urlStr = typeof url === 'string' ? url : url.toString();
+      if (urlStr.includes('/api/bootstrap')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({
+            success: true,
+            data: { vendors: backendVendors, buyerAccounts: [], evaluations: [], auditLogs: [], aiFeed: [], systemConfig: {} },
+          }),
+        }) as any;
+      }
+      if (urlStr.includes('/api/vendors')) {
+        return Promise.resolve({
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, data: backendVendors }),
+        }) as any;
+      }
+      return (origFetch as any)(url, init);
+    });
+    setEnableMode3(true);
+    try {
+      renderWizard();
+
+      chooseSourcingMode('mode_1');
+      expect(await screen.findByText(/2 Suppliers Found/i)).toBeInTheDocument();
+      expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+      expect(screen.queryByText('Stale Browser Only Vendor')).not.toBeInTheDocument();
+
+      chooseSourcingMode('mode_2');
+      expect(await screen.findByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+
+      chooseSourcingMode('mode_3');
+      expect(await screen.findByText(/2 Private Suppliers/i)).toBeInTheDocument();
+      expect(screen.getByText('Govardhan Solutions pvt LTD')).toBeInTheDocument();
+      expect(screen.getByText('Veera Industrial Corp')).toBeInTheDocument();
+    } finally {
+      global.fetch = origFetch;
+      setEnableMode3(false);
+      localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+  });
+
+  it('shows neutral loading indicator (AI Extracting...) instead of Gemini AI message while extracting RFQ data', async () => {
+    let resolveExtract: ((val: RFQExtractionResult) => void) | undefined;
+    const pendingPromise = new Promise<RFQExtractionResult>((resolve) => {
+      resolveExtract = resolve;
+    });
+    mockExtract.mockReturnValueOnce(pendingPromise);
+
+    renderWizard();
+    expect(screen.getByText(UI_STRINGS.rfqExtraction.dropZoneIdlePrompt)).toBeInTheDocument();
+
+    uploadFile(new File(['col1,col2'], 'BOQ_Loading.csv', { type: 'text/csv' }));
+    clickExtract();
+
+    expect(await screen.findByText(UI_STRINGS.rfqExtraction.extractingStatus)).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.rfqExtraction.extractingHint)).toBeInTheDocument();
+    expect(screen.getByRole('status')).toHaveTextContent(UI_STRINGS.rfqExtraction.extractingStatus);
+    expect(screen.getByRole('button', { name: UI_STRINGS.rfqExtraction.extractingButtonLabel })).toBeDisabled();
+    expect(screen.queryByText(/Gemini AI/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/parsing document/i)).not.toBeInTheDocument();
+
+    await act(async () => {
+      resolveExtract?.({ ...successResult(), extraction: undefined });
+      await pendingPromise;
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(UI_STRINGS.rfqExtraction.dropZoneIdlePrompt)).toBeInTheDocument();
+    });
+    expect(screen.getByDisplayValue('Centrifugal Water Pump 500 GPM')).toBeInTheDocument();
+  });
+
+  describe('IngestionWizard: Mode 3 Coming Soon feature flag', () => {
+    beforeEach(() => {
+      setEnableMode3(false);
+    });
+    afterEach(() => {
+      setEnableMode3(false);
+    });
+
+    it('marks Mode 3 as Coming Soon in the sourcing mode selector and shows coming soon badge', () => {
+      renderWizard();
+      const btn3 = screen.getByTestId('sourcing-mode-btn-mode_3');
+      expect(btn3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.comingSoonBadge);
+      expect(screen.getByTestId('mode-3-coming-soon-badge')).toBeInTheDocument();
+
+      // Check native select option has coming soon
+      const opt3 = screen.getByTestId('mode-option-mode_3');
+      expect(opt3).toHaveTextContent(UI_STRINGS.sourcingModeVersions.comingSoonBadge);
+    });
+
+    it('renders the Coming Soon state panel when Mode 3 is selected, does not render active roster, and disables Create & Dispatch RFQ', () => {
+      renderWizard();
+      const btn3 = screen.getByTestId('sourcing-mode-btn-mode_3');
+      fireEvent.click(btn3);
+      expect(btn3).toHaveAttribute('aria-checked', 'true');
+
+      // Does NOT render active Mode 3 supplier roster / protocol flow
+      expect(screen.queryByTestId('procucev-v3-panel')).not.toBeInTheDocument();
+      expect(screen.queryByText(/Buyer Approved Suppliers \(Double-Blind Protocol\)/i)).not.toBeInTheDocument();
+
+      // Renders Coming Soon state panel
+      expect(screen.getByTestId('mode-3-coming-soon-panel')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.sourcingModeVersions.mode3ComingSoonTitle)).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.sourcingModeVersions.mode3ComingSoonDescription)).toBeInTheDocument();
+
+      // Create & Dispatch RFQ button is disabled
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      expect(dispatchBtn).toBeDisabled();
+      expect(dispatchBtn).toHaveAttribute('title', UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip);
+    });
+
+    it('disables Create & Dispatch RFQ button and prevents form submission when Mode 3 is selected while disabled', () => {
+      renderWizard();
+      chooseSourcingMode('mode_3');
+
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      expect(dispatchBtn).toBeDisabled();
+      expect(dispatchBtn).toHaveAttribute('title', UI_STRINGS.sourcingModeVersions.mode3DisabledButtonTooltip);
+      expect(mockCreateRFQ).not.toHaveBeenCalled();
+    });
+
+    it('ensures Mode 0, Mode 1, and Mode 2 continue working normally without regression', () => {
+      renderWizard();
+
+      // Mode 0
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_0'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_0')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+
+      // Mode 1
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_1'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_1')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+
+      // Mode 2
+      fireEvent.click(screen.getByTestId('sourcing-mode-btn-mode_2'));
+      expect(screen.getByTestId('sourcing-mode-btn-mode_2')).toHaveAttribute('aria-checked', 'true');
+      expect(screen.queryByTestId('mode-3-coming-soon-panel')).not.toBeInTheDocument();
+      expect(screen.getByRole('button', { name: /Create & Dispatch RFQ/i })).not.toBeDisabled();
+    });
+  });
+
+  describe('IngestionWizard: Supporting Documents Field', () => {
+    beforeEach(() => {
+      mockAttach.mockReset();
+      mockCreateRFQ.mockReset();
+    });
+
+    it('renders the Supporting Documents upload field in Section 1 and handles upload, display, removal, and clearing', async () => {
+      mockAttach.mockResolvedValueOnce({
+        success: true,
+        data: {
+          id: 'doc-att-1',
+          fileName: 'Technical_Drawing_A1.pdf',
+          fileSize: 2048,
+          size: 2048,
+          mimeType: 'application/pdf',
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      renderWizard();
+
+      expect(screen.getByLabelText(/Supporting Documents/i)).toBeInTheDocument();
+      const uploadBtn = screen.getByRole('button', { name: /Upload Supporting Documents/i });
+      expect(uploadBtn).toBeInTheDocument();
+
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      expect(fileInput).toHaveAttribute('accept', '.xlsx,.xls,.csv,.pdf,.docx,.doc,.txt,.eml,.msg');
+
+      const testFile = new File(['dummy-content'], 'Technical_Drawing_A1.pdf', { type: 'application/pdf' });
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [testFile] } });
+      });
+
+      expect(mockAttach).toHaveBeenCalledWith(testFile);
+      expect(await screen.findByText('Technical_Drawing_A1.pdf')).toBeInTheDocument();
+      expect(screen.getByText('2.0 KB')).toBeInTheDocument();
+
+      // Test remove button
+      const removeBtn = screen.getByRole('button', { name: /Remove Technical_Drawing_A1\.pdf/i });
+      fireEvent.click(removeBtn);
+      expect(screen.queryByText('Technical_Drawing_A1.pdf')).not.toBeInTheDocument();
+    });
+
+    it('rejects files exceeding the 15 MB file size limit', async () => {
+      renderWizard();
+
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      const largeFile = new File(['content'], 'Large_Document.pdf', { type: 'application/pdf' });
+      Object.defineProperty(largeFile, 'size', { value: 16 * 1024 * 1024 });
+
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [largeFile] } });
+      });
+
+      expect(mockAttach).not.toHaveBeenCalled();
+      expect(await screen.findByRole('alert')).toHaveTextContent(/exceeds the 15 MB file size limit/i);
+    });
+
+    it('deduplicates and includes supporting documents in the createRFQ submission payload', async () => {
+      mockAttach.mockResolvedValueOnce({
+        success: true,
+        data: {
+          id: 'doc-att-sub',
+          fileName: 'Spec_Sheet.docx',
+          size: 4096,
+          mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          uploadedAt: new Date().toISOString(),
+        },
+      });
+
+      mockCreateRFQ.mockResolvedValueOnce({
+        success: true,
+        rfq: {
+          id: 'rfq-new-1',
+          rfqNumber: 'RFQ-NEW-1',
+          title: 'Specs RFQ',
+          attachments: [{ id: 'doc-att-sub', fileName: 'Spec_Sheet.docx', size: 4096 }],
+        },
+      });
+
+      renderWizard();
+
+      // Attach file
+      const fileInput = screen.getByTestId('rfq-supporting-docs-input');
+      const file = new File(['specs'], 'Spec_Sheet.docx', { type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' });
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+      });
+
+      expect(await screen.findByText('Spec_Sheet.docx')).toBeInTheDocument();
+
+      // Fill required fields
+      fireEvent.change(screen.getByPlaceholderText(MODAL.titlePlaceholder), { target: { value: 'Specs RFQ' } });
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryLocationPlaceholder), { target: { value: 'Bangalore, India' } });
+      fireEvent.change(screen.getByPlaceholderText(MODAL.deliveryPincodePlaceholder), { target: { value: '560001' } });
+      const targetDate = screen.getByLabelText(/Target Delivery Date/i);
+      fireEvent.change(targetDate, { target: { value: '2029-12-31' } });
+
+      // Line item
+      const row = screen.getByPlaceholderText(MODAL.itemPlaceholder).closest('tr')!;
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.itemPlaceholder), { target: { value: 'Mechanical Pump' } });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.qtyPlaceholder), { target: { value: '5' } });
+      fireEvent.change(within(row).getByPlaceholderText(MODAL.unitPlaceholder), { target: { value: 'Nos' } });
+      completeRFQFields();
+
+      // Choose Mode 0
+      chooseSourcingMode('mode_0');
+
+      // Submit
+      const dispatchBtn = screen.getByRole('button', { name: /Create & Dispatch RFQ/i });
+      await act(async () => {
+        fireEvent.click(dispatchBtn);
+      });
+
+      await waitFor(() => {
+        expect(mockCreateRFQ).toHaveBeenCalled();
+      });
+      const payload = mockCreateRFQ.mock.calls[0][0];
+      expect(payload.attachments).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ id: 'doc-att-sub', fileName: 'Spec_Sheet.docx' }),
+        ])
+      );
+    });
   });
 });

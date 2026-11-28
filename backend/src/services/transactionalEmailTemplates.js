@@ -7,7 +7,14 @@
  * Optional descriptive fields render as "Not specified" (see optionalText). No template invents a value.
  */
 
-const { QUA_AI_EMAIL_TEMPLATES, QUA_AI_EMAIL_SUPPORT } = require('../config/constants');
+const {
+  QUA_AI_EMAIL_TEMPLATES,
+  QUA_AI_EMAIL_SUPPORT,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
+  formatMessage,
+} = require('../config/constants');
 const { logger } = require('./loggerService');
 
 // Labels stay in this module until they move to backend/src/config/constants.js.
@@ -329,12 +336,19 @@ function buildEmail1_RfqCreatedAccountAutoCreated(params = {}) {
   const rfqId = requireText(params.rfq_id, 'rfq_id', templateId);
   const rfqTitle = optionalText(params.rfq_title);
   const email = requireText(params.email, 'email', templateId);
-  const mobileNumber = optionalText(params.mobile_number || params.mobileNumber);
+  const rawMobile = optionalText(params.mobile_number || params.mobileNumber);
+  const PLACEHOLDER_MOBILE = '9999999999';
+  const isPlaceholderMobile = Boolean(rawMobile && rawMobile !== TEMPLATE_MESSAGES.NOT_SPECIFIED && rawMobile.replace(/\D/g, '').endsWith(PLACEHOLDER_MOBILE));
+  const mobileNumber = rawMobile;
   const tempPassword = requireText(params.temp_password, 'temp_password', templateId);
   const loginUrl = params.login_url || `${getPublicFrontendUrl()}/login`;
   const reviewUrl = params.review_url || `${loginUrl}?redirect=/buyer/rfq-summary`;
 
   const subject = `Congratulations, your RFQ ${rfqId} is live on Qua AI`;
+
+  const mobileLine = isPlaceholderMobile
+    ? `Registered Mobile: ${mobileNumber} (placeholder — please update after login)`
+    : `Registered Mobile: ${mobileNumber}`;
 
   const text = `Hi ${firstName},
 
@@ -344,13 +358,13 @@ To save you time, we created a free Qua AI account for you with this email addre
 
 Your login details
 Login ID: ${email}
-Registered Mobile: ${mobileNumber}
+${mobileLine}
 Temporary password: ${tempPassword} (valid for 48 hours)
 Login page: ${loginUrl}
 
 Three quick steps to finish
 1. Log in and set your own password.
-2. Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.
+2. Complete your profile: company name, GSTIN, delivery address and phone number.${isPlaceholderMobile ? ` (Your mobile number is currently set to a system placeholder: ${mobileNumber} — please update it after sign in.)` : ''} Suppliers quote more accurately when these details are correct.
 3. Go to RFQ Summary to review ${rfqId}.
 
 [ Log in & review my RFQ ]: ${reviewUrl}
@@ -385,7 +399,10 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
         </tr>
         <tr>
           <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Registered Mobile:</td>
-          <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">${escapeHtml(mobileNumber)}</td>
+          <td style="padding: 6px 0; color: #0f172a; font-family: monospace; font-weight: 700;">
+            ${escapeHtml(mobileNumber)}
+            ${isPlaceholderMobile ? `<span style="font-size: 11px; color: #d97706; background: #fef3c7; border: 1px solid #fcd34d; border-radius: 4px; padding: 1px 6px; margin-left: 8px; font-family: Arial, sans-serif; font-weight: 600;">Placeholder — update after login</span>` : ''}
+          </td>
         </tr>
         <tr>
           <td style="padding: 6px 0; color: #64748b; font-weight: 600;">Temporary password:</td>
@@ -403,7 +420,7 @@ ${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
       <h3 style="margin: 0 0 12px 0; font-size: 15px; color: #0f172a;">Three quick steps to finish</h3>
       <ol style="margin: 0; padding-left: 20px; font-size: 14px; color: #334155;">
         <li style="margin-bottom: 8px;">Log in and set your own password.</li>
-        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number. Suppliers quote more accurately when these details are correct.</li>
+        <li style="margin-bottom: 8px;">Complete your profile: company name, GSTIN, delivery address and phone number.${isPlaceholderMobile ? ` (Your mobile is currently set to placeholder <strong>${escapeHtml(mobileNumber)}</strong> — please update it after sign in.)` : ''} Suppliers quote more accurately when these details are correct.</li>
         <li style="margin-bottom: 8px;">Go to RFQ Summary to review <strong>${escapeHtml(rfqId)}</strong>.</li>
       </ol>
     </div>
@@ -1476,7 +1493,147 @@ function getAllTransactionalEmailTemplates() {
 }
 
 /**
+ * Builds the portal-redirect auto-reply sent when a supplier replies to the
+ * network invite mailbox (portal-only quoting).
+ */
+function buildVendorInvitePortalRedirectTemplate({
+  rfq_id,
+  rfq_number,
+  rfq_title,
+  vendor_name,
+  is_registered_vendor = false,
+  cta_url,
+  invite_mailbox,
+} = {}) {
+  const rfqRef = String(rfq_number || rfq_id || '').trim();
+  const base = getPublicFrontendUrl();
+  const encodedRef = encodeURIComponent(rfqRef);
+  const resolvedUrl =
+    cta_url ||
+    (rfqRef
+      ? (is_registered_vendor
+        ? `${base}/vendor/rfqs/${encodedRef}`
+        : `${base}/vendor/register?rfq=${encodedRef}`)
+      : `${base}${is_registered_vendor ? '/vendor/opportunity-feed' : '/vendor/register'}`);
+  const copy = VENDOR_INVITE_PORTAL_REDIRECT_NOTIFICATION;
+  const subject = rfqRef
+    ? formatMessage(copy.SUBJECT, { rfqNumber: rfqRef })
+    : copy.SUBJECT_FALLBACK;
+  const greeting = vendor_name ? `Dear <strong>${escapeHtml(vendor_name)}</strong>,` : 'Hello,';
+  const greetingText = vendor_name ? `Dear ${String(vendor_name).trim()},` : 'Hello,';
+  const ctaLabel = is_registered_vendor ? copy.BUTTON_REGISTERED : copy.BUTTON_UNREGISTERED;
+  const mailboxLabel = invite_mailbox ? ` (${escapeHtml(invite_mailbox)})` : '';
+
+  const text = `${greetingText}
+
+We received your email reply${rfqRef ? ` for RFQ #${rfqRef}` : ''}${rfq_title ? ` (${rfq_title})` : ''}.
+
+${copy.PORTAL_ONLY_NOTICE}
+
+${copy.PORTAL_ACTION_INSTRUCTION}
+${ctaLabel}: ${resolvedUrl}
+
+${QUA_AI_EMAIL_SUPPORT.TEAM_SIGNATURE}
+${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
+
+  const innerHtml = `
+    <p style="font-size: 16px; margin: 0 0 16px 0; color: #0f172a;">${greeting}</p>
+    <p style="font-size: 15px; margin: 0 0 16px 0; color: #334155;">
+      We received your email reply${rfqRef ? ` for RFQ <strong>#${escapeHtml(rfqRef)}</strong>` : ''}${rfq_title ? ` (<em>${escapeHtml(rfq_title)}</em>)` : ''}.
+    </p>
+    <div style="background-color: #eff6ff; border: 1px solid #93c5fd; color: #1e40af; padding: 14px 16px; border-radius: 6px; margin: 16px 0; font-size: 14px;">
+      <strong>Portal Submission Required${mailboxLabel}</strong><br/>
+      ${escapeHtml(copy.PORTAL_ONLY_NOTICE)}
+    </div>
+    <p style="font-size: 14px; color: #334155; margin: 16px 0;">
+      ${escapeHtml(copy.PORTAL_ACTION_INSTRUCTION)}
+    </p>
+    ${renderCtaButton(ctaLabel, resolvedUrl)}
+  `;
+
+  return {
+    subject,
+    text,
+    ctaUrl: resolvedUrl,
+    html: wrapQuaAiEmail({ title: subject, subtitle: copy.SUBLINE, innerHtml }),
+  };
+}
+
+/**
+ * Builds the Welcome + Temporary Login Credentials email for Category Manager-added vendors.
+ */
+function buildCmVendorOnboardingTemplate({
+  to,
+  recipient_name,
+  buyer_organization_name,
+  vendor_code,
+  temp_password,
+  contact_phone,
+  login_url,
+} = {}) {
+  const copy = VENDOR_CM_ONBOARDING_NOTIFICATION;
+  const orgName = buyer_organization_name || copy.DEFAULT_ORGANIZATION_NAME;
+  const signInUrl = login_url || `${getPublicFrontendUrl()}/login`;
+  const greeting = recipient_name ? `Dear <strong>${escapeHtml(recipient_name)}</strong>,` : 'Hello,';
+  const greetingText = recipient_name ? `Dear ${String(recipient_name).trim()},` : 'Hello,';
+  const safeTempPassword = temp_password || 'Set during first login';
+
+  const text = `${greetingText}
+
+${orgName} has registered your organization as a supplier on Procucev Enterprise.
+
+Login Email: ${to || ''}
+Temporary Password: ${safeTempPassword}
+Portal Login URL: ${signInUrl}
+${vendor_code ? `Vendor Code: ${vendor_code}\n` : ''}${contact_phone ? `Mobile Number: ${contact_phone}\n` : ''}
+${copy.CHANGE_PASSWORD_NOTE}
+
+${QUA_AI_EMAIL_SUPPORT.TEAM_SIGNATURE}
+${QUA_AI_EMAIL_SUPPORT.COMPANY_NAME}`;
+
+  const innerHtml = `
+    <p style="font-size: 16px; margin: 0 0 16px 0; color: #0f172a;">${greeting}</p>
+    <p style="font-size: 15px; margin: 0 0 18px 0; color: #334155;">
+      <strong>${escapeHtml(orgName)}</strong> has created your supplier account on <strong>Procucev Enterprise</strong> so you can access RFQs and submit quotations.
+    </p>
+    <div style="background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 8px; padding: 18px; margin: 20px 0;">
+      <h3 style="margin: 0 0 12px 0; font-size: 14px; color: #0369a1; text-transform: uppercase; letter-spacing: 0.5px;">Your Login Credentials</h3>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <tr>
+          <td style="padding: 8px 0; color: #64748b; width: 38%; font-weight: 600;">Login Email</td>
+          <td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(to || '')}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: #64748b; font-weight: 600;">Temporary Password</td>
+          <td style="padding: 8px 0; color: #0f172a; font-family: monospace; font-weight: 700;">${escapeHtml(safeTempPassword)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 8px 0; color: #64748b; font-weight: 600;">Login URL</td>
+          <td style="padding: 8px 0;"><a href="${escapeHtml(signInUrl)}" style="color: #0284c7; text-decoration: underline;">${escapeHtml(signInUrl)}</a></td>
+        </tr>
+        ${vendor_code ? `<tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Vendor Code</td><td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(vendor_code)}</td></tr>` : ''}
+        ${contact_phone ? `<tr><td style="padding: 8px 0; color: #64748b; font-weight: 600;">Mobile Number</td><td style="padding: 8px 0; color: #0f172a; font-weight: 600;">${escapeHtml(contact_phone)}</td></tr>` : ''}
+      </table>
+    </div>
+    ${renderCtaButton('Sign in to Procucev Portal', signInUrl)}
+    <div style="background: #fef3c7; border-left: 4px solid #f59e0b; padding: 14px 16px; margin: 20px 0; border-radius: 4px;">
+      <p style="font-size: 13px; color: #92400e; margin: 0; line-height: 1.5;">
+        <strong>Password Change Required:</strong> ${escapeHtml(copy.CHANGE_PASSWORD_NOTE)}
+      </p>
+    </div>
+  `;
+
+  return {
+    subject: copy.SUBJECT,
+    text,
+    html: wrapQuaAiEmail({ title: copy.SUBJECT, subtitle: copy.SUBLINE, innerHtml }),
+  };
+}
+
+/**
  * Delivers a transactional email via mailerService.
+ * Dynamically routes vendor emails between VENDOR_INVITE_EMAIL_ADDRESS and
+ * VENDOR_DIRECT_RFQ_EMAIL_ADDRESS while keeping buyer emails untouched.
  */
 async function sendTransactionalEmail(identifier, recipientEmail, params = {}, options = {}) {
   const mailerService = require('./mailerService');
@@ -1492,8 +1649,29 @@ async function sendTransactionalEmail(identifier, recipientEmail, params = {}, o
   // Determine channel (buyer vs vendor)
   const isVendorTarget = String(rendered.who).toLowerCase().includes('vendor') || String(rendered.who).toLowerCase().includes('supplier');
   if (isVendorTarget) {
-    message.from = mailerService.vendorFromAddress();
-    return mailerService.deliverVendor(message, `Transactional Email: ${rendered.name}`, options);
+    const isDirectByTemplate =
+      rendered.templateId === QUA_AI_EMAIL_TEMPLATES.EMAIL_11_QUOTE_SUBMITTED.id ||
+      rendered.templateId === QUA_AI_EMAIL_TEMPLATES.EMAIL_10_LOW_OR_ZERO_CREDITS.id;
+    const mergedContext = {
+      ...params,
+      ...(options && typeof options === 'object' ? options : {}),
+      ...(isDirectByTemplate && !params?.mailboxChannel && !options?.mailboxChannel && !options?.vendorChannel
+        ? { mailboxChannel: VENDOR_MAILBOX_CHANNELS.DIRECT }
+        : {}),
+    };
+    const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+      ? mailerService.resolveVendorInviteRouting(mergedContext.vendor || mergedContext, mergedContext, mergedContext.rfq || null)
+      : null;
+    const vendorChannel = options?.vendorChannel || routing?.channel || null;
+    message.from = (routing && routing.from) || mailerService.vendorFromAddress(vendorChannel ? { channel: vendorChannel } : undefined);
+    const replyToAddr = (routing && routing.replyTo) || mailerService.vendorGatewayAddress(vendorChannel ? { channel: vendorChannel } : undefined);
+    if (replyToAddr) {
+      message.replyTo = replyToAddr;
+    }
+    return mailerService.deliverVendor(message, `Transactional Email: ${rendered.name}`, {
+      ...options,
+      ...(vendorChannel ? { vendorChannel } : {}),
+    });
   } else {
     message.from = mailerService.fromAddress();
     return mailerService.deliver(message, `Transactional Email: ${rendered.name}`, options);
@@ -1518,6 +1696,8 @@ module.exports = {
   buildEmail11_QuoteSubmitted,
   buildEmail12_RfqRevisedBuyerQuestion,
   buildEmail13_CompleteYourProfile,
+  buildVendorInvitePortalRedirectTemplate,
+  buildCmVendorOnboardingTemplate,
   renderTransactionalEmail,
   getAllTransactionalEmailTemplates,
   sendTransactionalEmail,

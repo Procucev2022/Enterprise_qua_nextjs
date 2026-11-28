@@ -9,7 +9,7 @@ const mailerService = require('./mailerService');
 const smsService = require('./smsService');
 const paymentDuesQueries = require('../db/paymentDuesQueries');
 const internalTaskQueries = require('../db/internalTaskQueries');
-const { SYSTEM_ACTOR_EMAIL, INTERNAL_TASK_CATEGORIES } = require('../config/constants');
+const { SYSTEM_ACTOR_EMAIL, INTERNAL_TASK_CATEGORIES, resolveStandardizedCommunicationCategory } = require('../config/constants');
 
 // Messages and labels stay in this module until they move to backend/src/config/constants.js.
 const ACTION_CENTER_MESSAGES = Object.freeze({
@@ -155,6 +155,8 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
   const senderName = actor.name || actor.email || SYSTEM_ACTOR_EMAIL;
   const senderEmail = actor.email || SYSTEM_ACTOR_EMAIL;
   const greetingName = recipientName || ACTION_CENTER_MESSAGES.NOT_SPECIFIED;
+  const scenarioId = payload.scenarioId || payload.metadata?.scenarioId || payload.metadata?.templateType;
+  const canonicalCategory = resolveStandardizedCommunicationCategory(scenarioId || payload.category || payload.metadata?.category);
   const results = {
     email: null,
     sms: null,
@@ -177,6 +179,9 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
       recipientName,
       recipientEmail,
       recipientPhone,
+      category: canonicalCategory,
+      templateType: scenarioId || canonicalCategory,
+      scenarioId: scenarioId || 'followup_new',
       deliveryEmailSubject: `[Procucev Alert] ${subject}`,
       deliveryReplyTo: senderEmail,
       deliveryRecipientEmail: recipientEmail || undefined,
@@ -395,6 +400,9 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
       recipientName,
       recipientEmail,
       recipientPhone,
+      category: canonicalCategory,
+      templateType: scenarioId || canonicalCategory,
+      scenarioId: scenarioId || 'followup_new',
       emailResult: results.email,
       smsResult: results.sms,
       gatewayMessageId: results.sms?.messageId || results.email?.messageId || null,
@@ -415,7 +423,7 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
         taskCategory: INTERNAL_TASK_CATEGORIES.COMMUNICATION,
         taskType: ACTION_CENTER_TASK_TYPE_BY_CHANNEL[channelUpper],
         priority: 'Low',
-        status: 'Completed',
+        status: 'Closed',
         assignedToUserId: actor.id || null,
         assignedToName: senderName,
         assignedTeam: 'Category Management',
@@ -473,6 +481,15 @@ async function dispatchActionCenterCommunication(payload, actor = {}) {
     } catch (folErr) {
       followupError = folErr.message;
       logger.warn('Failed to schedule follow-up task for communication', { error: folErr.message }, 'ACTION_CENTER_COMM');
+    }
+  }
+
+  // 7. Auto-complete linked open tasks when Send Proposal or Send Corporate Email is sent
+  if (scenarioId) {
+    try {
+      await internalTaskQueries.autoCompleteTasksForScenario(entityType, entityId, scenarioId, actor);
+    } catch (autoErr) {
+      logger.warn('Failed to auto-complete tasks for communication scenario', { error: autoErr.message }, 'ACTION_CENTER_COMM');
     }
   }
 

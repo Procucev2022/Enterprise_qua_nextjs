@@ -1,6 +1,6 @@
 import React from 'react';
-import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
-import VendorSummary from '@/app/buyer/vendor-summary';
+import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
+import VendorSummary, { setEnableEditVendorProfile, setEnableVendorRating } from '@/app/buyer/vendor-summary';
 import VendorEvaluationSummary from '@/app/buyer/vendor-evaluation-summary';
 import IngestionWizard from '@/app/buyer/ingestion-wizard';
 import { extractLineItemsFromDocument, classifyLineItems, uploadRFQAttachment, createRFQ } from '@/lib/rfqClient';
@@ -36,6 +36,8 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
   const mockShowToast = jest.fn();
   const mockAddBuyerVendor = jest.fn();
   const mockUpdateBuyerVendor = jest.fn();
+  const mockSetBuyerVendorActiveStatus = jest.fn().mockResolvedValue(true);
+  const mockSetMultipleBuyerVendorsActiveStatus = jest.fn().mockResolvedValue(true);
   const mockDeleteBuyerVendor = jest.fn();
   const mockReviseVendorRating = jest.fn();
   const mockOpenRatingRevisionEmailModal = jest.fn();
@@ -128,6 +130,11 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     },
   ];
 
+  beforeAll(() => {
+    setEnableEditVendorProfile(true);
+    setEnableVendorRating(true);
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     (useApp as jest.Mock).mockReturnValue({
@@ -138,6 +145,8 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       buyerVendors: mockBuyerVendors,
       addBuyerVendor: mockAddBuyerVendor,
       updateBuyerVendor: mockUpdateBuyerVendor,
+      setBuyerVendorActiveStatus: mockSetBuyerVendorActiveStatus,
+      setMultipleBuyerVendorsActiveStatus: mockSetMultipleBuyerVendorsActiveStatus,
       deleteBuyerVendor: mockDeleteBuyerVendor,
       categoryTaxonomy: [
         { majorCategory: 'Mechanical', minorCategories: ['Valves', 'Pumps'] },
@@ -250,10 +259,12 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
     }
 
 
-    // Click Edit button on a vendor
-    const editBtns = screen.getAllByRole('button', { name: /Edit/i });
-    if (editBtns.length > 0) {
-      fireEvent.click(editBtns[0]);
+    // Click View Profile then Edit Profile on a vendor
+    const viewBtns = screen.getAllByRole('button', { name: /View Profile/i });
+    if (viewBtns.length > 0) {
+      fireEvent.click(viewBtns[0]);
+      const editProfileBtn = screen.getByRole('button', { name: /Edit Profile/i });
+      fireEvent.click(editProfileBtn);
       expect(screen.getByText('Edit Vendor Profile')).toBeInTheDocument();
 
       // Add a minor category tag
@@ -279,12 +290,15 @@ describe('Buyer Directory & Ingestion Full Coverage Suite', () => {
       fireEvent.click(closeBtn);
     }
 
-    // Delete Modal
-    const deleteBtns = screen.getAllByRole('button', { name: /Delete/i });
-    if (deleteBtns.length > 0) {
-      fireEvent.click(deleteBtns[0]);
-      const confirmDeleteBtn = screen.getByRole('button', { name: /Delete Vendor/i });
-      fireEvent.click(confirmDeleteBtn);
+    // Buyer uploaded vendors expose Mark Inactive rather than Delete
+    expect(screen.queryByRole('button', { name: /^Delete$/i })).not.toBeInTheDocument();
+    const disableBtns = screen.getAllByRole('button', { name: /Mark Inactive/i });
+    if (disableBtns.length > 0) {
+      fireEvent.click(disableBtns[0]);
+      const confirmDisableBtn = screen.getByTestId('confirm-vendor-status-button');
+      await act(async () => {
+        fireEvent.click(confirmDisableBtn);
+      });
     }
 
     // View 360 Evaluation. The status filter is reset first so the evaluated vendor is listed.

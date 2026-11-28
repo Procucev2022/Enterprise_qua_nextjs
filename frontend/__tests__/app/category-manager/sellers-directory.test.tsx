@@ -3,7 +3,6 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import SellersDirectory from '@/app/category-manager/sellers-directory';
 import CategoryManagerSellersDirectoryPage from '@/app/category-manager/sellers-directory/page';
 import { useApp } from '@/lib/store';
-import * as reportsClient from '@/lib/reportsClient';
 import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS } from '@/lib/uiStrings';
 import { RFQ_MODES } from '@/lib/constants';
@@ -15,14 +14,6 @@ jest.mock('@/lib/store', () => ({
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
-
-jest.mock('@/lib/reportsClient', () => {
-  const actual = jest.requireActual('@/lib/reportsClient');
-  return {
-    ...actual,
-    exportReportToExcel: jest.fn(),
-  };
-});
 
 jest.mock('@/lib/rfqClient', () => {
   const actual = jest.requireActual('@/lib/rfqClient');
@@ -121,7 +112,8 @@ describe('SellersDirectory Component Suite', () => {
   test('renders page header, KPI cards, and unified sellers table', async () => {
     render(<SellersDirectory />);
 
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -274,20 +266,18 @@ describe('SellersDirectory Component Suite', () => {
     const searchInput = screen.getByPlaceholderText(/Search company/i);
     fireEvent.change(searchInput, { target: { value: 'Nonexistent Vendor 9999' } });
 
-    expect(screen.getByText('No suppliers found matching your query.')).toBeInTheDocument();
+    expect(screen.getByText(UI_STRINGS.sellerDirectory.noSellersFound)).toBeInTheDocument();
   });
 
-  test('export directory button triggers exportReportToExcel', async () => {
+  test('does not render Export Directory button in toolbar', async () => {
     render(<SellersDirectory />);
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
 
-    const exportBtn = screen.getByText('Export Directory');
-    fireEvent.click(exportBtn);
-
-    expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
   });
 
   test('clicking 360 Dossier opens seller drawer with 5 sections and close button', async () => {
@@ -349,9 +339,9 @@ describe('SellersDirectory Component Suite', () => {
     fireEvent.click(emptyRfqTab);
     expect(screen.getByText(/No quotation opportunities found/i)).toBeInTheDocument();
 
-    // Close via footer Close Dossier button
+    // Close via Close Dossier button
     const closeButtons = screen.getAllByRole('button', { name: /Close Dossier/i });
-    fireEvent.click(closeButtons[closeButtons.length - 1]);
+    fireEvent.click(closeButtons[0]);
 
     await waitFor(() => {
       expect(screen.queryByLabelText('Supplier 360° Dossier')).not.toBeInTheDocument();
@@ -393,7 +383,8 @@ describe('SellersDirectory Component Suite', () => {
     });
 
     render(<CategoryManagerSellersDirectoryPage />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
@@ -629,7 +620,7 @@ describe('SellersDirectory Component Suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
 
@@ -645,7 +636,7 @@ describe('SellersDirectory Component Suite', () => {
     await waitFor(() => {
       expect(screen.getByText('Apex Fasteners Ltd')).toBeInTheDocument();
     });
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
 
@@ -704,6 +695,89 @@ describe('SellersDirectory Component Suite', () => {
         fireEvent.click(closeBtn);
         expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
       }
+    });
+
+    test('renders SUBSCRIPTION VENDORS KPI card, filters table to subscription vendors on click, and resets on click again', async () => {
+      (useApp as jest.Mock).mockReturnValue({
+        buyerVendors: [
+          {
+            id: 'v-sub',
+            name: 'Subscribed Tools Pvt',
+            source: 'buyer_uploaded',
+            majorCategory: 'Tools',
+            subscriptionPlan: 'connect',
+            score: 90,
+            rating: 4.8,
+          },
+          {
+            id: 'v-free',
+            name: 'Free Tier Hardware',
+            source: 'buyer_uploaded',
+            majorCategory: 'Hardware',
+            subscriptionPlan: 'free_tier',
+            score: 80,
+            rating: 3.5,
+          },
+        ],
+        rfqs: [],
+        categoryTaxonomy: [],
+        user: { role: 'CATEGORY_MANAGER', name: 'Govardhan' },
+        auditLogs: [],
+        addAuditLog: jest.fn(),
+        setSelectedRFQForMatrix: jest.fn(),
+      });
+
+      (rfqClient.fetchAllVendors as jest.Mock).mockResolvedValueOnce({
+        success: true,
+        data: [],
+      });
+
+      render(<SellersDirectory />);
+      await waitFor(() => {
+        expect(screen.getByText('Subscribed Tools Pvt')).toBeInTheDocument();
+        expect(screen.getByText('Free Tier Hardware')).toBeInTheDocument();
+      });
+
+      // Find the Subscription Vendors card
+      const subCard = screen.getByText('Subscription Vendors', { selector: 'p' }).closest('[role="group"]') as HTMLElement | null;
+      expect(subCard).toBeInTheDocument();
+      if (!subCard) throw new Error('Expected Subscription Vendors card');
+      expect(within(subCard).getByText('1')).toBeInTheDocument();
+      expect(within(subCard).getByText(/1 Free Tier/i)).toBeInTheDocument();
+
+      // Click to filter by subscription vendors
+      fireEvent.click(subCard);
+      // Dialog modal opens
+      expect(screen.getByRole('dialog')).toBeInTheDocument();
+      expect(within(screen.getByRole('dialog')).getByText('Subscription Vendors')).toBeInTheDocument();
+      // Close modal
+      const closeBtn = screen.getAllByRole('button', { name: /close/i })[0];
+      fireEvent.click(closeBtn);
+
+      // Now table should be filtered to only subscription vendor
+      expect(screen.getByText('Subscribed Tools Pvt')).toBeInTheDocument();
+      expect(screen.queryByText('Free Tier Hardware')).not.toBeInTheDocument();
+
+      // Click Subscription Vendors card again to toggle off filter
+      fireEvent.click(subCard!);
+      // Close modal
+      fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      // Both vendors are visible again
+      expect(screen.getByText('Subscribed Tools Pvt')).toBeInTheDocument();
+      expect(screen.getByText('Free Tier Hardware')).toBeInTheDocument();
+
+      // Filter again, then click Total Suppliers to reset
+      fireEvent.click(subCard!);
+      // Close modal
+      fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      expect(screen.queryByText('Free Tier Hardware')).not.toBeInTheDocument();
+      const totalCard = screen.getByText('Total Suppliers', { selector: 'p' }).closest('[role="group"]');
+      fireEvent.click(totalCard!);
+      // Close dialog
+      fireEvent.click(screen.getAllByRole('button', { name: /close/i })[0]);
+      // Both visible
+      expect(screen.getByText('Subscribed Tools Pvt')).toBeInTheDocument();
+      expect(screen.getByText('Free Tier Hardware')).toBeInTheDocument();
     });
 
     test('opens modal for Network Suppliers, Buyer Uploaded, Avg Score, and Quoted Opportunities with keyboard support', async () => {

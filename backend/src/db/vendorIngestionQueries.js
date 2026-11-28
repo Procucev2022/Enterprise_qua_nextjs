@@ -543,8 +543,26 @@ function mapRowToVendorMaster(row) {
     city: loc.city,
     state: loc.state,
     pincode: loc.pincode,
-    gstin: text(row.gstin),
+    gstin: text(row.gstin) || text(rawMeta.gstin) || text(rawMeta.gstNumber) || text(rawMeta.gst) || null,
     rating: numeric(row.rating),
+    ...(rawMeta.isActive === false || rawMeta.disabled === true || String(rawMeta.status || '').trim().toUpperCase() === 'INACTIVE'
+      ? {
+          isActive: false,
+          disabled: true,
+          status: rawMeta.status || 'INACTIVE',
+          ...(rawMeta.previousStatus !== undefined ? { previousStatus: rawMeta.previousStatus } : {}),
+          ...(rawMeta.disabledAt !== undefined ? { disabledAt: rawMeta.disabledAt } : {}),
+          ...(rawMeta.disabledBy !== undefined ? { disabledBy: rawMeta.disabledBy } : {}),
+        }
+      : rawMeta.isActive === true
+        ? {
+            isActive: true,
+            disabled: false,
+            ...(rawMeta.status ? { status: rawMeta.status } : {}),
+            ...(rawMeta.reactivatedAt !== undefined ? { reactivatedAt: rawMeta.reactivatedAt } : {}),
+            ...(rawMeta.reactivatedBy !== undefined ? { reactivatedBy: rawMeta.reactivatedBy } : {}),
+          }
+        : {}),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -666,7 +684,7 @@ async function bulkUpsertVendorMasterRecords(sessionId, organizationId, rows = [
            rating = excluded.rating,
            source_row_number = excluded.source_row_number,
            raw = excluded.raw,
-           updated_at = now()
+           updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
     {
@@ -708,6 +726,21 @@ async function findVendorMasterRecords(sessionId, organizationId, limit = null) 
   return rows.map(mapRowToVendorMaster);
 }
 
+/** Every vendor-master row for an organisation across ingestion sessions, newest first. */
+async function findOrganizationVendorMasterRecords(organizationId, limit = null) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const hasLimit = Number.isInteger(Number(limit)) && Number(limit) > 0;
+  const limitClause = hasLimit ? ' limit $2' : ' limit 2000';
+  const params = hasLimit ? [organizationId, Math.min(Number(limit), 2000)] : [organizationId];
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where organization_id = $1
+      order by updated_at desc, source_row_number nulls last, company_name${limitClause}`,
+    params,
+    { d1: true }
+  );
+  return rows.map(mapRowToVendorMaster);
+}
+
 /** One vendor-master row, org-scoped. */
 async function findVendorMasterRecord(recordId, organizationId) {
   if (!pool.hasStorage() || !recordId || !organizationId) return null;
@@ -717,6 +750,50 @@ async function findVendorMasterRecord(recordId, organizationId) {
     { d1: true }
   );
   return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
+}
+
+/** One vendor-master row by record id alone (unscoped). */
+async function findVendorMasterRecordById(recordId) {
+  if (!pool.hasStorage() || !recordId) return null;
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where id = $1 limit 1`,
+    [recordId],
+    { d1: true }
+  );
+  return rows.length > 0 ? mapRowToVendorMaster(rows[0]) : null;
+}
+
+/** Persist active/inactive lifecycle metadata onto an org-scoped vendor-master record. */
+async function updateVendorMasterRecordActiveStatus(recordId, organizationId, statusUpdates = {}) {
+  if (!pool.hasStorage() || !recordId || !organizationId) return null;
+  const rows = await pool.rows(
+    `${VENDOR_MASTER_SELECT} where id = $1 and organization_id = $2 limit 1`,
+    [recordId, organizationId],
+    { d1: true }
+  );
+  if (!rows || rows.length === 0) return null;
+  const existingRaw = parseRawRecord(rows[0].raw);
+  const mergedRaw = {
+    ...existingRaw,
+    ...(statusUpdates && typeof statusUpdates === 'object' ? statusUpdates : {}),
+  };
+  const result = await pool.query(
+    `update vendor_master_records
+        set raw = $3::jsonb,
+            updated_at = now()
+      where id = $1 and organization_id = $2
+      returning *`,
+    [recordId, organizationId, JSON.stringify(mergedRaw)],
+    {
+      d1: true,
+      d1Text: `update vendor_master_records
+          set raw = $3,
+              updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+        where id = $1 and organization_id = $2
+        returning *`,
+    }
+  );
+  return result.rows[0] ? mapRowToVendorMaster(result.rows[0]) : null;
 }
 
 async function countVendorMasterRecords(sessionId, organizationId) {
@@ -733,6 +810,17 @@ async function countVendorMasterRecords(sessionId, organizationId) {
   return rows.length > 0 ? counter(rows[0].total) : 0;
 }
 
+/** Clear all category mappings for a session when the vendor master is replaced wholesale. */
+async function deleteCategoryMappingsForSession(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    'delete from vendor_category_mappings where session_id = $1 and organization_id = $2',
+    [sessionId, organizationId],
+    { d1: true }
+  );
+  return result.rowCount || 0;
+}
+
 /** Clear a session's vendor master so a corrected file replaces it wholesale. */
 async function deleteVendorMasterRecords(sessionId, organizationId) {
   if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
@@ -742,6 +830,80 @@ async function deleteVendorMasterRecords(sessionId, organizationId) {
     { d1: true }
   );
   return result.rowCount || 0;
+}
+
+/**
+ * Permanently delete specific vendor_master_records (and cascading category mappings)
+ * by raw record ID, v-master- prefixed ID, email, or vendor code.
+ */
+async function deleteVendorMasterRecordsByIdsOrEmails(identifiers, organizationId) {
+  if (!pool.hasStorage() || !Array.isArray(identifiers) || identifiers.length === 0 || !organizationId) {
+    return 0;
+  }
+
+  const rawIds = [];
+  const emails = [];
+  const codes = [];
+
+  for (const item of identifiers) {
+    if (!item || typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed) continue;
+    if (trimmed.startsWith('v-master-')) {
+      rawIds.push(trimmed.slice('v-master-'.length));
+    } else if (trimmed.includes('@')) {
+      emails.push(trimmed.toLowerCase());
+    } else {
+      rawIds.push(trimmed);
+      codes.push(trimmed);
+    }
+  }
+
+  if (rawIds.length === 0 && emails.length === 0 && codes.length === 0) {
+    return 0;
+  }
+
+  const conditions = [];
+  const params = [organizationId];
+  let pIdx = 2;
+
+  if (rawIds.length > 0) {
+    const idPlaceholders = rawIds.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`id in (${idPlaceholders})`);
+    params.push(...rawIds);
+  }
+  if (emails.length > 0) {
+    const emailPlaceholders = emails.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`lower(email) in (${emailPlaceholders})`);
+    params.push(...emails);
+  }
+  if (codes.length > 0) {
+    const codePlaceholders = codes.map(() => `$${pIdx++}`).join(', ');
+    conditions.push(`vendor_code in (${codePlaceholders})`);
+    params.push(...codes);
+  }
+
+  const selectSql = `select id from vendor_master_records where organization_id = $1 and (${conditions.join(' or ')})`;
+  const rows = await pool.rows(selectSql, params, { d1: true });
+  if (!rows || rows.length === 0) return 0;
+
+  const matchedIds = Array.from(new Set(rows.map((r) => r.id).filter(Boolean)));
+  if (matchedIds.length === 0) return 0;
+
+  const mapPlaceholders = matchedIds.map((_, i) => `$${i + 2}`).join(', ');
+  await pool.query(
+    `delete from vendor_category_mappings where organization_id = $1 and vendor_record_id in (${mapPlaceholders})`,
+    [organizationId, ...matchedIds],
+    { d1: true }
+  );
+
+  const result = await pool.query(
+    `delete from vendor_master_records where organization_id = $1 and id in (${mapPlaceholders})`,
+    [organizationId, ...matchedIds],
+    { d1: true }
+  );
+
+  return result.rowCount || matchedIds.length;
 }
 
 /**
@@ -916,6 +1078,39 @@ async function deletePoLineItems(sessionId, organizationId) {
 }
 
 /**
+ * Load existing PO line items previously uploaded by this organization so
+ * re-uploaded PO dumps can detect and reject duplicate PO records.
+ */
+async function findExistingPoLineItemsByOrganization(organizationId, limit = 5000) {
+  if (!pool.hasStorage() || !organizationId) return [];
+  const cap = Math.min(Math.max(counter(limit) || 5000, 1), 10000);
+  const rows = await pool.rows(
+    `select id, session_id, po_number, po_date, vendor_code, vendor_name,
+            item_description, specification, quantity, uom, spend, department
+       from po_line_items
+      where organization_id = $1
+      order by created_at desc
+      limit $2`,
+    [organizationId, cap],
+    { d1: true }
+  );
+  return rows.map((row) => ({
+    id: row.id,
+    sessionId: row.session_id,
+    poNumber: row.po_number || null,
+    poDate: dateOnly(row.po_date),
+    vendorCode: row.vendor_code || null,
+    vendorName: row.vendor_name || null,
+    itemDescription: row.item_description || null,
+    specification: row.specification || null,
+    quantity: numeric(row.quantity),
+    uom: row.uom || null,
+    spend: numeric(row.spend),
+    department: row.department || null,
+  }));
+}
+
+/**
  * Attribute in-horizon PO lines to vendor-master rows.
  *
  * Runs as three UPDATEs in the documented priority order, each only touching
@@ -945,48 +1140,47 @@ async function matchPoLineItemsToVendors(sessionId, organizationId) {
   );
   void clearResult;
 
-  // UPDATE ... FROM (a join-based update) is Postgres syntax that SQLite has
-  // also supported since 3.33 with an identical shape — verified directly
-  // against the real D1 database before relying on it here, so this is one
-  // genuinely shared query text, not a d1Text override.
+  // Target-table aliases (e.g. `UPDATE po_line_items p SET ... FROM ...`) are valid in
+  // PostgreSQL but rejected by SQLite / Cloudflare D1 with `near "p": syntax error`.
+  // Qualifying the target table by its name works identically across both PostgreSQL and D1.
   const byVendorCode = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.vendor_code is not null and p.vendor_code <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.vendor_code is not null and po_line_items.vendor_code <> ''
         and v.vendor_code is not null and v.vendor_code <> ''
-        and lower(trim(p.vendor_code)) = lower(trim(v.vendor_code))`,
+        and lower(trim(po_line_items.vendor_code)) = lower(trim(v.vendor_code))`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.VENDOR_CODE],
     { d1: true }
   );
 
   const byGstin = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.vendor_gstin is not null and p.vendor_gstin <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.vendor_gstin is not null and po_line_items.vendor_gstin <> ''
         and v.gstin is not null and v.gstin <> ''
-        and upper(trim(p.vendor_gstin)) = upper(trim(v.gstin))`,
+        and upper(trim(po_line_items.vendor_gstin)) = upper(trim(v.gstin))`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.GSTIN],
     { d1: true }
   );
 
   const byName = await pool.query(
-    `update po_line_items p
+    `update po_line_items
         set matched_vendor_record_id = v.id, match_strategy = $3
        from vendor_master_records v
-      where p.session_id = $1 and p.organization_id = $2 and p.in_horizon
-        and v.session_id = p.session_id and v.organization_id = p.organization_id
-        and p.matched_vendor_record_id is null
-        and p.normalized_vendor_name is not null and p.normalized_vendor_name <> ''
+      where po_line_items.session_id = $1 and po_line_items.organization_id = $2 and po_line_items.in_horizon
+        and v.session_id = po_line_items.session_id and v.organization_id = po_line_items.organization_id
+        and po_line_items.matched_vendor_record_id is null
+        and po_line_items.normalized_vendor_name is not null and po_line_items.normalized_vendor_name <> ''
         and v.normalized_name is not null and v.normalized_name <> ''
-        and p.normalized_vendor_name = v.normalized_name`,
+        and po_line_items.normalized_vendor_name = v.normalized_name`,
     [sessionId, organizationId, VENDOR_MATCH_STRATEGY.NORMALIZED_NAME],
     { d1: true }
   );
@@ -1115,7 +1309,7 @@ async function findVendorPurchasingProfiles(sessionId, organizationId, { descrip
             json_group_array(distinct p.existing_category)
               filter (where p.existing_category is not null and p.existing_category <> '')
               as existing_categories,
-            json_group_array(json_object('desc', p.item_description, 'spec', p.specification, 'qty', p.quantity, 'uom', p.uom) order by p.spend desc)
+            json_group_array(json_object('desc', p.item_description, 'spec', p.specification, 'qty', p.quantity, 'uom', p.uom))
               filter (where p.id is not null)
               as line_parts
        from vendor_master_records v
@@ -1329,6 +1523,12 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]' else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
      returning *`,
         params: [
@@ -1413,7 +1613,13 @@ async function seedCategoryMappings(sessionId, organizationId, profiles = []) {
                then vendor_category_mappings.processing_status
              else '${VENDOR_AI_PROCESSING_STATUS.QUEUED}'
            end,
-           updated_at = now()
+           ai_major_category = case when not excluded.has_po_history then null else vendor_category_mappings.ai_major_category end,
+           ai_minor_categories = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_minor_categories end,
+           ai_relevant_products = case when not excluded.has_po_history then '[]'::jsonb else vendor_category_mappings.ai_relevant_products end,
+           ai_confidence = case when not excluded.has_po_history then null else vendor_category_mappings.ai_confidence end,
+           ai_reason = case when not excluded.has_po_history then null else vendor_category_mappings.ai_reason end,
+           ai_model = case when not excluded.has_po_history then null else vendor_category_mappings.ai_model end,
+           updated_at = CURRENT_TIMESTAMP
      returning *`,
     values,
     { d1: true }
@@ -1481,7 +1687,7 @@ async function markMappingProcessing(mappingId, organizationId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, attempt_count = attempt_count + 1, updated_at = now()
+        set processing_status = $3, attempt_count = attempt_count + 1, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.PROCESSING],
@@ -1513,7 +1719,7 @@ async function saveAiSuggestion(mappingId, organizationId, suggestion) {
             processing_error = null,
             is_new_category_suggestion = $12,
             suggested_new_category = $13,
-            updated_at = now()
+            updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1568,7 +1774,7 @@ async function markMappingFailed(mappingId, organizationId, errorMessage) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, status = $4, processing_error = $5, updated_at = now()
+        set processing_status = $3, status = $4, processing_error = $5, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1588,13 +1794,66 @@ async function requeueMapping(mappingId, organizationId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_mappings
-        set processing_status = $3, processing_error = null, updated_at = now()
+        set processing_status = $3, processing_error = null, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2 and has_po_history
       returning *`,
     [mappingId, organizationId, VENDOR_AI_PROCESSING_STATUS.QUEUED],
     { d1: true }
   );
   return result.rows[0] ? mapRowToMapping(result.rows[0]) : null;
+}
+
+/** Reset non-approved mappings back to QUEUED and clear stale PO/AI derivations when PO data changes. */
+async function resetCategoryMappingsForReclassification(sessionId, organizationId) {
+  if (!pool.hasStorage() || !sessionId || !organizationId) return 0;
+  const result = await pool.query(
+    `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]'::jsonb,
+            ai_relevant_products = '[]'::jsonb,
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = false,
+            po_count = 0,
+            total_spend = 0,
+            updated_at = CURRENT_TIMESTAMP
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    [
+      sessionId,
+      organizationId,
+      VENDOR_AI_PROCESSING_STATUS.QUEUED,
+      VENDOR_MAPPING_STATUS.BUYER_APPROVED,
+      VENDOR_MAPPING_STATUS.REJECTED,
+      VENDOR_MAPPING_STATUS.PENDING_REVIEW,
+    ],
+    {
+      d1: true,
+      d1Text: `update vendor_category_mappings
+        set processing_status = $3,
+            status = $6,
+            processing_error = null,
+            ai_major_category = null,
+            ai_minor_categories = '[]',
+            ai_relevant_products = '[]',
+            ai_confidence = null,
+            ai_reason = null,
+            ai_model = null,
+            has_po_history = 0,
+            po_count = 0,
+            total_spend = 0,
+            updated_at = strftime('%Y-%m-%dT%H:%M:%fZ','now')
+      where session_id = $1
+        and organization_id = $2
+        and status not in ($4, $5)`,
+    }
+  );
+  return result.rowCount || 0;
 }
 
 /**
@@ -1613,8 +1872,8 @@ async function saveBuyerReview(mappingId, organizationId, review) {
             status = $6,
             review_action = $7,
             reviewed_by = $8,
-            reviewed_at = now(),
-            updated_at = now()
+            reviewed_at = CURRENT_TIMESTAMP,
+            updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [
@@ -1649,7 +1908,7 @@ async function saveBuyerReview(mappingId, organizationId, review) {
 async function attachVendorId(mappingId, organizationId, vendorId) {
   if (!pool.hasStorage() || !mappingId || !organizationId) return null;
   const result = await pool.query(
-    `update vendor_category_mappings set vendor_id = $3, updated_at = now()
+    `update vendor_category_mappings set vendor_id = $3, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2 returning *`,
     [mappingId, organizationId, nullable(vendorId)],
     { d1: true }
@@ -1879,7 +2138,7 @@ async function finalizeDispatch(dispatchId, organizationId, { sentCount, failedC
   if (!pool.hasStorage() || !dispatchId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_category_dispatches
-        set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = now()
+        set sent_count = $3, failed_count = $4, skipped_count = $5, status = $6, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [dispatchId, organizationId, counter(sentCount), counter(failedCount), counter(skippedCount), status],
@@ -1996,7 +2255,7 @@ async function claimEmailSlot({
            dispatch_id = $2,
            attempt_count = vendor_email_dispatch_log.attempt_count + 1,
            detail = null,
-           updated_at = now()
+           updated_at = CURRENT_TIMESTAMP
        where vendor_email_dispatch_log.status in ($12, $13)
      returning *`,
     [
@@ -2023,7 +2282,7 @@ async function markEmailSent(logId, organizationId, messageId) {
   if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
-        set status = $3, message_id = $4, detail = null, sent_at = now(), updated_at = now()
+        set status = $3, message_id = $4, detail = null, sent_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [logId, organizationId, VENDOR_EMAIL_STATUS.SENT, nullable(messageId)],
@@ -2036,7 +2295,7 @@ async function markEmailFailed(logId, organizationId, detail) {
   if (!pool.hasStorage() || !logId || !organizationId) return null;
   const result = await pool.query(
     `update vendor_email_dispatch_log
-        set status = $3, detail = $4, updated_at = now()
+        set status = $3, detail = $4, updated_at = CURRENT_TIMESTAMP
       where id = $1 and organization_id = $2
       returning *`,
     [logId, organizationId, VENDOR_EMAIL_STATUS.FAILED, nullable(detail)],
@@ -2293,14 +2552,19 @@ module.exports = {
   // vendor master
   bulkUpsertVendorMasterRecords,
   findVendorMasterRecords,
+  findOrganizationVendorMasterRecords,
   findVendorMasterRecord,
+  findVendorMasterRecordById,
+  updateVendorMasterRecordActiveStatus,
   countVendorMasterRecords,
   deleteVendorMasterRecords,
+  deleteVendorMasterRecordsByIdsOrEmails,
   markVendorMasterUploaded,
   // po data
   bulkInsertPoLineItems,
   countPoLineItems,
   deletePoLineItems,
+  findExistingPoLineItemsByOrganization,
   matchPoLineItemsToVendors,
   findVendorPurchasingProfiles,
   findUnmatchedPoVendors,
@@ -2313,6 +2577,8 @@ module.exports = {
   saveAiSuggestion,
   markMappingFailed,
   requeueMapping,
+  resetCategoryMappingsForReclassification,
+  deleteCategoryMappingsForSession,
   saveBuyerReview,
   attachVendorId,
   summarizeCategoryMappings,

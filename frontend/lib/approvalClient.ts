@@ -1,6 +1,7 @@
 import { authClient } from './authClient';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
+import { APPROVER_CONFIG } from './constants';
 import type { ApprovalRequest, ApprovalSummary } from './types';
 
 const RESOURCES = UI_STRINGS.dataLoad.resources;
@@ -112,13 +113,14 @@ export async function processApprovalAction(
   action: 'APPROVE' | 'REJECT',
   remarks = '',
   password = '',
-  approverName = ''
+  approverName = '',
+  verificationType?: 'password' | 'otp'
 ): Promise<{ success: boolean; data?: ApprovalRequest; error?: string }> {
   try {
     const res = await fetch(`/api/approvals/${encodeURIComponent(id)}/action`, {
       method: 'POST',
       headers: authHeaders(),
-      body: JSON.stringify({ action, remarks, password, approverName }),
+      body: JSON.stringify({ action, remarks, password, approverName, verificationType }),
     });
     const json = await res.json();
     if (!res.ok) {
@@ -130,5 +132,110 @@ export async function processApprovalAction(
     logApprovalTransportFailure('Approval decision', err);
     const msg = err instanceof Error && err.message ? err.message : 'Network error';
     return { success: false, error: msg };
+  }
+}
+
+/**
+ * Send an OTP code to the assigned approver email for authorization.
+ */
+export async function sendApprovalOtp(
+  approverName: string,
+  id?: string
+): Promise<{ success: boolean; message?: string; email?: string; expiresInSeconds?: number; error?: string }> {
+  try {
+    const res = await fetch('/api/approvals/send-otp', {
+      method: 'POST',
+      headers: authHeaders(),
+      body: JSON.stringify({ approverName, id }),
+    });
+    const json = await res.json();
+    if (!res.ok) {
+      logApprovalResponseFailure('Approval OTP request', res.status);
+      return { success: false, error: json.error || 'Failed to send verification OTP.' };
+    }
+    return {
+      success: true,
+      message: json.message,
+      email: json.email,
+      expiresInSeconds: json.expiresInSeconds,
+    };
+  } catch (err: unknown) {
+    logApprovalTransportFailure('Approval OTP request', err);
+    const msg = err instanceof Error && err.message ? err.message : 'Network error';
+    return { success: false, error: msg };
+  }
+}
+
+export interface ApprovalApproverOption {
+  id: string;
+  name: string;
+  title?: string;
+  email?: string | null;
+}
+
+export interface ApprovalUserOption {
+  id: string;
+  name: string;
+  role?: string | null;
+  email?: string | null;
+}
+
+export async function fetchApprovalApprovers(): Promise<{ approvers: ApprovalApproverOption[]; error?: string }> {
+  try {
+    const res = await fetch('/api/approvals/approvers', { headers: authHeaders() });
+    if (!res.ok) {
+      return { approvers: [...APPROVER_CONFIG] };
+    }
+    const json = await res.json();
+    if (Array.isArray(json?.approvers) && json.approvers.length > 0) {
+      return { approvers: json.approvers };
+    }
+    return { approvers: [...APPROVER_CONFIG] };
+  } catch {
+    return { approvers: [...APPROVER_CONFIG] };
+  }
+}
+
+export async function fetchApprovalUsers(): Promise<{ users: ApprovalUserOption[]; error?: string }> {
+  try {
+    const res = await fetch('/api/approvals/users', { headers: authHeaders() });
+    if (!res.ok) {
+      const fallback = await fetch('/api/internal-tasks/assignees', { headers: authHeaders() });
+      if (fallback.ok) {
+        const fJson = await fallback.json();
+        if (Array.isArray(fJson?.assignees) && fJson.assignees.length > 0) {
+          return { users: fJson.assignees };
+        }
+      }
+      return {
+        users: [
+          { id: 'usr_govardhan', name: 'Govardhan', role: 'Category Manager' },
+          { id: 'usr_krishna', name: 'Krishna', role: 'Category Manager' },
+          { id: 'usr_chandan', name: 'Chandan', role: 'Internal Staff' },
+          { id: 'usr_sudheer', name: 'Sudheer', role: 'Management Authority' },
+        ],
+      };
+    }
+    const json = await res.json();
+    if (Array.isArray(json?.users) && json.users.length > 0) {
+      return { users: json.users };
+    }
+    return {
+      users: [
+        { id: 'usr_govardhan', name: 'Govardhan', role: 'Category Manager' },
+        { id: 'usr_krishna', name: 'Krishna', role: 'Category Manager' },
+        { id: 'usr_chandan', name: 'Chandan', role: 'Internal Staff' },
+        { id: 'usr_sudheer', name: 'Sudheer', role: 'Management Authority' },
+      ],
+    };
+  } catch {
+    return {
+      users: [
+        { id: 'usr_govardhan', name: 'Govardhan', role: 'Category Manager' },
+        { id: 'usr_krishna', name: 'Krishna', role: 'Category Manager' },
+        { id: 'usr_chandan', name: 'Chandan', role: 'Internal Staff' },
+        { id: 'usr_sudheer', name: 'Sudheer', role: 'Management Authority' },
+      ],
+    };
   }
 }

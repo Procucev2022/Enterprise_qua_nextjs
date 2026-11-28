@@ -3,9 +3,19 @@ import { render, screen, fireEvent, act, within, waitFor } from '@testing-librar
 import * as XLSX from 'xlsx';
 import InitialSetupModal, { IngestionProgressCard, parseVendorMobile } from '@/app/buyer/initial-setup-modal';
 import { useApp } from '@/lib/store';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { formatString, UI_STRINGS } from '@/lib/uiStrings';
 import { PO_DUMP_TEMPLATE_HEADERS } from '@/lib/constants';
 import { logger } from '@/lib/logger';
+import * as vendorUploadHistoryClient from '@/lib/vendorUploadHistoryClient';
+
+jest.mock('@/lib/vendorUploadHistoryClient', () => ({
+  fetchVendorUploadHistory: jest.fn().mockResolvedValue([]),
+  saveVendorUploadHistoryBatch: jest.fn().mockImplementation(async (batch) => ({
+    id: batch.id || 'batch-saved-mock',
+    ...batch,
+  })),
+  deleteVendorUploadHistoryBatch: jest.fn().mockResolvedValue(true),
+}));
 
 const originalLoggerRemoteSyncEnabled = logger.isRemoteSyncEnabled;
 
@@ -172,8 +182,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     ...overrides,
   });
 
-  const jsonResponse = (body: unknown, ok = true) =>
-    Promise.resolve({ ok, status: ok ? 200 : 500, json: () => Promise.resolve(body) });
+  const jsonResponse = (body: unknown, ok = true, status?: number) =>
+    Promise.resolve({ ok, status: status !== undefined ? status : (ok ? 200 : 500), json: () => Promise.resolve(body) });
 
   /**
    * Stands in for the ingestion server: a saved session, the AI category job and the supplier mappings it stores.
@@ -190,6 +200,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       horizonClearsPo?: boolean;
       createSessionFails?: boolean;
       horizonFails?: boolean;
+      useDirectAi?: boolean;
+      directAiFails?: string;
     } = {}
   ) => {
     const fetchMock = jest.fn<Promise<unknown>, [string, RequestInit?]>((url: string, init?: RequestInit) => {
@@ -205,6 +217,21 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       if (url.includes('/time-horizon')) {
         if (options.horizonFails) return jsonResponse({ success: false, error: 'Horizon store unavailable' }, false);
         return jsonResponse({ success: true, data: {}, poDataCleared: options.horizonClearsPo === true });
+      }
+      if (url.endsWith('/ai-categorize-direct')) {
+        if (options.directAiFails !== undefined) {
+          return jsonResponse({ success: false, error: options.directAiFails || null }, false, 500);
+        }
+        if (options.useDirectAi) {
+          return jsonResponse({
+            success: true,
+            data: {
+              job: options.startJob ?? completedAiJob({ fileName: '' }),
+              mappings: options.mappings === undefined ? [APEX_MAPPING] : options.mappings,
+            },
+          });
+        }
+        return jsonResponse({ success: false, error: 'Direct route not found' }, false, 404);
       }
       if (url.endsWith('/ai-categorize-job')) {
         if (options.startFails) return jsonResponse({ success: false, error: options.startFails }, false);
@@ -1744,6 +1771,9 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
       />
     );
     expect(screen.getAllByText('Processing...').length).toBeGreaterThanOrEqual(1);
+    expect(
+      screen.queryByText(/Backend processing continues if you close this window or navigate away/i)
+    ).not.toBeInTheDocument();
 
     rerender(
       <IngestionProgressCard
@@ -2436,7 +2466,7 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         'PO Date': '2025-04-11',
         'Vendor Name': 'Minimalist Vendor Pvt Ltd',
         'Item Name': 'Civil works peb tmt steel structure', // lines 1226-1227
-        Specifications: 'Steel structure, Fe 500',
+        // Specifications intentionally omitted so the preview cell falls back to '—'
         Quantity: 1,
         'Total Spend': 5000,
       },
@@ -3584,6 +3614,75 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     }
   });
 
+  it('validates GSTIN in Vendor Master: detects invalid GSTIN characters/format, blocks navigation to PO dump, and shows inline errors', async () => {
+    const { container } = render(<InitialSetupModal />);
+
+    // Proceed to Step 2
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    // Upload spreadsheet with an invalid GSTIN (like DFFD)
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '1',
+        'Company Name': 'Test Vendor',
+        'Contact Person': 'John Doe',
+        'Email ID': 'vendor@test.com',
+        Phone: '+91 9823784838',
+        Address: 'Hyderabad',
+        GSTIN: 'DFFD',
+      },
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Valid Vendor',
+        'Contact Person': 'Jane Smith',
+        'Email ID': 'valid@test.com',
+        Phone: '+91 9823784839',
+        Address: 'Mumbai',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendors');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const file: any = new File([buf], 'vendor_master_gstin.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    file.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]');
+    if (fileInput) {
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [file] } });
+        await new Promise((resolve) => setTimeout(resolve, 60));
+      });
+    }
+
+    // Read-only table displays invalid GSTIN badge for DFFD
+    expect(screen.getByText(/Invalid GSTIN \(DFFD\)/i)).toBeInTheDocument();
+    expect(screen.getByText('27AAACK3921P1Z9')).toBeInTheDocument();
+
+    // Proceed to File 2: PO Dump is blocked
+    fireEvent.click(screen.getByText(/Proceed to File 2: PO Dump/i));
+    expect(mockShowToast).toHaveBeenCalledWith(
+      'Validation Error in Vendor Master',
+      expect.stringContaining('Cannot proceed: 1 vendor record(s) contain missing or invalid required fields'),
+      'warning'
+    );
+
+    // Switch to Edit Data mode and verify inline error message
+    fireEvent.click(screen.getByText('Edit Data'));
+    expect(screen.getByText(/GSTIN must contain exactly 15 characters/i)).toBeInTheDocument();
+
+    // Fix the GSTIN in editable mode
+    const gstinInputs = screen.getAllByPlaceholderText('GSTIN');
+    const dffdInput = gstinInputs.find((input: any) => input.value === 'DFFD');
+    expect(dffdInput).toBeTruthy();
+    if (dffdInput) {
+      fireEvent.change(dffdInput, { target: { value: '29ABCDE1234F1Z5' } });
+      expect(dffdInput).toHaveValue('29ABCDE1234F1Z5');
+    }
+  });
+
   it('handles vendor codes during Vendor Master upload: retains provided codes, generates sequential 1, 2, 3 codes when absent, and prevents collisions', async () => {
     const { container } = render(<InitialSetupModal />);
 
@@ -4200,6 +4299,58 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText(UI_STRINGS.vendorPoIngestion.aiCategory.sessionNotReady)).toBeInTheDocument();
   });
 
+  it('executes direct AI categorization in a single API call and opens Step 4 directly', async () => {
+    installIngestionServer({ useDirectAi: true });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization error when direct route fails with error message', async () => {
+    installIngestionServer({ directAiFails: 'Direct AI categorization failed on server' });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText('Direct AI categorization failed on server')).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization error when direct route fails with empty error message', async () => {
+    installIngestionServer({ directAiFails: '' });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(UI_STRINGS.vendorPoIngestion.aiCategory.startFailed)).toBeInTheDocument();
+    expect(screen.getByText(/Step 3: Upload File 2/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization with custom file name and empty mappings', async () => {
+    installIngestionServer({ useDirectAi: true, startJob: completedAiJob({ fileName: 'custom_po.xlsx' }), mappings: [] });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
+  it('handles direct AI categorization when mappings is null', async () => {
+    installIngestionServer({ useDirectAi: true, mappings: null as unknown as Record<string, unknown>[] });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    expect(await screen.findByText(/COMPLETE SETUP & INGEST/i)).toBeInTheDocument();
+  });
+
   it('creates the session with the chosen period when the server has none', async () => {
     const server = installIngestionServer({ session: null });
     render(<InitialSetupModal />);
@@ -4293,8 +4444,8 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(screen.getByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
   });
 
-  it('hydrates saved vendor_master_records on resume and tolerates non-ok or failing fetches', async () => {
-    const server = installIngestionServer({
+  it('does not render old uploaded vendor records in vendor master section on setup open', async () => {
+    installIngestionServer({
       session: {
         id: SESSION_ID,
         horizonType: 'LAST_1_YEAR',
@@ -4303,73 +4454,13 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
         poRowCount: 0,
       },
     });
-    const baseImpl = server.getMockImplementation()!;
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.resolve({
-          ok: true,
-          status: 200,
-          json: async () => ({
-            success: true,
-            data: {
-              records: [
-                {
-                  id: 'vm-1',
-                  vendorCode: 'VC-101',
-                  companyName: 'Hydrated Csv Supplier',
-                  contactPerson: 'Veera',
-                  email: 'veera@hydrated.test',
-                  phone: '+91 9876543210',
-                  address: 'Hyderabad',
-                  gstin: '36ABCDE1234F1Z5',
-                  rating: 88,
-                },
-                {
-                  id: '',
-                  vendorCode: '',
-                  companyName: '',
-                  email: '',
-                },
-              ],
-            },
-          }),
-        } as Response);
-      }
-      return baseImpl(url, init);
-    });
 
-    const { unmount } = render(<InitialSetupModal />);
-    await settleOpeningRequests();
-    await waitFor(() =>
-      expect(server).toHaveBeenCalledWith(
-        `/api/vendor-ingestion/${SESSION_ID}/vendor-master?limit=500`,
-        expect.any(Object)
-      )
-    );
-    fireEvent.click(screen.getByText('2. Vendor Master'));
-    expect(await screen.findByText('Hydrated Csv Supplier')).toBeInTheDocument();
-    unmount();
-
-    // Non-ok response branch
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.resolve({ ok: false, status: 500, json: async () => ({}) } as Response);
-      }
-      return baseImpl(url, init);
-    });
-    const r2 = render(<InitialSetupModal />);
-    await settleOpeningRequests();
-    r2.unmount();
-
-    // Fetch rejection branch
-    server.mockImplementation((url: string, init?: RequestInit) => {
-      if (url.includes(`/api/vendor-ingestion/${SESSION_ID}/vendor-master`)) {
-        return Promise.reject(new Error('Network down'));
-      }
-      return baseImpl(url, init);
-    });
     render(<InitialSetupModal />);
     await settleOpeningRequests();
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    expect(screen.queryByText('Hydrated Csv Supplier')).not.toBeInTheDocument();
+    expect(screen.queryByText('Testing data.csv')).not.toBeInTheDocument();
+    expect(screen.getByText('No Vendor Master file selected')).toBeInTheDocument();
   });
 
   it('extracts and persists city, state, and pincode from combined addresses and explicit columns during upload and inline edits', async () => {
@@ -4418,22 +4509,27 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     });
 
     await waitFor(() => {
-      const history = JSON.parse(localStorage.getItem('procucev_vendor_upload_history') || '[]');
-      expect(history).toHaveLength(1);
-      expect(history[0].records[0]).toMatchObject({
-        name: 'Veera Solutions Pvt LTD',
-        address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
-        city: 'Bengaluru',
-        state: 'Karnataka',
-        pincode: '560037',
-      });
-      expect(history[0].records[1]).toMatchObject({
-        name: 'Explicit Address Supplier',
-        address: 'Plot 12, Chakan MIDC',
-        city: 'Pune',
-        state: 'Maharashtra',
-        pincode: '410501',
-      });
+      expect(vendorUploadHistoryClient.saveVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.objectContaining({
+          fileName: 'location-vendors.xlsx',
+          records: expect.arrayContaining([
+            expect.objectContaining({
+              name: 'Veera Solutions Pvt LTD',
+              address: '302, Sharada, AECS Layout, Kundalahalli, Bengaluru - 560037',
+              city: 'Bengaluru',
+              state: 'Karnataka',
+              pincode: '560037',
+            }),
+            expect.objectContaining({
+              name: 'Explicit Address Supplier',
+              address: 'Plot 12, Chakan MIDC',
+              city: 'Pune',
+              state: 'Maharashtra',
+              pincode: '410501',
+            }),
+          ]),
+        })
+      );
     });
 
     // Inline edit address row and confirm address update handler updates without error
@@ -4477,6 +4573,1361 @@ describe('app/buyer/initial-setup-modal.tsx', () => {
     expect(await screen.findByText('PO Dump Uploaded Successfully')).toBeInTheDocument();
     expect(screen.getByText('Industrial Ball Valve 2 Inch')).toBeInTheDocument();
     expect(screen.getByText('SS316 PN40')).toBeInTheDocument();
+
+    // Preview table and instructions show only the 3 fields matching the latest Excel template
+    expect(screen.getByText(UI_STRINGS.vendorPoIngestion.poDump.requiredColumnsBanner)).toBeInTheDocument();
+    const headerCells = Array.from(container.querySelectorAll('table thead th')).map((th) => th.textContent?.trim());
+    expect(headerCells).toEqual([
+      UI_STRINGS.vendorPoIngestion.poDump.fieldVendor,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldDescription,
+      UI_STRINGS.vendorPoIngestion.poDump.fieldSpecsOptional,
+    ]);
+    expect(screen.queryByText('PO Number')).not.toBeInTheDocument();
+    expect(screen.queryByText('PO Date')).not.toBeInTheDocument();
+    expect(screen.queryByText(/Total Spend/i)).not.toBeInTheDocument();
+  });
+
+  it('derives minor categories from local PO lines when server mapping has majorCategory but empty finalMinorCategories', async () => {
+    installIngestionServer({
+      mappings: [{ ...APEX_MAPPING, finalMinorCategories: [] }],
+    });
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+    const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    fireEvent.change(vInput, { target: { files: [createValidVendorMasterFile()] } });
+
+    fireEvent.click(screen.getByText('3. PO Dump'));
+    const poInputs = container.querySelectorAll('input[type="file"]');
+    const poInput = poInputs[poInputs.length - 1] as HTMLInputElement;
+    fireEvent.change(poInput, { target: { files: [createValidPoDumpFile()] } });
+
+    fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+    fireEvent.click(screen.getByText(/COMPLETE SETUP & INGEST/i));
+    await waitFor(() => expect(mockProcessHistoricalPurchaseData).toHaveBeenCalled());
+    const submittedVendors = mockProcessHistoricalPurchaseData.mock.calls[0][1];
+    expect(submittedVendors[0].secondSetMinorCategories.length).toBeGreaterThan(0);
+  });
+
+  it('skips duplicate vendors within uploaded file, displays skipped duplicate banner with reasons, and resets on Clear', async () => {
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': 'V-501',
+        'Company Name': 'Govardhan Solutions Pvt LTD',
+        'Contact Person': 'Govardhan',
+        Email: 'govardhan.kilari@procucev.com',
+        Phone: '9966766905',
+        Address: 'Bengaluru',
+        GSTIN: '27AAACA1928K1Z4',
+      },
+      {
+        'Vendor Code': 'V-502',
+        'Company Name': 'Veera Solutions Pvt LTD',
+        'Contact Person': 'veerababu',
+        Email: 'veerababu.v@procucev.com',
+        Phone: '9381877013',
+        Address: 'Bengaluru',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+      {
+        'Vendor Code': 'V-503',
+        'Company Name': 'Govardhan Duplicate Row',
+        'Contact Person': 'Govardhan',
+        Email: 'GOVARDHAN.KILARI@procucev.com',
+        Phone: '9999999901',
+        Address: 'Mumbai',
+        GSTIN: '27NEWGS1928K1Z4',
+      },
+      {
+        'Vendor Code': 'V-504',
+        'Company Name': 'Veera Dup GSTIN Row',
+        'Contact Person': 'Veera',
+        Email: 'veera-other@procucev.com',
+        Phone: '9999999902',
+        Address: 'Chennai',
+        GSTIN: '27AAACK3921P1Z9',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const dupFile: any = new File([buf], 'Testing data.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    dupFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [dupFile] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    const skippedBanner = await screen.findByTestId('vendor-duplicate-skipped-banner');
+    expect(skippedBanner).toBeInTheDocument();
+    expect(skippedBanner).toHaveTextContent('#4');
+    expect(skippedBanner).toHaveTextContent('#5');
+    expect(skippedBanner).toHaveTextContent('Govardhan Duplicate Row');
+    expect(skippedBanner).toHaveTextContent('Veera Dup GSTIN Row');
+    expect(screen.getByText(/Stored Vendor Master Records \(2 Suppliers\)/i)).toBeInTheDocument();
+    expect(mockShowToast).toHaveBeenCalledWith(
+      UI_STRINGS.vendorPoIngestion.vendorMaster.duplicatesWarningToastTitle,
+      expect.stringContaining('2 duplicate'),
+      'warning'
+    );
+
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreate = URL.createObjectURL;
+    const originalRevoke = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:dup-modal');
+    URL.revokeObjectURL = jest.fn();
+    try {
+      fireEvent.click(
+        screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv })
+      );
+      expect(URL.createObjectURL).toHaveBeenCalledTimes(1);
+      expect(clickSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      URL.createObjectURL = originalCreate;
+      URL.revokeObjectURL = originalRevoke;
+      clickSpy.mockRestore();
+    }
+
+    fireEvent.click(
+      screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.dismissDuplicatesAction })
+    );
+    expect(screen.queryByTestId('vendor-duplicate-skipped-banner')).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /^Clear$/i }));
+    expect(screen.queryByTestId('vendor-duplicate-skipped-banner')).not.toBeInTheDocument();
+  });
+
+  it('skips all rows and displays all-duplicates warning banner when every uploaded vendor matches existing Buyer Directory', async () => {
+    installIngestionServer();
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+
+    fireEvent.click(screen.getByText('2. Vendor Master'));
+
+    // Both rows duplicate mockBuyerVendors[0] ('rajesh@apex.in' and Apex Supplies Ltd. + 9820144820)
+    const wb = XLSX.utils.book_new();
+    const ws = XLSX.utils.json_to_sheet([
+      {
+        'Vendor Code': '1',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh',
+        Email: 'rajesh@apex.in',
+        Phone: '9820144820',
+        Address: 'Mumbai',
+      },
+      {
+        'Vendor Code': '2',
+        'Company Name': 'Apex Supplies Ltd.',
+        'Contact Person': 'Rajesh',
+        Email: 'rajesh-alt@apex.in',
+        Phone: '9820144820',
+        Address: 'Mumbai',
+      },
+    ]);
+    XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+    const existingDupFile: any = new File([buf], 'all_existing_dupes.xlsx', {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
+    existingDupFile.__buffer = buf;
+
+    const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    await act(async () => {
+      fireEvent.change(fileInput, { target: { files: [existingDupFile] } });
+      await new Promise((resolve) => setTimeout(resolve, 60));
+    });
+
+    expect(await screen.findByTestId('vendor-duplicate-skipped-banner')).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        formatString(UI_STRINGS.vendorPoIngestion.vendorMaster.allDuplicatesBannerTitle, { count: 2 })
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/Stored Vendor Master Records/i)).not.toBeInTheDocument();
+  });
+
+  it('populates skipped duplicate banner when polling returns backend duplicate_skipped errorDetails', async () => {
+    let jobPollCount = 0;
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ data: { session: { id: 'sess-poll-dup' } } }),
+        });
+      }
+      if (url.includes('/stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-poll-dup-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'huge_dupes.csv',
+                  status: 'PROCESSING',
+                  totalRecords: 3,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/job-poll-dup-1')) {
+        jobPollCount++;
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-poll-dup-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'huge_dupes.csv',
+                  status: 'COMPLETED',
+                  totalRecords: 3,
+                  processedRecords: 3,
+                  importedRecords: 2,
+                  skippedRecords: 1,
+                  failedRecords: 0,
+                  errorDetails: [
+                    {
+                      rowNumber: 0,
+                      vendorName: 'Polled Dup Vendor',
+                      status: 'duplicate_skipped',
+                      matchedAgainst: 'EXISTING_VENDOR',
+                      reason: 'Duplicate email (polled@dup.in) — already exists in Buyer Directory',
+                    },
+                  ],
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    jest.useFakeTimers();
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await Promise.resolve();
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+
+      const csvFile: any = new File(['Vendor Code,Company Name,Email\n'], 'huge_dupes.csv', { type: 'text/csv' });
+      Object.defineProperty(csvFile, 'size', { value: 20 * 1024 * 1024 }); // > 15MB triggers server-only streaming path
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [csvFile] } });
+        await Promise.resolve();
+      });
+
+      await act(async () => {
+        jest.advanceTimersByTime(2200);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+
+      expect(jobPollCount).toBeGreaterThanOrEqual(1);
+      const banner = await screen.findByTestId('vendor-duplicate-skipped-banner');
+      expect(banner).toHaveTextContent('Polled Dup Vendor');
+      expect(banner).toHaveTextContent('1 Duplicate Row Skipped');
+      expect(banner).toHaveTextContent('Duplicate email (polled@dup.in)');
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('displays accurate processed and imported AI Category Ingestion counts and retains fileName across polling', async () => {
+    jest.useFakeTimers();
+    try {
+      installIngestionServer({
+        startJob: completedAiJob({ status: 'PROCESSING', totalRecords: 7, processedRecords: 0, importedRecords: 0, fileName: 'po latest one.xlsx' }),
+        pollJob: completedAiJob({ status: 'COMPLETED', totalRecords: 7, processedRecords: 7, importedRecords: 7, skippedRecords: 0, failedRecords: 0, fileName: '' }),
+      });
+      const { container } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
+      uploadVendorAndPoDump(container);
+      runAiCategoryJob();
+
+      await screen.findByText(/AI Category Ingestion/i);
+      await act(async () => {
+        jest.advanceTimersByTime(2100);
+      });
+      await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      expect(await screen.findByText('7 / 7 suppliers processed (100%)')).toBeInTheDocument();
+      expect(screen.getAllByText('po latest one.xlsx').length).toBeGreaterThanOrEqual(1);
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('never counts vendors with hasPoHistory=false as PO Mapped on Step 4 even if stale finalMajorCategory was present', async () => {
+    installIngestionServer({
+      startJob: completedAiJob({ status: 'COMPLETED', totalRecords: 4, processedRecords: 4, importedRecords: 4 }),
+      mappings: [
+        ...Array.from({ length: 4 }, (_, idx) => ({
+          ...APEX_MAPPING,
+          id: `map-m-${idx}`,
+          vendorRecordId: `vr-m-${idx}`,
+          vendorCode: `V-${idx + 1}`,
+          companyName: `Mapped Vendor ${idx + 1}`,
+          email: `m${idx + 1}@co.in`,
+          hasPoHistory: true,
+          status: 'AI_MAPPED',
+          finalMajorCategory: 'Mechanical',
+          finalMinorCategories: ['Pumps'],
+        })),
+        ...Array.from({ length: 6 }, (_, idx) => ({
+          ...APEX_MAPPING,
+          id: `map-u-${idx}`,
+          vendorRecordId: `vr-u-${idx}`,
+          vendorCode: `V-${idx + 5}`,
+          companyName: `SelfMap Vendor ${idx + 1}`,
+          email: `u${idx + 1}@co.in`,
+          hasPoHistory: false,
+          status: 'SELF_MAP_REQUIRED',
+          finalMajorCategory: 'Electrical',
+          finalMinorCategories: ['Cables'],
+        })),
+      ],
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    await settleOpeningRequests();
+    uploadVendorAndPoDump(container);
+    runAiCategoryJob();
+
+    await waitFor(() => expect(screen.getByText(/Step 4: Confirm Ingestion/i)).toBeInTheDocument());
+    expect(screen.getByText('10 Vendors')).toBeInTheDocument();
+    expect(screen.getByText('4 Suppliers')).toBeInTheDocument();
+    expect(screen.getByText('6 Suppliers')).toBeInTheDocument();
+
+    const mappedInfoBox = screen.getByTestId('step4-mapped-vendors-info');
+    const unmappedInfoBox = screen.getByTestId('step4-unmapped-vendors-info');
+    const totalSummaryLabel = screen.getByText('Total Stored');
+
+    expect(mappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoTitle);
+    expect(mappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.mappedVendorsInfoBody);
+    expect(unmappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoTitle);
+    expect(unmappedInfoBox).toHaveTextContent(UI_STRINGS.vendorPoIngestion.dispatch.unmappedVendorsInfoBody);
+    expect(
+      mappedInfoBox.compareDocumentPosition(totalSummaryLabel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+    expect(
+      unmappedInfoBox.compareDocumentPosition(totalSummaryLabel) & Node.DOCUMENT_POSITION_FOLLOWING
+    ).toBeTruthy();
+  });
+
+  it('does not mark 0-processed or partial-failure jobs as Completed Successfully and shows reconciliation banner & duplicate actions', () => {
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:init-dup');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      // Screenshot 1 regression: status: COMPLETED returned when 0 / 7 suppliers processed
+      const { rerender } = render(
+        <IngestionProgressCard
+          job={{
+            id: 'ai-zero-processed',
+            jobType: 'AI_CATEGORY',
+            fileName: 'po latest one.xlsx',
+            status: 'COMPLETED',
+            totalRecords: 7,
+            processedRecords: 0,
+            importedRecords: 0,
+            skippedRecords: 0,
+            failedRecords: 0,
+          }}
+          title="AI Category"
+          unit="suppliers"
+        />
+      );
+      expect(screen.getAllByText('Failed').length).toBeGreaterThanOrEqual(1);
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed)).toBeInTheDocument();
+      expect(screen.queryByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusCompleted)).not.toBeInTheDocument();
+      expect(screen.getByTestId('ingestion-job-error-banner')).toHaveTextContent(
+        UI_STRINGS.vendorPoIngestion.vendorMaster.jobFailureFallbackReason
+      );
+
+      // Partial failure status
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'ai-partial',
+            jobType: 'AI_CATEGORY',
+            fileName: 'po latest one.xlsx',
+            status: 'PARTIAL_FAILURE',
+            totalRecords: 10,
+            processedRecords: 10,
+            importedRecords: 6,
+            skippedRecords: 3,
+            failedRecords: 1,
+            errorMessage: '6 PO-matched mapped, 1 failed.',
+          }}
+          title="AI Category"
+          unit="suppliers"
+        />
+      );
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+      expect(screen.getByText('PO Mapped')).toBeInTheDocument();
+      expect(screen.getByText('Self-Map')).toBeInTheDocument();
+      expect(screen.getByTestId('ingestion-job-error-banner')).toHaveTextContent('6 PO-matched mapped, 1 failed.');
+
+      // Vendor Master with 12 uploaded, 2 duplicates removed -> 10 stored
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'vm-dedupe',
+            jobType: 'VENDOR_MASTER',
+            fileName: 'Testing data.xlsx',
+            status: 'COMPLETED',
+            uploadedRecords: 12,
+            totalRecords: 10,
+            processedRecords: 10,
+            importedRecords: 10,
+            skippedRecords: 2,
+            failedRecords: 0,
+          }}
+          title="Vendor Master"
+          unit="vendors"
+        />
+      );
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobUploadedStat)).toBeInTheDocument();
+      expect(screen.getByText('12')).toBeInTheDocument();
+      expect(screen.getByText('Stored Total')).toBeInTheDocument();
+      expect(screen.getByText('10 / 10 vendors processed (100%)')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobDuplicatesRemovedStat)).toBeInTheDocument();
+
+      // All rows duplicates
+      rerender(
+        <IngestionProgressCard
+          job={{
+            id: 'vm-all-dups',
+            jobType: 'VENDOR_MASTER',
+            fileName: 'dups.xlsx',
+            status: 'COMPLETED',
+            uploadedRecords: 5,
+            totalRecords: 0,
+            processedRecords: 0,
+            importedRecords: 0,
+            skippedRecords: 5,
+            failedRecords: 0,
+          }}
+          title="Vendor Master"
+          unit="vendors"
+        />
+      );
+      expect(screen.getByText('All Duplicates')).toBeInTheDocument();
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusAllDuplicates)).toBeInTheDocument();
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('reconciles uploaded vs skipped duplicate vs stored counts on Step 2 and Step 4 reconciliation banner', async () => {
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:step4-dup');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      installIngestionServer({
+        startJob: completedAiJob({ status: 'COMPLETED', totalRecords: 2, processedRecords: 2, importedRecords: 2 }),
+      });
+      const customFetch = global.fetch as jest.Mock;
+      const baseFetchImpl = customFetch.getMockImplementation();
+      customFetch.mockImplementation((url: string, init?: RequestInit) => {
+        if (url.includes('/start-job')) {
+          const parsedBody = init?.body ? JSON.parse(init.body as string) : {};
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: `job-${parsedBody.jobType || 'VM'}`,
+                    jobType: parsedBody.jobType || 'VENDOR_MASTER',
+                    fileName: parsedBody.fileName || 'vendors.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: (parsedBody.rows || []).length,
+                    processedRecords: (parsedBody.rows || []).length,
+                    importedRecords: (parsedBody.rows || []).length,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return baseFetchImpl ? baseFetchImpl(url, init) : Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+
+      const { container } = render(<InitialSetupModal />);
+      await settleOpeningRequests();
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+
+      // 3 rows where 1 is duplicate -> 2 unique stored
+      const wb = XLSX.utils.book_new();
+      const ws = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'R-1', 'Company Name': 'Reconcile One', 'Contact Person': 'A', Email: 'r1@co.in', Phone: '9800000001' },
+        { 'Vendor Code': 'R-2', 'Company Name': 'Reconcile Two', 'Contact Person': 'B', Email: 'r2@co.in', Phone: '9800000002' },
+        { 'Vendor Code': 'R-3', 'Company Name': 'Reconcile Dup', 'Contact Person': 'C', Email: 'R1@co.in', Phone: '9800000003' },
+      ]);
+      XLSX.utils.book_append_sheet(wb, ws, 'Vendor Master');
+      const vBuf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+      const vFile: any = new File([vBuf], 'reconcile.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      vFile.__buffer = vBuf;
+
+      const fileInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(fileInput, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(await screen.findByText('2 / 2 vendors processed (100%)')).toBeInTheDocument();
+
+      // Entering edit mode & deleting a vendor row keeps stored count & job total synchronized
+      fireEvent.click(screen.getByRole('button', { name: /Edit Data/i }));
+      fireEvent.click(screen.getByTitle('Delete Reconcile One'));
+      expect(await screen.findByText('1 / 1 vendors processed (100%)')).toBeInTheDocument();
+
+      // Upload PO dump via Step 3 and run AI Category Cross-Match to reach Step 4
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const wbPo = XLSX.utils.book_new();
+      const wsPo = XLSX.utils.json_to_sheet([
+        { 'Vendor/Supplier Name': 'Unmatched Corp', 'Item Description': 'Bolts', Specifications: 'SS304' },
+      ]);
+      XLSX.utils.book_append_sheet(wbPo, wsPo, 'PO');
+      const poBuf = XLSX.write(wbPo, { type: 'array', bookType: 'xlsx' });
+      const poFile: any = new File([poBuf], 'po.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile.__buffer = poBuf;
+
+      const poInputs = container.querySelectorAll('input[type="file"]');
+      const poInput = poInputs[poInputs.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(poInput, { target: { files: [poFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByRole('button', { name: /Run AI Category Cross-Match/i }));
+      const recBanner = await screen.findByTestId('step4-reconciliation-banner');
+      expect(recBanner).toHaveTextContent(UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationUploadedLabel);
+      expect(recBanner).toHaveTextContent(UI_STRINGS.vendorPoIngestion.vendorMaster.reconciliationDuplicatesLabel);
+      fireEvent.click(
+        screen.getAllByRole('button', { name: UI_STRINGS.vendorPoIngestion.vendorMaster.downloadDuplicatesCsv })[0]
+      );
+      expect(clickSpy).toHaveBeenCalled();
+
+      // Also cover PARTIAL_FAILURE, explicit server FAILED, and 0-processed false-COMPLETED responses
+      fireEvent.click(screen.getByRole('button', { name: /2. Vendor Master/i }));
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-partial',
+                    jobType: 'VENDOR_MASTER',
+                    fileName: 'reconcile.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: 3,
+                    processedRecords: 3,
+                    importedRecords: 2,
+                    skippedRecords: 0,
+                    failedRecords: 1,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const vInputs2 = container.querySelectorAll('input[type="file"]');
+      const vInput2 = vInputs2[vInputs2.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput2, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+
+      // Server returning 0 processed while claiming COMPLETED must display FAILED
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-zero',
+                    jobType: 'VENDOR_MASTER',
+                    fileName: 'reconcile.xlsx',
+                    status: 'COMPLETED',
+                    totalRecords: 2,
+                    processedRecords: 0,
+                    importedRecords: 0,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const vInputs3 = container.querySelectorAll('input[type="file"]');
+      const vInput3 = vInputs3[vInputs3.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput3, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getByText(UI_STRINGS.vendorPoIngestion.vendorMaster.jobStatusFailed)).toBeInTheDocument();
+
+      // Cover PO_DUMP /start-job partial failure too
+      fireEvent.click(screen.getByRole('button', { name: '3. PO Dump' }));
+      (global.fetch as jest.Mock).mockImplementation((url: string) => {
+        if (url.includes('/start-job')) {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-po-partial',
+                    jobType: 'PO_DUMP',
+                    fileName: 'po.xlsx',
+                    status: 'PARTIAL_FAILURE',
+                    totalRecords: 2,
+                    processedRecords: 2,
+                    importedRecords: 1,
+                    skippedRecords: 0,
+                    failedRecords: 1,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+      });
+      const wsPo2 = XLSX.utils.json_to_sheet([
+        {
+          'Vendor/Supplier Name': 'Reconcile Alpha',
+          'Item Description': 'Pressure Gauges',
+          Specifications: '0-10 bar',
+        },
+      ]);
+      const wbPo2 = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbPo2, wsPo2, 'PO');
+      const poBuf2 = XLSX.write(wbPo2, { type: 'array', bookType: 'xlsx' });
+      const poFile2: any = new File([poBuf2], 'po-partial.xlsx', {
+        type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      });
+      poFile2.__buffer = poBuf2;
+
+      const poInputs2 = container.querySelectorAll('input[type="file"]');
+      const poInput2 = poInputs2[poInputs2.length - 1] as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(poInput2, { target: { files: [poFile2] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+      expect(screen.getAllByText('Completed with Errors').length).toBeGreaterThanOrEqual(2);
+    } finally {
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('does not render Buyer Initial Setup popup when initialSetupModalOpen is false', () => {
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: false,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn(),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: true,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: true },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: true },
+      buyerVendors: [],
+      showToast: jest.fn(),
+    });
+
+    const { container } = render(<InitialSetupModal />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('closes Buyer Initial Setup popup when clicking outside on the backdrop, while inside clicks keep it open', async () => {
+    const mockSetOpen = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: mockSetOpen,
+      historicalPurchaseDataPeriod: '1_year',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn(),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: true,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: true },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: true },
+      buyerVendors: [],
+      showToast: jest.fn(),
+    });
+
+    render(<InitialSetupModal />);
+
+    const backdrop = screen.getByTestId('initial-setup-modal-backdrop');
+    const heading = within(backdrop).getByRole('heading', { level: 2 });
+
+    // Clicking inside modal content must not close it
+    fireEvent.click(heading);
+    expect(mockSetOpen).not.toHaveBeenCalled();
+
+    // Clicking directly on the backdrop overlay closes the popup
+    await act(async () => {
+      fireEvent.click(backdrop);
+    });
+    expect(mockSetOpen).toHaveBeenCalledWith(false);
+  });
+
+  it('rejects re-uploaded duplicate PO data, shows duplicate PO table, supports CSV download & dismiss, and skips intra-file PO duplicates', async () => {
+    const mockShowToast = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn().mockResolvedValue(undefined),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: false,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: false },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: false },
+      buyerVendors: [],
+      showToast: mockShowToast,
+    });
+
+    let poStartJobCalls = 0;
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/vendor-ingestion/session') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: {
+                session: { id: 'sess-po-dedupe', horizonType: 'LAST_2_YEARS', poRowCount: 1, poFileName: 'prev.xlsx' },
+                existingPoRecords: [
+                  {
+                    poNumber: 'PO-900',
+                    poDate: '2025-05-01',
+                    vendorName: 'Previously Uploaded Supplier',
+                    itemDescription: 'Stainless Bolts M10',
+                    specification: 'SS304',
+                    quantity: 50,
+                    spend: 5000,
+                  },
+                ],
+              },
+            }),
+        });
+      }
+      if (url.includes('/start-job')) {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+        if (parsedBody.jobType === 'PO_DUMP') {
+          poStartJobCalls += 1;
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: `job-po-${poStartJobCalls}`,
+                    jobType: 'PO_DUMP',
+                    fileName: parsedBody.fileName,
+                    status: 'COMPLETED',
+                    totalRecords: parsedBody.rows.length,
+                    processedRecords: parsedBody.rows.length,
+                    importedRecords: parsedBody.rows.length,
+                    skippedRecords: 0,
+                    failedRecords: 0,
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-vm-1',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'vendors.xlsx',
+                  status: 'COMPLETED',
+                  totalRecords: 1,
+                  processedRecords: 1,
+                  importedRecords: 1,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+    }) as unknown as typeof fetch;
+
+    const originalCreateObjectURL = URL.createObjectURL;
+    const originalRevokeObjectURL = URL.revokeObjectURL;
+    const clickSpy = jest.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    URL.createObjectURL = jest.fn().mockReturnValue('blob:po-dup-dl');
+    URL.revokeObjectURL = jest.fn();
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 40));
+      });
+
+      // Step 2: upload valid vendor
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const wsV = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-900', 'Company Name': 'Previously Uploaded Supplier', Email: 'prev@sup.in', Phone: '9876543210' },
+      ]);
+      const wbV = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+      const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+      const vFile = Object.assign(new File([vBuf], 'vendors.xlsx'), { __buffer: vBuf });
+      const vInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+      await act(async () => {
+        fireEvent.change(vInput, { target: { files: [vFile] } });
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Step 3: upload a PO file containing ONLY the already-uploaded PO record from session history
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const makePoFile = (name: string, rows: Record<string, unknown>[]) => {
+        const ws = XLSX.utils.json_to_sheet(rows);
+        const wb = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(wb, ws, 'PO');
+        const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+        return Object.assign(new File([buf], name), { __buffer: buf });
+      };
+
+      const dupOnlyFile = makePoFile('same-po-again.xlsx', [
+        {
+          'PO Number': 'po-900',
+          'PO Date': '01/05/2025',
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Stainless Bolts M10',
+          Specifications: 'SS304',
+          Quantity: 50,
+          'Total Spend': 5000,
+        },
+      ]);
+
+      const getPoInput = () => {
+        const inputs = container.querySelectorAll('input[type="file"]');
+        return inputs[inputs.length - 1] as HTMLInputElement;
+      };
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [dupOnlyFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      // All-duplicate PO upload must NOT call /start-job and must show duplicates banner + amber card + error banner
+      expect(poStartJobCalls).toBe(0);
+      const dupBanner = screen.getByTestId('skipped-duplicate-pos-banner');
+      expect(dupBanner).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+          count: 1,
+          rowWord: UI_STRINGS.vendorPoIngestion.poDump.duplicateRowSingular,
+        })
+      );
+      expect(dupBanner).toHaveTextContent('Previously Uploaded Supplier');
+      expect(dupBanner).toHaveTextContent('Stainless Bolts M10');
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'same-po-again.xlsx',
+        })
+      );
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, { count: 1 })
+      );
+
+      // Download duplicate POs CSV and dismiss duplicate list
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.poDump.downloadDuplicatesCsv }));
+      expect(clickSpy).toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: UI_STRINGS.vendorPoIngestion.poDump.dismissDuplicatesAction }));
+      expect(screen.queryByTestId('skipped-duplicate-pos-banner')).not.toBeInTheDocument();
+
+      // Upload a mixed PO file (1 brand-new PO + 1 intra-file duplicate of it)
+      const mixedPoFile = makePoFile('mixed-po.xlsx', [
+        {
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Industrial Valve DN40',
+          Specifications: 'Cast Iron',
+        },
+        {
+          'Vendor/Supplier Name': 'Previously Uploaded Supplier',
+          'Item Description': 'Industrial Valve DN40',
+          Specifications: 'Cast Iron',
+        },
+      ]);
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [mixedPoFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(poStartJobCalls).toBe(1);
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Industrial Valve DN40');
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSummaryInline, { count: 1 })
+      );
+
+      // Immediately re-uploading the same mixed-po.xlsx again must now reject ALL 2 rows as duplicates
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [mixedPoFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(poStartJobCalls).toBe(1);
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.duplicatesSkippedBannerTitle, {
+          count: 2,
+          rowWord: UI_STRINGS.vendorPoIngestion.poDump.duplicateRowPlural,
+        })
+      );
+      expect(screen.getByTestId('po-dump-uploaded-card')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesBannerTitle, { count: 2 })
+      );
+    } finally {
+      global.fetch = origFetch;
+      URL.createObjectURL = originalCreateObjectURL;
+      URL.revokeObjectURL = originalRevokeObjectURL;
+      clickSpy.mockRestore();
+    }
+  });
+
+  it('surfaces server-rejected duplicate PO records returned from /start-job and live PO job polling', async () => {
+    const mockShowToast = jest.fn();
+    (useApp as jest.Mock).mockReturnValue({
+      initialSetupModalOpen: true,
+      setInitialSetupModalOpen: jest.fn(),
+      historicalPurchaseDataPeriod: '2_years',
+      setHistoricalPurchaseDataPeriod: jest.fn(),
+      processHistoricalPurchaseData: jest.fn().mockResolvedValue(undefined),
+      lastIngestionSummary: null,
+      lastIngestionError: null,
+      initialSetupCompleted: false,
+      setInitialSetupCompleted: jest.fn(),
+      currentUserSession: { role: 'buyer', vendorMasterUploaded: false },
+      activeBuyerAccount: { organizationName: 'Veera solutions pvt ltd', initialSetupCompleted: false },
+      buyerVendors: [],
+      showToast: mockShowToast,
+    });
+
+    const origFetch = global.fetch;
+    global.fetch = jest.fn((url: string, init?: RequestInit) => {
+      if (url === '/api/vendor-ingestion/session') {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              success: true,
+              data: { session: { id: 'sess-po-server-dup', horizonType: 'LAST_2_YEARS' }, existingPoRecords: [] },
+            }),
+        });
+      }
+      if (url.includes('/start-job')) {
+        const parsedBody = init?.body ? JSON.parse(String(init.body)) : {};
+        if (parsedBody.jobType === 'PO_DUMP') {
+          return Promise.resolve({
+            ok: true,
+            json: () =>
+              Promise.resolve({
+                data: {
+                  job: {
+                    id: 'job-po-server-dup',
+                    jobType: 'PO_DUMP',
+                    fileName: parsedBody.fileName,
+                    status: 'COMPLETED',
+                    totalRecords: 0,
+                    processedRecords: 0,
+                    importedRecords: 0,
+                    skippedRecords: 1,
+                    failedRecords: 0,
+                    errorDetails: [
+                      {
+                        rowNumber: 2,
+                        vendorName: 'Server Existing Vendor',
+                        itemDescription: 'Hydraulic Hose',
+                        specification: '300 bar',
+                        status: 'duplicate_skipped',
+                        matchedAgainst: 'EXISTING_PO',
+                        reason: 'Duplicate PO record (Server Existing Vendor — Hydraulic Hose) — already uploaded previously',
+                      },
+                    ],
+                  },
+                },
+              }),
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-vm-srv',
+                  jobType: 'VENDOR_MASTER',
+                  fileName: 'vendors.xlsx',
+                  status: 'COMPLETED',
+                  totalRecords: 1,
+                  processedRecords: 1,
+                  importedRecords: 1,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/stream-upload')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-po-csv-poll',
+                  jobType: 'PO_DUMP',
+                  fileName: 'dup-stream.csv',
+                  status: 'PROCESSING',
+                  totalRecords: 1,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 0,
+                  failedRecords: 0,
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/job-po-csv-poll')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                job: {
+                  id: 'job-po-csv-poll',
+                  jobType: 'PO_DUMP',
+                  fileName: 'dup-stream.csv',
+                  status: 'COMPLETED',
+                  totalRecords: 0,
+                  processedRecords: 0,
+                  importedRecords: 0,
+                  skippedRecords: 1,
+                  failedRecords: 0,
+                  errorDetails: [
+                    {
+                      rowNumber: 0,
+                      vendorName: 'Stream Existing Vendor',
+                      itemDescription: 'Copper Gasket',
+                      status: 'duplicate_skipped',
+                      matchedAgainst: 'EXISTING_PO',
+                      reason: 'Duplicate PO record (Stream Existing Vendor — Copper Gasket) — already uploaded previously',
+                    },
+                  ],
+                },
+              },
+            }),
+        });
+      }
+      return Promise.resolve({ ok: true, json: () => Promise.resolve({ success: true, data: {} }) });
+    }) as unknown as typeof fetch;
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 40));
+      });
+
+      // Step 2: upload valid vendor
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const wsV = XLSX.utils.json_to_sheet([
+        { 'Vendor Code': 'V-901', 'Company Name': 'Server Existing Vendor', Email: 'srv@sup.in', Phone: '9876543211' },
+      ]);
+      const wbV = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbV, wsV, 'Vendors');
+      const vBuf = XLSX.write(wbV, { type: 'array', bookType: 'xlsx' });
+      const vFile = Object.assign(new File([vBuf], 'vendors.xlsx'), { __buffer: vBuf });
+      await act(async () => {
+        fireEvent.change(container.querySelector('input[type="file"]') as HTMLInputElement, {
+          target: { files: [vFile] },
+        });
+        await new Promise((r) => setTimeout(r, 50));
+      });
+
+      // Step 3: upload Excel PO file that server rejects as all duplicates
+      fireEvent.click(screen.getByText('3. PO Dump'));
+      const wsPo = XLSX.utils.json_to_sheet([
+        {
+          'Vendor/Supplier Name': 'Server Existing Vendor',
+          'Item Description': 'Hydraulic Hose',
+          Specifications: '300 bar',
+        },
+      ]);
+      const wbPo = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wbPo, wsPo, 'PO');
+      const poBuf = XLSX.write(wbPo, { type: 'array', bookType: 'xlsx' });
+      const poFile = Object.assign(new File([poBuf], 'server-dup.xlsx'), { __buffer: poBuf });
+      const getPoInput = () => {
+        const inputs = container.querySelectorAll('input[type="file"]');
+        return inputs[inputs.length - 1] as HTMLInputElement;
+      };
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [poFile] } });
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Hydraulic Hose');
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'server-dup.xlsx',
+        })
+      );
+
+      // Now upload CSV PO file and let live polling resolve with server-detected all-duplicate PO
+      const csvText = 'Vendor/Supplier Name,Item Description,Specifications\nStream Existing Vendor,Copper Gasket,2mm\n';
+      const csvBuf = new TextEncoder().encode(csvText).buffer;
+      const csvFile = Object.assign(new File([csvText], 'dup-stream.csv', { type: 'text/csv' }), {
+        __buffer: csvBuf,
+      });
+
+      await act(async () => {
+        fireEvent.change(getPoInput(), { target: { files: [csvFile] } });
+      });
+
+      await waitFor(
+        () => {
+          expect(screen.getByTestId('skipped-duplicate-pos-banner')).toHaveTextContent('Copper Gasket');
+        },
+        { timeout: 5000 }
+      );
+      expect(screen.getByTestId('po-upload-error-banner')).toHaveTextContent(
+        formatString(UI_STRINGS.vendorPoIngestion.poDump.allDuplicatesError, {
+          count: 1,
+          fileName: 'dup-stream.csv',
+        })
+      );
+    } finally {
+      global.fetch = origFetch;
+    }
+  });
+
+  it('discards unconfirmed vendor master upload from localStorage when modal is closed without PO dump', async () => {
+    const origFetch = global.fetch;
+    let cancelBody: any = null;
+    let cancelCalled = false;
+    let updateEventFired = false;
+    let storageEventFired = false;
+
+    const onUpdate = () => { updateEventFired = true; };
+    const onStorage = () => { storageEventFired = true; };
+    window.addEventListener('vendor_upload_history_updated', onUpdate);
+    window.addEventListener('storage', onStorage);
+
+    localStorage.setItem(
+      'procucev_vendor_upload_history',
+      JSON.stringify([
+        { id: 'batch-unconfirmed', fileName: 'unconfirmed.csv', records: [{ name: 'Unconfirmed Vendor' }] },
+        { id: 'batch-prior', fileName: 'prior.xlsx', records: [{ name: 'Prior Vendor' }] },
+      ])
+    );
+
+    global.fetch = jest.fn().mockImplementation((url: string, options?: any) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                session: {
+                  id: 'sess-discard-test',
+                  vendorMasterFileName: 'unconfirmed.csv',
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/cancel')) {
+        cancelCalled = true;
+        cancelBody = options?.body ? JSON.parse(options.body) : null;
+        return Promise.resolve({
+          ok: true,
+          json: () => Promise.resolve({ success: true, data: { cancelled: true } }),
+        });
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const fileInput = container.querySelector('input[type="file"]');
+      if (fileInput) {
+        const csvContent = 'Vendor Code,Company Name,Email\nV-1,Unconfirmed Vendor,unconfirmed@test.com';
+        const csvFile = new File([csvContent], 'unconfirmed.csv', { type: 'text/csv' });
+        await act(async () => {
+          fireEvent.change(fileInput, { target: { files: [csvFile] } });
+          await new Promise((r) => setTimeout(r, 60));
+        });
+      }
+
+      const closeBtn = container.querySelector('button[title="Dismiss setup (you can resume from the blinking corner badge)"]');
+      expect(closeBtn).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(closeBtn!);
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(cancelCalled).toBe(true);
+      expect(cancelBody).toEqual({
+        discardVendorMaster: true,
+        discardIncomplete: true,
+      });
+
+      expect(vendorUploadHistoryClient.deleteVendorUploadHistoryBatch).toHaveBeenCalledWith(
+        expect.any(String),
+        'unconfirmed.csv'
+      );
+      expect(updateEventFired).toBe(true);
+    } finally {
+      window.removeEventListener('vendor_upload_history_updated', onUpdate);
+      window.removeEventListener('storage', onStorage);
+      global.fetch = origFetch;
+      localStorage.removeItem('procucev_vendor_upload_history');
+    }
+  });
+
+  it('handles cancel fetch error and upload history delete error gracefully on close without PO dump', async () => {
+    const origFetch = global.fetch;
+    (vendorUploadHistoryClient.deleteVendorUploadHistoryBatch as jest.Mock).mockRejectedValueOnce(
+      new Error('History delete failed')
+    );
+
+    global.fetch = jest.fn().mockImplementation((url: string) => {
+      if (url.includes('/api/vendor-ingestion/session')) {
+        return Promise.resolve({
+          ok: true,
+          json: () =>
+            Promise.resolve({
+              data: {
+                session: {
+                  id: 'sess-err-test',
+                },
+              },
+            }),
+        });
+      }
+      if (url.includes('/jobs/cancel')) {
+        return Promise.reject(new Error('Network offline'));
+      }
+      return Promise.resolve({
+        ok: true,
+        json: () => Promise.resolve({ success: true, data: {} }),
+      });
+    });
+
+    try {
+      const { container } = render(<InitialSetupModal />);
+      await act(async () => {
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      fireEvent.click(screen.getByText('2. Vendor Master'));
+      const fileInput = container.querySelector('input[type="file"]');
+      if (fileInput) {
+        const csvContent = 'Vendor Code,Company Name,Email\nV-1,Unconfirmed Vendor,unconfirmed@test.com';
+        const csvFile = new File([csvContent], 'unconfirmed.csv', { type: 'text/csv' });
+        await act(async () => {
+          fireEvent.change(fileInput, { target: { files: [csvFile] } });
+          await new Promise((r) => setTimeout(r, 60));
+        });
+      }
+
+      const closeBtn = container.querySelector('button[title="Dismiss setup (you can resume from the blinking corner badge)"]');
+      expect(closeBtn).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(closeBtn!);
+        await new Promise((r) => setTimeout(r, 60));
+      });
+
+      expect(mockSetInitialSetupModalOpen).toHaveBeenCalledWith(false);
+    } finally {
+      global.fetch = origFetch;
+      localStorage.removeItem('procucev_vendor_upload_history');
+    }
   });
 });
 

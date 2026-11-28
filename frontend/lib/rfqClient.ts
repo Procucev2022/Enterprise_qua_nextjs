@@ -3,11 +3,13 @@ import { logger } from './logger';
 import { resolveAttachmentMimeType } from './constants';
 import { UI_STRINGS, formatString } from './uiStrings';
 import { getPendingVendorFetchSignal, withVendorFetchSignal } from './vendorFetchSignal';
+import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
   ExtractedEntity,
   FetchAllVendorsOptions,
   RFQAttachment,
   RFQAttachmentResult,
+  RFQBroadcast,
   RFQCreatePayload,
   RFQDeleteResult,
   RFQExtractionRequest,
@@ -20,6 +22,7 @@ import type {
   RFQMutationResult,
   RFQUpdatePayload,
   RFQExtensionResult,
+  RFQExcludedVendor,
   RFQQuoteAttachment,
   RFQVendorCandidate,
   RFQVendorCandidatesResult,
@@ -590,12 +593,27 @@ export async function fetchRFQList(
  * endpoint. The rows come back newest first.
  */
 export async function fetchAllRFQs(
-  options: { summary?: boolean; limit?: number } = {}
+  options: {
+    summary?: boolean;
+    limit?: number;
+    page?: number;
+    search?: string;
+    status?: string;
+    buyer?: string;
+    startDate?: string;
+    endDate?: string;
+  } = {}
 ): Promise<RFQListResult> {
   const token = authClient.getToken();
   const params = new URLSearchParams();
   if (options.summary) params.set('summary', 'true');
   if (options.limit) params.set('limit', String(options.limit));
+  if (options.page) params.set('page', String(options.page));
+  if (options.search && options.search.trim()) params.set('search', options.search.trim());
+  if (options.status && options.status !== 'all') params.set('status', options.status);
+  if (options.buyer && options.buyer !== 'all') params.set('buyer', options.buyer);
+  if (options.startDate) params.set('startDate', options.startDate);
+  if (options.endDate) params.set('endDate', options.endDate);
   const queryStr = params.toString() ? `?${params.toString()}` : '';
 
   let res: Response;
@@ -607,7 +625,16 @@ export async function fetchAllRFQs(
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem[]; error?: string } = {};
+  let body: {
+    success?: boolean;
+    data?: RFQItem[];
+    rfqs?: RFQItem[];
+    total?: number;
+    page?: number;
+    limit?: number;
+    totalPages?: number;
+    error?: string;
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -624,11 +651,25 @@ export async function fetchAllRFQs(
     }
     return { success: false, reason: 'UNAUTHORIZED', error: body.error || UI_STRINGS.auth.sessionExpired };
   }
-  if (!res.ok || !body.success || !Array.isArray(body.data)) {
+  const rawList = Array.isArray(body.data) ? body.data : (Array.isArray(body.rfqs) ? body.rfqs : null);
+  if (!res.ok || !body.success || !rawList) {
     return { success: false, reason: 'SERVER', error: body.error || UI_STRINGS.rfqDetails.loadFailed };
   }
 
-  return { success: true, rfqs: body.data };
+  const rfqs = rawList;
+  const total = typeof body.total === 'number' ? body.total : rfqs.length;
+  const page = typeof body.page === 'number' ? body.page : (options.page || 1);
+  const limit = typeof body.limit === 'number' ? body.limit : (options.limit || 100);
+  const totalPages = typeof body.totalPages === 'number' ? body.totalPages : Math.max(1, Math.ceil(total / limit));
+
+  return {
+    success: true,
+    rfqs,
+    total,
+    page,
+    limit,
+    totalPages,
+  };
 }
 
 /**
@@ -702,6 +743,7 @@ export async function fetchAllVendors(
     state = '',
     city = '',
     pincode = '',
+    preferredPincode = '',
   } = options;
 
   // The database stores category names with a plain hyphen ("Others - New Product"), while some
@@ -723,6 +765,9 @@ export async function fetchAllVendors(
   if (city.trim()) params.set('city', city.trim());
   const cleanPincode = String(pincode || '').replace(/\s+/g, '');
   if (/^\d{3,6}$/.test(cleanPincode)) params.set('pincode', cleanPincode);
+  const cleanPreferredPincode = String(preferredPincode || '').replace(/\s+/g, '');
+  if (/^\d{3,6}$/.test(cleanPreferredPincode)) params.set('preferredPincode', cleanPreferredPincode);
+  if (options.subscription || options.subscriptionOnly) params.set('subscription', 'true');
 
   let res: Response;
   try {
@@ -797,7 +842,16 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
     return { success: false, reason: 'NETWORK', error: UI_STRINGS.auth.networkUnreachable };
   }
 
-  let body: { success?: boolean; data?: RFQItem; invitedCount?: number; error?: string } = {};
+  let body: {
+    success?: boolean;
+    data?: RFQItem;
+    invitedCount?: number;
+    excludedCount?: number;
+    excludedVendors?: RFQExcludedVendor[];
+    provisionedCount?: number;
+    provisioningErrors?: Array<{ id: string; email: string; error?: string }>;
+    error?: string;
+  } = {};
   try {
     body = await res.json();
   } catch {
@@ -825,7 +879,21 @@ export async function inviteVendorsToRFQ(rfqId: string, vendorIds: string[]): Pr
   if (typeof body.invitedCount !== 'number') {
     return { success: false, reason: 'SERVER', error: UI_STRINGS.dataLoad.inviteCountMissing };
   }
-  return { success: true, rfq: body.data, invitedCount: body.invitedCount };
+  return {
+    success: true,
+    rfq: body.data,
+    invitedCount: body.invitedCount,
+    ...(typeof body.excludedCount === 'number' && body.excludedCount > 0 ? { excludedCount: body.excludedCount } : {}),
+    ...(Array.isArray(body.excludedVendors) && body.excludedVendors.length > 0
+      ? { excludedVendors: body.excludedVendors }
+      : {}),
+    ...(typeof body.provisionedCount === 'number' && body.provisionedCount > 0
+      ? { provisionedCount: body.provisionedCount }
+      : {}),
+    ...(Array.isArray(body.provisioningErrors) && body.provisioningErrors.length > 0
+      ? { provisioningErrors: body.provisioningErrors }
+      : {}),
+  };
 }
 
 /**
@@ -1056,6 +1124,60 @@ export async function replyToRFQInquiry(
   }
 }
 
+/**
+ * Publish an information broadcast / announcement on an RFQ (buyer/category manager).
+ */
+export async function publishRFQBroadcast(
+  rfqIdOrNumber: string,
+  payload: { title?: string; message: string; attachments?: RFQAttachment[] }
+): Promise<{ success: boolean; data?: RFQBroadcast; rfq?: RFQItem; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to publish broadcast announcement.' };
+    }
+    return { success: true, data: body.data, rfq: body.rfq };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcast publish request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error publishing broadcast announcement.') };
+  }
+}
+
+/**
+ * Fetch all broadcast announcements for an RFQ.
+ */
+export async function fetchRFQBroadcasts(
+  rfqIdOrNumber: string
+): Promise<{ success: boolean; data?: RFQBroadcast[]; error?: string }> {
+  const token = authClient.getToken();
+
+  try {
+    const res = await fetch(`/api/rfqs/${encodeURIComponent(rfqIdOrNumber)}/broadcasts`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+
+    const body = await res.json();
+    if (!res.ok || !body.success) {
+      return { success: false, error: body.error || 'Failed to fetch broadcast announcements.' };
+    }
+    return { success: true, data: body.data || [] };
+  } catch (err: unknown) {
+    logRfqTransportFailure('RFQ broadcasts fetch request failed', err);
+    return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching broadcast announcements.') };
+  }
+}
+
 export interface RequestVendorCategoryUpdatePayload {
   idempotencyKey?: string;
   vendorId?: string;
@@ -1159,7 +1281,9 @@ export async function fetchVendorRfqCredits(vendorId?: string): Promise<{
     }
     return { success: true, data: body.data };
   } catch (err: unknown) {
-    logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    if (!isAbortOrPageUnloadError(err)) {
+      logRfqTransportFailure('Vendor RFQ credit request failed', err);
+    }
     return { success: false, error: getRfqTransportErrorMessage(err, 'Network error fetching RFQ credits.') };
   }
 }

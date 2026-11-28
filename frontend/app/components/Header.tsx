@@ -1,18 +1,17 @@
 'use client';
 
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useApp, clearSessionCache } from '@/lib/store';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
-import { ROLE_SIDEBAR_NAV, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS } from '@/lib/constants';
+import { ROLE_PROFILE_ROUTES, LOGIN_ROUTE, RFQ_MODES, RFQ_MODE_LABELS, registerOutsideClickClose, isBuyerTrialActive, getRemainingTrialDays } from '@/lib/constants';
 import { authClient } from '@/lib/authClient';
-import { UI_STRINGS } from '@/lib/uiStrings';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import NotificationBell from '@/app/components/NotificationBell';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import { deriveInitials, resolveSessionOrgName } from '@/lib/accountIdentity';
 import type { UserRole } from '@/lib/types';
 import {
-  ShieldCheck,
   ChevronDown,
   Sun,
   Moon,
@@ -21,6 +20,7 @@ import {
   Clock,
   Building2,
   LogIn,
+  User,
 } from 'lucide-react';
 
 /**
@@ -30,7 +30,6 @@ import {
  */
 interface RoleChrome {
   designation: string;
-  authLabel: string;
   avatarGradient: string;
   badge: string;
   badgeClass: string;
@@ -39,7 +38,6 @@ interface RoleChrome {
 const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   buyer: {
     designation: 'Enterprise Buyer',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-indigo-600 to-indigo-800 text-white',
     badge: 'Buyer',
     badgeClass:
@@ -47,7 +45,6 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   category_manager: {
     designation: 'Category Manager',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-sky-600 to-blue-700 text-white',
     badge: 'Category Desk',
     badgeClass:
@@ -55,7 +52,6 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   vendor: {
     designation: 'Vendor Partner',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-emerald-600 to-teal-700 text-white',
     badge: 'Vendor',
     badgeClass:
@@ -63,20 +59,12 @@ const ROLE_CHROME: Record<UserRole, RoleChrome> = {
   },
   admin: {
     designation: 'Platform Administrator',
-    authLabel: 'Verified against enterprise user directory',
     avatarGradient: 'from-purple-600 to-indigo-800 text-white',
     badge: 'Admin',
     badgeClass:
       'bg-purple-100 dark:bg-purple-950 text-purple-800 dark:text-purple-300 border-purple-200 dark:border-purple-800',
   },
 };
-
-/** Human label for the authentication method recorded on the session. */
-function authMethodLabel(method?: string): string | null {
-  if (method === 'PASSWORD') return 'Password verified';
-  if (method === 'EMAIL_OTP') return 'Email OTP verified';
-  return null;
-}
 
 /** Format remaining session duration as MM:SS (or HH:MM:SS if > 1hr). */
 export function formatSessionCountdown(seconds: number): string {
@@ -116,6 +104,12 @@ export default function Header() {
   const vendorCreditsExhausted = vendorFreeCreditsRemaining != null && vendorFreeCreditsRemaining <= 0;
 
   const [userProfileDropdownOpen, setUserProfileDropdownOpen] = useState(false);
+  const userProfileDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => registerOutsideClickClose(userProfileDropdownOpen, userProfileDropdownRef, setUserProfileDropdownOpen, false),
+    [userProfileDropdownOpen]
+  );
 
   // Visibility of the Account & Security overlay. The forms inside it live in
   // AccountSecurityPanel, which owns its own field state.
@@ -126,8 +120,7 @@ export default function Header() {
   const sessionName = currentUserSession?.name?.trim() || '';
   const sessionEmail = currentUserSession?.email || '';
   const initials = deriveInitials(sessionName, sessionEmail);
-  const authLabel = authMethodLabel(currentUserSession?.authMethod) || chrome.authLabel;
-  const moduleCount = ROLE_SIDEBAR_NAV[currentRole]?.length ?? 0;
+  const profileRoute = ROLE_PROFILE_ROUTES[currentRole];
 
   // The organisation on the verified session record is authoritative; see
   // resolveSessionOrgName for why the active buyer account is only a conditional
@@ -144,14 +137,13 @@ export default function Header() {
     ? 3 * 60 * 60
     : 30 * 60;
   const [sessionSecondsLeft, setSessionSecondsLeft] = useState<number>(SESSION_DURATION_SECONDS);
+  const sessionExpiresAtRef = useRef<number>(0);
+  const sessionRoleRef = useRef<UserRole>(currentRole);
 
   const handleLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
     clearSessionCache();
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('procucev_session_expires_at');
-      localStorage.removeItem('procucev_session_role');
-    }
+    sessionExpiresAtRef.current = 0;
     // The server stamps the actor from the signed-in session, so no email is sent.
     addAuditLog('User logged out of session');
     setIsLoggedIn(false);
@@ -165,10 +157,7 @@ export default function Header() {
   const handleAutoLogout = useCallback(() => {
     setUserProfileDropdownOpen(false);
     clearSessionCache();
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('procucev_session_expires_at');
-      localStorage.removeItem('procucev_session_role');
-    }
+    sessionExpiresAtRef.current = 0;
     addAuditLog('Session expired - automatic logout');
     setIsLoggedIn(false);
     setCurrentUserSession(null);
@@ -182,11 +171,8 @@ export default function Header() {
   // exists for this, so the handler makes no "extended" claim: the timer itself shows
   // the new remaining time.
   const handleExtendSession = useCallback(() => {
-    if (typeof window !== 'undefined') {
-      const newExpiresAt = Date.now() + SESSION_DURATION_SECONDS * 1000;
-      localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
-      localStorage.setItem('procucev_session_role', currentRole);
-    }
+    sessionExpiresAtRef.current = Date.now() + SESSION_DURATION_SECONDS * 1000;
+    sessionRoleRef.current = currentRole;
     setSessionSecondsLeft(SESSION_DURATION_SECONDS);
   }, [SESSION_DURATION_SECONDS, currentRole]);
 
@@ -199,11 +185,8 @@ export default function Header() {
       const now = Date.now();
       if (now - lastThrottle > 1000) {
         lastThrottle = now;
-        const newExpiresAt = now + INACTIVITY_LIMIT_SECONDS * 1000;
-        if (typeof window !== 'undefined') {
-          localStorage.setItem('procucev_session_expires_at', String(newExpiresAt));
-          localStorage.setItem('procucev_session_role', currentRole);
-        }
+        sessionExpiresAtRef.current = now + INACTIVITY_LIMIT_SECONDS * 1000;
+        sessionRoleRef.current = currentRole;
         setSessionSecondsLeft(INACTIVITY_LIMIT_SECONDS);
       }
     };
@@ -219,26 +202,17 @@ export default function Header() {
   useEffect(() => {
     if (!isLoggedIn) return;
 
-    if (typeof window !== 'undefined') {
-      const stored = localStorage.getItem('procucev_session_expires_at');
-      const storedRole = localStorage.getItem('procucev_session_role');
-      const now = Date.now();
-      let expiresAt = stored ? Number(stored) : NaN;
-      const roleChanged = Boolean(storedRole && storedRole !== currentRole);
-      if (!expiresAt || isNaN(expiresAt) || expiresAt <= now || roleChanged) {
-        expiresAt = now + SESSION_DURATION_SECONDS * 1000;
-        localStorage.setItem('procucev_session_expires_at', String(expiresAt));
-        localStorage.setItem('procucev_session_role', currentRole);
-      }
-      setSessionSecondsLeft(Math.max(0, Math.floor((expiresAt - now) / 1000)));
+    const now = Date.now();
+    const roleChanged = sessionRoleRef.current !== currentRole;
+    if (!sessionExpiresAtRef.current || sessionExpiresAtRef.current <= now || roleChanged) {
+      sessionExpiresAtRef.current = now + SESSION_DURATION_SECONDS * 1000;
+      sessionRoleRef.current = currentRole;
     }
+    setSessionSecondsLeft(Math.max(0, Math.ceil((sessionExpiresAtRef.current - now) / 1000)));
 
     const interval = setInterval(() => {
-      if (typeof window === 'undefined') return;
-      const now = Date.now();
-      const stored = localStorage.getItem('procucev_session_expires_at');
-      const expiresAt = stored ? Number(stored) : now + SESSION_DURATION_SECONDS * 1000;
-      const remaining = Math.max(0, Math.floor((expiresAt - now) / 1000));
+      const currentNow = Date.now();
+      const remaining = Math.max(0, Math.ceil((sessionExpiresAtRef.current - currentNow) / 1000));
       setSessionSecondsLeft(remaining);
 
       if (remaining <= 0) {
@@ -332,7 +306,7 @@ export default function Header() {
 
         {/* Right Section: Buyer Credits / Active Plan, Theme Toggle, Notifications, and Sleek Corner User Profile Box */}
         <div className="flex items-center gap-2 sm:gap-3">
-          {currentRole === 'category_manager' && (
+          {currentRole === 'category_manager' && pathname !== '/category-manager/vendor-console' && (
             <Link
               href="/vendors"
               className="hidden md:flex items-center gap-1.5 px-2.5 py-1.5 rounded-xl bg-slate-100 dark:bg-gray-800 border border-slate-300 dark:border-gray-700 text-slate-700 dark:text-gray-200 hover:bg-slate-200 dark:hover:bg-gray-700 transition-all text-xs font-semibold shadow-xs"
@@ -345,31 +319,59 @@ export default function Header() {
           {/* Buyer Credits / Active Plan Display */}
           {currentRole === 'buyer' && (
             <>
-              {(!activeSubscription || activeSubscription === 'free_trial') ? (
-                <div
-                  className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
-                  title={
-                    remainingFreeRFQs == null
-                      ? `Sourcing Credits: ${UI_STRINGS.headerNav.creditBalanceUnknown}`
-                      : `Sourcing Credits: ${remainingFreeRFQs} remaining`
-                  }
-                >
-                  <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300">Sourcing Credits:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800">
-                    Remaining: {remainingFreeRFQs ?? UI_STRINGS.headerNav.creditBalanceUnknown}
-                  </span>
-                </div>
-              ) : (
-                <div
-                  className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
-                  title={`Active Plan: ${activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}`}
-                >
-                  <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
-                  <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
-                    {activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}
-                  </span>
-                </div>
-              )}
+              {(() => {
+                const trialActive = isBuyerTrialActive(activeBuyerAccount);
+                const trialDaysLeft = trialActive ? getRemainingTrialDays(activeBuyerAccount?.trialEndDate) : 0;
+
+                if (trialActive && trialDaysLeft > 0) {
+                  const badgeText = trialDaysLeft === 1
+                    ? UI_STRINGS.headerNav.trialPeriodBadgeSingle
+                    : formatString(UI_STRINGS.headerNav.trialPeriodBadge, { days: trialDaysLeft });
+                  return (
+                    <div
+                      data-testid="header-trial-period-badge"
+                      className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
+                      title={`Active Plan: ${badgeText}`}
+                    >
+                      <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
+                        {badgeText}
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (!activeSubscription || activeSubscription === 'free_trial') {
+                  return (
+                    <div
+                      data-testid="header-free-credits-badge"
+                      className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-slate-50/80 dark:bg-gray-900/80 border border-slate-200 dark:border-gray-800 shadow-xs"
+                      title={
+                        remainingFreeRFQs == null
+                          ? `Sourcing Credits: ${UI_STRINGS.headerNav.creditBalanceUnknown}`
+                          : `Sourcing Credits: ${remainingFreeRFQs} remaining`
+                      }
+                    >
+                      <span className="text-[11px] font-bold text-slate-700 dark:text-gray-300">Sourcing Credits:</span>
+                      <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 dark:bg-emerald-950/80 text-emerald-900 dark:text-emerald-200 border border-emerald-200 dark:border-emerald-800">
+                        Remaining: {remainingFreeRFQs ?? UI_STRINGS.headerNav.creditBalanceUnknown}
+                      </span>
+                    </div>
+                  );
+                }
+
+                return (
+                  <div
+                    className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1 rounded-xl bg-emerald-50/80 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 shadow-xs"
+                    title={`Active Plan: ${activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}`}
+                  >
+                    <span className="text-[11px] font-bold text-emerald-800 dark:text-emerald-300">Active Plan:</span>
+                    <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-emerald-600 text-white shadow-xs">
+                      {activeSubscription === 'version_1' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_1] : activeSubscription === 'version_2' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_2] : activeSubscription === 'version_3' ? RFQ_MODE_LABELS[RFQ_MODES.MODE_3] : activeSubscription}
+                    </span>
+                  </div>
+                );
+              })()}
             </>
           )}
 
@@ -470,7 +472,7 @@ export default function Header() {
           {/* ═══════════════════════════════════════════════════════════════ */}
           {/* SLEEK CORNER USER PROFILE BOX & PERSONA SWITCHER */}
           {/* ═══════════════════════════════════════════════════════════════ */}
-          <div className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
+          <div ref={userProfileDropdownRef} className="relative pl-1 border-l border-slate-200 dark:border-gray-800">
             <button
               onClick={() => setUserProfileDropdownOpen(!userProfileDropdownOpen)}
               className="flex items-center gap-2.5 p-1.5 pr-2.5 rounded-2xl hover:bg-slate-100 dark:hover:bg-gray-800/80 transition-all border border-slate-200/80 dark:border-gray-700/60 bg-slate-50/50 dark:bg-gray-900/50 shadow-xs text-left group"
@@ -508,15 +510,15 @@ export default function Header() {
                 {/* Active Persona Header Card */}
                 <div className="p-3.5 rounded-2xl bg-gradient-to-br from-slate-50 to-indigo-50/50 dark:from-gray-800/80 dark:to-indigo-950/40 border border-indigo-100 dark:border-indigo-900/60 space-y-2.5">
                   <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
                       <div
                         className={`w-11 h-11 rounded-2xl bg-gradient-to-br ${chrome.avatarGradient} flex items-center justify-center text-sm font-black shadow-md shrink-0`}
                       >
                         {initials}
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <div className="flex items-center gap-1.5 flex-wrap">
-                          <h4 className="text-xs font-black text-slate-900 dark:text-white">
+                          <h4 className="text-xs font-black text-slate-900 dark:text-white truncate">
                             {sessionName || sessionEmail}
                           </h4>
                           <span
@@ -530,6 +532,21 @@ export default function Header() {
                         </p>
                       </div>
                     </div>
+
+                    {profileRoute && (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setUserProfileDropdownOpen(false);
+                          router.push(profileRoute);
+                        }}
+                        className="shrink-0 inline-flex items-center gap-1 px-2.5 py-1.5 rounded-xl bg-white dark:bg-gray-900 border border-indigo-200 dark:border-indigo-700/70 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-50 dark:hover:bg-indigo-950/60 text-[11px] font-bold shadow-xs transition-colors cursor-pointer"
+                        title={UI_STRINGS.headerNav.openProfileTitle}
+                      >
+                        <User size={12} />
+                        <span>{UI_STRINGS.headerNav.profile}</span>
+                      </button>
+                    )}
                   </div>
 
                   {/* Active Login Details & Organization Box */}
@@ -544,26 +561,12 @@ export default function Header() {
                         {sessionEmail}
                       </strong>
                     </div>
-                    <div className="flex items-center justify-between text-slate-500 dark:text-gray-400 text-[10px] pt-1 border-t border-slate-100 dark:border-gray-800/80">
-                      <span className="flex items-center gap-1 text-emerald-600 dark:text-emerald-400 font-semibold">
-                        <ShieldCheck size={12} /> {authLabel}
-                      </span>
-                    </div>
                   </div>
                 </div>
 
-                {/* Workspace Summary (read-only, derived from the session) */}
-                <div className="px-1 flex items-center justify-between text-[10px]">
-                  <span className="font-black uppercase tracking-wider text-slate-400 dark:text-gray-500">
-                    Active Workspace
-                  </span>
-                  <span className="font-mono text-slate-500 dark:text-gray-400">
-                    {chrome.designation} · {moduleCount} modules
-                  </span>
-                </div>
                 {/* Session Actions Footer */}
                 <div className="pt-2 border-t border-slate-100 dark:border-gray-800 flex items-center justify-between gap-2 text-xs">
-                  {currentRole !== 'buyer' && (
+                  {!profileRoute && (
                     <button
                       type="button"
                       onClick={() => {

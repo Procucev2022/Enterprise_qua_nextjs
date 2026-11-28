@@ -2,7 +2,9 @@ import { authClient } from './authClient';
 import { BUYER_PROFILE_ENDPOINTS } from './constants';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
+import { isAbortOrPageUnloadError } from './errorUtils';
 import type {
+  BuyerUploadedVendorItem,
   BuyerCreditSummary,
   BuyerCreditTransaction,
   BuyerCommunicationItem,
@@ -96,11 +98,17 @@ function describeFailure(res: Response, body: ApiEnvelope | null): { error: stri
 /**
  * Read the signed-in buyer's organisation profile.
  */
-export async function fetchBuyerProfile(): Promise<BuyerProfileResult> {
+export async function fetchBuyerProfile(options?: { signal?: AbortSignal }): Promise<BuyerProfileResult> {
   let res: Response;
   try {
-    res = await fetch(BUYER_PROFILE_ENDPOINTS.ME, { headers: authHeaders() });
-  } catch {
+    res = await fetch(BUYER_PROFILE_ENDPOINTS.ME, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    if (isAbortOrPageUnloadError(err, options?.signal)) {
+      return { success: false, error: UI_STRINGS.buyerProfile.loadUnreachable };
+    }
     logger.error('Buyer profile load failed: API unreachable', {}, 'BUYER_PROFILE');
     return { success: false, error: UI_STRINGS.buyerProfile.loadUnreachable };
   }
@@ -109,7 +117,8 @@ export async function fetchBuyerProfile(): Promise<BuyerProfileResult> {
 
   if (!res.ok || !body?.success || !body.data) {
     const { error } = describeFailure(res, body);
-    logger.error('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Buyer profile load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       status: res.status,
@@ -124,6 +133,55 @@ export async function fetchBuyerProfile(): Promise<BuyerProfileResult> {
 
   logger.info('Buyer profile loaded', {}, 'BUYER_PROFILE');
   return { success: true, status: res.status, data: body.data as BuyerProfile };
+}
+
+/**
+ * Fetch and evaluate completion status for the signed-in buyer's profile.
+ */
+export async function fetchBuyerProfileCompletion(options?: {
+  signal?: AbortSignal;
+}): Promise<{
+  success: boolean;
+  status?: number;
+  data?: import('./buyerProfileCompletion').ProfileCompletionResult;
+  profile?: BuyerProfile;
+  error?: string;
+}> {
+  try {
+    const res = await fetch(BUYER_PROFILE_ENDPOINTS.COMPLETION, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+    if (res.ok) {
+      const body = await readEnvelope(res);
+      if (body?.success && body.data) {
+        return {
+          success: true,
+          status: res.status,
+          data: body.data as import('./buyerProfileCompletion').ProfileCompletionResult,
+        };
+      }
+    }
+  } catch {
+    // Fall back to fetchBuyerProfile and local evaluation
+  }
+
+  const profileRes = await fetchBuyerProfile(options);
+  if (!profileRes.success || !profileRes.data) {
+    return {
+      success: false,
+      status: profileRes.status,
+      error: profileRes.error || 'Failed to load buyer profile for completion evaluation',
+    };
+  }
+  const { checkBuyerProfileCompletion } = await import('./buyerProfileCompletion');
+  const completion = checkBuyerProfileCompletion(profileRes.data);
+  return {
+    success: true,
+    status: profileRes.status,
+    data: completion,
+    profile: profileRes.data,
+  };
 }
 
 /**
@@ -164,6 +222,9 @@ export async function saveBuyerProfile(
   }
 
   logger.info('Buyer profile saved', { categoryCount: body.categoryCount }, 'BUYER_PROFILE');
+  if (typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('buyer-profile-updated', { detail: body.data }));
+  }
   return {
     success: true,
     status: res.status,
@@ -187,14 +248,23 @@ export async function saveBuyerProfile(
  * A failure therefore yields an empty list plus a reason for the caller to
  * surface, rather than a plausible-looking tree assembled offline.
  */
-export async function fetchCategoryTaxonomy(query?: string): Promise<CategoryTaxonomyResult> {
+export async function fetchCategoryTaxonomy(
+  query?: string,
+  options?: { signal?: AbortSignal }
+): Promise<CategoryTaxonomyResult> {
   let res: Response;
   const endpoint = query && query.trim()
     ? `${BUYER_PROFILE_ENDPOINTS.CATEGORIES}?q=${encodeURIComponent(query.trim())}`
     : BUYER_PROFILE_ENDPOINTS.CATEGORIES;
   try {
-    res = await fetch(endpoint, { headers: authHeaders() });
-  } catch {
+    res = await fetch(endpoint, {
+      headers: authHeaders(),
+      ...(options?.signal ? { signal: options.signal } : {}),
+    });
+  } catch (err) {
+    if (isAbortOrPageUnloadError(err, options?.signal)) {
+      return { success: false, data: [], error: UI_STRINGS.buyerProfile.loadUnreachable };
+    }
     logger.error('Category taxonomy load failed: API unreachable', {}, 'BUYER_PROFILE');
     return { success: false, data: [], error: UI_STRINGS.buyerProfile.loadUnreachable };
   }
@@ -203,7 +273,8 @@ export async function fetchCategoryTaxonomy(query?: string): Promise<CategoryTax
 
   if (!res.ok || !body?.success || !Array.isArray(body.data)) {
     const { error } = describeFailure(res, body);
-    logger.error('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
+    const logFn = res.status === 401 ? logger.warn.bind(logger) : logger.error.bind(logger);
+    logFn('Category taxonomy load rejected', { status: res.status, error }, 'BUYER_PROFILE');
     return {
       success: false,
       data: [],
@@ -474,8 +545,62 @@ export async function fetchBuyerPaymentHistory(buyerId: string): Promise<{
   }
 }
 
+export async function fetchBuyerUploadedVendors(buyerId: string): Promise<{
+  success: boolean;
+  count?: number;
+  data?: BuyerUploadedVendorItem[];
+  error?: string;
+}> {
+  try {
+    const res = await fetch(`/api/buyer-accounts/${encodeURIComponent(buyerId)}/uploaded-vendors`, {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer uploaded vendors request failed', err);
+    return { success: false, error: getRequestErrorMessage(err, 'Failed to fetch buyer uploaded vendors') };
+  }
+}
+
+export async function fetchBuyerDirectoryKPIStats(): Promise<{
+  success: boolean;
+  totalBuyers: number;
+  verifiedBuyers: number;
+  subscriptionBuyers: number;
+  modeCounts?: Record<string, number>;
+  error?: string;
+}> {
+  try {
+    const res = await fetch('/api/buyer-accounts/kpi-stats', {
+      headers: authHeaders(),
+    });
+    const body = await res.json();
+    if (!body || typeof body.totalBuyers !== 'number') {
+      return {
+        success: false,
+        totalBuyers: 0,
+        verifiedBuyers: 0,
+        subscriptionBuyers: 0,
+        error: 'Invalid KPI stats response',
+      };
+    }
+    return body;
+  } catch (err: unknown) {
+    logBuyerAccountRequestFailure('Buyer directory KPI stats request failed', err);
+    return {
+      success: false,
+      totalBuyers: 0,
+      verifiedBuyers: 0,
+      subscriptionBuyers: 0,
+      error: getRequestErrorMessage(err, 'Failed to fetch buyer directory KPI stats'),
+    };
+  }
+}
+
 const buyerProfileClient = {
   fetchBuyerProfile,
+  fetchBuyerProfileCompletion,
   saveBuyerProfile,
   fetchCategoryTaxonomy,
   flattenCategorySelection,
@@ -488,6 +613,8 @@ const buyerProfileClient = {
   fetchBuyerCommunications,
   recordBuyerCommunication,
   fetchBuyerPaymentHistory,
+  fetchBuyerUploadedVendors,
+  fetchBuyerDirectoryKPIStats,
 };
 
 export default buyerProfileClient;

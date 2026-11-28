@@ -124,6 +124,24 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
     });
   });
 
+  describe('GET /api/buyer-profile/completion', () => {
+    test('returns completion status for buyer profile', async () => {
+      jest.spyOn(buyerProfileService, 'getProfile').mockResolvedValue(STORED_PROFILE);
+      const res = await request(app).get('/api/buyer-profile/completion').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(200);
+      expect(res.body.success).toBe(true);
+      expect(res.body.data).toHaveProperty('isComplete');
+      expect(res.body.data).toHaveProperty('completionPercentage');
+      expect(res.body.data).toHaveProperty('issues');
+    });
+
+    test('returns error when service fails', async () => {
+      jest.spyOn(buyerProfileService, 'getProfile').mockRejectedValue(new Error('completion failure'));
+      const res = await request(app).get('/api/buyer-profile/completion').set(authHeader('buyer'));
+      expect(res.statusCode).toBe(500);
+    });
+  });
+
   // ── Write ─────────────────────────────────────────────────────────────────
   describe('PUT /api/buyer-profile/me', () => {
     test('saves the profile and returns the stored record', async () => {
@@ -186,6 +204,29 @@ describe('Buyer Profile API (/api/buyer-profile)', () => {
 
       expect(res.statusCode).toBe(503);
       expect(res.body.error).toBe(BUYER_PROFILE_MESSAGES.PROFILE_SAVE_FAILED);
+      expect(res.body.retryable).toBeUndefined();
+    });
+
+    test('sets Retry-After header and retryable flag on retryable 503 errors', async () => {
+      const { D1_OVERLOAD_CONFIG } = require('../src/config/constants');
+      jest
+        .spyOn(buyerProfileService, 'saveProfile')
+        .mockRejectedValue(
+          new buyerProfileService.BuyerProfileError(D1_OVERLOAD_CONFIG.MESSAGE, 503, null, { retryable: true })
+        );
+
+      const res = await request(app)
+        .put('/api/buyer-profile/me')
+        .set(authHeader('buyer'))
+        .send({ companyName: 'ACME Ltd' });
+
+      expect(res.statusCode).toBe(503);
+      expect(res.headers['retry-after']).toBe(String(D1_OVERLOAD_CONFIG.RETRY_AFTER_SECONDS));
+      expect(res.body).toMatchObject({
+        success: false,
+        retryable: true,
+        error: D1_OVERLOAD_CONFIG.MESSAGE,
+      });
     });
 
     test('answers 500 through the shared error handler for an unexpected fault', async () => {

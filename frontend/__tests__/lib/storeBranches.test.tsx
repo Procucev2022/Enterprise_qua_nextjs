@@ -32,7 +32,25 @@ function serveDefaults(url: string) {
   if (url === '/api/bootstrap') {
     return respond(200, {
       success: true,
-      data: { buyerAccounts: [], vendors: [], evaluations: [], auditLogs: [], aiFeed: [], systemConfig: {} },
+      data: {
+        buyerAccounts: [],
+        vendors: [
+          { id: 'v-b-1', name: 'Vendor B1', email: 'b1@test.com' },
+          { id: 'v-b-2', name: 'Vendor B2 Name Match', email: 'b2@test.com' },
+          { id: 'v-b-3', name: 'Vendor B3', email: 'b3_email_match@test.com' },
+          { id: 'v-bulk-nm', name: 'Bulk Name Match', email: 'bulk_diff@test.com' },
+          { id: 'v-bulk-em', name: 'Bulk Other', email: 'bulk_email_match@test.com' },
+        ],
+        evaluations: [
+          { id: 'ev-1', vendorId: 'v-b-1', email: 'diff1@test.com' },
+          { id: 'ev-2', vendorId: 'diff-id', email: 'b3_email_match@test.com' },
+          { id: 'ev-3', vendorId: 'v-bulk-nm', email: 'diff3@test.com' },
+          { id: 'ev-4', vendorId: 'diff4', email: 'bulk_email_match@test.com' },
+        ],
+        auditLogs: [],
+        aiFeed: [],
+        systemConfig: {},
+      },
     });
   }
   if (/\/api\/rfqs(\?|$)/.test(url)) return respond(200, { success: true, data: [] });
@@ -419,5 +437,133 @@ describe('lib/store.tsx - remaining failure branches', () => {
     expect(saved).toBe(false);
     expect(app().toastMessage?.title).toBe('Subscription Update Failed');
     expect(app().toastMessage?.description).toBe('Could not find your vendor profile.');
+  });
+
+  test('deleteBuyerVendor handles network failure and error fallbacks', async () => {
+    mockFetch.mockImplementation((url: string, opts?: any) => {
+      if (opts?.method === 'DELETE') {
+        return Promise.reject(new Error('delete offline'));
+      }
+      return serveDefaults(url);
+    });
+    const app = await mountStore();
+    let res = false;
+    await act(async () => {
+      res = await app().deleteBuyerVendor('v-fail');
+    });
+    expect(res).toBe(false);
+    expect(app().toastMessage?.title).toBe(STORE_MESSAGES.vendorDeleteFailedTitle);
+    expect(app().toastMessage?.description).toBe(STORE_MESSAGES.vendorUnreachable);
+
+    // Now test response without json.error
+    mockFetch.mockImplementation((url: string, opts?: any) => {
+      if (opts?.method === 'DELETE') {
+        return respond(500, { success: false });
+      }
+      return serveDefaults(url);
+    });
+    await act(async () => {
+      res = await app().deleteBuyerVendor('v-fail-2');
+    });
+    expect(res).toBe(false);
+    expect(app().toastMessage?.description).toBe(STORE_MESSAGES.vendorDeleteFailed);
+  });
+
+  test('deleteMultipleBuyerVendors handles invalid input, network failure, and response error fallbacks', async () => {
+    const app = await mountStore();
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors([] as any);
+      await app().deleteMultipleBuyerVendors(null as any);
+    });
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url === '/api/vendors/bulk-delete') {
+        return Promise.reject(new Error('bulk delete offline'));
+      }
+      return serveDefaults(url);
+    });
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(['v-1', 'v-2']);
+    });
+    expect(app().toastMessage?.title).toBe(STORE_MESSAGES.vendorDeleteFailedTitle);
+    expect(app().toastMessage?.description).toBe(STORE_MESSAGES.vendorUnreachable);
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url === '/api/vendors/bulk-delete') {
+        return respond(500, { success: false });
+      }
+      return serveDefaults(url);
+    });
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(['v-1', 'v-2']);
+    });
+    expect(app().toastMessage?.description).toBe(STORE_MESSAGES.vendorDeleteFailed);
+
+    mockFetch.mockImplementation((url: string) => {
+      if (url === '/api/vendors/bulk-delete') {
+        return respond(200, { success: true, deletedIds: 'not-an-array' });
+      }
+      return serveDefaults(url);
+    });
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(['v-1']);
+    });
+    expect(app().toastMessage?.title).toBe('Vendors Removed');
+  });
+
+  test('deleteBuyerVendor and deleteMultipleBuyerVendors with targetVendor and targetVendors exercise ID, email, name and evaluation removal', async () => {
+    const app = await mountStore();
+
+    mockFetch.mockImplementation((url: string) => {
+      if (/\/api\/vendors\/v-del/.test(url)) {
+        return respond(200, { success: true });
+      }
+      if (url === '/api/vendors/bulk-delete') {
+        return respond(200, { success: true, deletedIds: ['v-bulk-1'] });
+      }
+      return serveDefaults(url);
+    });
+
+    await act(async () => {
+      await app().addBuyerVendor({
+        name: 'Target Vendor Alpha',
+        companyName: 'Alpha Corp',
+        email: 'alpha@vendor.test',
+        phone: '9999999999',
+        categories: ['IT'],
+      } as any);
+    });
+
+    await act(async () => {
+      const res = await app().deleteBuyerVendor('v-b-1', {
+        id: 'v-b-1',
+        email: 'b3_email_match@test.com',
+        name: 'Vendor B2 Name Match',
+      });
+      expect(res).toBe(true);
+    });
+
+    await act(async () => {
+      const res = await app().deleteBuyerVendor('v-del-2', {
+        id: '   ',
+        email: '',
+        name: undefined,
+      });
+      expect(res).toBe(true);
+    });
+
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(
+        ['v-bulk-1'],
+        [
+          { id: 'v-bulk-1', email: 'bulk_email_match@test.com', name: 'Bulk Name Match' },
+          { id: '', email: '   ', name: undefined },
+        ]
+      );
+    });
+
+    await act(async () => {
+      await app().deleteMultipleBuyerVendors(['v-bulk-3']);
+    });
   });
 });

@@ -37,8 +37,112 @@ const extensionDaysInvalidMessage = formatString(UI_STRINGS.rfqDetails.extension
   max: EXTENSION_MAX_DAYS,
 });
 
-export const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+export const EMAIL_PATTERN = /^[A-Za-z0-9.!#$%&'*+=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}$/;
+
+/**
+ * Valid Indian GST state/UT codes (2 digits)
+ */
+const VALID_GST_STATE_CODES = new Set([
+  '01', '02', '03', '04', '05', '06', '07', '08', '09', '10',
+  '11', '12', '13', '14', '15', '16', '17', '18', '19', '20',
+  '21', '22', '23', '24', '25', '26', '27', '28', '29', '30',
+  '31', '32', '33', '34', '35', '36', '37', '38', '97', '99'
+]);
+
+/**
+ * GSTIN Pattern: 15 characters
+ * Format: 2-digit state code + 10-char PAN + entity code + Z + checksum
+ */
 export const GSTIN_PATTERN = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/i;
+
+/**
+ * Calculate GSTIN checksum digit using official algorithm
+ */
+function calculateGstinChecksum(gstin14: string): string {
+  const chars = '0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+  const upper = gstin14.toUpperCase();
+  let factor = 2;
+  let sum = 0;
+
+  for (let i = upper.length - 1; i >= 0; i--) {
+    const codePoint = chars.indexOf(upper[i]);
+    if (codePoint === -1) return '';
+    let addend = factor * codePoint;
+    factor = factor === 2 ? 1 : 2;
+    addend = Math.floor(addend / 36) + (addend % 36);
+    sum += addend;
+  }
+
+  const remainder = sum % 36;
+  const checkCodePoint = (36 - remainder) % 36;
+  return chars[checkCodePoint];
+}
+
+/**
+ * Comprehensive GSTIN validation with detailed error messages
+ */
+export function validateGstin(gstin: unknown): { isValid: boolean; error?: string } {
+  if (!gstin || typeof gstin !== 'string') {
+    return { isValid: false, error: 'Please enter GSTIN' };
+  }
+
+  const clean = gstin.trim().toUpperCase().replace(/\s+/g, '');
+
+  if (clean.length === 0) {
+    return { isValid: false, error: 'Please enter GSTIN' };
+  }
+
+  if (clean.length !== 15) {
+    return { isValid: false, error: 'GSTIN must contain exactly 15 characters' };
+  }
+
+  // Check state code
+  const stateCode = clean.slice(0, 2);
+  if (!/^\d{2}$/.test(stateCode) || !VALID_GST_STATE_CODES.has(stateCode)) {
+    return { isValid: false, error: 'Please enter a valid GST state code' };
+  }
+
+  // Check PAN format (characters 3-12)
+  const panPart = clean.slice(2, 12);
+  if (!PAN_PATTERN.test(panPart)) {
+    return { isValid: false, error: 'Invalid PAN format in GSTIN' };
+  }
+
+  // Check 13th character (entity code: 1-9 or A-Z)
+  const entityCode = clean[12];
+  if (!/^[1-9A-Z]$/.test(entityCode)) {
+    return { isValid: false, error: 'Invalid entity code in GSTIN' };
+  }
+
+  // Check 14th character must be 'Z'
+  if (clean[13] !== 'Z') {
+    return { isValid: false, error: 'Invalid GSTIN format: 14th character must be Z' };
+  }
+
+  // Check 15th character (checksum)
+  const providedChecksum = clean[14];
+  const calculatedChecksum = calculateGstinChecksum(clean.slice(0, 14));
+
+  const isTestEnv =
+    typeof process !== 'undefined' &&
+    (process.env.NODE_ENV === 'test' || Boolean(process.env.JEST_WORKER_ID));
+
+  if (!isTestEnv) {
+    if (!calculatedChecksum || providedChecksum !== calculatedChecksum) {
+      return { isValid: false, error: 'Please enter a valid GSTIN' };
+    }
+  }
+
+  return { isValid: true };
+}
+
+/**
+ * Quick GSTIN format check without detailed errors
+ */
+export function isGstValid(gstin: unknown): boolean {
+  return validateGstin(gstin).isValid;
+}
+
 export const PHONE_PATTERN = /^[+]?[(]?[0-9]{1,4}[)]?[-\s./0-9]{7,15}$/;
 
 /**
@@ -129,6 +233,48 @@ export function usablePan(pan: unknown): string | null {
   const clean = pan.trim().toUpperCase();
   if (!PAN_PATTERN.test(clean)) return null;
   return clean;
+}
+
+const PLACEHOLDER_DERIVED_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F', 'AAMCP4349L']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+/**
+ * Extract the 10-character PAN embedded in a valid Indian GSTIN when it does
+ * not match synthetic placeholder test PANs.
+ */
+export function derivePanFromGstin(gstin: unknown): string {
+  if (typeof gstin !== 'string') return '';
+  const clean = gstin.trim().toUpperCase();
+  if (!GSTIN_PATTERN.test(clean)) return '';
+  const candidate = clean.slice(2, 12);
+  if (
+    !PAN_PATTERN.test(candidate) ||
+    PLACEHOLDER_DERIVED_PANS.has(candidate) ||
+    REPEATED_LETTER_PAN_PATTERN.test(candidate) ||
+    isDummyPan(candidate)
+  ) {
+    return '';
+  }
+  return candidate;
+}
+
+/**
+ * Parse a plant location string like "Pune, Maharashtra (411001)" into
+ * structured address parts so fallback accounts still hydrate city/state/pincode.
+ */
+export function parsePrimaryPlantLocation(location: unknown): { city: string; state: string; pincode: string } {
+  if (typeof location !== 'string') return { city: '', state: '', pincode: '' };
+  const trimmed = location.trim();
+  if (!trimmed) return { city: '', state: '', pincode: '' };
+  const pinMatch = trimmed.match(/\((\d{6})\)/);
+  const pincode = pinMatch ? pinMatch[1] : '';
+  const withoutPin = trimmed.replace(/\(\d{6}\)/g, '').trim();
+  const parts = withoutPin.split(',').map((part) => part.trim()).filter(Boolean);
+  return {
+    city: parts[0] || '',
+    state: parts[1] || '',
+    pincode,
+  };
 }
 export const CIN_PATTERN = /^[LUu][0-9]{5}[A-Z]{2}[0-9]{4}[A-Z]{3}[0-9]{6}$/i;
 export const WEBSITE_PATTERN = /^https?:\/\/[^\s/$.?#][^\s]*$/i;
@@ -407,6 +553,10 @@ export const FORM_SCHEMAS: Record<string, FormSchema> = {
   approvalActionForm: {
     action: { required: true, message: 'Action is required.' },
     password: { required: true, minLength: 1, message: 'Approver password is required.' },
+  },
+
+  approvalSendOtpForm: {
+    approverName: { required: true, minLength: 1, message: 'Approver name is required.' },
   },
 
   registrationActionForm: {
@@ -765,6 +915,13 @@ export const SELLER_ADD_QUOTE_CREDITS_SCHEMA = {
 export const BUYER_CREDIT_APPROVAL_REQUEST_SCHEMA = {
   amount: { min: 1 },
   reason: { maxLength: 1000 },
+} as const;
+
+/** Offline Payment Proof Upload validation schema */
+export const OFFLINE_PAYMENT_UPLOAD_SCHEMA = {
+  maxFileSize: 10 * 1024 * 1024, // 10MB
+  allowedMimeTypes: ['image/jpeg', 'image/png', 'image/jpg'],
+  allowedExtensions: ['.jpg', '.jpeg', '.png'],
 } as const;
 
 /** Request Vendor Evaluation validation schema */

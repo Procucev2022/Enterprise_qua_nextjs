@@ -4,13 +4,13 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { authClient } from '@/lib/authClient';
-import { formatFileSize } from '@/lib/constants';
+import { createBackdropClickHandler, formatFileSize, registerOutsideClickClose } from '@/lib/constants';
 import { rfqAttachmentUrl, submitRFQInquiry } from '@/lib/rfqClient';
 import { downloadVendorQuotationExcel } from '@/lib/bidComparisonExport';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { SubscriptionPaymentModal } from '@/app/components/Modals';
-import { UI_STRINGS } from '@/lib/uiStrings';
-import type { RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
+import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import type { LineItemBid, LineItemQuote, QuoteComparison, RFQItem, RFQQuoteAttachment, VendorOpportunity } from '@/lib/types';
 import {
   getPaidVendorPlanPrice,
   getPaidVendorPlanRfqQuota,
@@ -50,6 +50,7 @@ import {
   ChevronsRight,
   Tag,
   Filter,
+  MapPin,
 } from 'lucide-react';
 
 /**
@@ -58,6 +59,135 @@ import {
  */
 function messageSortTime(timestamp: string | null | undefined): number {
   return timestamp ? new Date(timestamp).getTime() : Number.MAX_SAFE_INTEGER;
+}
+
+function extractPin(pinVal?: any, addrVal?: any): string {
+  const digits = String(pinVal || '').replace(/\D/g, '');
+  if (digits.length === 6) return digits;
+  const match = String(addrVal || '').match(/\b\d{6}\b/);
+  return match ? match[0] : '';
+}
+
+interface RawLineEntity {
+  id?: string;
+  itemName?: string;
+  description?: string;
+  quantity?: number;
+  unit?: string | null;
+}
+
+/** Converts extracted RFQ entities into bid line items with empty vendor rates. */
+function mapEntitiesToLineItems(entities: RawLineEntity[], fallbackTitle: string): LineItemBid[] {
+  return entities.map((ent, idx) => ({
+    id: ent.id || `item-${idx}`,
+    description: ent.itemName || ent.description || fallbackTitle,
+    quantity: typeof ent.quantity === 'number' ? ent.quantity : Number(ent.quantity) || 0,
+    unit: ent.unit || undefined,
+    unitPrice: 0,
+    leadTimeDays: 0,
+    marketBandStatus: 'optimal',
+    paymentTerms: '',
+  }));
+}
+
+function round2(val: number): number {
+  return Math.round((val + Number.EPSILON) * 100) / 100;
+}
+
+/** Ensures an opportunity carries line items from its backing RFQ record when available. */
+function resolveOpportunityForBid(opp: VendorOpportunity, rfqs: RFQItem[]): VendorOpportunity {
+  if (Array.isArray(opp.lineItems) && opp.lineItems.length > 0) {
+    return opp;
+  }
+  const rfqRecord = rfqs.find(
+    (r) => (Boolean(opp.rfqNumber) && r.rfqNumber === opp.rfqNumber) || (Boolean(opp.id) && r.id === opp.id)
+  );
+  if (!rfqRecord) return opp;
+  const rawEntities: RawLineEntity[] = rfqRecord.extractedEntities?.length
+    ? rfqRecord.extractedEntities
+    : Array.isArray(rfqRecord.lineItems)
+    ? (rfqRecord.lineItems as RawLineEntity[])
+    : [];
+  if (rawEntities.length === 0) return opp;
+  return {
+    ...opp,
+    lineItems: mapEntitiesToLineItems(rawEntities, opp.title),
+  };
+}
+
+/** Pre-fills per-line-item rates when reopening an existing quotation for resubmission. */
+function buildInitialLineItemPrices(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemPrices: Record<string, string> = {};
+  if (!existingQuote) return itemPrices;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    if (lq.lineItemId && lq.unitPrice != null) {
+      itemPrices[lq.lineItemId] = String(lq.unitPrice);
+    }
+  });
+  lineItems.forEach((li) => {
+    if (itemPrices[li.id] != null) return;
+    const normalizedDesc = (li.description || '').trim().toLowerCase();
+    if (!normalizedDesc) return;
+    const matchedByName = lineItemQuotes.find(
+      (lq) => lq.unitPrice != null && (lq.itemName || '').trim().toLowerCase() === normalizedDesc
+    );
+    if (matchedByName) {
+      itemPrices[li.id] = String(matchedByName.unitPrice);
+    }
+  });
+  if (
+    lineItems.length === 1 &&
+    itemPrices[lineItems[0].id] == null &&
+    lineItemQuotes.length === 0 &&
+    existingQuote.unitPrice != null
+  ) {
+    itemPrices[lineItems[0].id] = String(existingQuote.unitPrice);
+  }
+  return itemPrices;
+}
+
+/** Pre-fills per-line-item discounts when reopening an existing quotation for resubmission. */
+function buildInitialLineItemDiscounts(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemDiscounts: Record<string, string> = {};
+  if (!existingQuote) return itemDiscounts;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    if (lq.lineItemId && (lq as any).discountPercent != null) {
+      itemDiscounts[lq.lineItemId] = String((lq as any).discountPercent);
+    }
+  });
+  if (lineItems.length === 1 && itemDiscounts[lineItems[0].id] == null && existingQuote.discountPercent != null) {
+    itemDiscounts[lineItems[0].id] = String(existingQuote.discountPercent);
+  }
+  return itemDiscounts;
+}
+
+/** Pre-fills per-line-item GST rates when reopening an existing quotation for resubmission. */
+function buildInitialLineItemGst(
+  lineItems: LineItemBid[],
+  existingQuote: QuoteComparison | null | undefined
+): Record<string, string> {
+  const itemGst: Record<string, string> = {};
+  if (!existingQuote) return itemGst;
+  const lineItemQuotes = Array.isArray(existingQuote.lineItemQuotes) ? existingQuote.lineItemQuotes : [];
+  lineItemQuotes.forEach((lq) => {
+    const rate = (lq as any).taxRate ?? (lq as any).gstPercent;
+    if (lq.lineItemId && rate != null) {
+      itemGst[lq.lineItemId] = String(rate);
+    }
+  });
+  const fallbackRate = existingQuote.taxRate ?? existingQuote.gstPercent;
+  if (lineItems.length === 1 && itemGst[lineItems[0].id] == null && fallbackRate != null) {
+    itemGst[lineItems[0].id] = String(fallbackRate);
+  }
+  return itemGst;
 }
 
 interface QuotationFormProps {
@@ -89,7 +219,15 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [opportunitySearch, setOpportunitySearch] = useState('');
   const [opportunityStatusFilter, setOpportunityStatusFilter] = useState<'all' | 'open' | 'submitted' | 'closed' | 'direct'>('all');
   const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
-  const [userSelectedTab, setUserSelectedTab] = useState<'my_enquiries' | 'public_enquiries' | null>(null);
+  const [selectedPincodes, setSelectedPincodes] = useState<string[]>([]);
+  const [isPincodeDropdownOpen, setIsPincodeDropdownOpen] = useState(false);
+  const pincodeDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(
+    () => registerOutsideClickClose(isPincodeDropdownOpen, pincodeDropdownRef, setIsPincodeDropdownOpen, false),
+    [isPincodeDropdownOpen]
+  );
+  const [userSelectedTab, setUserSelectedTab] = useState<'all' | 'my_enquiries' | 'public_enquiries' | null>(null);
   const [locallyUnlockedRfqIds, setLocallyUnlockedRfqIds] = useState<string[]>([]);
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
@@ -159,6 +297,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   const [myVendorName, setMyVendorName] = useState<string>('');
   const [myAddedByBuyerCompany, setMyAddedByBuyerCompany] = useState<string | null>(null);
   const [myBuyerId, setMyBuyerId] = useState<string | null>(null);
+  const [myPincode, setMyPincode] = useState<string>('');
+  const [myMajorCategory, setMyMajorCategory] = useState<string>('');
+  const [myMinorCategories, setMyMinorCategories] = useState<string[]>([]);
   const myVendorRecord = buyerVendors?.find(
     (v) => v.email?.toLowerCase() === currentUserSession?.email?.toLowerCase()
   );
@@ -193,10 +334,13 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         if (!res.ok) return;
         const data = await res.json();
         if (!cancelled && data.success && data.data) {
-          setMyVendorId(data.data.id);
-          setMyVendorName(data.data.name);
+          setMyVendorId(data.data.id || '');
+          setMyVendorName(data.data.name || '');
           setMyAddedByBuyerCompany(data.data.addedByBuyerCompany || null);
           setMyBuyerId(data.data.buyerId || data.data.buyerAccountId || null);
+          setMyPincode(data.data.pincode || '');
+          setMyMajorCategory(data.data.majorCategory || '');
+          setMyMinorCategories(Array.isArray(data.data.minorCategories) ? data.data.minorCategories : []);
         }
       } catch {
         // Leave myVendorId null — bidding/download actions will surface a
@@ -230,16 +374,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (qEmail && sessionEmail && qEmail === sessionEmail) return true;
 
     const qVendorId = String(q.vendorId || '').trim().toLowerCase();
-    if (myVendorId && qVendorId && qVendorId === myVendorId.toLowerCase()) return true;
-    if (myVendorRecord?.id && qVendorId && qVendorId === String(myVendorRecord.id).toLowerCase()) return true;
+    const myIds = [myVendorId, myVendorRecord?.id ? String(myVendorRecord.id) : '']
+      .filter((id): id is string => Boolean(id))
+      .map((id) => id.toLowerCase());
+    if (qVendorId && myIds.includes(qVendorId)) return true;
 
     const qName = (q.vendorName || '').toLowerCase().trim();
     if (qName) {
-      if (myVendorName && qName === myVendorName.toLowerCase().trim()) return true;
-      if (myVendorRecord?.name && qName === myVendorRecord.name.toLowerCase().trim()) return true;
-      if (currentUserSession?.name && qName === currentUserSession.name.toLowerCase().trim()) return true;
       const sessionOrgName = (currentUserSession as any)?.organizationName || currentUserSession?.orgName;
-      if (sessionOrgName && qName === String(sessionOrgName).toLowerCase().trim()) return true;
+      const myNames = [myVendorName, myVendorRecord?.name, currentUserSession?.name, sessionOrgName]
+        .filter(Boolean)
+        .map((n) => String(n).toLowerCase().trim());
+      if (myNames.includes(qName)) return true;
     }
     return false;
   };
@@ -263,6 +409,84 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       };
     });
 
+  // Vendor's category pool and pincode for matching
+  const vendorCategoryPool = useMemo(() => {
+    const pool = new Set<string>();
+    const add = (c: any) => {
+      if (typeof c === 'string' && c.trim()) {
+        pool.add(c.trim().toLowerCase());
+      } else if (Array.isArray(c)) {
+        c.forEach((item) => add(item));
+      }
+    };
+    add(myMajorCategory);
+    add(myMinorCategories);
+    add(myVendorRecord?.majorCategory);
+    add(myVendorRecord?.minorCategories);
+    add((myVendorRecord as any)?.category);
+    add((currentUserSession as any)?.category);
+    add((currentUserSession as any)?.majorCategory);
+    add((currentUserSession as any)?.minorCategories);
+    return Array.from(pool);
+  }, [myMajorCategory, myMinorCategories, myVendorRecord, currentUserSession]);
+
+  const effectiveVendorPincode = useMemo(() => {
+    const raw =
+      myPincode ||
+      myVendorRecord?.pincode ||
+      (currentUserSession as any)?.pincode ||
+      (currentUserSession as any)?.postalCode ||
+      '';
+    return String(raw).replace(/\D/g, '');
+  }, [myPincode, myVendorRecord, currentUserSession]);
+
+  const checkCategoryAndPincodeMatch = useCallback((rfqNumber: string) => {
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    if (!rfq && !rfqRecord) return false;
+
+    const rfqMinors = new Set<string>();
+    const addMinor = (c: any) => {
+      if (typeof c === 'string' && c.trim()) rfqMinors.add(c.trim().toLowerCase());
+    };
+    if (rfq?.minorCategory) addMinor(rfq.minorCategory);
+    if (rfq?.category) addMinor(rfq.category);
+    if (rfqRecord?.category) addMinor(rfqRecord.category);
+    if ((rfqRecord as any)?.majorCategory) addMinor((rfqRecord as any).majorCategory);
+    (rfqRecord?.extractedEntities || []).forEach((e: any) => {
+      if (e.minorCategory) addMinor(e.minorCategory);
+      if (e.category) addMinor(e.category);
+    });
+    (rfqRecord?.lineItems || []).forEach((li: any) => {
+      if (li.minorCategory) addMinor(li.minorCategory);
+      if (li.category) addMinor(li.category);
+    });
+
+    const hasCategoryMatch =
+      rfqMinors.size > 0 &&
+      vendorCategoryPool.length > 0 &&
+      Array.from(rfqMinors).some((minor) =>
+        vendorCategoryPool.some((vc) => vc === minor || vc.includes(minor) || minor.includes(vc))
+      );
+
+    const rfqPin = extractPin(
+      rfq?.pincode || rfq?.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode,
+      rfq?.deliveryLocation || rfqRecord?.deliveryLocation
+    );
+
+    const vendorPin = extractPin(
+      effectiveVendorPincode,
+      (currentUserSession as any)?.address || (myVendorRecord as any)?.address
+    );
+
+    const hasPincodeMatch =
+      Boolean(rfqPin) &&
+      Boolean(vendorPin) &&
+      rfqPin === vendorPin;
+
+    return Boolean(hasCategoryMatch && hasPincodeMatch);
+  }, [vendorOpportunities, rfqs, vendorCategoryPool, effectiveVendorPincode, currentUserSession, myVendorRecord]);
+
   // Direct-vs-marketplace reflects the real relationship:
   // When a buyer uploads or adds a vendor, the vendor is buyer-mapped and has unlimited quotations for that buyer's direct RFQs (V1).
   // Network and marketplace sourcing modes (V0, V2, V3) require free credits or subscription plan unless specifically invited.
@@ -271,24 +495,36 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
     if (!rfq && !rfqRecord) return false;
 
-    // Check if the vendor was explicitly invited/assigned by the buyer
-    const isExplicitlyAssigned = (rfqRecord?.assignedVendors || []).some((v) => {
-      const vEmail = (v.email || '').toLowerCase().trim();
-      const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
-      if (vEmail && sEmail && vEmail === sEmail) return true;
-      const vId = String(v.id || '').toLowerCase().trim();
-      if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
-      const vName = (v.name || '').toLowerCase().trim();
-      if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
-      return false;
-    });
-    if (isExplicitlyAssigned) return true;
+    // If RFQ's minor category matches vendor's category AND pincode matches, display in My Enquiries
+    if (checkCategoryAndPincodeMatch(rfqNumber)) {
+      return true;
+    }
 
-    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase();
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    if (isV0) {
+      return false;
+    }
+
+    const assignedList = rfqRecord?.assignedVendors || (rfq as { assignedVendors?: unknown[] })?.assignedVendors || (rfqRecord?.followUpData as { vendors?: unknown[] })?.vendors;
+    if (Array.isArray(assignedList) && assignedList.length > 0) {
+      // Check if the vendor was explicitly invited/assigned by the buyer
+      const isExplicitlyAssigned = (assignedList as Array<Record<string, unknown>>).some((v) => {
+        if (!v) return false;
+        const vEmail = (typeof v.email === 'string' ? v.email : '').toLowerCase().trim();
+        const sEmail = (currentUserSession?.email || '').toLowerCase().trim();
+        if (vEmail && sEmail && vEmail === sEmail) return true;
+        const vId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        if (vId && myVendorId && vId === myVendorId.toLowerCase().trim()) return true;
+        const vName = (typeof v.name === 'string' ? v.name : '').toLowerCase().trim();
+        if (vName && myVendorName && vName === myVendorName.toLowerCase().trim()) return true;
+        return false;
+      });
+      // When assignedVendors exists, ONLY invited vendors can see this RFQ in My Enquiries
+      return isExplicitlyAssigned;
+    }
+
     if (
-      mode === 'mode_0' ||
-      mode === 'v0' ||
-      mode === 'version_0' ||
       mode === 'mode_3' ||
       mode === 'v3' ||
       mode === 'version_3'
@@ -305,7 +541,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       if (myVendorRecord.buyerAccountId && buyerAccountId === myVendorRecord.buyerAccountId) return true;
     }
     return false;
-  }, [vendorOpportunities, rfqs, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+  }, [vendorOpportunities, rfqs, checkCategoryAndPincodeMatch, currentUserSession?.email, myVendorId, myVendorName, myAddedByBuyerCompany, myBuyerId, myVendorRecord]);
+
+  const isPublicEnquiryRfq = useCallback((rfqNumber: string) => {
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+
+    // In Mode 0, all RFQs should be visible to all vendors in public enquiries,
+    // even if the RFQ category does not match their registered categories
+    if (isV0) {
+      return true;
+    }
+
+    return !isOwnBuyerRfq(rfqNumber);
+  }, [vendorOpportunities, rfqs, isOwnBuyerRfq]);
 
   // Entitlement is decided from store data only: the subscription plan from the backend and
   // the credit balance from refreshVendorCredits. A balance that has not loaded (null) does not
@@ -329,38 +580,89 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     ).trim();
   }, [rfqs]);
 
-  // Extract distinct minor categories available across opportunities
-  const availableCategories = useMemo(() => {
-    const set = new Set<string>();
-    vendorOpportunities.forEach((opp) => {
-      const cat = resolveOpportunityCategory(opp);
-      if (cat) set.add(cat);
-    });
-    rfqs.forEach((rfq) => {
-      (rfq.extractedEntities || []).forEach((e) => {
-        const entCat = (e.minorCategory || e.majorCategory || '').trim();
-        if (entCat) set.add(entCat);
-      });
-      if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
-    });
-    return Array.from(set).sort();
-  }, [vendorOpportunities, rfqs, resolveOpportunityCategory]);
-
   // Compile RFQ Bidding summaries
   const myEnquiries = useMemo(() => {
     return vendorOpportunities.filter((opp) => isOwnBuyerRfq(opp.rfqNumber));
   }, [vendorOpportunities, isOwnBuyerRfq]);
 
   const publicEnquiries = useMemo(() => {
-    return vendorOpportunities.filter((opp) => !isOwnBuyerRfq(opp.rfqNumber));
-  }, [vendorOpportunities, isOwnBuyerRfq]);
+    return vendorOpportunities.filter((opp) => isPublicEnquiryRfq(opp.rfqNumber));
+  }, [vendorOpportunities, isPublicEnquiryRfq]);
 
-  const effectiveTab: 'my_enquiries' | 'public_enquiries' = useMemo(() => {
+  // Combined listing without duplicate RFQs
+  const combinedEnquiries = useMemo(() => {
+    const seen = new Set<string>();
+    const list: VendorOpportunity[] = [];
+    for (const opp of [...myEnquiries, ...publicEnquiries]) {
+      const key = opp.rfqNumber || opp.id;
+      if (!seen.has(key)) {
+        seen.add(key);
+        list.push(opp);
+      }
+    }
+    return list;
+  }, [myEnquiries, publicEnquiries]);
+
+  const effectiveTab: 'all' | 'my_enquiries' | 'public_enquiries' = useMemo(() => {
     if (userSelectedTab) return userSelectedTab;
     if (opportunityStatusFilter === 'direct') return 'my_enquiries';
-    if (myEnquiries.length > 0) return 'my_enquiries';
-    return 'public_enquiries';
-  }, [userSelectedTab, opportunityStatusFilter, myEnquiries.length]);
+    return 'all';
+  }, [userSelectedTab, opportunityStatusFilter]);
+
+  // Extract distinct categories available across opportunities for the active tab
+  const availableCategories = useMemo(() => {
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
+    const set = new Set<string>();
+    pool.forEach((opp) => {
+      const cat = resolveOpportunityCategory(opp);
+      if (cat) set.add(cat);
+      if (opp.minorCategory && opp.minorCategory.trim()) set.add(opp.minorCategory.trim());
+      if (opp.majorCategory && opp.majorCategory.trim()) set.add(opp.majorCategory.trim());
+      const rfq = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
+      if (rfq) {
+        if (rfq.category && rfq.category.trim()) set.add(rfq.category.trim());
+        (rfq.extractedEntities || []).forEach((e) => {
+          const entCat = (e.minorCategory || (e as any).majorCategory || '').trim();
+          if (entCat) set.add(entCat);
+        });
+        (rfq.lineItems || []).forEach((li: any) => {
+          if (li.minorCategory && li.minorCategory.trim()) set.add(li.minorCategory.trim());
+        });
+      }
+    });
+    return Array.from(set).sort();
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs, resolveOpportunityCategory]);
+
+  // Extract distinct pincodes available across opportunities for the active tab
+  const availablePincodes = useMemo(() => {
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
+    const set = new Set<string>();
+    pool.forEach((opp) => {
+      const rfqRecord = rfqs.find((r) => r.rfqNumber === opp.rfqNumber);
+      const rawPin = opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '';
+      let pin = String(rawPin).replace(/\D/g, '');
+      if (!pin && opp.deliveryLocation) {
+        const m = opp.deliveryLocation.match(/\b\d{6}\b/);
+        if (m) pin = m[0];
+      }
+      if (!pin && rfqRecord?.deliveryLocation) {
+        const m = rfqRecord.deliveryLocation.match(/\b\d{6}\b/);
+        if (m) pin = m[0];
+      }
+      if (pin) set.add(pin);
+    });
+    return Array.from(set).sort();
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, rfqs]);
 
   const totalReceivedCount = vendorOpportunities.length;
   const pendingQuotesCount = useMemo(() => {
@@ -374,7 +676,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
 
   const filteredOpportunities = useMemo(() => {
     const query = opportunitySearch.trim().toLocaleLowerCase();
-    const pool = effectiveTab === 'my_enquiries' ? myEnquiries : publicEnquiries;
+    const pool =
+      effectiveTab === 'my_enquiries'
+        ? myEnquiries
+        : effectiveTab === 'public_enquiries'
+        ? publicEnquiries
+        : combinedEnquiries;
     return pool
       .filter((opp) => {
         const quote = submittedQuotes.some((item) => item.rfqNumber === opp.rfqNumber);
@@ -387,12 +694,31 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const rfqRecord = rfqs.find((rfq) => rfq.rfqNumber === opp.rfqNumber);
         const oppCat = resolveOpportunityCategory(opp);
 
-        // Category filter check (multi-category support):
-        // Filter strictly by the enquiry's resolved category so that choosing a category
-        // (e.g. Civil Works) does not surface RFQs from other categories (e.g. Electrical, IT).
+        // Pincode filter check (multi-pincode support):
+        if (selectedPincodes.length > 0) {
+          const oppPin = String(opp.pincode || opp.deliveryPincode || rfqRecord?.deliveryPincode || (rfqRecord as any)?.pincode || '').replace(/\D/g, '');
+          const matchesPincode = selectedPincodes.some(
+            (pin) => pin.replace(/\D/g, '') === oppPin
+          );
+          if (!matchesPincode) return false;
+        }
+
+        // Category & minor category filter check (multi-category support):
         if (selectedCategories.length > 0) {
-          const matchesCategory = selectedCategories.some(
-            (cat) => cat.toLowerCase() === oppCat.toLowerCase()
+          const rfqCategories = [
+            oppCat,
+            opp.minorCategory,
+            opp.majorCategory,
+            opp.category,
+            rfqRecord?.category,
+            ...(rfqRecord?.extractedEntities || []).map((e) => e.minorCategory),
+            ...(rfqRecord?.extractedEntities || []).map((e) => e.majorCategory),
+          ]
+            .filter((c): c is string => typeof c === 'string' && Boolean(c.trim()))
+            .map((c) => c.trim().toLowerCase());
+
+          const matchesCategory = selectedCategories.some((cat) =>
+            rfqCategories.includes(cat.trim().toLowerCase())
           );
           if (!matchesCategory) return false;
         }
@@ -413,40 +739,21 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
           .some((value) => value.toLocaleLowerCase().includes(query));
       })
       .sort((a, b) => {
-        const aHasQuote = submittedQuotes.some((item) => item.rfqNumber === a.rfqNumber) || a.status === 'submitted';
-        const bHasQuote = submittedQuotes.some((item) => item.rfqNumber === b.rfqNumber) || b.status === 'submitted';
-        const aDirect = isOwnBuyerRfq(a.rfqNumber);
-        const bDirect = isOwnBuyerRfq(b.rfqNumber);
+        const aRecord = (rfqs || []).find((r) => r.rfqNumber === a.rfqNumber || r.id === a.id);
+        const bRecord = (rfqs || []).find((r) => r.rfqNumber === b.rfqNumber || r.id === b.id);
+        const aDate = new Date(a.createdAt || aRecord?.createdAt || 0).getTime();
+        const bDate = new Date(b.createdAt || bRecord?.createdAt || 0).getTime();
 
-        // Sorting priority to prevent vendor's own requests from being buried:
-        // Score 4: Direct client invitation awaiting quote (Highest urgency)
-        // Score 3: Submitted quote (Vendor's active submission tracking)
-        // Score 2: Direct client invitation (closed/other)
-        // Score 0: Generic marketplace / open network enquiry
-        const getPriority = (hasQuote: boolean, isDirect: boolean, opp: VendorOpportunity) => {
-          const isClosed = opp.status === 'Closed' || opp.status === 'Expired';
-          if (isDirect && !hasQuote && !isClosed) return 4;
-          if (hasQuote) return 3;
-          if (isDirect) return 2;
-          return 0;
-        };
-
-        const aScore = getPriority(aHasQuote, aDirect, a);
-        const bScore = getPriority(bHasQuote, bDirect, b);
-
-        if (bScore !== aScore) {
-          return bScore - aScore;
+        if (bDate !== aDate) {
+          return bDate - aDate;
         }
-
-        const aTime = new Date(a.deadline || 0).getTime();
-        const bTime = new Date(b.deadline || 0).getTime();
-        return bTime - aTime;
+        return 0;
       });
-  }, [effectiveTab, myEnquiries, publicEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, isOwnBuyerRfq, resolveOpportunityCategory]);
+  }, [effectiveTab, myEnquiries, publicEnquiries, combinedEnquiries, submittedQuotes, rfqs, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, isOwnBuyerRfq, resolveOpportunityCategory]);
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [effectiveTab, opportunitySearch, opportunityStatusFilter, selectedCategories, pageSize]);
+  }, [effectiveTab, opportunitySearch, opportunityStatusFilter, selectedCategories, selectedPincodes, pageSize]);
 
   const totalFilteredCount = filteredOpportunities.length;
   const totalPages = Math.max(1, Math.ceil(totalFilteredCount / pageSize));
@@ -460,11 +767,14 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // ─── Real quote/bid submission ─────────────────────────────────────────
   const [biddingOn, setBiddingOn] = useState<VendorOpportunity | null>(null);
   const [bidUnitPrice, setBidUnitPrice] = useState('');
-  // One unit price per RFQ line item, keyed by line item id — only rendered
-  // (and only required) when the RFQ has more than one line item. For the
-  // common single-item case the form stays exactly as it was: just
-  // bidUnitPrice above.
+  const [bidDiscountPercent, setBidDiscountPercent] = useState('');
+  const [bidGstPercent, setBidGstPercent] = useState('');
+  // One unit price per RFQ line item, keyed by line item id — rendered and
+  // required whenever the RFQ has one or more line items. Only RFQs without
+  // any line item details fall back to bidUnitPrice above.
   const [bidLineItemPrices, setBidLineItemPrices] = useState<Record<string, string>>({});
+  const [bidLineItemDiscounts, setBidLineItemDiscounts] = useState<Record<string, string>>({});
+  const [bidLineItemGst, setBidLineItemGst] = useState<Record<string, string>>({});
   const [bidLeadTimeDays, setBidLeadTimeDays] = useState('');
   const [bidWarrantyYears, setBidWarrantyYears] = useState('');
   // Blank until the vendor states terms. A default here would be submitted as the vendor's own commercial term.
@@ -501,12 +811,18 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         const jsonRows: any[] = XLSX.utils.sheet_to_json(worksheet);
 
         const newPrices: Record<string, string> = { ...bidLineItemPrices };
+        const newDiscounts: Record<string, string> = { ...bidLineItemDiscounts };
+        const newGst: Record<string, string> = { ...bidLineItemGst };
         let matchedCount = 0;
 
         jsonRows.forEach((row) => {
           const rawItem = String(row['Item'] || row['Item Name'] || row['Description'] || row['Item Description'] || '').trim().toLowerCase();
           const rawRate = row['Rate (INR)'] ?? row['Rate'] ?? row['Unit Price (INR)'] ?? row['Unit Price'] ?? row['Price'];
           const rateVal = Number(rawRate);
+          const rawDisc = row['Discount (%)'] ?? row['Discount'] ?? row['Discount %'];
+          const discVal = Number(rawDisc);
+          const rawGstRate = row['GST (%)'] ?? row['GST'] ?? row['GST %'] ?? row['Tax (%)'];
+          const gstVal = Number(rawGstRate);
 
           if (rawItem && Number.isFinite(rateVal) && rateVal > 0) {
             const matched = (biddingOn.lineItems || []).find(
@@ -514,12 +830,22 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             );
             if (matched) {
               newPrices[matched.id] = String(rateVal);
+              // Validate: max 99.99 (2 digits before decimal, 2 after)
+              if (Number.isFinite(discVal) && discVal >= 0 && discVal <= 99.99) {
+                newDiscounts[matched.id] = String(discVal);
+              }
+              // Validate: max 99.99 (2 digits before decimal, 2 after)
+              if (Number.isFinite(gstVal) && gstVal >= 0 && gstVal <= 99.99) {
+                newGst[matched.id] = String(gstVal);
+              }
               matchedCount++;
             }
           }
         });
 
         setBidLineItemPrices(newPrices);
+        setBidLineItemDiscounts(newDiscounts);
+        setBidLineItemGst(newGst);
         showToast('Excel Imported', `Successfully imported pricing for ${matchedCount} item(s).`, 'success');
       } catch (err: unknown) {
         showToast(
@@ -536,26 +862,27 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   // Opens quotation form modal on explicit user action (Submit Quote / Resubmit Bid).
   // Pre-populates previously submitted values when resubmitting a quotation.
   const openBidForm = (opp: VendorOpportunity) => {
-    setBiddingOn(opp);
-    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === opp.rfqNumber) as any;
+    const resolvedOpp = resolveOpportunityForBid(opp, rfqs);
+    setBiddingOn(resolvedOpp);
+    const existingQuote = submittedQuotes.find((q) => q.rfqNumber === resolvedOpp.rfqNumber) as any;
     if (existingQuote) {
       setBidUnitPrice(existingQuote.unitPrice != null ? String(existingQuote.unitPrice) : (existingQuote.totalPrice != null ? String(existingQuote.totalPrice) : ''));
-      const itemPrices: Record<string, string> = {};
-      if (Array.isArray(existingQuote.lineItemQuotes)) {
-        existingQuote.lineItemQuotes.forEach((lq: any) => {
-          if (lq.lineItemId && lq.unitPrice != null) {
-            itemPrices[lq.lineItemId] = String(lq.unitPrice);
-          }
-        });
-      }
-      setBidLineItemPrices(itemPrices);
+      setBidDiscountPercent(existingQuote.discountPercent != null ? String(existingQuote.discountPercent) : '');
+      setBidGstPercent(existingQuote.taxRate != null ? String(existingQuote.taxRate) : (existingQuote.gstPercent != null ? String(existingQuote.gstPercent) : ''));
+      setBidLineItemPrices(buildInitialLineItemPrices(resolvedOpp.lineItems || [], existingQuote));
+      setBidLineItemDiscounts(buildInitialLineItemDiscounts(resolvedOpp.lineItems || [], existingQuote));
+      setBidLineItemGst(buildInitialLineItemGst(resolvedOpp.lineItems || [], existingQuote));
       setBidLeadTimeDays(existingQuote.leadTimeDays != null ? String(existingQuote.leadTimeDays) : '');
       setBidWarrantyYears(existingQuote.warrantyYears != null ? String(existingQuote.warrantyYears) : '');
       setBidPaymentTerms(existingQuote.paymentTerms || '');
       setBidRemarks(existingQuote.remarks || '');
     } else {
       setBidUnitPrice('');
+      setBidDiscountPercent('');
+      setBidGstPercent('');
       setBidLineItemPrices({});
+      setBidLineItemDiscounts({});
+      setBidLineItemGst({});
       setBidLeadTimeDays('');
       setBidWarrantyYears('');
       setBidPaymentTerms('');
@@ -572,7 +899,11 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     if (isSubmittingQuote) return;
     setBiddingOn(null);
     setBidUnitPrice('');
+    setBidDiscountPercent('');
+    setBidGstPercent('');
     setBidLineItemPrices({});
+    setBidLineItemDiscounts({});
+    setBidLineItemGst({});
     setBidLeadTimeDays('');
     setBidWarrantyYears('');
     setBidPaymentTerms('');
@@ -649,21 +980,23 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
     setSubmitModalError(null);
 
     const rfqLineItems = biddingOn.lineItems || [];
-    const isMultiItem = rfqLineItems.length > 1;
+    const hasLineItems = rfqLineItems.length > 0;
 
-    // Multi-item RFQs price every line item individually; the single-item
-    // case keeps today's one blanket-price field unchanged.
+    // Any RFQ with one or more line items prices each row via the line-item
+    // pricing UI; only line-item-less RFQs fall back to a blanket unit price.
     let unitPrice: number;
     let totalPrice: number;
-    let lineItemQuotes: Array<{
-      lineItemId?: string;
-      itemName: string;
-      quantity: number;
-      unitPrice: number;
-      totalPrice: number;
-    }> | undefined;
+    let subtotal: number;
+    let discountPercent: number;
+    let discountAmount: number;
+    let taxableAmount: number;
+    let taxRate: number;
+    let gstPercent: number;
+    let taxAmount: number;
+    let gstAmount: number;
+    let lineItemQuotes: LineItemQuote[] | undefined;
 
-    if (isMultiItem) {
+    if (hasLineItems) {
       const missing = rfqLineItems.some((li) => {
         const v = Number(bidLineItemPrices[li.id]);
         return !v || v <= 0;
@@ -675,31 +1008,64 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       }
       lineItemQuotes = rfqLineItems.map((li) => {
         const price = Number(bidLineItemPrices[li.id]);
+        const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+        const gst = Number(bidLineItemGst[li.id]) || 0;
+        const baseAmt = round2(price * li.quantity);
+        const discAmt = round2(baseAmt * (disc / 100));
+        const taxableAmt = round2(baseAmt - discAmt);
+        const gstAmt = round2(taxableAmt * (gst / 100));
+        const liTotal = round2(taxableAmt + gstAmt);
         return {
           lineItemId: li.id,
           itemName: li.description,
           quantity: li.quantity,
           unitPrice: price,
-          totalPrice: price * li.quantity,
+          totalPrice: liTotal,
+          ...(disc > 0 ? { discountPercent: disc, discountAmount: discAmt } : {}),
+          ...(taxableAmt !== baseAmt ? { taxableAmount: taxableAmt } : {}),
+          ...(gst > 0 ? { taxRate: gst, gstPercent: gst, taxAmount: gstAmt, gstAmount: gstAmt } : {}),
         };
       });
-      totalPrice = lineItemQuotes.reduce((sum, li) => sum + li.totalPrice, 0);
+      subtotal = round2(lineItemQuotes.reduce((sum, li) => sum + (li.unitPrice * li.quantity), 0));
+      discountAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.discountAmount || 0), 0));
+      taxableAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.taxableAmount || 0), 0));
+      taxAmount = round2(lineItemQuotes.reduce((sum, li) => sum + (li.taxAmount || 0), 0));
+      gstAmount = taxAmount;
+      totalPrice = round2(lineItemQuotes.reduce((sum, li) => sum + li.totalPrice, 0));
+      discountPercent = subtotal > 0 ? round2((discountAmount / subtotal) * 100) : 0;
+      taxRate = taxableAmount > 0 ? round2((taxAmount / taxableAmount) * 100) : 0;
+      gstPercent = taxRate;
       const totalQty = rfqLineItems.reduce((sum, li) => sum + (li.quantity || 0), 0);
-      unitPrice = totalQty > 0 ? totalPrice / totalQty : totalPrice;
+      unitPrice = totalQty > 0 ? round2(totalPrice / totalQty) : totalPrice;
       if (!Number.isFinite(unitPrice) || !Number.isFinite(totalPrice)) {
         setSubmitModalError('The entered line-item rates produce an invalid quotation total.');
         showToast('Validation Error', 'Check the line-item quantities and rates.', 'warning');
         return;
       }
     } else {
-      unitPrice = Number(bidUnitPrice);
-      if (!unitPrice || unitPrice <= 0) {
+      const price = Number(bidUnitPrice);
+      if (!price || price <= 0) {
         setSubmitModalError('Please enter a valid unit price greater than 0.');
         showToast('Validation Error', 'Enter a valid unit price.', 'warning');
         return;
       }
+      const disc = Number(bidDiscountPercent) || 0;
+      const gst = Number(bidGstPercent) || 0;
       const quantity = rfqLineItems[0]?.quantity || 1;
-      totalPrice = unitPrice * quantity;
+      const baseTotal = round2(price * quantity);
+      const discAmt = round2(baseTotal * (disc / 100));
+      const taxableAmt = round2(baseTotal - discAmt);
+      const gstAmt = round2(taxableAmt * (gst / 100));
+      totalPrice = round2(taxableAmt + gstAmt);
+      unitPrice = price;
+      subtotal = baseTotal;
+      discountPercent = disc;
+      discountAmount = discAmt;
+      taxableAmount = taxableAmt;
+      taxRate = gst;
+      gstPercent = gst;
+      taxAmount = gstAmt;
+      gstAmount = gstAmt;
       if (!Number.isFinite(totalPrice)) {
         setSubmitModalError('The entered rate produces an invalid quotation total.');
         showToast('Validation Error', 'Check the rate and quantity.', 'warning');
@@ -754,6 +1120,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
         body: JSON.stringify({
           unitPrice,
           totalPrice,
+          ...(subtotal !== undefined && subtotal > 0 && (discountPercent > 0 || taxRate > 0) ? { subtotal } : {}),
+          ...(discountPercent > 0 ? { discountPercent, discountAmount } : {}),
+          ...(taxableAmount !== undefined && taxableAmount > 0 && taxableAmount !== subtotal ? { taxableAmount } : {}),
+          ...(taxRate > 0 ? { taxRate, gstPercent, taxAmount, gstAmount, taxes: taxAmount } : {}),
           ...(lineItemQuotes ? { lineItemQuotes } : {}),
           leadTimeDays: Number(leadTimeText),
           // Omitted when the vendor leaves warranty blank, rather than sent as zero years.
@@ -819,17 +1189,29 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
   };
 
   const isRfqUnlocked = useCallback((rfqNumber: string) => {
-    if (isOwnBuyerRfq(rfqNumber)) return true;
+    const rfq = vendorOpportunities.find((o) => o.rfqNumber === rfqNumber);
+    const rfqRecord = rfqs.find((r) => r.rfqNumber === rfqNumber);
+    const mode = String(rfq?.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+    const isV0 = mode === 'mode_0' || mode === 'v0' || mode === 'version_0';
+    const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
+    const isPublic = Boolean((rfq as any)?.isPublic || (rfqRecord as any)?.isPublic);
+    const isPublicMode = isV0 || isV3 || isPublic;
+
+    // Public RFQs are NEVER automatically unlocked - they require download
+    if (!isPublicMode && isOwnBuyerRfq(rfqNumber)) return true;
+
     const norm = String(rfqNumber).toLowerCase();
     return (
       vendorUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm) ||
       locallyUnlockedRfqIds.some((id) => String(id).toLowerCase() === norm)
     );
-  }, [isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
+  }, [vendorOpportunities, rfqs, isOwnBuyerRfq, vendorUnlockedRfqIds, locallyUnlockedRfqIds]);
 
   const handleDownloadRfq = async (opp: VendorOpportunity) => {
     try {
-      const isDirect = isOwnBuyerRfq(opp.rfqNumber);
+      const oppMode = String(opp.sourcingMode || '').toLowerCase().trim();
+      const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic);
+      const isDirect = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
       const wasUnlocked = isRfqUnlocked(opp.rfqNumber);
 
       const res = await fetch(`/api/rfqs/${encodeURIComponent(opp.rfqNumber)}/email-preview`, {
@@ -972,7 +1354,28 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* ═══════════════════════════════════════════════════════════════ */}
       {/* MY ENQUIRIES & PUBLIC ENQUIRIES TABS */}
       {/* ═══════════════════════════════════════════════════════════════ */}
-      <div className="flex items-center gap-3">
+      <div className="flex items-center gap-3 flex-wrap">
+        <button
+          type="button"
+          onClick={() => setUserSelectedTab('all')}
+          className={`inline-flex items-center gap-2 rounded-xl px-5 py-2.5 text-sm font-bold transition-all shadow-sm ${
+            effectiveTab === 'all'
+              ? 'bg-[#1a3a8f] text-white shadow-blue-900/20'
+              : 'bg-white text-slate-700 hover:bg-slate-50 border border-slate-200 dark:bg-gray-900 dark:text-gray-300 dark:border-slate-800'
+          }`}
+          aria-label="All RFQs tab"
+        >
+          <FileText size={16} />
+          <span>All RFQs</span>
+          <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+            effectiveTab === 'all'
+              ? 'bg-white/20 text-white'
+              : 'bg-slate-100 text-slate-600 dark:bg-gray-800 dark:text-gray-400'
+          }`}>
+            {combinedEnquiries.length}
+          </span>
+        </button>
+
         <button
           type="button"
           onClick={() => setUserSelectedTab('my_enquiries')}
@@ -1030,7 +1433,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               <p className="mt-1 pl-10 text-xs text-slate-500 dark:text-gray-400">
                 {effectiveTab === 'my_enquiries'
                   ? 'Direct buyer RFQs invited specifically for your company. Download specifications and submit quotes freely.'
-                  : 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'}
+                  : effectiveTab === 'public_enquiries'
+                  ? 'Public marketplace RFQs open to all vendors. Download RFQ specification to unlock quote submission.'
+                  : 'All sourcing enquiries from your buyers and open marketplace combined, newest first.'}
               </p>
             </div>
             <span className="inline-flex items-center gap-1.5 text-[11px] text-slate-500 dark:text-gray-400">
@@ -1038,8 +1443,8 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </span>
           </div>
 
-          {/* Search, Categories, and Status Filters */}
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(180px,220px)_200px]">
+          {/* Search, Categories, Pincodes, and Status Filters */}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-[minmax(0,1fr)_minmax(160px,210px)_minmax(160px,210px)_180px]">
             <label className="relative block min-w-0">
               <span className="sr-only">Search enquiries</span>
               <Search size={16} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1078,6 +1483,97 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
               </select>
             </label>
 
+            {/* Multi-Select Pincode Filter */}
+            <div ref={pincodeDropdownRef} className="relative block min-w-0">
+              <span className="sr-only">Filter enquiries by pincode</span>
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setIsPincodeDropdownOpen((prev) => !prev)}
+                  className="flex h-11 w-full items-center justify-between rounded-xl border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm font-semibold text-slate-700 dark:border-slate-700 dark:bg-gray-950 dark:text-gray-200"
+                  aria-label="Filter enquiries by pincode"
+                  aria-expanded={isPincodeDropdownOpen}
+                >
+                  <MapPin size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+                  <span className="truncate">
+                    {selectedPincodes.length === 0
+                      ? `All Pincodes (${availablePincodes.length})`
+                      : `${selectedPincodes.length} Pincode${selectedPincodes.length === 1 ? '' : 's'}`}
+                  </span>
+                  <span className="text-xs text-slate-400">▾</span>
+                </button>
+
+                {/* Backwards-compatible select for programmatic testing */}
+                <select
+                  aria-label="Filter enquiries by pincode select"
+                  value={selectedPincodes.length === 0 ? 'all' : selectedPincodes[0]}
+                  onChange={(event) => {
+                    const val = event.target.value;
+                    if (val === 'all') {
+                      setSelectedPincodes([]);
+                    } else {
+                      setSelectedPincodes([val]);
+                    }
+                  }}
+                  className="sr-only"
+                  tabIndex={-1}
+                >
+                  <option value="all">All Pincodes</option>
+                  {availablePincodes.map((pin) => (
+                    <option key={pin} value={pin}>
+                      {pin}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              {isPincodeDropdownOpen && (
+                <div className="absolute right-0 top-full z-40 mt-1 max-h-60 w-56 overflow-y-auto rounded-xl border border-slate-200 bg-white p-2.5 shadow-xl dark:border-slate-700 dark:bg-gray-900">
+                  <div className="mb-2 flex items-center justify-between border-b border-slate-100 pb-1.5 text-xs dark:border-slate-800">
+                    <span className="font-bold text-slate-700 dark:text-gray-300">Select Pincodes</span>
+                    {selectedPincodes.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPincodes([])}
+                        className="text-[11px] font-bold text-blue-600 hover:underline dark:text-cyan-400"
+                      >
+                        Clear All
+                      </button>
+                    )}
+                  </div>
+                  {availablePincodes.length === 0 ? (
+                    <p className="py-2 text-center text-xs text-slate-400">No pincodes found</p>
+                  ) : (
+                    <div className="space-y-1">
+                      {availablePincodes.map((pin) => {
+                        const isChecked = selectedPincodes.includes(pin);
+                        return (
+                          <label
+                            key={pin}
+                            className="flex cursor-pointer items-center gap-2 rounded-lg px-2 py-1 text-xs font-medium text-slate-700 hover:bg-slate-50 dark:text-gray-300 dark:hover:bg-gray-800"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={isChecked}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedPincodes((prev) => [...prev, pin]);
+                                } else {
+                                  setSelectedPincodes((prev) => prev.filter((p) => p !== pin));
+                                }
+                              }}
+                              className="rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                            />
+                            <span>{pin}</span>
+                          </label>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
             <label className="relative block min-w-0">
               <span className="sr-only">Filter enquiries by status</span>
               <Filter size={15} aria-hidden="true" className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
@@ -1096,11 +1592,45 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
             </label>
           </div>
 
+          {selectedPincodes.length > 0 && (
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[11px] font-bold text-slate-500 dark:text-gray-400">Selected Pincodes:</span>
+              {selectedPincodes.map((pin) => (
+                <span
+                  key={pin}
+                  className="inline-flex items-center gap-1 rounded-md bg-indigo-50 px-2 py-0.5 text-xs font-semibold text-indigo-700 dark:bg-indigo-950 dark:text-indigo-300"
+                >
+                  PIN: {pin}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedPincodes((prev) => prev.filter((p) => p !== pin))}
+                    className="hover:text-indigo-900 dark:hover:text-white"
+                    aria-label={`Remove filter for pincode ${pin}`}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+              <button
+                type="button"
+                onClick={() => setSelectedPincodes([])}
+                className="ml-1 text-xs font-bold text-blue-600 hover:underline dark:text-cyan-400"
+              >
+                Clear Pincodes
+              </button>
+            </div>
+          )}
+
           <p aria-live="polite" className="text-xs font-medium text-slate-500 dark:text-gray-400">
             Showing <span className="font-bold text-slate-700 dark:text-gray-200">{filteredOpportunities.length}</span> of {totalReceivedCount} enquiries
             {selectedCategories.length > 0 && (
               <span className="ml-1 text-blue-600 dark:text-blue-400 font-semibold">
                 (Filtered by {selectedCategories.length} categor{selectedCategories.length === 1 ? 'y' : 'ies'})
+              </span>
+            )}
+            {selectedPincodes.length > 0 && (
+              <span className="ml-1 text-indigo-600 dark:text-indigo-400 font-semibold">
+                (Filtered by {selectedPincodes.length} pincode{selectedPincodes.length === 1 ? '' : 's'})
               </span>
             )}
           </p>
@@ -1119,10 +1649,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 ? 'No RFQs match the selected category filter. Try clearing or selecting different categories.'
                 : 'Try another search term or choose a different status filter.'}
             </p>
-            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0) && (
+            {vendorOpportunities.length > 0 && (opportunitySearch || opportunityStatusFilter !== 'all' || selectedCategories.length > 0 || selectedPincodes.length > 0) && (
               <button
                 type="button"
-                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); }}
+                onClick={() => { setOpportunitySearch(''); setOpportunityStatusFilter('all'); setSelectedCategories([]); setSelectedPincodes([]); setUserSelectedTab('all'); }}
                 className="mt-1 text-xs font-bold text-blue-700 hover:underline dark:text-cyan-300"
               >
                 Clear search and filters
@@ -1175,7 +1705,9 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       null
                     );
                     const parentCompany = getParentCompany(opp.buyer);
-                    const isDirectBuyer = isOwnBuyerRfq(opp.rfqNumber);
+                    const oppMode = String(opp.sourcingMode || rfqRecord?.sourcingMode || '').toLowerCase().trim();
+                    const isOppPublic = oppMode === 'mode_0' || oppMode === 'v0' || oppMode === 'version_0' || oppMode === 'mode_3' || oppMode === 'v3' || oppMode === 'version_3' || Boolean((opp as any)?.isPublic || (rfqRecord as any)?.isPublic);
+                    const isDirectBuyer = !isOppPublic && isOwnBuyerRfq(opp.rfqNumber);
                     const isLocked = isRfqLockedForVendor(opp.rfqNumber);
                     
                     const isQuoteSubmitted = !!quote || opp.status === 'submitted';
@@ -1595,7 +2127,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* INQUIRY / CLARIFICATION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {inquiryModal && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(setInquiryModal, null)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-6 max-w-md w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -1747,7 +2282,10 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
       {/* BID / QUOTE SUBMISSION MODAL */}
       {/* ═══════════════════════════════════════════════════════════════ */}
       {biddingOn && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
+        <div
+          onClick={createBackdropClickHandler(closeBidForm)}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in"
+        >
           <div className="bg-white dark:bg-gray-900 border border-slate-200 dark:border-gray-800 rounded-2xl p-4 sm:p-6 max-w-6xl max-h-[92vh] overflow-y-auto w-full shadow-2xl space-y-4 text-xs text-slate-800 dark:text-gray-200 animate-scale-up">
             <div className="flex items-start justify-between pb-3 border-b border-slate-100 dark:border-gray-800">
               <div className="flex items-center gap-2">
@@ -1800,7 +2338,7 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                 )}
 
                 <div className="space-y-3">
-                  {(biddingOn.lineItems?.length || 0) > 1 ? (
+                  {(biddingOn.lineItems?.length || 0) > 0 ? (
                     <div>
                       {(biddingOn.lineItems?.length || 0) > 10 && (
                         <div className="mb-2 p-2.5 rounded-xl bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-800/60 text-blue-800 dark:text-blue-300 text-[11px] flex items-center justify-between gap-2 flex-wrap">
@@ -1812,7 +2350,12 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                       )}
                       <div className="flex items-center justify-between mb-1.5 flex-wrap gap-2">
                         <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400">
-                          Line Item Pricing ({biddingOn.lineItems.length} items) *
+                          {formatString(
+                            biddingOn.lineItems.length === 1
+                              ? UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingSingular
+                              : UI_STRINGS.vendorQuotationPage.lineItemPricingHeadingPlural,
+                            { count: biddingOn.lineItems.length }
+                          )}
                         </label>
                         <div className="flex items-center gap-2">
                           <input
@@ -1849,17 +2392,25 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold">Item</th>
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right">Qty</th>
                               <th className="px-2.5 py-2 text-[10px] uppercase font-bold">UOM</th>
-                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[10rem]">Rate (₹)</th>
-                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[10rem]">Amount (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[8rem]">Rate (₹)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[6rem]">Discount (%)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold min-w-[6rem]">GST (%)</th>
+                              <th className="px-2.5 py-2 text-[10px] uppercase font-bold text-right min-w-[8rem]">Amount (₹)</th>
                             </tr>
                           </thead>
                           <tbody className="divide-y divide-slate-100 dark:divide-gray-800">
                             {(biddingOn.lineItems || []).map((li) => {
                               const rate = Number(bidLineItemPrices[li.id]) || 0;
-                              const amount = rate * li.quantity;
+                              const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                              const gst = Number(bidLineItemGst[li.id]) || 0;
+                              const baseAmt = rate * li.quantity;
+                              const discAmt = baseAmt * (disc / 100);
+                              const taxableAmt = baseAmt - discAmt;
+                              const gstAmt = taxableAmt * (gst / 100);
+                              const lineTotal = taxableAmt + gstAmt;
                               return (
                                 <tr key={li.id}>
-                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[220px] truncate" title={li.description}>
+                                  <td className="px-2.5 py-1.5 text-slate-700 dark:text-gray-300 max-w-[200px] truncate" title={li.description}>
                                     {li.description}
                                   </td>
                                   <td className="px-2.5 py-1.5 text-right mono text-slate-600 dark:text-gray-300">{li.quantity}</td>
@@ -1875,46 +2426,273 @@ export default function QuotationForm({ opportunity, onBack, onSubmitSuccess }: 
                                       }
                                       disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
                                       placeholder="0"
-                                      className="w-36 px-3 py-2 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                      className="w-28 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      aria-label={`Discount for ${li.description}`}
+                                      value={bidLineItemDiscounts[li.id] || ''}
+                                      onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (val === '' || pattern.test(val)) {
+                                          setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: val }));
+                                        }
+                                      }}
+                                      onPaste={(e) => {
+                                        e.preventDefault();
+                                        const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (pastedText === '' || pattern.test(pastedText)) {
+                                          setBidLineItemDiscounts((prev) => ({ ...prev, [li.id]: pastedText }));
+                                        }
+                                      }}
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="0"
+                                      className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                                    />
+                                  </td>
+                                  <td className="px-2.5 py-1.5">
+                                    <input
+                                      type="text"
+                                      inputMode="numeric"
+                                      aria-label={`GST for ${li.description}`}
+                                      value={bidLineItemGst[li.id] || ''}
+                                      onChange={(e) => {
+                                        const val = e.target.value.replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (val === '' || pattern.test(val)) {
+                                          setBidLineItemGst((prev) => ({ ...prev, [li.id]: val }));
+                                        }
+                                      }}
+                                      onPaste={(e) => {
+                                        e.preventDefault();
+                                        const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                                        const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                                        if (pastedText === '' || pattern.test(pastedText)) {
+                                          setBidLineItemGst((prev) => ({ ...prev, [li.id]: pastedText }));
+                                        }
+                                      }}
+                                      disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                                      placeholder="18"
+                                      className="w-20 px-2 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-[12px] font-mono bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
                                     />
                                   </td>
                                   <td className="px-2.5 py-1.5 text-right mono font-bold text-slate-900 dark:text-white">
-                                    {amount > 0 ? amount.toLocaleString('en-IN') : '—'}
+                                    {lineTotal > 0 ? (
+                                      <div>
+                                        <div>{lineTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</div>
+                                        {(disc > 0 || gst > 0) && (
+                                          <div className="text-[9px] text-slate-400 font-normal">
+                                            {disc > 0 && <span className="text-amber-600 dark:text-amber-400">-{disc}%</span>}
+                                            {disc > 0 && gst > 0 && <span> </span>}
+                                            {gst > 0 && <span className="text-indigo-600 dark:text-indigo-400">+{gst}% GST</span>}
+                                          </div>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      '—'
+                                    )}
                                   </td>
                                 </tr>
                               );
                             })}
                           </tbody>
                           <tfoot>
-                            <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
-                              <td colSpan={4} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
-                                Total
-                              </td>
-                              <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
-                                {(biddingOn.lineItems || [])
-                                  .reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0)
-                                  .toLocaleString('en-IN')}
-                              </td>
-                            </tr>
+                            {(() => {
+                              const lineItems = biddingOn.lineItems || [];
+                              const subtotal = lineItems.reduce((sum, li) => sum + (Number(bidLineItemPrices[li.id]) || 0) * li.quantity, 0);
+                              const totalDisc = lineItems.reduce((sum, li) => {
+                                const rate = Number(bidLineItemPrices[li.id]) || 0;
+                                const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                                return sum + (rate * li.quantity * (disc / 100));
+                              }, 0);
+                              const taxable = subtotal - totalDisc;
+                              const totalGst = lineItems.reduce((sum, li) => {
+                                const rate = Number(bidLineItemPrices[li.id]) || 0;
+                                const disc = Number(bidLineItemDiscounts[li.id]) || 0;
+                                const gst = Number(bidLineItemGst[li.id]) || 0;
+                                const lineTaxable = (rate * li.quantity) * (1 - disc / 100);
+                                return sum + (lineTaxable * (gst / 100));
+                              }, 0);
+                              const grandTotal = taxable + totalGst;
+                              const hasDiscOrGst = totalDisc > 0 || totalGst > 0;
+
+                              return (
+                                <>
+                                  {hasDiscOrGst && (
+                                    <>
+                                      <tr className="border-t border-slate-200 dark:border-gray-800 bg-slate-50/50 dark:bg-gray-950/40 text-slate-600 dark:text-gray-400">
+                                        <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                          Subtotal (Base):
+                                        </td>
+                                        <td className="px-2.5 py-1 text-right mono font-semibold text-slate-800 dark:text-gray-200">
+                                          ₹{subtotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                        </td>
+                                      </tr>
+                                      {totalDisc > 0 && (
+                                        <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-amber-600 dark:text-amber-400">
+                                          <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                            Discount:
+                                          </td>
+                                          <td className="px-2.5 py-1 text-right mono font-semibold">
+                                            -₹{totalDisc.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                          </td>
+                                        </tr>
+                                      )}
+                                      <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-slate-600 dark:text-gray-400">
+                                        <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                          Final Quote Price (Taxable Base):
+                                        </td>
+                                        <td className="px-2.5 py-1 text-right mono font-semibold text-slate-800 dark:text-gray-200">
+                                          ₹{taxable.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                        </td>
+                                      </tr>
+                                      {totalGst > 0 && (
+                                        <tr className="bg-slate-50/50 dark:bg-gray-950/40 text-indigo-600 dark:text-indigo-400">
+                                          <td colSpan={6} className="px-2.5 py-1 text-right font-medium text-[10px]">
+                                            GST Amount:
+                                          </td>
+                                          <td className="px-2.5 py-1 text-right mono font-semibold">
+                                            +₹{totalGst.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                          </td>
+                                        </tr>
+                                      )}
+                                    </>
+                                  )}
+                                  <tr className="border-t-2 border-slate-200 dark:border-gray-800 bg-slate-50 dark:bg-gray-950/60">
+                                    <td colSpan={6} className="px-2.5 py-2 text-right font-bold text-slate-700 dark:text-gray-300">
+                                      Total
+                                    </td>
+                                    <td className="px-2.5 py-2 text-right mono font-black text-slate-900 dark:text-white">
+                                      {grandTotal.toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                                    </td>
+                                  </tr>
+                                </>
+                              );
+                            })()}
                           </tfoot>
                         </table>
                       </div>
                     </div>
                   ) : (
                     <div>
-                      <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Unit Price (₹) *</label>
-                      <div className="relative">
-                        <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
-                        <input
-                          type="number"
-                          min={0}
-                          value={bidUnitPrice}
-                          onChange={(e) => setBidUnitPrice(e.target.value)}
-                          disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
-                          placeholder="e.g. 25000"
-                          className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
-                        />
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Quote Price (₹) *</label>
+                          <div className="relative">
+                            <IndianRupee size={12} className="absolute left-3 top-2.5 text-slate-400" />
+                            <input
+                              type="number"
+                              min={0}
+                              value={bidUnitPrice}
+                              onChange={(e) => setBidUnitPrice(e.target.value)}
+                              disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                              placeholder="e.g. 25000"
+                              className="w-full pl-8 pr-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                            />
+                          </div>
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">Discount (%)</label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={bidDiscountPercent}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              // Allow max 2 digits before decimal, max 2 after
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (val === '' || pattern.test(val)) {
+                                setBidDiscountPercent(val);
+                              }
+                            }}
+                            onPaste={(e) => {
+                              e.preventDefault();
+                              const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (pastedText === '' || pattern.test(pastedText)) {
+                                setBidDiscountPercent(pastedText);
+                              }
+                            }}
+                            disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                            placeholder="0"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                          />
+                        </div>
+                        <div>
+                          <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">GST (%)</label>
+                          <input
+                            type="text"
+                            inputMode="numeric"
+                            value={bidGstPercent}
+                            onChange={(e) => {
+                              const val = e.target.value.replace(/[^0-9.]/g, '');
+                              // Allow max 2 digits before decimal, max 2 after
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (val === '' || pattern.test(val)) {
+                                setBidGstPercent(val);
+                              }
+                            }}
+                            onPaste={(e) => {
+                              e.preventDefault();
+                              const pastedText = e.clipboardData.getData('text').replace(/[^0-9.]/g, '');
+                              const pattern = /^\d{0,2}(\.\d{0,2})?$/;
+                              if (pastedText === '' || pattern.test(pastedText)) {
+                                setBidGstPercent(pastedText);
+                              }
+                            }}
+                            disabled={isSubmittingQuote || biddingOn.status === 'Closed' || biddingOn.status === 'Expired'}
+                            placeholder="18"
+                            className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
+                          />
+                        </div>
                       </div>
+                      {Number(bidUnitPrice) > 0 && (Number(bidDiscountPercent) > 0 || Number(bidGstPercent) > 0) && (
+                        <div className="mt-3 p-3 rounded-xl bg-slate-50 dark:bg-gray-950/60 border border-slate-200 dark:border-gray-800 text-xs space-y-1">
+                          <div className="flex justify-between text-slate-500 dark:text-gray-400">
+                            <span>Quote Price:</span>
+                            <span className="mono font-semibold">₹{Number(bidUnitPrice).toLocaleString('en-IN')}</span>
+                          </div>
+                          {Number(bidDiscountPercent) > 0 && (
+                            <div className="flex justify-between text-amber-600 dark:text-amber-400">
+                              <span>Discount ({bidDiscountPercent}%):</span>
+                              <span className="mono font-semibold">-₹{((Number(bidUnitPrice) * Number(bidDiscountPercent)) / 100).toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>
+                            </div>
+                          )}
+                          <div className="flex justify-between text-slate-600 dark:text-gray-300">
+                            <span>Final Quote Price (Taxable):</span>
+                            <span className="mono font-semibold">
+                              ₹{(Number(bidUnitPrice) * (1 - (Number(bidDiscountPercent) || 0) / 100)).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                          {Number(bidGstPercent) > 0 && (
+                            <div className="flex justify-between text-slate-600 dark:text-gray-300">
+                              <span>GST ({bidGstPercent}%):</span>
+                              <span className="mono font-semibold">
+                                +₹{(
+                                  Number(bidUnitPrice) *
+                                  (1 - (Number(bidDiscountPercent) || 0) / 100) *
+                                  ((Number(bidGstPercent) || 0) / 100)
+                                ).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                          <div className="flex justify-between font-bold text-indigo-700 dark:text-indigo-300 pt-1 border-t border-slate-200 dark:border-gray-800">
+                            <span>Total Price:</span>
+                            <span className="mono text-sm">
+                              ₹{(
+                                Number(bidUnitPrice) *
+                                (1 - (Number(bidDiscountPercent) || 0) / 100) *
+                                (1 + (Number(bidGstPercent) || 0) / 100)
+                              ).toLocaleString('en-IN', { maximumFractionDigits: 2 })}
+                            </span>
+                          </div>
+                        </div>
+                      )}
                     </div>
                   )}
                   <div className="grid grid-cols-2 gap-2">

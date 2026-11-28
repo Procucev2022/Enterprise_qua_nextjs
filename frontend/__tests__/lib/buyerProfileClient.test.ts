@@ -5,6 +5,7 @@ import {
   fetchBuyerCreditHistory,
   fetchBuyerPaymentHistory,
   fetchBuyerProfile,
+  fetchBuyerProfileCompletion,
   fetchCategoryTaxonomy,
   fetchDispatchTemplates,
   flattenCategorySelection,
@@ -104,6 +105,23 @@ describe('buyerProfileClient', () => {
       expect(res.error).toBe(UI_STRINGS.buyerProfile.loadUnreachable);
     });
 
+    test('passes AbortSignal cleanly and suppresses error logging when aborted', async () => {
+      const controller = new AbortController();
+      controller.abort();
+      global.fetch = jest.fn().mockRejectedValue(new DOMException('Aborted', 'AbortError'));
+      const { logger } = await import('../../lib/logger');
+      const errorSpy = jest.spyOn(logger, 'error');
+
+      const res = await fetchBuyerProfile({ signal: controller.signal });
+      expect(res.success).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      const catRes = await fetchCategoryTaxonomy(undefined, { signal: controller.signal });
+      expect(catRes.success).toBe(false);
+      expect(errorSpy).not.toHaveBeenCalled();
+      errorSpy.mockRestore();
+    });
+
     test('wraps a server-side reason in the load-failure template', async () => {
       global.fetch = jest
         .fn()
@@ -119,9 +137,27 @@ describe('buyerProfileClient', () => {
     });
 
     test('surfaces a 401 as a sign-in instruction, unwrapped', async () => {
+      const warnSpy = jest.spyOn(logger, 'warn');
+      const errorSpy = jest.spyOn(logger, 'error');
       global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 401 }));
       const res = await fetchBuyerProfile();
       expect(res.error).toBe(UI_STRINGS.buyerProfile.sessionExpired);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Buyer profile load rejected',
+        expect.objectContaining({ status: 401 }),
+        'BUYER_PROFILE'
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
+
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({}, { ok: false, status: 401 }));
+      const taxRes = await fetchCategoryTaxonomy();
+      expect(taxRes.success).toBe(false);
+      expect(warnSpy).toHaveBeenCalledWith(
+        'Category taxonomy load rejected',
+        expect.objectContaining({ status: 401 }),
+        'BUYER_PROFILE'
+      );
+      expect(errorSpy).not.toHaveBeenCalled();
     });
 
     test('surfaces a 403 as a permissions instruction, unwrapped', async () => {
@@ -148,6 +184,50 @@ describe('buyerProfileClient', () => {
       global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: true }));
       const res = await fetchBuyerProfile();
       expect(res.success).toBe(false);
+    });
+  });
+
+  describe('fetchBuyerProfileCompletion', () => {
+    test('fetches completion from the completion endpoint when successful', async () => {
+      const mockCompletion = {
+        isComplete: true,
+        completionPercentage: 100,
+        completedCount: 12,
+        totalCount: 12,
+        issues: [],
+        missingSections: [],
+        completedFields: ['companyName'],
+      };
+      global.fetch = jest.fn().mockResolvedValue(jsonResponse({ success: true, data: mockCompletion }));
+
+      const res = await fetchBuyerProfileCompletion();
+
+      expect(res.success).toBe(true);
+      expect(res.data).toEqual(mockCompletion);
+      expect((global.fetch as jest.Mock).mock.calls[0][0]).toBe(BUYER_PROFILE_ENDPOINTS.COMPLETION);
+    });
+
+    test('falls back to fetching profile and local evaluation when endpoint throws', async () => {
+      global.fetch = jest.fn()
+        .mockRejectedValueOnce(new Error('Network failure'))
+        .mockResolvedValueOnce(jsonResponse({ success: true, data: PROFILE }));
+
+      const res = await fetchBuyerProfileCompletion();
+
+      expect(res.success).toBe(true);
+      expect(res.data).toBeDefined();
+      expect(res.profile).toEqual(PROFILE);
+    });
+
+    test('returns failure when both completion endpoint and profile fetch fail', async () => {
+      global.fetch = jest.fn()
+        .mockRejectedValueOnce(new Error('Network failure'))
+        .mockRejectedValueOnce(new Error('Profile failure'));
+
+      const res = await fetchBuyerProfileCompletion();
+
+      expect(res.success).toBe(false);
+      expect(res.error).toBeDefined();
     });
   });
 
@@ -636,14 +716,57 @@ describe('buyerProfileClient', () => {
     });
   });
 
+  describe('fetchBuyerDirectoryKPIStats', () => {
+    test('fetches live DB KPI counts successfully', async () => {
+      const mockKPI = { success: true, totalBuyers: 512, verifiedBuyers: 410, subscriptionBuyers: 220, modeCounts: { Mode_1: 300 } };
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => mockKPI,
+      });
+
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res).toEqual(mockKPI);
+      expect(global.fetch).toHaveBeenCalledWith('/api/buyer-accounts/kpi-stats', expect.any(Object));
+    });
+
+    test('returns error envelope when response payload is invalid', async () => {
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ invalid: true }),
+      });
+
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalBuyers).toBe(0);
+      expect(res.error).toBe('Invalid KPI stats response');
+    });
+
+    test('returns fallback error object when fetch throws', async () => {
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network error'));
+      const errorLog = jest.spyOn(logger, 'error');
+      const res = await buyerProfileClient.fetchBuyerDirectoryKPIStats();
+      expect(res.success).toBe(false);
+      expect(res.totalBuyers).toBe(0);
+      expect(res.error).toBe('Network error');
+      expect(errorLog).toHaveBeenCalledWith(
+        'Buyer directory KPI stats request failed',
+        expect.any(Object),
+        'BUYER_PROFILE'
+      );
+    });
+  });
+
   test('the default export exposes the whole client surface', () => {
     expect(Object.keys(buyerProfileClient).sort()).toEqual([
       'addBuyerCredit',
       'expandCategorySelection',
       'fetchBuyerCommunications',
       'fetchBuyerCreditHistory',
+      'fetchBuyerDirectoryKPIStats',
       'fetchBuyerPaymentHistory',
       'fetchBuyerProfile',
+      'fetchBuyerProfileCompletion',
+      'fetchBuyerUploadedVendors',
       'fetchCategoryTaxonomy',
       'fetchDispatchTemplates',
       'flattenCategorySelection',

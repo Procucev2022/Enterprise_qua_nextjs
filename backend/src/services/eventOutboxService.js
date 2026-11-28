@@ -25,6 +25,8 @@ const {
   EVENT_OUTBOX_NOTIFICATION_BATCH_SIZE,
   EMAIL_REGEX,
   DAILY_RFQ_REPORT_CONFIG,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
 } = require('../config/constants');
 const { logger } = require('./loggerService');
 
@@ -139,7 +141,19 @@ async function persistWithOutboxFallback({ eventType, idempotencyKey, payload, w
   }
 }
 
-async function dispatchEvent(job) {
+async function loadCachedRfqById(rfqId, rfqCache) {
+  if (rfqCache && rfqCache.has(rfqId)) {
+    return rfqCache.get(rfqId);
+  }
+  const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+  if (rfqCache) {
+    rfqCache.set(rfqId, rfq);
+  }
+  return rfq;
+}
+
+async function dispatchEvent(job, options = {}) {
+  const rfqCache = options.rfqCache || null;
   switch (job.event_type) {
     case EVENT_OUTBOX_TYPES.AI_FEED: {
       const saved = await domainQueries.upsertAIFeedItemInDB(job.raw);
@@ -290,17 +304,34 @@ async function dispatchEvent(job) {
         throw error;
       }
 
+      const isCmCreated = Boolean(
+        job.raw?.isCmCreated ||
+        vendor.isCmCreated ||
+        vendor.createdByCategoryManager ||
+        String(vendor.createdByRole || '').toLowerCase() === 'category_manager'
+      );
+      const mailboxChannel = job.raw?.mailboxChannel || (isCmCreated ? 'direct' : null);
       const emailPayload = mailerService.buildVendorOnboardingEmail({
         to: recipient,
         recipientName: vendor.contactPerson || vendor.name,
-        buyerOrganizationName: 'Procucev Enterprise',
+        buyerOrganizationName: isCmCreated
+          ? VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME
+          : (vendor.addedByBuyerCompany || 'Procucev Enterprise'),
         vendorCode: vendor.id,
         tempPassword,
         contactPhone: vendor.phone,
+        ...(isCmCreated ? { isCmCreated: true } : {}),
+        ...(mailboxChannel ? { mailboxChannel } : {}),
       });
       let delivery;
       try {
-        delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+        delivery = mailboxChannel
+          ? await mailerService.sendVendorIngestionEmail(
+            emailPayload,
+            'onboarding',
+            { vendorChannel: mailboxChannel }
+          )
+          : await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       } catch {
         const error = new Error('Vendor onboarding email provider request failed.');
         error.code = 'VENDOR_ONBOARDING_EMAIL_FAILED';
@@ -695,6 +726,10 @@ async function dispatchEvent(job) {
         qty: item.quantity != null ? item.quantity : item.qty,
         uom: item.unit || item.uom,
       }));
+      const assignedVendorsCount = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : 0;
+      const suppliersInvited = assignedVendorsCount > 0
+        ? assignedVendorsCount
+        : (Number.isFinite(rfq.procucevVendorCount) ? rfq.procucevVendorCount : 0);
       const delivery = await mailerService.sendRfqAcknowledgementEmail({
         to: recipient,
         buyerName: rfq.raisedByName || rfq.buyerAccountName,
@@ -707,8 +742,8 @@ async function dispatchEvent(job) {
         requiredBy: rfq.targetDeliveryDate,
         quoteDeadline: rfq.deadline,
         deadline: rfq.deadline,
-        // The real number of suppliers assigned to this RFQ. No fixed fallback.
-        suppliersInvited: Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors.length : rfq.procucevVendorCount,
+        // The real number of suppliers assigned/matched to this RFQ. No fixed fallback.
+        suppliersInvited,
         items,
       });
       if (!delivery?.sent) {
@@ -752,12 +787,29 @@ async function dispatchEvent(job) {
         throw error;
       }
 
-      const rfq = await domainQueries.getRFQByIdFromDB(rfqId);
+      const rfq = await loadCachedRfqById(rfqId, rfqCache);
       if (!rfq) {
         const error = new Error('RFQ vendor invitation retry references a missing RFQ.');
         error.code = 'INVALID_PERSISTED_RECORD';
         throw error;
       }
+      const inviteMessageId = target.inviteMessageId || (
+        rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+          ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, target.vendorId || target.vendor?.id || 'vendor')
+          : null
+      );
+      const invitedAt = new Date().toISOString();
+      const quotesDispatchDueAt = new Date(Date.parse(invitedAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString();
+      const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+        ? mailerService.resolveVendorInviteRouting(target.vendor, target, rfq)
+        : null;
+      const inviteChannel = target.inviteChannel || routing?.channel || null;
+      const inviteOrigin = target.inviteOrigin || routing?.origin || null;
+      const senderMailbox = target.senderMailbox || routing?.replyTo || null;
+      const replyToQuoteAllowed = typeof target.replyToQuoteAllowed === 'boolean'
+        ? target.replyToQuoteAllowed
+        : (typeof routing?.replyToQuoteAllowed === 'boolean' ? routing.replyToQuoteAllowed : null);
+
       const delivery = await mailerService.sendRfqInviteEmail(target.recipientEmail, {
         rfq,
         recipientName: target.recipientName,
@@ -765,13 +817,40 @@ async function dispatchEvent(job) {
         freeCreditsRemaining: target.freeCreditsRemaining,
         isSubscribed: target.isSubscribed,
         isBuyerUploaded: target.isBuyerUploaded,
+        ...(typeof target.isCmAssigned === 'boolean' ? { isCmAssigned: target.isCmAssigned } : {}),
+        ...(typeof target.isCmCreated === 'boolean' ? { isCmCreated: target.isCmCreated } : {}),
+        ...(inviteChannel ? { inviteChannel, mailboxChannel: inviteChannel } : {}),
+        ...(inviteOrigin ? { inviteOrigin } : {}),
+        ...(senderMailbox ? { senderMailbox } : {}),
+        ...(typeof replyToQuoteAllowed === 'boolean' ? { replyToQuoteAllowed } : {}),
         vendor: target.vendor,
+        messageId: inviteMessageId,
       });
       if (!delivery?.sent) {
         const error = new Error('RFQ vendor invitation email provider did not accept the message.');
         error.code = 'EMAIL_DELIVERY_NOT_ACCEPTED';
         throw error;
       }
+      await domainQueries.recordRfqVendorInviteInDB({
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: target.vendorId || target.vendor?.id || null,
+        vendorEmail: target.recipientEmail,
+        inviteMessageId: delivery.inviteMessageId || inviteMessageId || delivery.messageId || null,
+        invitedAt,
+        quotesDispatchDueAt,
+        inviteChannel,
+        inviteOrigin,
+        senderMailbox,
+        replyToQuoteAllowed,
+      }).catch((err) => {
+        logger.warn('Failed to persist RFQ vendor invite metadata after outbox dispatch', {
+          rfqId,
+          rfqNumber: rfq.rfqNumber,
+          vendorEmail: target.recipientEmail,
+          error: err.message,
+        }, 'EVENT_OUTBOX');
+      });
       logger.info('RFQ vendor invitation email accepted by a provider', {
         rfqId,
         rfqNumber: rfq.rfqNumber,
@@ -1177,6 +1256,29 @@ async function dispatchScheduledEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_S
 async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, eventIds = null) {
   if (!pool.hasStorage()) return { claimed: 0, completed: 0, retried: 0, dead: 0 };
 
+  if (Array.isArray(eventIds) && eventIds.length > EVENT_OUTBOX_MAX_BATCH_SIZE) {
+    const aggregate = { claimed: 0, completed: 0, retried: 0, dead: 0, completedIds: [] };
+    let authUnavailable = false;
+    for (let i = 0; i < eventIds.length; i += EVENT_OUTBOX_MAX_BATCH_SIZE) {
+      const slice = eventIds.slice(i, i + EVENT_OUTBOX_MAX_BATCH_SIZE);
+      const step = await dispatchDueEventOutboxBatch(slice.length, slice);
+      aggregate.claimed += step.claimed;
+      aggregate.completed += step.completed;
+      aggregate.retried += step.retried;
+      aggregate.dead += step.dead;
+      if (Array.isArray(step.completedIds)) aggregate.completedIds.push(...step.completedIds);
+      if (step.authUnavailable) authUnavailable = true;
+    }
+    if (authUnavailable) {
+      Object.defineProperty(aggregate, 'authUnavailable', { value: true, enumerable: false });
+    }
+    return aggregate;
+  }
+
+  return dispatchDueEventOutboxBatch(limit, eventIds);
+}
+
+async function dispatchDueEventOutboxBatch(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, eventIds = null) {
   const now = new Date();
   const leaseToken = crypto.randomUUID();
   const jobs = await eventOutboxQueries.claimDueEventOutboxInDB({
@@ -1188,14 +1290,16 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
     ids: eventIds,
   });
 
+  const rfqCache = new Map();
   let completed = 0;
   let retried = 0;
   let dead = 0;
+  let authUnavailable = false;
   const completedIds = [];
   for (const job of jobs) {
     try {
       if (job.parseError) throw job.parseError;
-      await dispatchEvent(job);
+      await dispatchEvent(job, { rfqCache });
       const saved = await eventOutboxQueries.markEventOutboxCompleteInDB(job.id, job.lease_token || leaseToken);
       if (!saved) {
         logger.warn('Event-outbox lease expired before completion was recorded', {
@@ -1208,6 +1312,11 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
       completedIds.push(job.id);
     } catch (error) {
       const permanentFailure = error?.code === 'INVALID_EVENT_OUTBOX_TYPE' || error?.code === 'INVALID_PERSISTED_RECORD';
+      const isAuthFailure =
+        error?.code === 'MAIL_PROVIDERS_COOLING_DOWN' ||
+        error?.code === 'AUTH_REVOKED' ||
+        (Array.isArray(error?.deliveryAttempts) && error.deliveryAttempts.some((attempt) => attempt && attempt.kind === 'AUTH_REVOKED'));
+      if (isAuthFailure) authUnavailable = true;
       const isDead = permanentFailure || job.attempts >= EVENT_OUTBOX_MAX_ATTEMPTS;
       const availableAt = new Date(Date.now() + getRetryDelayMs(job.attempts)).toISOString();
       if (
@@ -1335,7 +1444,11 @@ async function dispatchDueEventOutboxJobs(limit = EVENT_OUTBOX_MAX_BATCH_SIZE, e
       dead,
     }, 'EVENT_OUTBOX');
   }
-  return { claimed: jobs.length, completed, retried, dead, completedIds };
+  const summary = { claimed: jobs.length, completed, retried, dead, completedIds };
+  if (authUnavailable) {
+    Object.defineProperty(summary, 'authUnavailable', { value: true, enumerable: false });
+  }
+  return summary;
 }
 
 async function purgeExpiredEventOutboxRows() {

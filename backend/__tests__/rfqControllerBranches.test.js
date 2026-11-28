@@ -83,6 +83,54 @@ describe('rfqController Comprehensive Branch Coverage', () => {
 
       storeService.getRFQs.mockRestore();
     });
+
+    test('getAllRFQs respects pagination and filter query parameters', async () => {
+      const pageResult = {
+        rows: [{ id: 'rfq-p2-1', rfqNumber: 'RFQ-P2-1' }],
+        total: 250,
+        page: 2,
+        limit: 100,
+        totalPages: 3,
+      };
+      jest.spyOn(storeService, 'getRFQsPage').mockReturnValue(pageResult);
+
+      const req = {
+        user: { role: 'admin' },
+        query: {
+          page: '2',
+          limit: '100',
+          search: 'cable',
+          status: 'Quotes Pending',
+          buyer: 'Buyer Co',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        },
+      };
+      const res = mockRes();
+      const next = jest.fn();
+
+      await rfqController.getAllRFQs(req, res, next);
+      expect(res.statusCode).toBe(200);
+      expect(res.data.success).toBe(true);
+      expect(res.data.total).toBe(250);
+      expect(res.data.page).toBe(2);
+      expect(res.data.limit).toBe(100);
+      expect(res.data.totalPages).toBe(3);
+      expect(res.data.data).toEqual(pageResult.rows);
+      expect(storeService.getRFQsPage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          page: 2,
+          limit: 100,
+          search: 'cable',
+          status: 'Quotes Pending',
+          buyer: 'Buyer Co',
+          startDate: '2026-01-01',
+          endDate: '2026-12-31',
+        })
+      );
+
+      storeService.getRFQsPage.mockRestore();
+    });
   });
 
   describe('getVendorCandidates, inviteVendors, and validateVendorCategories', () => {
@@ -395,6 +443,83 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(res.statusCode).toBe(200);
       expect(res.data).toMatchObject({ success: true, deliveryStatus: 'sent' });
       expect(dispatch).not.toHaveBeenCalled();
+    });
+
+    test('rejects invalid vendor emails, sanitizes invalid buyerEmail, and reports 503 when outbox hits auth cooldown or dead-letter', async () => {
+      const { EMAIL_REGEX, RFQ_NOTIFICATION_MESSAGES } = require('../src/config/constants');
+      expect(EMAIL_REGEX.test('http://www.google.co.in/maps/@17.038,82.123')).toBe(false);
+
+      // Vendor record with URL in email field is rejected cleanly before enqueueing
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValueOnce({
+        id: 'v-url-email',
+        name: 'Bad Email Vendor',
+        email: 'http://www.google.co.in/maps/@17.038',
+      });
+      const resBadEmail = mockRes();
+      await rfqController.requestVendorCategoryUpdate({ body: { vendorId: 'v-url-email' } }, resBadEmail, jest.fn());
+      expect(resBadEmail.statusCode).toBe(400);
+
+      // Invalid buyer corporateEmail is nulled out instead of dead-lettering persisted payload
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const validVendor = { id: 'v-auth-fail', name: 'Vendor', email: 'v@example.test', majorCategory: 'IT' };
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(validVendor);
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        companyName: ' ',
+        corporateEmail: 'not-valid',
+      });
+      const enqueueSpy = jest.spyOn(eventOutboxService, 'enqueueEventOutbox').mockResolvedValue({
+        id: 'cat-auth-1',
+        status: 'pending',
+      });
+      const cooledDispatch = { claimed: 1, completed: 0, retried: 1, dead: 0, completedIds: [] };
+      Object.defineProperty(cooledDispatch, 'authUnavailable', { value: true, enumerable: false });
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValueOnce(cooledDispatch);
+
+      const resAuthFail = mockRes();
+      await rfqController.requestVendorCategoryUpdate(
+        {
+          body: { vendorId: validVendor.id, rfqNumber: ' ', rfqCategory: ' ', rfqTitle: ' ' },
+          user: { email: 'buyer@test.com', name: 'Buyer' },
+        },
+        resAuthFail,
+        jest.fn()
+      );
+      expect(enqueueSpy).toHaveBeenCalledWith(
+        EVENT_OUTBOX_TYPES.VENDOR_CATEGORY_UPDATE_EMAIL,
+        expect.any(String),
+        expect.objectContaining({
+          buyerEmail: null,
+          rfqNumber: 'NEW-RFQ',
+          rfqTitle: 'Procurement Requisition',
+        })
+      );
+      expect(resAuthFail.statusCode).toBe(503);
+      expect(resAuthFail.data).toMatchObject({
+        success: false,
+        retryable: true,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE,
+      });
+
+      // Permanent dead-letter refusal returns 503 with retryable: false
+      jest.spyOn(eventOutboxService, 'dispatchDueEventOutboxJobs').mockResolvedValueOnce({
+        claimed: 1,
+        completed: 0,
+        retried: 0,
+        dead: 1,
+        completedIds: [],
+      });
+      const resDead = mockRes();
+      await rfqController.requestVendorCategoryUpdate(
+        { body: { vendorId: validVendor.id } },
+        resDead,
+        jest.fn()
+      );
+      expect(resDead.statusCode).toBe(503);
+      expect(resDead.data).toMatchObject({
+        success: false,
+        retryable: false,
+        error: RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+      });
     });
   });
 
@@ -1433,7 +1558,11 @@ describe('rfqController Comprehensive Branch Coverage', () => {
           quotesCount: 1,
           buyerAccountId: 'acc-1',
           buyerAccountName: 'Acme',
-          assignedVendors: [{ vendorId: 'v-1', vendorName: 'V1', status: 'Invited' }],
+          assignedVendors: [
+            { vendorId: 'v-1', vendorName: 'V1', corporateEmail: 'v1@corp.test', status: 'Invited' },
+            { vendorId: 'v-2', vendorName: 'V2', email: 'v2@direct.test', status: 'Invited' },
+            { vendorId: 'v-3', vendorName: 'V3', status: 'Invited' },
+          ],
           quotes: [{ id: 'q-1', vendorId: 'v-1', vendorName: 'V1', submittedAt: '2026-01-02', totalAmount: 45000 }],
         },
       ];
@@ -1447,6 +1576,9 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       expect(res.data.success).toBe(true);
       expect(res.data.data[0].id).toBe('rfq-sum-1');
       expect(res.data.data[0].assignedVendors[0].vendorName).toBe('V1');
+      expect(res.data.data[0].assignedVendors[0].email).toBe('v1@corp.test');
+      expect(res.data.data[0].assignedVendors[1].email).toBe('v2@direct.test');
+      expect(res.data.data[0].assignedVendors[2].email).toBeNull();
       expect(res.data.data[0].quotes[0].id).toBe('q-1');
       storeService.getRFQs.mockRestore();
     });
@@ -2485,6 +2617,156 @@ describe('rfqController Comprehensive Branch Coverage', () => {
       storeService.approvePurchaseOrder.mockRestore();
       storeService.addInquiryToRFQ.mockRestore();
       mailerService.sendVendorIssueAcknowledgementEmail.mockRestore();
+    });
+
+    test('getRFQs forces fresh DB sync with no-store Cache-Control and updateRFQ falls back to getRFQByIdAsync', async () => {
+      const rfqClosed = {
+        id: 'rfq-sync-1',
+        rfqNumber: 'RFQ261611296521',
+        buyerAccountId: 'buyer-sync-1',
+        status: 'Closed',
+      };
+      const getByIdSpy = jest.spyOn(storeService, 'getRFQById').mockReturnValue(undefined);
+      const getByIdAsyncSpy = jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValue({
+        ...rfqClosed,
+        status: 'Quotes Pending',
+      });
+      const ensureBuyerSpy = jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValue({ id: 'buyer-sync-1' });
+      const updateDurableSpy = jest.spyOn(storeService, 'updateRFQDurably').mockResolvedValue(rfqClosed);
+      const syncSpy = jest.spyOn(storeService, 'syncRFQsFromDB').mockResolvedValue([rfqClosed]);
+      const getRfqsSpy = jest.spyOn(storeService, 'getRFQs').mockReturnValue([rfqClosed]);
+      const next = jest.fn();
+
+      try {
+        const updateRes = { ...mockRes(), setHeader: jest.fn() };
+        await rfqController.updateRFQ(
+          {
+            params: { id: rfqClosed.id },
+            body: { status: 'Closed' },
+            user: { role: 'buyer', buyerAccountId: 'buyer-sync-1', email: 'buyer@sync.test' },
+          },
+          updateRes,
+          next
+        );
+        expect(getByIdAsyncSpy).toHaveBeenCalledWith(rfqClosed.id);
+        expect(updateRes.statusCode).toBe(200);
+        expect(updateRes.data.data.status).toBe('Closed');
+
+        const listRes = { ...mockRes(), setHeader: jest.fn() };
+        await rfqController.getRFQs(
+          {
+            query: {},
+            user: { role: 'buyer', buyerAccountId: 'buyer-sync-1', email: 'buyer@sync.test' },
+          },
+          listRes,
+          next
+        );
+        expect(syncSpy).toHaveBeenCalledWith(true, 'buyer-sync-1');
+        expect(listRes.setHeader).toHaveBeenCalledWith('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+        expect(listRes.data.data[0].status).toBe('Closed');
+      } finally {
+        getByIdSpy.mockRestore();
+        getByIdAsyncSpy.mockRestore();
+        ensureBuyerSpy.mockRestore();
+        updateDurableSpy.mockRestore();
+        syncSpy.mockRestore();
+        getRfqsSpy.mockRestore();
+      }
+    });
+
+    test('enforces comparison confidentiality before closing or 48h/extended-deadline expiration across all open statuses', async () => {
+      const { parseRfqTimestampMs, isRfqConcluded, resolveRfqBiddingWindowEndMs } = require('../src/config/constants');
+      expect(parseRfqTimestampMs(null)).toBe(0);
+      expect(parseRfqTimestampMs('')).toBe(0);
+      expect(parseRfqTimestampMs(1700000000000)).toBe(1700000000000);
+      expect(parseRfqTimestampMs('2026-11-18 02:00 UTC')).toBeGreaterThan(0);
+      expect(parseRfqTimestampMs('not-a-date')).toBe(0);
+      expect(isRfqConcluded(null)).toBe(false);
+      expect(resolveRfqBiddingWindowEndMs(null)).toBe(0);
+
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      for (const openStatus of ['In Evaluation', 'AI Recommended', 'Quotes Received', 'Published']) {
+        const masked = rfqController.applyQuotesVisibility(
+          {
+            id: `rfq-${openStatus}`,
+            status: openStatus,
+            sourcingMode: 'mode_2',
+            createdAt: twoHoursAgo,
+            quotes: [{ id: 'q1', unitPrice: 1000 }],
+            aiRecommendation: { recommendedVendor: 'V1' },
+          },
+          'buyer'
+        );
+        expect(masked.quotesHidden).toBe(true);
+        expect(masked.quotes).toEqual([]);
+        expect(masked.aiRecommendation).toBeNull();
+      }
+
+      // Extended closingDeadline keeps quotes sealed even >48h after creation until extended deadline elapses
+      const fiftyHoursAgo = new Date(Date.now() - 50 * 3600 * 1000).toISOString();
+      const futureClosing = new Date(Date.now() + 24 * 3600 * 1000).toISOString();
+      const extendedMasked = rfqController.applyQuotesVisibility(
+        {
+          id: 'rfq-extended',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          createdAt: fiftyHoursAgo,
+          closingDeadline: futureClosing,
+          quotes: [{ id: 'q1', unitPrice: 500 }],
+        },
+        'buyer'
+      );
+      expect(extendedMasked.quotesHidden).toBe(true);
+      expect(extendedMasked.quotes).toEqual([]);
+      expect(extendedMasked.quotesHiddenUntil).toBe(futureClosing);
+
+      // Unseals when explicitly closed even within 48h window
+      const closedVisible = rfqController.applyQuotesVisibility(
+        {
+          id: 'rfq-closed-early',
+          status: 'Closed',
+          sourcingMode: 'mode_1',
+          createdAt: twoHoursAgo,
+          quotes: [{ id: 'q1', unitPrice: 500 }],
+        },
+        'buyer'
+      );
+      expect(closedVisible.quotesHidden).toBe(false);
+      expect(closedVisible.quotes).toHaveLength(1);
+
+      // inviteVendors masks quotes in buyer response
+      jest.spyOn(storeService, 'getRFQByIdAsync').mockResolvedValueOnce({
+        id: 'rfq-inv-mask',
+        buyerAccountId: 'b-mask-1',
+        status: 'In Evaluation',
+        sourcingMode: 'mode_1',
+        createdAt: twoHoursAgo,
+      });
+      jest.spyOn(storeService, 'ensureBuyerAccountForUser').mockResolvedValueOnce({ id: 'b-mask-1' });
+      jest.spyOn(storeService, 'inviteVendorsToRFQ').mockResolvedValueOnce({
+        updatedRFQ: {
+          id: 'rfq-inv-mask',
+          status: 'In Evaluation',
+          sourcingMode: 'mode_1',
+          createdAt: twoHoursAgo,
+          quotes: [{ id: 'q-secret', unitPrice: 999 }],
+        },
+        invitedCount: 1,
+        excludedCount: 0,
+        excludedVendors: [],
+      });
+      const invRes = mockRes();
+      await rfqController.inviteVendors(
+        {
+          params: { id: 'rfq-inv-mask' },
+          body: { vendorIds: ['v-1'] },
+          user: { role: 'buyer', email: 'b@mask.test' },
+        },
+        invRes,
+        jest.fn()
+      );
+      expect(invRes.data.data.quotesHidden).toBe(true);
+      expect(invRes.data.data.quotes).toEqual([]);
     });
   });
 });

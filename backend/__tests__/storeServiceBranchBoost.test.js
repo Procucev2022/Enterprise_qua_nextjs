@@ -775,13 +775,20 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(data.vendorsTotal).toBeGreaterThanOrEqual(2);
     });
 
-    test('getBootstrapData with pool.hasStorage and isHydratedFromDB uses cached vendors', async () => {
+    test('getBootstrapData with pool.hasStorage and isHydratedFromDB reads fresh vendors from DB instead of stale RAM cache', async () => {
       jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
       storeService.isHydratedFromDB = true;
-      storeService.vendors = [{ id: 'v-cached-1', name: 'Cached Vendor' }];
+      storeService.vendors = [{ id: 'v-stale-ram', name: 'Stale RAM Vendor' }];
       storeService.vendorsTotal = 1;
+      jest.spyOn(domainQueries, 'getVendorsPageFromDB').mockResolvedValueOnce({
+        rows: [{ id: 'v-fresh-db-1', name: 'Fresh DB Vendor' }],
+        total: 1,
+      });
+      jest.spyOn(domainQueries, 'getBuyerAccountsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getEvaluationsFromDB').mockResolvedValueOnce([]);
+      jest.spyOn(domainQueries, 'getAuditLogsFromDB').mockResolvedValueOnce([]);
       const data = await storeService.getBootstrapData();
-      expect(data.vendors).toEqual([{ id: 'v-cached-1', name: 'Cached Vendor' }]);
+      expect(data.vendors).toEqual([{ id: 'v-fresh-db-1', name: 'Fresh DB Vendor' }]);
       expect(data.vendorsTotal).toBe(1);
       storeService.isHydratedFromDB = false;
     });
@@ -2648,7 +2655,7 @@ describe('storeService comprehensive branch boost tests', () => {
       expect(res).toBeNull();
     });
 
-    test('requestVendorEvaluationDurably handles mailer error gracefully', async () => {
+    test('requestVendorEvaluationDurably awaits mailer delivery and handles both not_configured and rejected sends', async () => {
       const vendorWithEmail = {
         id: 'v-eval-durable-err',
         name: 'Durable Error Vendor',
@@ -2659,15 +2666,22 @@ describe('storeService comprehensive branch boost tests', () => {
       jest.spyOn(storeService, 'updateVendorDurably').mockImplementation(async (id, updater) => {
         return { ...vendorWithEmail, ...updater(vendorWithEmail) };
       });
-      jest.spyOn(mailerService, 'sendVendorEvaluationRequestEmail').mockImplementationOnce(() => {
-        throw new Error('Durable mailer dispatch failure');
-      });
+      jest
+        .spyOn(mailerService, 'sendVendorEvaluationRequestEmail')
+        .mockResolvedValueOnce({ sent: false, status: 'not_configured', reason: 'SMTP not configured' })
+        .mockRejectedValueOnce(new Error('Durable mailer async rejection'));
 
-      const res = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
+      const warnRes = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
         buyerCompany: 'Durable Buyer',
       });
-      expect(res).toBeDefined();
-      expect(res.status).toBe('PREFERRED');
+      expect(warnRes).toBeDefined();
+      expect(warnRes.status).toBe('PREFERRED');
+
+      const errRes = await storeService.requestVendorEvaluationDurably('v-eval-durable-err', {
+        buyerCompany: 'Durable Buyer',
+      });
+      expect(errRes).toBeDefined();
+      expect(errRes.status).toBe('PREFERRED');
     });
 
     test('_sendVendorRatingRevisionEmail handles build error and empty remarks', () => {
@@ -2687,6 +2701,430 @@ describe('storeService comprehensive branch boost tests', () => {
           { newCompositeScore: 80, revisionRecord: {} }
         );
       }).not.toThrow();
+    });
+
+    test('excludes inactive vendors from future RFQ creation, candidates, invitations, notifications, and emails while preserving historical invites', async () => {
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+      jest.spyOn(mailerService, 'sendRfqInviteEmail').mockResolvedValue({ sent: true });
+
+      const buyerAcc = {
+        id: 'buyer-inact-flow',
+        organizationName: 'Future Flow Buyer',
+        corporateEmail: 'buyer@future.test',
+        subscriptionPlan: 'enterprise',
+        remainingFreeRFQs: 10,
+      };
+      storeService.buyerAccounts = [buyerAcc];
+      storeService.activeBuyerAccount = buyerAcc;
+
+      const activeVendor = storeService.addVendor(
+        {
+          name: 'Active Electrical Vendor',
+          email: 'act@mech.test',
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Transformers'],
+          source: 'buyer_uploaded',
+          buyerId: buyerAcc.id,
+          buyerAccountId: buyerAcc.id,
+        },
+        buyerAcc.corporateEmail,
+        buyerAcc.id
+      );
+      const inactiveVendor = storeService.addVendor(
+        {
+          name: 'Disabled Electrical Vendor',
+          email: 'inact@mech.test',
+          majorCategory: 'Engineering Spares - Electrical',
+          minorCategories: ['Transformers'],
+          source: 'buyer_uploaded',
+          buyerId: buyerAcc.id,
+          buyerAccountId: buyerAcc.id,
+        },
+        buyerAcc.corporateEmail,
+        buyerAcc.id
+      );
+
+      // Unknown vendor returns null on status update
+      await expect(storeService.updateVendorActiveStatusDurably('v-missing-status', false, buyerAcc.corporateEmail)).resolves.toBeNull();
+
+      // Mark inactive
+      const deactivated = await storeService.updateVendorActiveStatusDurably(inactiveVendor.id, false, buyerAcc.corporateEmail);
+      expect(deactivated).toMatchObject({ id: inactiveVendor.id, isActive: false, disabled: true, status: 'INACTIVE' });
+
+      // Historical already-invited RFQ keeps visibility; future/uninvited RFQ does not
+      const historicalRfq = {
+        id: 'rfq-hist-invited',
+        rfqNumber: 'RFQ-HIST-1',
+        sourcingMode: 'mode_0',
+        category: 'Engineering Spares - Electrical',
+        buyerId: buyerAcc.id,
+        buyerAccountId: buyerAcc.id,
+        buyerEmail: buyerAcc.corporateEmail,
+        assignedVendors: [{ id: inactiveVendor.id, name: inactiveVendor.name, email: inactiveVendor.email }],
+      };
+      const futureOpenRfq = {
+        id: 'rfq-future-open',
+        rfqNumber: 'RFQ-FUT-1',
+        sourcingMode: 'mode_0',
+        category: 'Engineering Spares - Electrical',
+        buyerId: buyerAcc.id,
+        buyerAccountId: buyerAcc.id,
+        buyerEmail: buyerAcc.corporateEmail,
+        assignedVendors: [],
+      };
+      expect(storeService.vendorCoversRFQ(deactivated, historicalRfq)).toBe(true);
+      expect(storeService.vendorCoversRFQ(deactivated, futureOpenRfq)).toBe(false);
+
+      // Visible & candidate pools exclude inactive vendors
+      expect(storeService._visibleVendorsForRFQ(futureOpenRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+      expect(storeService.candidateVendorsForRFQ(futureOpenRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+
+      // inviteVendorsToRFQ excludes inactive vendor and records reason
+      storeService.rfqs = [futureOpenRfq];
+      const inviteRes = await storeService.inviteVendorsToRFQ(futureOpenRfq.id, [inactiveVendor.id, activeVendor.id], 'cm@procucev.com');
+      expect(inviteRes.invitedCount).toBe(1);
+      expect(inviteRes.updatedRFQ.assignedVendors.map((v) => v.id)).toEqual([activeVendor.id]);
+      expect(inviteRes.excludedVendors).toEqual(
+        expect.arrayContaining([expect.objectContaining({ id: inactiveVendor.id })])
+      );
+
+      // createRFQ filters out inactive client-supplied vendors and skips them in targets/emails/notifications
+      const createdRfq = storeService.createRFQ(
+        {
+          title: 'Future Transformer Requirement',
+          category: 'Engineering Spares - Electrical',
+          sourcingMode: 'mode_1',
+          extractedEntities: [
+            { itemName: 'Step-down Transformer', majorCategory: 'Engineering Spares - Electrical', minorCategory: 'Transformers', quantity: 5, unit: 'Nos' },
+          ],
+          assignedVendors: [
+            { id: inactiveVendor.id, name: inactiveVendor.name, email: inactiveVendor.email },
+            { id: activeVendor.id, name: activeVendor.name, email: activeVendor.email },
+          ],
+        },
+        buyerAcc,
+        { deferSideEffects: true }
+      );
+      expect(createdRfq.assignedVendors.map((v) => v.id)).toEqual([activeVendor.id]);
+      expect(storeService.selectVendorsForRFQEmail(createdRfq).map((v) => v.id)).not.toContain(inactiveVendor.id);
+      expect(storeService.notifyVendorsOfNewRFQ(createdRfq).map((n) => n.recipientId)).not.toContain(inactiveVendor.id);
+      const targets = storeService._buildRFQVendorInviteTargets(createdRfq, [deactivated, activeVendor]);
+      expect(targets.map((t) => t.vendorId)).toEqual([activeVendor.id]);
+      expect(storeService.emailRFQToMatchedVendors(createdRfq)).toBeGreaterThanOrEqual(1);
+
+      // Reactivating restores previous status
+      const reactivated = await storeService.updateVendorActiveStatusDurably(inactiveVendor.id, true, buyerAcc.corporateEmail);
+      expect(reactivated).toMatchObject({ id: inactiveVendor.id, isActive: true, disabled: false });
+      expect(storeService.vendorCoversRFQ(reactivated, futureOpenRfq)).toBe(true);
+    });
+
+    test('notifyOfRFQClosure resolves all invited vendor formats, cancels chasers, and falls back to DB contacts', async () => {
+      const rfqChaserScheduler = require('../src/services/rfqChaserScheduler');
+      storeService.notifyOfRFQClosure(null);
+
+      const clearSpy = jest.spyOn(rfqChaserScheduler, 'clearScheduledChasers').mockImplementation(() => {});
+      const deliverVendorSpy = jest.spyOn(mailerService, 'deliverVendor').mockResolvedValue({ sent: true });
+      const sendSmsSpy = jest.spyOn(smsService, 'sendActionCenterSms').mockResolvedValue({ success: true });
+      const sendWaSpy = jest.spyOn(whatsAppService, 'sendRFQClosedWhatsApp').mockResolvedValue({ success: true });
+
+      storeService.vendors = [
+        {
+          id: 'v-mem-1',
+          name: 'Memory Invited Vendor',
+          email: 'mem@vendor.test',
+          phone: '9876543201',
+          source: 'buyer_uploaded',
+        },
+      ];
+
+      const rfq = {
+        id: 'rfq-close-invited-1',
+        rfqNumber: 'RFQ-CLOSE-INV-1',
+        title: 'Heavy Valves Package',
+        sourcingMode: 'mode_1',
+        buyerAccountId: 'buyer-c-1',
+        buyerEmail: 'buyer@c.test',
+        assignedVendors: [
+          'v-mem-1',
+          'direct@string.test',
+          '  ',
+          null,
+          42,
+          { vendorId: 'v-db-only-1', name: 'DB Cold Vendor' },
+          { id: 'v-mem-1', email: 'mem@vendor.test' },
+          { email: 'mem@vendor.test', phone: '9876543201', contactPerson: 'Lead Contact' },
+          {},
+        ],
+        followUpData: {
+          vendors: [
+            { id: 'v-fup-1', vendorName: 'FollowUp Vendor', email: 'fup@vendor.test', mobile: '9876543202' },
+            { name: 'FollowUp Vendor', email: 'fup@vendor.test' },
+          ],
+        },
+        status: 'Closed',
+      };
+
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const getDbVendorsSpy = jest.spyOn(domainQueries, 'getVendorsByIdsFromDB').mockResolvedValue([
+        {
+          id: 'v-db-only-1',
+          name: 'DB Cold Vendor',
+          email: 'db-cold@vendor.test',
+          mobileNumber: '9876543203',
+          source: 'procucev_network',
+        },
+      ]);
+
+      storeService.notifyOfRFQClosure(rfq);
+      await new Promise((resolve) => setImmediate(resolve));
+      await new Promise((resolve) => setImmediate(resolve));
+
+      expect(clearSpy).toHaveBeenCalledWith('RFQ-CLOSE-INV-1');
+      expect(getDbVendorsSpy).toHaveBeenCalledWith(expect.arrayContaining(['v-db-only-1']));
+
+      expect(deliverVendorSpy).not.toHaveBeenCalled();
+
+      expect(sendSmsSpy).toHaveBeenCalledTimes(3);
+      expect(sendWaSpy).toHaveBeenCalledTimes(3);
+
+      const closedNotifs = storeService.notifications.filter((n) => n.recipientType === 'vendor' && n.kind === 'rfq_closed');
+      expect(closedNotifs.map((n) => n.recipientId)).toEqual(
+        expect.arrayContaining(['v-mem-1', 'v-db-only-1', 'v-fup-1'])
+      );
+
+      // Missing/empty DB vendor list and empty dispatch coverage
+      getDbVendorsSpy.mockResolvedValueOnce([]);
+      storeService.notifyOfRFQClosure({ id: 'rfq-no-inv', title: 'Empty', assignedVendors: [] });
+      storeService._dispatchVendorClosureMessages({ id: 'rfq-null-v' }, [null]);
+      await new Promise((resolve) => setImmediate(resolve));
+
+      hasStorageSpy.mockRestore();
+      getDbVendorsSpy.mockRestore();
+      clearSpy.mockRestore();
+      deliverVendorSpy.mockRestore();
+      sendSmsSpy.mockRestore();
+      sendWaSpy.mockRestore();
+    });
+
+    test('getVendorByIdWithDBFallback resolves promoted masterRecordId vendors from DB and supports preloaded bulk status options', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const promoted = {
+        id: 'v-ingest-boost-1',
+        masterRecordId: 'vmr-boost-1',
+        name: 'Boost Master Vendor',
+        email: 'boostmaster@test.in',
+        buyerId: 'buyer-boost-1',
+        status: 'REGISTERED / NOT EVALUATED',
+      };
+      storeService.vendors = [promoted];
+      const byIdSpy = jest.spyOn(domainQueries, 'getVendorByIdFromDB').mockImplementation(async (lookupId) => {
+        if (lookupId === 'v-ingest-boost-1') return promoted;
+        return null;
+      });
+      const byEmailSpy = jest.spyOn(domainQueries, 'getVendorByEmailFromDB').mockResolvedValue(null);
+
+      const resolved = await storeService.getVendorByIdWithDBFallback('v-master-vmr-boost-1', 'buyer-boost-1', { fresh: true });
+      expect(resolved).toMatchObject({ id: 'v-ingest-boost-1', masterRecordId: 'vmr-boost-1' });
+      expect(byIdSpy).toHaveBeenCalledWith('v-ingest-boost-1', { fresh: true });
+
+      const nonFresh = await storeService.getVendorByIdWithDBFallback('v-master-vmr-boost-1', 'buyer-boost-1', { fresh: false });
+      expect(nonFresh).toMatchObject({ id: 'v-ingest-boost-1' });
+
+      const snapSpy = jest.spyOn(domainQueries, 'getVendorSnapshotByIdFromDB').mockResolvedValue({
+        id: promoted.id,
+        vendor: promoted,
+        raw: JSON.stringify(promoted),
+      });
+      const updSnapSpy = jest.spyOn(domainQueries, 'updateVendorIfUnchangedInDB').mockResolvedValue({
+        ...promoted,
+        isActive: false,
+        disabled: true,
+        status: 'INACTIVE',
+      });
+      const auditCountBefore = storeService.auditLogs.length;
+      const updatedPreloaded = await storeService.updateVendorActiveStatusDurably(
+        promoted.id,
+        false,
+        'buyer@boost.in',
+        { preloadedVendor: promoted, skipAuditLog: true }
+      );
+      expect(updatedPreloaded).toMatchObject({ id: promoted.id, isActive: false, status: 'INACTIVE' });
+      expect(storeService.auditLogs.length).toBe(auditCountBefore);
+
+      snapSpy.mockRestore();
+      updSnapSpy.mockRestore();
+      byIdSpy.mockRestore();
+      byEmailSpy.mockRestore();
+      hasStorageSpy.mockRestore();
+    });
+  });
+
+  describe('getRFQsPage branch coverage', () => {
+    test('getRFQsPage with pool.hasStorage() true delegates to domainQueries and reconciles rows', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(true);
+      const rawRfq = {
+        id: 'rfq-db-1',
+        rfqNumber: 'RFQ-DB-1',
+        title: 'DB RFQ',
+        category: 'Electrical',
+        status: 'Quotes Pending',
+        quotes: [{ vendorId: 'v-1', vendorName: 'V1', submittedAt: '2026-01-01' }],
+        assignedVendors: [{ vendorId: 'v-1', vendorName: 'V1' }],
+      };
+      const getPageSpy = jest.spyOn(domainQueries, 'getRFQsPageFromDB').mockResolvedValue({
+        rows: [rawRfq],
+        total: 250,
+      });
+
+      const res = await storeService.getRFQsPage({
+        page: 2,
+        limit: 50,
+        search: 'db',
+        status: 'Quotes Pending',
+        buyer: 'Buyer Acc',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      expect(res.total).toBe(250);
+      expect(res.page).toBe(2);
+      expect(res.limit).toBe(50);
+      expect(res.totalPages).toBe(5);
+      expect(res.rows).toHaveLength(1);
+      expect(res.rows[0].rfqNumber).toBe('RFQ-DB-1');
+      expect(getPageSpy).toHaveBeenCalledWith({
+        page: 2,
+        limit: 50,
+        search: 'db',
+        status: 'Quotes Pending',
+        buyer: 'Buyer Acc',
+        startDate: '2026-01-01',
+        endDate: '2026-12-31',
+      });
+
+      hasStorageSpy.mockRestore();
+      getPageSpy.mockRestore();
+    });
+
+    test('getRFQsPage with pool.hasStorage() false filters in-memory records and handles pagination', async () => {
+      const hasStorageSpy = jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+      const rfq1 = {
+        id: 'rfq-mem-1',
+        rfqNumber: 'RFQ-MEM-001',
+        title: 'Copper Wires',
+        category: 'Wires',
+        status: 'Quotes Pending',
+        buyerAccountName: 'Buyer Alpha',
+        createdAt: '2026-05-10T10:00:00.000Z',
+        quotes: [{ vendorName: 'Wire Supplier Inc' }],
+        assignedVendors: [{ name: 'Wire Supplier Inc' }],
+      };
+      const rfq2 = {
+        id: 'rfq-mem-2',
+        rfqNumber: 'RFQ-MEM-002',
+        title: 'Steel Pipes',
+        category: 'Pipes',
+        status: 'Closed',
+        buyerAccountId: 'buyer-beta-id',
+        createdAt: '2026-06-15T12:00:00.000Z',
+        quotes: [],
+        assignedVendors: [{ vendorName: 'Steel Co' }],
+      };
+      const rfq3 = {
+        id: 'rfq-mem-3',
+        rfqNumber: 'RFQ-MEM-003',
+        title: 'Fiber Cable',
+        category: 'Wires',
+        status: 'PO Generated',
+        buyerId: 'buyer-gamma-id',
+        createdAt: '2026-07-20T15:00:00.000Z',
+        quotes: [],
+        assignedVendors: [],
+      };
+      const rfqNoDate = {
+        id: 'rfq-mem-4',
+        rfqNumber: 'RFQ-MEM-004',
+        title: 'No Date Item',
+        category: 'Misc',
+        status: 'Quotes Pending',
+        createdAt: null,
+      };
+
+      storeService.rfqs = [rfq1, rfq2, rfq3, rfqNoDate];
+
+      // 1. Default parameters (page 1, limit 100, no filters)
+      const resDefault = await storeService.getRFQsPage();
+      expect(resDefault.total).toBe(4);
+      expect(resDefault.page).toBe(1);
+      expect(resDefault.limit).toBe(100);
+      expect(resDefault.totalPages).toBe(1);
+
+      // 2. Filter by status
+      const resStatus = await storeService.getRFQsPage({ status: 'Closed' });
+      expect(resStatus.rows).toHaveLength(1);
+      expect(resStatus.rows[0].id).toBe('rfq-mem-2');
+
+      // 3. Filter by buyer (matching buyerAccountName, buyerAccountId, buyerId)
+      const resBuyerAlpha = await storeService.getRFQsPage({ buyer: 'Buyer Alpha' });
+      expect(resBuyerAlpha.rows).toHaveLength(1);
+      expect(resBuyerAlpha.rows[0].id).toBe('rfq-mem-1');
+
+      const resBuyerBeta = await storeService.getRFQsPage({ buyer: 'buyer-beta-id' });
+      expect(resBuyerBeta.rows).toHaveLength(1);
+      expect(resBuyerBeta.rows[0].id).toBe('rfq-mem-2');
+
+      const resBuyerGamma = await storeService.getRFQsPage({ buyer: 'buyer-gamma-id' });
+      expect(resBuyerGamma.rows).toHaveLength(1);
+      expect(resBuyerGamma.rows[0].id).toBe('rfq-mem-3');
+
+      // 4. Date filtering (start date, end date, out of range, missing createdAt)
+      const resDateRange = await storeService.getRFQsPage({
+        startDate: '2026-06-01',
+        endDate: '2026-06-30',
+      });
+      expect(resDateRange.rows).toHaveLength(1);
+      expect(resDateRange.rows[0].id).toBe('rfq-mem-2');
+
+      // 5. Search matching title, rfqNumber, category, quotes vendorName, assignedVendors
+      const resSearchNumber = await storeService.getRFQsPage({ search: 'mem-001' });
+      expect(resSearchNumber.rows).toHaveLength(1);
+      expect(resSearchNumber.rows[0].id).toBe('rfq-mem-1');
+
+      const resSearchTitle = await storeService.getRFQsPage({ search: 'steel' });
+      expect(resSearchTitle.rows).toHaveLength(1);
+      expect(resSearchTitle.rows[0].id).toBe('rfq-mem-2');
+
+      const resSearchCategory = await storeService.getRFQsPage({ search: 'wires' });
+      expect(resSearchCategory.rows).toHaveLength(2);
+
+      const resSearchQuoteVendor = await storeService.getRFQsPage({ search: 'wire supplier' });
+      expect(resSearchQuoteVendor.rows).toHaveLength(1);
+      expect(resSearchQuoteVendor.rows[0].id).toBe('rfq-mem-1');
+
+      const resSearchAssignedVendor = await storeService.getRFQsPage({ search: 'steel co' });
+      expect(resSearchAssignedVendor.rows).toHaveLength(1);
+      expect(resSearchAssignedVendor.rows[0].id).toBe('rfq-mem-2');
+
+      // 6. Pagination with slice: page 2, limit 2
+      const resPagination = await storeService.getRFQsPage({ page: 2, limit: 2 });
+      expect(resPagination.page).toBe(2);
+      expect(resPagination.limit).toBe(2);
+      expect(resPagination.total).toBe(4);
+      expect(resPagination.totalPages).toBe(2);
+      expect(resPagination.rows).toHaveLength(2);
+
+      // 7. Edge cases: invalid page & limit fallback, status='all', buyer='all'
+      const resEdge = await storeService.getRFQsPage({
+        page: 'invalid',
+        limit: 'invalid',
+        status: 'all',
+        buyer: 'all',
+      });
+      expect(resEdge.page).toBe(1);
+      expect(resEdge.limit).toBe(100);
+
+      hasStorageSpy.mockRestore();
     });
   });
 });

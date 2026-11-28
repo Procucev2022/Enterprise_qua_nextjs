@@ -813,5 +813,355 @@ describe('supplierProfileEnhancements & vendorDossierExtensions', () => {
       }));
       expect(recordSpy.mock.calls[0][0].metadata).not.toHaveProperty('deliveryReplyTo');
     });
+
+    test('getCreditHistory handles DB error and falls back to rfqDownloadsUsed when freeCreditsUsed is zero', async () => {
+      jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB').mockRejectedValueOnce(new Error('DB connection reset'));
+      jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValue({
+        vendorId: 'v-test-1',
+        freeCreditsAllocated: 15,
+        freeCreditsUsed: 0,
+        freeCreditsRemaining: 10,
+        isSubscribed: true,
+        subscriptionPlan: 'connect',
+      });
+      const vendorWithDownloads = { ...mockVendor, rfqDownloadsUsed: 5 };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorWithDownloads);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorWithDownloads);
+
+      const req = { user: adminUser, params: { id: 'v-test-1' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getCreditHistory(req, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        summary: expect.objectContaining({
+          totalCreditsConsumed: 5,
+        }),
+      }));
+    });
+
+    test('getVendorCommunications handles DB error gracefully and returns empty array', async () => {
+      jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockRejectedValue(new Error('Comms DB down'));
+      const req = { user: adminUser, params: { id: 'v-test-1' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getVendorCommunications(req, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith({ success: true, data: [] });
+    });
+
+    test('getCreditHistory exercises free tier vendor balance and contactEmail/mobile communication paths', async () => {
+      const freeVendor = {
+        id: 'v-free-1',
+        name: 'Free Vendor',
+        email: 'free@test.com',
+        contactEmail: 'contact@test.com',
+        phone: '+919876543210',
+        mobile: '+919876543211',
+        mobileNumber: '+919876543212',
+        subscriptionPlan: 'free',
+        freeQuotationCredits: 4,
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(freeVendor);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(freeVendor);
+      jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValue({
+        vendorId: 'v-free-1',
+        freeCreditsAllocated: 5,
+        freeCreditsUsed: 1,
+        freeCreditsRemaining: undefined,
+        isSubscribed: false,
+      });
+      jest.spyOn(domainQueries, 'getVendorCreditTransactionsFromDB').mockResolvedValue([
+        { id: 'tx-f1', transaction_type: 'RFQ_UNLOCK', amount: -1, balance_after: 3 },
+      ]);
+      const commHistorySpy = jest.spyOn(paymentDuesQueries, 'getCommunicationHistory').mockResolvedValue([]);
+
+      const req = { user: adminUser, params: { id: 'v-free-1' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getCreditHistory(req, res, jest.fn());
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        summary: expect.objectContaining({
+          isSubscribed: false,
+          currentCreditBalance: 4,
+        }),
+      }));
+
+      const resComm = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.getVendorCommunications(req, resComm, jest.fn());
+      expect(commHistorySpy).toHaveBeenCalledWith(
+        expect.any(Array),
+        expect.objectContaining({
+          emails: expect.arrayContaining(['free@test.com', 'contact@test.com']),
+          phones: expect.arrayContaining(['+919876543210', '+919876543211', '+919876543212']),
+        })
+      );
+    });
+
+    test('requestCreditApproval covers Discounts, Trial Periods, and Offline Payments requestType branches', async () => {
+      const internalTaskQueries = require('../src/db/internalTaskQueries');
+      const createTaskSpy = jest.spyOn(internalTaskQueries, 'createInternalTaskWithApproval').mockResolvedValue({
+        id: 'task-test',
+        task_number: 'TASK-001',
+      });
+
+      // Discounts with discountPercentage
+      const reqDiscount = {
+        user: cmUser,
+        params: { id: 'v-test-1' },
+        body: { requestType: 'Discounts', discountPercentage: 15, approverName: 'Srinu Sir' },
+      };
+      const resDiscount = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.requestCreditApproval(reqDiscount, resDiscount, jest.fn());
+      expect(resDiscount.status).toHaveBeenCalledWith(201);
+      expect(createTaskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: 'Discounts' }),
+        expect.anything(),
+        expect.objectContaining({ value_impact: '15% Subscription Discount (Alpha Supplier Ltd)' })
+      );
+
+      // Discounts fallback to amount
+      const reqDiscountAmt = {
+        user: cmUser,
+        params: { id: 'v-test-1' },
+        body: { requestType: 'Discount', amount: 20, approverName: 'Srinu Sir' },
+      };
+      const resDiscountAmt = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.requestCreditApproval(reqDiscountAmt, resDiscountAmt, jest.fn());
+      expect(createTaskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: 'Discounts' }),
+        expect.anything(),
+        expect.objectContaining({ value_impact: '20% Subscription Discount (Alpha Supplier Ltd)' })
+      );
+
+      // Trial Periods with durationDays
+      const reqTrial = {
+        user: cmUser,
+        params: { id: 'v-test-1' },
+        body: { requestType: 'Trial Periods', durationDays: 45, approverName: 'Srinu Sir' },
+      };
+      const resTrial = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.requestCreditApproval(reqTrial, resTrial, jest.fn());
+      expect(createTaskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: 'Trial Periods' }),
+        expect.anything(),
+        expect.objectContaining({ value_impact: '45 Days Free Trial (Alpha Supplier Ltd)' })
+      );
+
+      // Offline Payments with paymentReference and Cash
+      const reqOffline = {
+        user: cmUser,
+        params: { id: 'v-test-1' },
+        body: { requestType: 'Offline Payments', paymentAmount: 5000, amount: 5000, paymentReference: 'REF123', approverName: 'Srinu Sir' },
+      };
+      const resOffline = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.requestCreditApproval(reqOffline, resOffline, jest.fn());
+      expect(resOffline.status).toHaveBeenCalledWith(201);
+      expect(createTaskSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ taskType: 'Offline Payments' }),
+        expect.anything(),
+        expect.anything()
+      );
+
+      // Offline Payments with Cash paymentType
+      const reqCash = {
+        user: cmUser,
+        params: { id: 'v-test-1' },
+        body: { requestType: 'Offline Payments', paymentAmount: 3000, amount: 3000, paymentType: 'Cash', approverName: 'Srinu Sir' },
+      };
+      const resCash = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.requestCreditApproval(reqCash, resCash, jest.fn());
+      expect(resCash.status).toHaveBeenCalledWith(201);
+    });
+
+    test('getSellerBuyerUploads exercises matchesVendorBuyer across all linkage branches', async () => {
+      const vendorLinked = {
+        id: 'v-linked',
+        name: 'Linked Supplier',
+        buyerId: 'b-id-1',
+        buyerAccountId: 'b-acc-2',
+        buyerEmail: 'buyer3@test.com',
+        addedByBuyerCompany: 'Org Four',
+        subscriptionPlan: 'connect',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorLinked);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorLinked);
+
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([
+        { id: 'b-id-1', organizationName: 'Org One', corporateEmail: 'buyer1@test.com' },
+        { id: 'b-acc-2', organizationName: 'Org Two', corporateEmail: 'buyer2@test.com' },
+        { id: 'b-other-3', organizationName: 'Org Three', corporateEmail: 'buyer3@test.com' },
+        { id: 'b-other-4', organizationName: 'Org Four', corporateEmail: 'buyer4@test.com' },
+        { id: 'b-unrelated', organizationName: 'Unrelated Org', corporateEmail: 'unrelated@test.com' },
+        null,
+      ]);
+
+      const req = { user: adminUser, params: { id: 'v-linked' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getSellerBuyerUploads(req, res, jest.fn());
+
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: 'b-id-1' }),
+          expect.objectContaining({ id: 'b-acc-2' }),
+          expect.objectContaining({ id: 'b-other-3' }),
+          expect.objectContaining({ id: 'b-other-4' }),
+        ]),
+      }));
+    });
+
+    test('getSellerBuyerUploads falls back to synthesizing client when buyerMap is empty', async () => {
+      const vendorSynth = {
+        id: 'v-synth',
+        name: 'Direct Supplier',
+        addedByBuyerCompany: 'Direct Enterprise Corp',
+        buyerEmail: 'corp@enterprise.com',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorSynth);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorSynth);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValue([]);
+
+      const req = { user: adminUser, params: { id: 'v-synth' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getSellerBuyerUploads(req, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        count: 1,
+        data: [expect.objectContaining({ companyName: 'Direct Enterprise Corp', location: 'Bengaluru, Karnataka' })],
+      }));
+
+      // Test without buyerEmail and without state
+      const vendorCityOnly = {
+        id: 'v-city-only',
+        name: 'City Only Vendor',
+        addedByBuyerCompany: 'City Enterprise',
+        city: 'Mumbai',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorCityOnly);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorCityOnly);
+
+      const resCity = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.getSellerBuyerUploads(req, resCity, jest.fn());
+      expect(resCity.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        data: [expect.objectContaining({ companyName: 'City Enterprise', contactPerson: 'Procurement Contact', location: 'Mumbai' })],
+      }));
+    });
+
+    test('getSellerActiveRFQs filters closed/expired RFQs and matches active category RFQs', async () => {
+      const vendorRfqs = {
+        id: 'v-rfq-match',
+        name: 'Industrial Vendor',
+        majorCategory: 'Industrial Machinery',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorRfqs);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorRfqs);
+      jest.spyOn(storeService, 'vendorCoversCategory').mockImplementation((v, cat) => cat === 'Industrial Machinery');
+      storeService._vendorCoversRFQCategories = jest.fn().mockImplementation((v, rfq) => rfq.id === 'rfq-helper-matched');
+
+      const futureDate = new Date(Date.now() + 86400000).toISOString();
+      const pastDate = new Date(Date.now() - 86400000).toISOString();
+
+      storeService.rfqs = [
+        null,
+        { id: 'rfq-closed', status: 'Closed', category: 'Industrial Machinery' },
+        { id: 'rfq-expired', status: 'Open', closingDate: pastDate, category: 'Industrial Machinery' },
+        {
+          id: 'rfq-matched-1',
+          rfqNumber: 'RFQ-001',
+          title: 'Lathe Machine',
+          category: 'Industrial Machinery',
+          status: 'Quotes Pending',
+          closingDate: futureDate,
+        },
+        {
+          id: 'rfq-matched-2',
+          category: 'Other',
+          status: 'Active',
+          closingDate: null,
+          extractedEntities: [{ majorCategory: 'Industrial Machinery' }],
+        },
+        {
+          id: 'rfq-helper-matched',
+          category: 'Helper Category',
+          status: 'Active',
+          closingDate: null,
+        },
+      ];
+
+      const req = { user: adminUser, params: { id: 'v-rfq-match' } };
+      const res = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+
+      await vendorDossierExtensions.getSellerActiveRFQs(req, res, jest.fn());
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        count: 3,
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: 'rfq-matched-1' }),
+          expect.objectContaining({ id: 'rfq-matched-2' }),
+          expect.objectContaining({ id: 'rfq-helper-matched' }),
+        ]),
+      }));
+
+      expect(res.status).toHaveBeenCalledWith(200);
+      expect(res.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        count: 3,
+        data: expect.arrayContaining([
+          expect.objectContaining({ id: 'rfq-matched-1' }),
+          expect.objectContaining({ id: 'rfq-matched-2' }),
+        ]),
+      }));
+    });
+
+    test('addQuoteCredits validates amount and handles balance fallbacks', async () => {
+      const vendorNoBal = {
+        id: 'v-no-bal',
+        name: 'Vendor No Bal',
+      };
+      jest.spyOn(storeService, 'getVendorById').mockReturnValue(vendorNoBal);
+      jest.spyOn(storeService, 'getVendorByIdWithDBFallback').mockResolvedValue(vendorNoBal);
+      jest.spyOn(storeService, 'getVendorRfqCredits').mockReturnValue({
+        vendorId: 'v-no-bal',
+        isSubscribed: false,
+        freeCreditsRemaining: undefined,
+      });
+      jest.spyOn(storeService, 'updateVendor').mockReturnValue(true);
+      jest.spyOn(pool, 'hasStorage').mockReturnValue(false);
+
+      // Validation failure for invalid amount
+      const reqInvalid = {
+        user: cmUser,
+        params: { id: 'v-no-bal' },
+        body: { amount: 10 }, // Schema limit is between 1 and 5
+      };
+      const resInvalid = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.addQuoteCredits(reqInvalid, resInvalid, jest.fn());
+      expect(resInvalid.status).toHaveBeenCalledWith(400);
+
+      // Successful addition with fallback balance
+      const reqValid = {
+        user: cmUser,
+        params: { id: 'v-no-bal' },
+        body: { amount: 3, reason: 'Special promo' },
+      };
+      const resValid = { status: jest.fn().mockReturnThis(), json: jest.fn() };
+      await vendorDossierExtensions.addQuoteCredits(reqValid, resValid, jest.fn());
+      expect(resValid.json).toHaveBeenCalledWith(expect.objectContaining({
+        success: true,
+        updatedBalance: 8, // 5 default + 3
+      }));
+    });
   });
 });

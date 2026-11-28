@@ -48,7 +48,7 @@ describe('apiFetchPatch', () => {
 
     expect(mockFetch).toHaveBeenCalledWith(
       'https://backend.example.workers.dev/api/auth/login',
-      { method: 'POST' }
+      { method: 'POST', cache: 'no-store' }
     );
   });
 
@@ -110,6 +110,6 @@ describe('apiFetchPatch', () => {
     installApiFetchPatch();
 
     await window.fetch('/api/rfqs/extract', { method: 'POST' });
-    expect(mockFetch).toHaveBeenCalledWith('http://localhost:4000/api/rfqs/extract', { method: 'POST' });
+    expect(mockFetch).toHaveBeenCalledWith('http://localhost:4000/api/rfqs/extract', { method: 'POST', cache: 'no-store' });
   });
 });

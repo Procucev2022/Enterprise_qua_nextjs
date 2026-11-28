@@ -30,7 +30,7 @@ export async function fetchNotifications(options: { limit?: number } = {}): Prom
   const url = options.limit ? `/api/notifications?limit=${options.limit}` : '/api/notifications';
   let res: Response;
   try {
-    res = await fetch(url, { headers: authHeaders() });
+    res = await fetch(url, { headers: authHeaders(), cache: 'no-store' });
   } catch {
     return { ...EMPTY, success: false, error: UI_STRINGS.auth.networkUnreachable };
   }
@@ -49,7 +49,10 @@ export async function fetchNotifications(options: { limit?: number } = {}): Prom
   return {
     success: true,
     notifications: body.data,
-    unreadCount: typeof body.unreadCount === 'number' ? body.unreadCount : body.data.filter((n) => !n.read).length,
+    unreadCount:
+      typeof body.unreadCount === 'number' && Number.isFinite(body.unreadCount)
+        ? Math.max(0, Math.floor(body.unreadCount))
+        : body.data.filter((n) => !n.read).length,
   };
 }
 

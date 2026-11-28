@@ -12,7 +12,16 @@ const { extractToken } = require('../middleware/auth');
 const rfqSummaryService = require('../services/rfqSummaryService');
 const { AUTH_MESSAGES } = require('../config/constants');
 const { sanitizePublicVendor } = require('../controllers/vendorController');
+const { applyQuotesVisibility, applyVendorBuyerPrivacy } = require('../controllers/rfqController');
 const graphqlUserCache = new WeakMap();
+
+function sanitizeRfqForScope(rfq, scope) {
+  if (!rfq || !scope) return rfq;
+  if (scope.role === 'vendor') {
+    return applyVendorBuyerPrivacy(rfq, scope.vendor);
+  }
+  return applyQuotesVisibility(rfq, scope.role);
+}
 
 /**
  * Mutations go through the same rootValue-as-plain-functions path as queries,
@@ -191,7 +200,7 @@ const rootResolvers = {
     if (status) {
       result = result.filter((r) => r.status && r.status.toLowerCase() === status.toLowerCase());
     }
-    return result.slice(offset, offset + limit);
+    return result.slice(offset, offset + limit).map((item) => sanitizeRfqForScope(item, scope));
   },
 
   rfq: async (args = {}, context) => {
@@ -201,7 +210,7 @@ const rootResolvers = {
     const rfq = storeService.getRFQById(key);
     if (!rfq) return null;
     if (!rfqInScope(scope, rfq)) return null;
-    return rfq;
+    return sanitizeRfqForScope(rfq, scope);
   },
 
   vendors: async (args = {}, context = {}) => {
@@ -443,7 +452,34 @@ const rootResolvers = {
     logger.info('GraphQL Mutation: createVendor', { name: input.name }, 'GRAPHQL_MUTATION');
     const buyerAccount = user.role === 'buyer' ? await storeService.getBuyerAccountByEmail(user.email) : null;
     const buyerId = user.role === 'buyer' ? (buyerAccount ? buyerAccount.id : user.sub || user.email) : null;
-    return storeService.addVendorDurably(input, user.email, buyerId);
+    const vendorInput = { ...input };
+    if (user.role === 'category_manager') {
+      vendorInput.source = 'procucev_network';
+      vendorInput.createdByRole = 'category_manager';
+      vendorInput.isCmCreated = true;
+    } else if (user.role === 'buyer') {
+      if (buyerAccount?.organizationName) {
+        vendorInput.addedByBuyerCompany = buyerAccount.organizationName;
+      }
+      vendorInput.buyerEmail = user.email;
+    }
+    if (vendorInput.email) {
+      const claimed = await storeService.claimMigratedVendorProfile(vendorInput.email, vendorInput, buyerId, user.email);
+      if (claimed) {
+        return claimed;
+      }
+    }
+    const created = await storeService.addVendorDurably(vendorInput, user.email, buyerId);
+    if (created.email) {
+      await storeService.provisionVendorOnboarding(
+        created,
+        user.email,
+        user.role === 'category_manager'
+          ? { isCmCreated: true, mailboxChannel: 'direct' }
+          : undefined
+      );
+    }
+    return storeService.getVendorById(created.id, 'all') || created;
   },
 
   updateVendor: async ({ id, input }, context) => {

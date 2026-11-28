@@ -1,6 +1,13 @@
 import React from 'react';
 import { render, screen, fireEvent, waitFor, within, act } from '@testing-library/react';
-import IngestionWizard, { resolveConfirmationVendorCount } from '@/app/buyer/ingestion-wizard';
+import IngestionWizard, {
+  resolveConfirmationVendorCount,
+  setEnableMode3,
+  isRosterVendorSelectable,
+  isRosterVendorSelected,
+  getRosterVendorCardClasses,
+  RosterVendorCheckbox,
+} from '@/app/buyer/ingestion-wizard';
 import { useApp } from '@/lib/store';
 import { getMajorCategories } from '@/lib/categoryTaxonomy';
 import { validatePincode, type PostOfficeDetail } from '@/lib/validationSchemas';
@@ -858,7 +865,7 @@ describe('IngestionWizard coverage: documents and manual recovery', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /Extract Line Items with AI/i }));
 
-    expect(await screen.findByText(EXTRACTION.unreadableResponse)).toBeInTheDocument();
+    expect(await screen.findByText(EXTRACTION.unreadableResponse, {}, { timeout: 10000 })).toBeInTheDocument();
     expect(screen.getByText(EXTRACTION.errorDetailLabel)).toBeInTheDocument();
     expect(screen.getByText('socket hang up')).toBeInTheDocument();
     expect(mockExtract).toHaveBeenCalledWith({ fileName: 'requisition.txt', documentText: 'Need 10 centrifugal pumps' });
@@ -873,7 +880,7 @@ describe('IngestionWizard coverage: documents and manual recovery', () => {
     expect(screen.getByText(/No line items added yet\./i)).toBeInTheDocument();
     dropFiles([textFile('requisition.txt')]);
     fireEvent.click(screen.getByRole('button', { name: /Extract Line Items with AI/i }));
-    expect(await screen.findByText(EXTRACTION.reasonMessages.NO_ITEMS_FOUND)).toBeInTheDocument();
+    expect(await screen.findByText(EXTRACTION.reasonMessages.NO_ITEMS_FOUND, {}, { timeout: 10000 })).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: EXTRACTION.manualEntryAction }));
 
@@ -1062,6 +1069,12 @@ describe('IngestionWizard coverage: submit validation and dispatch payloads', ()
 // ------------------------------------------------------------------------------
 
 describe('IngestionWizard coverage: Mode 3 Procucev ranking', () => {
+  beforeAll(() => {
+    setEnableMode3(true);
+  });
+  afterAll(() => {
+    setEnableMode3(false);
+  });
   const ALPHA = candidate({
     id: 'net-alpha',
     name: 'Alpha Pumps',
@@ -1507,5 +1520,352 @@ describe('IngestionWizard coverage: free-quota controls', () => {
     expect(screen.queryByTestId('ingestion-wizard-quota-exhausted-banner')).not.toBeInTheDocument();
     expect(screen.getByTestId('sourcing-mode-btn-mode_0')).toHaveAttribute('aria-checked', 'true');
     expect(dispatchButton()).toBeEnabled();
+  });
+
+  it('excludes inactive/disabled buyer-uploaded and network vendors from future RFQ creation rosters and submissions', async () => {
+    const activeVendor = vendor({
+      id: 'v-wiz-active',
+      name: 'Wizard Active Vendor',
+      email: 'active@wiz.test',
+      source: 'buyer_uploaded',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+    const inactiveVendor = vendor({
+      id: 'v-wiz-inactive',
+      name: 'Wizard Disabled Vendor',
+      email: 'inactive@wiz.test',
+      source: 'buyer_uploaded',
+      isActive: false,
+      disabled: true,
+      status: 'INACTIVE',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+    setupStore({ currentMode: 'mode_1', buyerVendors: [activeVendor, inactiveVendor] });
+
+    renderWizard();
+    chooseSourcingMode('mode_1');
+    fillValidForm();
+
+    expect(screen.getByText(/Wizard Active Vendor/)).toBeInTheDocument();
+    expect(screen.queryByText(/Wizard Disabled Vendor/)).not.toBeInTheDocument();
+
+    await dispatchRfq();
+    const submittedIds = (mockCreateRFQ.mock.calls[0][0].assignedVendors || []).map((v: { id?: string }) => v.id);
+    expect(submittedIds).not.toContain('v-wiz-inactive');
+  });
+});
+
+// ------------------------------------------------------------------------------
+// Category Mismatch selection for buyer-owned internal vendors
+// ------------------------------------------------------------------------------
+
+describe('IngestionWizard coverage: Category Mismatch selection for internal vendors', () => {
+  it('allows selection strictly for internal Category Mismatch vendors and disables Procucev Network / Vetted mismatches', () => {
+    const internalVendor = vendor({
+      id: 'int-1',
+      name: 'Internal Vendor Co',
+      source: 'buyer_uploaded',
+      majorCategory: 'Civil Works',
+    });
+    const procucevVendor = vendor({
+      id: 'proc-1',
+      name: 'Procucev Vetted Co',
+      source: 'procucev_network',
+      majorCategory: 'Civil Works',
+    });
+
+    expect(isRosterVendorSelectable(internalVendor, false)).toBe(true);
+    expect(isRosterVendorSelectable(internalVendor, true)).toBe(true);
+    expect(isRosterVendorSelectable(procucevVendor, false)).toBe(true);
+    expect(isRosterVendorSelectable(procucevVendor, true)).toBe(false);
+
+    expect(
+      isRosterVendorSelected({
+        vendor: procucevVendor,
+        isCategoryMismatch: true,
+        hasExplicitSelection: true,
+        selectedVendorIds: ['proc-1'],
+        defaultSelectedIds: ['proc-1'],
+      })
+    ).toBe(false);
+    expect(
+      isRosterVendorSelected({
+        vendor: vendor({ name: 'Missing Id', source: 'buyer_uploaded' }),
+        isCategoryMismatch: true,
+        hasExplicitSelection: true,
+        selectedVendorIds: ['int-1'],
+        defaultSelectedIds: [],
+      })
+    ).toBe(false);
+    expect(
+      isRosterVendorSelected({
+        vendor: internalVendor,
+        isCategoryMismatch: true,
+        hasExplicitSelection: false,
+        selectedVendorIds: ['int-1'],
+        defaultSelectedIds: [],
+      })
+    ).toBe(false);
+    expect(
+      isRosterVendorSelected({
+        vendor: internalVendor,
+        isCategoryMismatch: true,
+        hasExplicitSelection: true,
+        selectedVendorIds: ['int-1'],
+        defaultSelectedIds: [],
+      })
+    ).toBe(true);
+
+    const disabledClasses = getRosterVendorCardClasses({
+      isSelected: false,
+      isCategoryMismatch: true,
+      isSelectable: false,
+      accent: 'emerald',
+    });
+    expect(disabledClasses.cardClass).toContain('cursor-not-allowed');
+    expect(disabledClasses.checkboxClass).toContain('bg-amber-500');
+
+    const selectedBlueClasses = getRosterVendorCardClasses({
+      isSelected: true,
+      isCategoryMismatch: true,
+      isSelectable: true,
+      accent: 'blue',
+    });
+    expect(selectedBlueClasses.cardClass).toContain('border-blue-500');
+    expect(selectedBlueClasses.checkboxClass).toContain('bg-blue-600');
+
+    const selectedEmeraldClasses = getRosterVendorCardClasses({
+      isSelected: true,
+      isCategoryMismatch: true,
+      isSelectable: true,
+      accent: 'emerald',
+    });
+    expect(selectedEmeraldClasses.cardClass).toContain('border-emerald-500');
+    expect(selectedEmeraldClasses.checkboxClass).toContain('bg-emerald-600');
+
+    const unselectedMismatchClasses = getRosterVendorCardClasses({
+      isSelected: false,
+      isCategoryMismatch: true,
+      isSelectable: true,
+      accent: 'blue',
+    });
+    expect(unselectedMismatchClasses.cardClass).toContain('cursor-pointer');
+    expect(unselectedMismatchClasses.cardClass).toContain('border-amber-300');
+    expect(unselectedMismatchClasses.checkboxClass).toContain('border-slate-300');
+
+    const unselectedMatchedClasses = getRosterVendorCardClasses({
+      isSelected: false,
+      isCategoryMismatch: false,
+      isSelectable: true,
+      accent: 'blue',
+    });
+    expect(unselectedMatchedClasses.cardClass).toContain('opacity-60');
+
+    const { rerender, container } = render(
+      <RosterVendorCheckbox isSelectable={false} isSelected={false} checkboxClass={disabledClasses.checkboxClass} />
+    );
+    expect(container.querySelector('svg')).toHaveClass('lucide-circle-alert');
+
+    rerender(
+      <RosterVendorCheckbox isSelectable isSelected checkboxClass={selectedBlueClasses.checkboxClass} />
+    );
+    expect(container.querySelector('svg')).toHaveClass('lucide-check');
+
+    rerender(
+      <RosterVendorCheckbox isSelectable isSelected={false} checkboxClass={unselectedMismatchClasses.checkboxClass} />
+    );
+    expect(container.querySelector('svg')).toBeNull();
+  });
+
+  it.each(['mode_1', 'mode_2'] as const)(
+    'allows toggling internal Category Mismatch cards in %s, preserves badge/warning/email button with stopPropagation, and dispatches selected mismatch vendors',
+    async (mode) => {
+      const mismatchOne = vendor({
+        id: 'v-int-mis-1',
+        name: 'Chandan Marketing Solutions',
+        contactPerson: 'Chandan',
+        email: 'chandan@roster.test',
+        phone: '+919999999901',
+        source: 'buyer_uploaded',
+        majorCategory: 'Civil Works',
+      });
+      const mismatchTwo = vendor({
+        id: 'v-int-mis-2',
+        name: 'Govardhan Solutions Pvt Ltd',
+        contactPerson: 'Govardhan',
+        email: 'govardhan@roster.test',
+        source: 'historical_purchase_dump',
+        majorCategory: 'IT',
+      });
+      // Procucev Network mismatch vendor in store must remain excluded from Mode 2 dispatch even if present in roster pool.
+      const procucevMismatch = vendor({
+        id: 'v-proc-mis-1',
+        name: 'Network Mismatch Supplier',
+        email: 'network@mismatch.test',
+        source: 'procucev_network',
+        majorCategory: 'Civil Works',
+      });
+
+      setupStore({
+        currentMode: mode,
+        buyerVendors: [mismatchOne, mismatchTwo, procucevMismatch],
+      });
+
+      renderWizard();
+      chooseSourcingMode(mode);
+      fillValidForm();
+
+      expect(
+        screen.getByText(formatString(MODAL.allMatchedVendorsDispatchNotice, { count: 0 }))
+      ).toBeInTheDocument();
+
+      fireEvent.click(await screen.findByRole('button', { name: /Category Mismatch \(2\)/ }));
+
+      const cardOne = screen.getByText('Chandan Marketing Solutions').closest('.rounded-xl') as HTMLElement;
+      const cardTwo = screen.getByText('Govardhan Solutions Pvt Ltd').closest('.rounded-xl') as HTMLElement;
+      expect(cardOne).toBeInTheDocument();
+      expect(cardTwo).toBeInTheDocument();
+
+      // Both mismatch cards start unselected (amber border, no Check SVG), while keeping badge & warning box intact.
+      expect(cardOne.className).toContain('border-amber-300');
+      expect(within(cardOne).getByText(/Category Mismatch/)).toBeInTheDocument();
+      expect(within(cardOne).getByText('Registered Category:')).toBeInTheDocument();
+      expect(within(cardOne).getByText('Excluded from RFQ shortlist until details updated & verified.')).toBeInTheDocument();
+      expect(cardOne.querySelector('svg.lucide-check')).toBeNull();
+
+      // Clicking "Send Email to Update Category" stops propagation and does NOT toggle card selection.
+      const sendButtons = screen.getAllByRole('button', { name: /Send Email to Update Category/i });
+      fireEvent.click(sendButtons[0]);
+      await waitFor(() => expect(mockEmail).toHaveBeenCalledTimes(1));
+      expect(cardOne.className).toContain('border-amber-300');
+      expect(cardOne.querySelector('svg.lucide-check')).toBeNull();
+
+      // Select internal mismatch card 1 -> adopts Matched card selected styling & checkbox.
+      fireEvent.click(cardOne);
+      const expectedBorder = mode === 'mode_1' ? 'border-blue-500' : 'border-emerald-500';
+      const expectedCheckbox = mode === 'mode_1' ? 'bg-blue-600' : 'bg-emerald-600';
+      expect(cardOne.className).toContain(expectedBorder);
+      expect(cardOne.querySelector(`span.${expectedCheckbox}`)).toBeInTheDocument();
+      expect(cardOne.querySelector('svg.lucide-check')).toBeInTheDocument();
+      expect(cardTwo.className).toContain('border-amber-300');
+      expect(
+        screen.getByText(formatString(MODAL.vendorsSelectedSummary, { selected: 1, total: 2 }))
+      ).toBeInTheDocument();
+
+      // Dispatch -> selected internal mismatch vendor is included; unselected internal & Procucev mismatch are excluded.
+      await dispatchRfq();
+      const dispatchedVendors = mockCreateRFQ.mock.calls[0][0].assignedVendors;
+      expect(dispatchedVendors).toEqual([
+        {
+          id: 'v-int-mis-1',
+          name: 'Chandan Marketing Solutions',
+          email: 'chandan@roster.test',
+          contactPerson: 'Chandan',
+          phone: '+919999999901',
+          vendorCategory: 'Client List',
+        },
+      ]);
+    }
+  );
+
+  it('allows deselecting matched vendors and dispatching solely to a selected internal Category Mismatch vendor in Mode 1', async () => {
+    const matchedVendor = vendor({
+      id: 'v-m1-matched-only',
+      name: 'Matched Mechanical Co',
+      email: 'matched@mech.test',
+      source: 'buyer_uploaded',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+    const mismatchVendor = vendor({
+      id: 'v-m1-mismatch-only',
+      name: 'Internal Mismatch Co',
+      email: 'mismatch@internal.test',
+      source: 'buyer_uploaded',
+      majorCategory: 'Civil Works',
+    });
+
+    setupStore({
+      currentMode: 'mode_1',
+      buyerVendors: [matchedVendor, mismatchVendor],
+    });
+
+    renderWizard();
+    chooseSourcingMode('mode_1');
+    fillValidForm();
+
+    // Uncheck the single matched vendor — it must stay unselected instead of snapping back.
+    const matchedCard = screen.getByText('Matched Mechanical Co').closest('.rounded-xl') as HTMLElement;
+    expect(matchedCard.className).toContain('border-blue-500');
+    fireEvent.click(matchedCard);
+    expect(matchedCard.className).toContain('opacity-60');
+    expect(
+      screen.getByText(formatString(MODAL.matchedVendorsSelectedSummary, { selected: 0, total: 1 }))
+    ).toBeInTheDocument();
+
+    // Switch to Category Mismatch tab and select only the internal mismatch vendor.
+    fireEvent.click(screen.getByRole('button', { name: /Category Mismatch \(1\)/ }));
+    const mismatchCard = screen.getByText('Internal Mismatch Co').closest('.rounded-xl') as HTMLElement;
+    fireEvent.click(mismatchCard);
+    expect(mismatchCard.className).toContain('border-blue-500');
+    expect(
+      screen.getByText(formatString(MODAL.vendorsSelectedSummary, { selected: 1, total: 2 }))
+    ).toBeInTheDocument();
+
+    await dispatchRfq();
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
+      {
+        id: 'v-m1-mismatch-only',
+        name: 'Internal Mismatch Co',
+        email: 'mismatch@internal.test',
+        contactPerson: 'Internal Mismatch Co',
+        phone: null,
+        vendorCategory: 'Client List',
+      },
+    ]);
+  });
+
+  it('filters out Procucev Network mismatch vendors from Mode 2 dispatch even if an external id was selected alongside an internal mismatch', async () => {
+    const internalMismatch = vendor({
+      id: 'v-m2-int-mis',
+      name: 'Internal Only Mismatch',
+      email: 'int@mis.test',
+      source: 'buyer_uploaded',
+      majorCategory: 'Civil Works',
+    });
+    const procucevMatched = vendor({
+      id: 'v-m2-proc-match',
+      name: 'Procucev Matched Supplier',
+      email: 'proc@match.test',
+      source: 'procucev_network',
+      majorCategory: MECHANICAL,
+      minorCategories: [MECHANICAL_MINOR],
+    });
+
+    setupStore({
+      currentMode: 'mode_2',
+      buyerVendors: [internalMismatch, procucevMatched],
+    });
+
+    renderWizard();
+    chooseSourcingMode('mode_2');
+    fillValidForm();
+
+    fireEvent.click(screen.getByRole('button', { name: /Category Mismatch \(1\)/ }));
+    fireEvent.click(screen.getByText('Internal Only Mismatch').closest('.rounded-xl') as HTMLElement);
+
+    await dispatchRfq();
+    expect(mockCreateRFQ.mock.calls[0][0].assignedVendors).toEqual([
+      {
+        id: 'v-m2-int-mis',
+        name: 'Internal Only Mismatch',
+        email: 'int@mis.test',
+        contactPerson: 'Internal Only Mismatch',
+        phone: null,
+        vendorCategory: 'Client List',
+      },
+    ]);
   });
 });

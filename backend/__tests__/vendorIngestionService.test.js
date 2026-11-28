@@ -6,7 +6,9 @@ jest.mock('../src/services/storeService', () => ({
   getVendorByIdWithDBFallback: jest.fn(), updateVendorDurably: jest.fn(), empanelIngestedVendor: jest.fn(),
   ensureBuyerAccountForUser: jest.fn(), getBuyerAccountByEmail: jest.fn(),
 }));
-jest.mock('../src/services/mailerService', () => ({}));
+jest.mock('../src/services/mailerService', () => ({
+  ...jest.requireActual('../src/services/mailerService'),
+}));
 jest.mock('../src/services/vendorCategorizationService', () => ({
   ...jest.requireActual('../src/services/vendorCategorizationService'),
   runCategorizationBatch: jest.fn(), classifyVendor: jest.fn(),
@@ -59,6 +61,7 @@ beforeEach(() => {
   queries.summarizeEmailLogs.mockResolvedValue({ sent: 0, failed: 0 });
   queries.countPoLineItems.mockResolvedValue({ total: 2, inHorizon: 1, outsideHorizon: 1 });
   queries.findVendorMasterRecords.mockResolvedValue([{ id: MAPPING.vendorRecordId, ...VENDOR_ROW, contactPerson: 'Supplier Contact', phone: '+919900000000', address: 'Mumbai' }]);
+  queries.findExistingPoLineItemsByOrganization.mockResolvedValue([]);
   queries.countVendorMasterRecords.mockResolvedValue(1);
   queries.bulkUpsertVendorMasterRecords.mockResolvedValue([{ id: MAPPING.vendorRecordId }]);
   queries.findCategoryMappingByVendorRecord.mockResolvedValue({ ...MAPPING });
@@ -178,6 +181,7 @@ describe('vendor ingestion session lifecycle', () => {
     const result = await service.updateSessionHorizon(USER, SESSION.id, { horizonType: HORIZON.LAST_2_YEARS });
     expect(result.poDataCleared).toBe(true);
     expect(queries.deletePoLineItems).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
+    expect(queries.resetCategoryMappingsForReclassification).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     expect(result.session).toMatchObject({ poRowCount: 0, aiProcessedCount: 0, aiStatus: AI_STATUS.IDLE, currentStep: STEP.PO_DUMP, status: status === SESSION_STATUS.DRAFT ? SESSION_STATUS.DRAFT : SESSION_STATUS.VENDOR_MASTER_STORED });
   });
 
@@ -194,7 +198,11 @@ describe('vendor ingestion session lifecycle', () => {
     await service.getResumeState(USER, SESSION.id);
     expect(queries.findSession).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     queries.findLatestSession.mockResolvedValue(null);
-    expect(await service.getResumeState(USER)).toEqual({ session: null, categoryMaster: CATEGORY_MASTER });
+    expect(await service.getResumeState(USER)).toEqual({
+      session: null,
+      categoryMaster: CATEGORY_MASTER,
+      existingPoRecords: [],
+    });
   });
 });
 
@@ -244,6 +252,7 @@ describe('vendor and purchase order uploads', () => {
     const result = await service.confirmPoDump(USER, SESSION.id, { rows, replaceExisting: true, fileName: 'new-pos.csv' });
     expect(result).toMatchObject({ validRows: 3, invalidRows: 2, insidePeriod: 1, outsidePeriod: 1 });
     expect(queries.deletePoLineItems).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
+    expect(queries.resetCategoryMappingsForReclassification).toHaveBeenCalledWith(SESSION.id, CONTEXT.organizationId);
     const stored = queries.bulkInsertPoLineItems.mock.calls[0][2];
     expect(stored.map((row) => row.inHorizon)).toEqual([true, false, false]);
     expect(stored[1].poDate).toBe('2024-01-01');
@@ -267,6 +276,70 @@ describe('vendor and purchase order uploads', () => {
     });
     expect(result).toMatchObject({ validRows: 3, invalidRows: 0 });
     expect(queries.bulkInsertPoLineItems.mock.calls[0][2][0]).toMatchObject({ inHorizon: true });
+  });
+
+  test('skips intra-file and previously uploaded duplicate PO rows in confirmPoDump and rejects all-duplicate uploads without wiping existing rows', async () => {
+    queries.findExistingPoLineItemsByOrganization.mockResolvedValueOnce([
+      {
+        poNumber: 'PO-001',
+        poDate: '2026-06-01',
+        vendorCode: 'V-001',
+        itemDescription: 'Industrial pump',
+        specification: 'Centrifugal, 5 HP',
+        quantity: 2,
+        spend: 2000,
+      },
+    ]);
+
+    await expect(
+      service.confirmPoDump(USER, SESSION.id, {
+        rows: [PO_ROW],
+        replaceExisting: true,
+        fileName: 'duplicate-pos.xlsx',
+      })
+    ).rejects.toMatchObject({
+      status: 422,
+      message: expect.stringContaining('duplicate'),
+      details: {
+        duplicateRows: [
+          expect.objectContaining({
+            status: 'duplicate_skipped',
+            matchedAgainst: 'EXISTING_PO',
+            poNumber: 'PO-001',
+          }),
+        ],
+      },
+    });
+    expect(queries.deletePoLineItems).not.toHaveBeenCalled();
+    expect(queries.bulkInsertPoLineItems).not.toHaveBeenCalled();
+
+    // Mixed upload: 1 existing duplicate + 1 intra-file duplicate + 1 brand-new PO line
+    queries.findExistingPoLineItemsByOrganization.mockResolvedValueOnce([
+      {
+        vendorName: 'Valve Corp',
+        itemDescription: 'Ball valve DN50',
+        specification: 'SS316',
+      },
+    ]);
+    const mixed = await service.confirmPoDump(USER, SESSION.id, {
+      rows: [
+        { vendorName: 'Valve Corp', itemDescription: 'Ball valve DN50', specification: 'SS316' },
+        { vendorName: 'Pump Supplier', itemDescription: 'Gear Pump', specification: '10 HP' },
+        { vendorName: 'Pump Supplier', itemDescription: 'Gear Pump', specification: '10 HP' },
+      ],
+      replaceExisting: false,
+      fileName: 'mixed-pos.xlsx',
+    });
+    expect(mixed).toMatchObject({
+      totalRows: 3,
+      validRows: 1,
+      invalidRows: 0,
+      duplicateRows: 2,
+    });
+    expect(mixed.rejected).toHaveLength(2);
+    expect(mixed.rejected.map((r) => r.matchedAgainst)).toEqual(['EXISTING_PO', 'FILE']);
+    expect(queries.bulkInsertPoLineItems).toHaveBeenCalledTimes(1);
+    expect(queries.bulkInsertPoLineItems.mock.calls[0][2]).toHaveLength(1);
   });
 });
 
@@ -348,11 +421,12 @@ describe('vendor history matching and AI progress', () => {
 });
 
 describe('buyer category review and vendor empanelment', () => {
-  test('resolves canonical categories, removes repeated minors and rejects unknown/oversized choices', () => {
+  test('resolves canonical categories, removes repeated minors and allows unlimited minor choices', () => {
     expect(service.assertCategoriesInMaster(CATEGORY_MASTER, ' mechanical ', ['pumps', 'PUMPS'])).toEqual({ majorCategory: 'Mechanical', minorCategories: ['Pumps'] });
     expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Invented', [])).toThrow(expect.objectContaining({ status: 422 }));
     expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Mechanical', ['Wrong Minor'])).toThrow(expect.objectContaining({ status: 422 }));
-    expect(() => service.assertCategoriesInMaster(CATEGORY_MASTER, 'Mechanical', Array(CONFIG.MAX_MINOR_CATEGORIES_PER_VENDOR + 1).fill('Pumps'))).toThrow(expect.objectContaining({ status: 422 }));
+    const largeMaster = [{ majorCategory: 'Mechanical', minorCategories: Array.from({ length: 15 }, (_, i) => `Item-${i + 1}`) }];
+    expect(service.assertCategoriesInMaster(largeMaster, 'Mechanical', Array.from({ length: 15 }, (_, i) => `Item-${i + 1}`)).minorCategories).toHaveLength(15);
   });
 
   test.each(['APPROVE', 'EDIT', 'REJECT'])('persists the %s decision while retaining the original AI columns', async (action) => {
@@ -436,6 +510,12 @@ describe('mapping review reads', () => {
     const selfMapping = { ...MAPPING, id: 'mapping-2', vendorRecordId: 'record-2', companyName: 'Other Supplier', hasPoHistory: false, status: MAPPING_STATUS.SELF_MAP_REQUIRED, aiSuggestion: { ...MAPPING.aiSuggestion, confidence: 50 } };
     queries.findCategoryMappings.mockResolvedValue([approved, selfMapping]);
     expect((await service.listMappings(USER, SESSION.id)).vendors[0]).toMatchObject({ finalMajorCategory: 'Mechanical', finalMinorCategories: ['Valves'], confidenceBand: 'HIGH' });
+    expect((await service.listMappings(USER, SESSION.id)).vendors[1]).toMatchObject({
+      id: selfMapping.id,
+      hasPoHistory: false,
+      finalMajorCategory: '',
+      finalMinorCategories: [],
+    });
     expect((await service.listMappings(USER, SESSION.id, { status: MAPPING_STATUS.BUYER_APPROVED, confidence: 'HIGH', hasPoHistory: 'YES', search: 'valves' })).total).toBe(1);
     expect((await service.listMappings(USER, SESSION.id, { status: 'ALL', confidence: 'NEEDS_REVIEW', hasPoHistory: 'NO' })).vendors[0].id).toBe(selfMapping.id);
     expect((await service.listMappings(USER, SESSION.id, { confidence: 'ALL', search: 'missing', limit: 999, offset: -5 })).total).toBe(0);
@@ -460,5 +540,45 @@ describe('mapping review reads', () => {
       ],
       selfMappingRequired: ['E', 'F', 'G'],
     });
+  });
+
+  test('runDirectCategorization executes join, batch classification, and returns job and mappings', async () => {
+    queries.findSessionById.mockResolvedValue({
+      ...SESSION,
+      vendorMasterRowCount: 2,
+      poRowCount: 5,
+      horizonStart: '2025-01-01',
+      horizonEnd: '2025-12-31',
+    });
+    queries.matchPoLineItemsToVendors.mockResolvedValue({ byVendorCode: 1, byGstin: 0, byName: 0, unmatched: 0 });
+    queries.findVendorPurchasingProfiles.mockResolvedValue([
+      { vendorRecordId: 'vr-1', vendorCode: 'V1', companyName: 'Vendor 1', hasPoHistory: true, poCount: 1, poLineCount: 1, totalSpend: 100, lineSummaries: ['Pump'] },
+      { vendorRecordId: 'vr-2', vendorCode: 'V2', companyName: 'Vendor 2', hasPoHistory: false, poCount: 0, poLineCount: 0, totalSpend: 0, lineSummaries: [] },
+    ]);
+    queries.seedCategoryMappings.mockResolvedValue(null);
+    queries.findUnmatchedPoVendors.mockResolvedValue([]);
+    queries.updateSession.mockResolvedValue({ ...SESSION, status: 'AI_COMPLETED' });
+    queries.findQueuedCategoryMappings.mockResolvedValue([{ id: 'm-1', vendorRecordId: 'vr-1', companyName: 'Vendor 1' }]);
+    queries.createIngestionJob.mockResolvedValue({ id: 'job-direct-1' });
+    queries.updateIngestionJobProgress.mockResolvedValue({ id: 'job-direct-1', status: 'COMPLETED' });
+    queries.findCategoryMappings.mockResolvedValue([
+      {
+        id: 'm-1',
+        vendorRecordId: 'vr-1',
+        status: MAPPING_STATUS.AI_MAPPED,
+        aiSuggestion: { majorCategory: 'Mechanical', minorCategories: ['Pumps'], confidence: 90 },
+        buyerMajorCategory: '',
+        buyerMinorCategories: [],
+      },
+    ]);
+
+    const result = await service.runDirectCategorization(USER, SESSION.id);
+    expect(result.job).toBeDefined();
+    expect(result.job.status).toBe('COMPLETED');
+    expect(result.totalVendors).toBe(2);
+    expect(result.matchedVendorCount).toBe(1);
+    expect(result.unmatchedVendorCount).toBe(1);
+    expect(result.mappings).toHaveLength(1);
+    expect(result.mappings[0].finalMajorCategory).toBe('Mechanical');
   });
 });

@@ -4,6 +4,7 @@ const { queryCache } = require('./queryCache');
 const { logger } = require('../services/loggerService');
 const {
   VENDOR_FREE_CREDITS_LIMIT,
+  VENDOR_PLAN_RFQ_QUOTA,
   hasUnlimitedQuoteAccess,
   clearDummyPanFields,
 } = require('../config/constants');
@@ -34,17 +35,38 @@ function parseVendorRaw(raw) {
   return {};
 }
 
-function quoteCreditState(vendor, isBuyerMapped, isResubmission = false) {
-  const current = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? VENDOR_FREE_CREDITS_LIMIT);
-  const balance = Number.isFinite(current) ? Math.max(0, current) : 0;
-  const subscribed = Boolean(
-    vendor.subscriptionPlan === 'connect' ||
-    vendor.subscriptionPlan === 'select' ||
-    vendor.isSubscribed === true ||
-    vendor.subscriptionStatus === 'active' ||
-    hasUnlimitedQuoteAccess(vendor)
-  );
-  return { balance, shouldCharge: !subscribed && !isBuyerMapped && !isResubmission };
+function quoteCreditState(vendor, isBuyerMapped, isResubmission = false, alreadyUnlocked) {
+  const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+  const unlimited = hasUnlimitedQuoteAccess(vendor);
+  const planQuota = unlimited ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+  const downloadsUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+
+  let balance;
+  if (unlimited) {
+    balance = 999999;
+  } else if (planQuota !== undefined) {
+    balance = Math.max(0, planQuota - downloadsUsed);
+  } else {
+    const current = Number(vendor.freeQuotationCredits ?? vendor.freeRfqDownloadCredits ?? VENDOR_FREE_CREDITS_LIMIT);
+    balance = Number.isFinite(current) ? Math.max(0, current) : 0;
+  }
+
+  let shouldCharge;
+  if (isBuyerMapped || isResubmission || unlimited) {
+    shouldCharge = false;
+  } else if (planQuota !== undefined) {
+    // For Connect/Select plans: charge 1 quota credit if not already unlocked.
+    // If alreadyUnlocked is not passed (or true), do not charge.
+    shouldCharge = alreadyUnlocked === false;
+  } else {
+    const isGenericSubscribed = Boolean(
+      vendor.isSubscribed === true ||
+      vendor.subscriptionStatus === 'active'
+    );
+    shouldCharge = !isGenericSubscribed;
+  }
+
+  return { balance, shouldCharge };
 }
 
 function includesId(values, id) {
@@ -57,14 +79,29 @@ function buildQuotedVendor(vendor, { rfqId, rfqNumber, charged }) {
   const unlockedRfqIds = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
   if (!includesId(unlockedRfqIds, rfqId)) unlockedRfqIds.push(String(rfqId));
   if (rfqNumber && !includesId(unlockedRfqIds, rfqNumber)) unlockedRfqIds.push(String(rfqNumber));
-  const nextBalance = Math.max(0, quoteCreditState(vendor, false).balance - (charged ? 1 : 0));
-  return {
+
+  const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+  const planQuota = VENDOR_PLAN_RFQ_QUOTA[plan];
+  const updated = {
     ...vendor,
-    freeQuotationCredits: nextBalance,
-    freeRfqDownloadCredits: nextBalance,
     quotedRfqIds,
     unlockedRfqIds,
   };
+
+  if (planQuota !== undefined) {
+    const downloadsUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0) + (charged ? 1 : 0);
+    updated.rfqDownloadsUsed = downloadsUsed;
+  } else {
+    const state = quoteCreditState(vendor, false);
+    const nextBalance = Math.max(0, state.balance - (charged ? 1 : 0));
+    updated.freeQuotationCredits = nextBalance;
+    updated.freeRfqDownloadCredits = nextBalance;
+    if (charged) {
+      updated.freeCreditsUsed = (Number(vendor.freeCreditsUsed) || 0) + 1;
+      updated.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
+    }
+  }
+  return updated;
 }
 
 async function recordVendorQuoteCreditInPostgres(options) {
@@ -81,7 +118,8 @@ async function recordVendorQuoteCreditInPostgres(options) {
       return { vendor, alreadyQuoted: true, creditCharged: 0 };
     }
 
-    const state = quoteCreditState(vendor, isBuyerMapped, options.isResubmission);
+    const alreadyUnlocked = includesId(vendor.unlockedRfqIds, rfqId) || (rfqNumber && includesId(vendor.unlockedRfqIds, rfqNumber));
+    const state = quoteCreditState(vendor, isBuyerMapped, options.isResubmission, alreadyUnlocked);
     if (state.shouldCharge && state.balance <= 0) {
       return { vendor, creditsExhausted: true, freeCreditsRemaining: state.balance };
     }
@@ -93,13 +131,19 @@ async function recordVendorQuoteCreditInPostgres(options) {
     );
     if (!savedVendorResult.rows?.[0]) throw new Error('Vendor quote credit update returned no persisted row.');
     const savedVendor = parseVendorRaw(savedVendorResult.rows[0].raw);
+    const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+    const unlimited = hasUnlimitedQuoteAccess(vendor);
+    const planQuota = unlimited ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+    const balanceAfter = planQuota !== undefined
+      ? Math.max(0, planQuota - updatedVendor.rfqDownloadsUsed)
+      : savedVendor.freeQuotationCredits;
     const ledgerResult = await client.query(
       `INSERT INTO vendor_credit_transactions
         (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
        VALUES ($1, $2, $3, 'RFQ_QUOTE', $4, $5, $6, now())
        ON CONFLICT (idempotency_key) DO NOTHING
        RETURNING *`,
-      [transactionId, vendorId, rfqId, -creditCharged, savedVendor.freeQuotationCredits, idempotencyKey]
+      [transactionId, vendorId, rfqId, -creditCharged, balanceAfter, idempotencyKey]
     );
     if (!ledgerResult.rows?.[0]) throw new Error('Vendor quote credit ledger was not recorded with the balance update.');
     return { vendor: savedVendor, transaction: ledgerResult.rows[0], alreadyQuoted: false, creditCharged };
@@ -112,18 +156,22 @@ const D1_UNLIMITED_QUOTES = `(
   COALESCE(json_extract(raw, '$.unlimitedAccess'), 0) = 1 OR
   COALESCE(json_extract(raw, '$.isUnlimited'), 0) = 1
 )`;
-const D1_SUBSCRIBED = `(
-  lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) IN ('connect', 'select') OR
-  COALESCE(json_extract(raw, '$.isSubscribed'), 0) = 1 OR
-  lower(COALESCE(json_extract(raw, '$.subscriptionStatus'), '')) = 'active' OR
-  ${D1_UNLIMITED_QUOTES}
+const D1_BALANCE = `CASE
+  WHEN lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) = 'select' THEN MAX(0, 100 - CAST(COALESCE(json_extract(raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+  WHEN lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) = 'connect' THEN MAX(0, 50 - CAST(COALESCE(json_extract(raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+  ELSE MAX(0, CAST(COALESCE(
+    json_extract(raw, '$.freeQuotationCredits'),
+    json_extract(raw, '$.freeRfqDownloadCredits'),
+    ${VENDOR_FREE_CREDITS_LIMIT}
+  ) AS INTEGER))
+END`;
+const D1_ALREADY_UNLOCKED = `EXISTS (
+  SELECT 1 FROM json_each(CASE
+    WHEN json_type(raw, '$.unlockedRfqIds') = 'array' THEN json_extract(raw, '$.unlockedRfqIds')
+    ELSE '[]'
+  END) unlocked WHERE CAST(unlocked.value AS TEXT) = CAST($2 AS TEXT) OR ($3 IS NOT NULL AND CAST(unlocked.value AS TEXT) = CAST($3 AS TEXT))
 )`;
-const D1_BALANCE = `MAX(0, CAST(COALESCE(
-  json_extract(raw, '$.freeQuotationCredits'),
-  json_extract(raw, '$.freeRfqDownloadCredits'),
-  ${VENDOR_FREE_CREDITS_LIMIT}
-) AS INTEGER))`;
-const D1_CHARGE = `(CASE WHEN $6 = 1 OR $7 = 1 OR ${D1_SUBSCRIBED} THEN 0 ELSE 1 END)`;
+const D1_CHARGE = `(CASE WHEN $6 = 1 OR $7 = 1 OR ${D1_UNLIMITED_QUOTES} OR ${D1_ALREADY_UNLOCKED} THEN 0 ELSE 1 END)`;
 
 function makeD1VendorQuoteCreditStatements(options) {
   const { vendorId, rfqId, rfqNumber, transactionId, idempotencyKey, isBuyerMapped } = options;
@@ -136,12 +184,13 @@ function makeD1VendorQuoteCreditStatements(options) {
       {
         text: `UPDATE vendors SET raw = json_set(
           raw,
-          '$.freeQuotationCredits', CASE WHEN ${D1_CHARGE} = 1 THEN ${D1_BALANCE} - 1 ELSE ${D1_BALANCE} END,
-          '$.freeRfqDownloadCredits', CASE WHEN ${D1_CHARGE} = 1 THEN ${D1_BALANCE} - 1 ELSE ${D1_BALANCE} END,
+          '$.freeQuotationCredits', CASE WHEN ${D1_CHARGE} = 1 AND lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) NOT IN ('connect', 'select') THEN ${D1_BALANCE} - 1 ELSE CAST(COALESCE(json_extract(raw, '$.freeQuotationCredits'), 0) AS INTEGER) END,
+          '$.freeRfqDownloadCredits', CASE WHEN ${D1_CHARGE} = 1 AND lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) NOT IN ('connect', 'select') THEN ${D1_BALANCE} - 1 ELSE CAST(COALESCE(json_extract(raw, '$.freeRfqDownloadCredits'), 0) AS INTEGER) END,
+          '$.rfqDownloadsUsed', COALESCE(CAST(json_extract(raw, '$.rfqDownloadsUsed') AS INTEGER), 0) + CASE WHEN ${D1_CHARGE} = 1 THEN 1 ELSE 0 END,
           '$.quotedRfqIds', json(CASE
             WHEN json_type(raw, '$.quotedRfqIds') = 'array' THEN (
               SELECT json_group_array(value) FROM (
-                SELECT value FROM json_each(json_extract(vendors.raw, '$.quotedRfqIds'))
+                SELECT value FROM json_each(json_extract(raw, '$.quotedRfqIds'))
                 UNION SELECT $2
               )
             )
@@ -150,12 +199,11 @@ function makeD1VendorQuoteCreditStatements(options) {
           '$.unlockedRfqIds', json(CASE
             WHEN json_type(raw, '$.unlockedRfqIds') = 'array' THEN (
               SELECT json_group_array(value) FROM (
-                SELECT value FROM json_each(json_extract(vendors.raw, '$.unlockedRfqIds'))
+                SELECT value FROM json_each(json_extract(raw, '$.unlockedRfqIds'))
                 UNION SELECT $2
                 UNION SELECT $3 WHERE $3 IS NOT NULL
               )
             )
-            WHEN $3 IS NULL THEN json_array($2)
             ELSE json_array($2, $3)
           END)
         ), updated_at = CURRENT_TIMESTAMP
@@ -176,7 +224,11 @@ function makeD1VendorQuoteCreditStatements(options) {
           (id, vendor_id, rfq_id, transaction_type, amount, balance_after, idempotency_key, created_at)
          SELECT $4, $1, $2, 'RFQ_QUOTE',
            CASE WHEN ${D1_CHARGE} = 1 THEN -1 ELSE 0 END,
-           CAST(json_extract(raw, '$.freeQuotationCredits') AS INTEGER), $5, CURRENT_TIMESTAMP
+           CASE
+             WHEN lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) = 'select' THEN MAX(0, 100 - CAST(COALESCE(json_extract(raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+             WHEN lower(COALESCE(json_extract(raw, '$.subscriptionPlan'), '')) = 'connect' THEN MAX(0, 50 - CAST(COALESCE(json_extract(raw, '$.rfqDownloadsUsed'), 0) AS INTEGER))
+             ELSE CAST(json_extract(raw, '$.freeQuotationCredits') AS INTEGER)
+           END, $5, CURRENT_TIMESTAMP
          FROM vendors WHERE id = $1 AND changes() > 0
          ON CONFLICT (idempotency_key) DO NOTHING
          RETURNING *`, params,

@@ -21,7 +21,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { AlertCircle, CheckCircle2, Loader2, Paperclip, Plus, Save, Sparkles, Trash2, X } from 'lucide-react';
 import { getMajorCategories, getMinorCategories, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
-import { CURRENCY, RFQ_STATUSES, formatFileSize, formatIndianDateTime } from '@/lib/constants';
+import { CURRENCY, RFQ_STATUSES, createBackdropClickHandler, formatFileSize, formatIndianDateTime } from '@/lib/constants';
 import { PINCODE_PATTERN, isDummyPincode, validatePincode, PostOfficeDetail, resolveLocationFromPostalResult } from '@/lib/validationSchemas';
 import { uploadRFQAttachment, classifyLineItems } from '@/lib/rfqClient';
 import { isPastDateString } from '@/lib/manualRfqModel';
@@ -594,6 +594,7 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
 
   return (
     <div
+      onClick={createBackdropClickHandler(handleClose)}
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
@@ -696,7 +697,8 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                   id="rfq-edit-status"
                   value={form.status}
                   onChange={(e) => patch('status', e.target.value as RFQItem['status'])}
-                  className="font-semibold"
+                  disabled={rfq.status === 'Closed'}
+                  className="font-semibold disabled:opacity-60 disabled:cursor-not-allowed"
                 >
                   {RFQ_STATUSES.map((status) => (
                     <option key={status} value={status}>
@@ -704,6 +706,11 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                     </option>
                   ))}
                 </select>
+                {rfq.status === 'Closed' && (
+                  <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1">
+                    {EDIT.closedStatusLockedNote}
+                  </p>
+                )}
               </div>
 
               <div>
@@ -716,9 +723,24 @@ export function RFQEditModal({ rfq, onClose, onSave }: RFQEditModalProps) {
                 <input
                   id="rfq-edit-budget"
                   type="number"
+                  step="any"
                   min={0}
+                  inputMode="numeric"
                   value={form.budget ?? ''}
                   onChange={(e) => patch('budget', e.target.value === '' ? null : Number(e.target.value))}
+                  onPaste={(e) => {
+                    const paste = e.clipboardData?.getData('text') || '';
+                    const cleaned = paste.replace(/[^0-9.]/g, '');
+                    if (cleaned !== '') {
+                      e.preventDefault();
+                      patch('budget', Number(cleaned));
+                    }
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                      e.preventDefault();
+                    }
+                  }}
                   aria-invalid={!!errors.budget}
                   className="mono font-semibold"
                 />
@@ -1093,6 +1115,7 @@ export function RFQDeleteDialog({ rfq, onClose, onConfirm }: RFQDeleteDialogProp
 
   return (
     <div
+      onClick={createBackdropClickHandler(handleClose)}
       className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4"
       role="dialog"
       aria-modal="true"

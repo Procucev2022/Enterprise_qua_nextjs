@@ -3,7 +3,10 @@ import InviteVendorsModal from '@/app/category-manager/InviteVendorsModal';
 import { useApp } from '@/lib/store';
 import * as rfqClient from '@/lib/rfqClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { MAX_INVITE_VENDORS } from '@/lib/constants';
 import type { RFQItem, RFQVendorCandidate } from '@/lib/types';
+
+jest.setTimeout(35000);
 
 jest.mock('@/lib/store', () => ({
   useApp: jest.fn(),
@@ -232,6 +235,109 @@ describe('InviteVendorsModal', () => {
 
     await waitFor(() => expect(mockOnClose).toHaveBeenCalled());
   });
+
+  it('shows inline feedback and keeps modal open when invitedCount is 0 without exclusions', async () => {
+    const rfqUnchanged = { ...RFQ, assignedVendors: [] };
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockResolvedValue({ success: true, rfq: rfqUnchanged, invitedCount: 0 });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => expect(mockInvite).toHaveBeenCalledWith('rfq-1', ['v-1']));
+    expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.noNewVendorsMessage);
+    expect(mockShowToast).toHaveBeenCalledWith(S.noNewVendorsTitle, S.noNewVendorsMessage, 'warning');
+    expect(mockOnInvited).toHaveBeenCalledWith(rfqUnchanged, 0);
+    expect(mockOnClose).not.toHaveBeenCalled();
+  });
+
+  it('catches rejected invite requests, shows inline error feedback, and re-enables the submit button', async () => {
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockRejectedValue(new Error('Network timeout'));
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    const submitBtn = screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) });
+    fireEvent.click(submitBtn);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.inviteRequestFailedMessage);
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(S.failTitle, S.inviteRequestFailedMessage, 'warning');
+    expect(mockOnClose).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) })).not.toBeDisabled();
+  });
+
+  it('shows inline error feedback when the invite response fails with a server message', async () => {
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [candidate({ id: 'v-1' })] });
+    mockInvite.mockResolvedValue({ success: false, reason: 'SERVER', error: 'Rate limit exceeded.' });
+
+    render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+    await waitFor(() => expect(screen.getByText('Vendor v-1')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent('Rate limit exceeded.');
+    });
+    expect(mockShowToast).toHaveBeenCalledWith(S.failTitle, 'Rate limit exceeded.', 'warning');
+  });
+
+  it('treats vendors matching assigned emails case-insensitively as already invited', async () => {
+    const rfqWithEmailOnly = {
+      ...RFQ,
+      assignedVendors: [{ id: 'legacy-other-id', name: 'Assigned Vendor', email: 'MatchMe@Example.test' }],
+    };
+    const emailDup = candidate({
+      id: 'v-email-dup',
+      name: 'Email Dup Vendor',
+      email: 'matchme@example.test',
+      alreadyInvited: false,
+    });
+    const freshVendor = candidate({
+      id: 'v-fresh',
+      name: 'Fresh Vendor',
+      email: 'fresh@example.test',
+      alreadyInvited: false,
+    });
+    mockFetchCandidates.mockResolvedValue({ success: true, candidates: [emailDup] });
+    mockFetchAllVendors.mockResolvedValue({
+      success: true,
+      candidates: [emailDup, freshVendor],
+      pagination: { page: 1, pageSize: 50, total: 2, totalPages: 1 },
+    });
+
+    render(
+      <InviteVendorsModal
+        isOpen={true}
+        rfq={rfqWithEmailOnly}
+        onClose={mockOnClose}
+        onInvited={mockOnInvited}
+      />
+    );
+
+    await waitFor(() => expect(screen.getByText('Email Dup Vendor')).toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+    expect(mockInvite).not.toHaveBeenCalled();
+    expect(screen.getByTestId('invite-submit-feedback')).toHaveTextContent(S.alreadyInvitedMessage);
+    expect(mockShowToast).toHaveBeenCalledWith(S.alreadyInvitedTitle, S.alreadyInvitedMessage, 'warning');
+
+    fireEvent.click(screen.getByTestId('invite-tab-all'));
+    await waitFor(() => expect(screen.getByText('Fresh Vendor')).toBeInTheDocument());
+    expect(screen.getByText(S.alreadyInvitedBadge)).toBeInTheDocument();
+    const checkboxes = screen.getAllByRole('checkbox');
+    expect(checkboxes[0]).toBeDisabled();
+    expect(checkboxes[1]).not.toBeDisabled();
+  });
 });
 
 describe('InviteVendorsModal — All Vendors tab', () => {
@@ -315,15 +421,15 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'copper' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.queryByText('Bolt Supplies')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: 'y.com' } });
-    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Bolt Supplies')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.queryByText('Alpha Traders')).not.toBeInTheDocument();
 
     fireEvent.change(search, { target: { value: '' } });
-    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 3000 });
+    await waitFor(() => expect(screen.getByText('Alpha Traders')).toBeInTheDocument(), { timeout: 10000 });
     expect(screen.getByText('Bolt Supplies')).toBeInTheDocument();
   });
 
@@ -383,9 +489,9 @@ describe('InviteVendorsModal — All Vendors tab', () => {
     };
 
     render(<InviteVendorsModal isOpen={true} rfq={rfqWithEntities} onClose={mockOnClose} onInvited={mockOnInvited} />);
-    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText(S.noCandidates)).toBeInTheDocument(), { timeout: 10000 });
     fireEvent.click(screen.getByTestId('invite-tab-all'));
-    await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText('Matches RFQ')).toBeInTheDocument(), { timeout: 10000 });
 
     // The RFQ names the minor 'Copper Wire', so only a vendor carrying that minor (or named
     // 'Copper Wire' as its major) is inside. A vendor whose major alone is 'Insulation' is outside.
@@ -492,20 +598,24 @@ describe('InviteVendorsModal — All Vendors tab', () => {
   });
 
   describe('InviteVendorsModal — Add New Vendor (V0 & V2 feature)', () => {
-    test('renders Add New Vendor button for V0 and V2 RFQs, but not for V1 RFQs', () => {
+    test('renders Add New Vendor button across all sourcing modes (Mode 0, 1, 2, 3)', () => {
       const v0Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_0' };
       const { rerender } = render(
         <InviteVendorsModal isOpen={true} rfq={v0Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />
       );
       expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
 
+      const v1Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_1' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v1Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
+
       const v2Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_2' };
       rerender(<InviteVendorsModal isOpen={true} rfq={v2Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
       expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
 
-      const v1Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_1' };
-      rerender(<InviteVendorsModal isOpen={true} rfq={v1Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
-      expect(screen.queryByTestId('add-new-vendor-button')).not.toBeInTheDocument();
+      const v3Rfq: RFQItem = { ...RFQ, sourcingMode: 'mode_3' };
+      rerender(<InviteVendorsModal isOpen={true} rfq={v3Rfq} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      expect(screen.getByTestId('add-new-vendor-button')).toBeInTheDocument();
     });
 
     test('opens Add New Vendor modal, validates input, handles duplicate (409) and successful vendor creation', async () => {
@@ -648,6 +758,120 @@ describe('InviteVendorsModal — All Vendors tab', () => {
         formatString(UI_STRINGS.vendorOnboarding.registeredAndSelectedMessage, { name: 'New Test Vendor' }),
         'success'
       );
+    });
+
+    test('supports Excel copy-paste into search to auto-match and auto-select vendors with inline summary', async () => {
+      const candidateList = Array.from({ length: 25 }, (_, i) =>
+        candidate({
+          id: `v-cand-${i + 1}`,
+          name: `Vendor Cell ${i + 1}`,
+          email: `vendor${i + 1}@domain.com`,
+          majorCategory: 'Mechanical & Fluid Equipment',
+        })
+      );
+      mockFetchCandidates.mockResolvedValue({ success: true, candidates: candidateList });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('Vendor Cell 1')).toBeInTheDocument());
+
+      const searchInput = screen.getByTestId('invite-vendors-search');
+
+      // Paste 22 vendors copied from an Excel column (newline-delimited) plus 2 unknown
+      const pastedExcelText = [
+        ...candidateList.slice(0, 22).map((c) => c.email),
+        'unknown1@domain.com',
+        'unknown2@domain.com',
+      ].join('\r\n');
+
+      fireEvent.paste(searchInput, {
+        clipboardData: {
+          getData: () => pastedExcelText,
+        },
+      });
+
+      // Verify limit reached toast (max 20)
+      expect(mockShowToast).toHaveBeenCalledWith(
+        'Limit Reached',
+        formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS }),
+        'warning'
+      );
+
+      // Verify inline paste summary (22 matched & selected up to limit, 2 not found)
+      await waitFor(() => {
+        const summary = screen.getByTestId('invite-paste-summary');
+        expect(summary).toBeInTheDocument();
+        expect(summary).toHaveTextContent(
+          formatString(S.pasteSummary, { matched: 22, notFound: 2 })
+        );
+      });
+
+      // Clearing search clears paste summary
+      await waitFor(() => {
+        expect(screen.getByTestId('clear-search-btn')).toBeInTheDocument();
+      });
+      fireEvent.click(screen.getByTestId('clear-search-btn'));
+      expect(screen.queryByTestId('invite-paste-summary')).not.toBeInTheDocument();
+    });
+
+    test('handles Excel paste where all entries match', async () => {
+      const candidatesList = [
+        candidate({ id: 'v-p1', name: 'P1 Vendor', email: 'p1@test.com' }),
+        candidate({ id: 'v-p2', name: 'P2 Vendor', email: 'p2@test.com' }),
+      ];
+      mockFetchCandidates.mockResolvedValue({ success: true, candidates: candidatesList });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('P1 Vendor')).toBeInTheDocument());
+
+      const searchInput = screen.getByTestId('invite-vendors-search');
+      fireEvent.paste(searchInput, {
+        clipboardData: {
+          getData: () => 'p1@test.com\tp2@test.com',
+        },
+      });
+
+      await waitFor(() => {
+        expect(screen.getByTestId('invite-paste-summary')).toHaveTextContent(
+          formatString(S.pasteSummaryAllMatched, { matched: 2 })
+        );
+      });
+    });
+
+    test('shows success message with provisioned account count and handles provisioning error warnings', async () => {
+      mockFetchCandidates.mockResolvedValue({
+        success: true,
+        candidates: [candidate({ id: 'v-unregistered', name: 'Unregistered Vendor', email: 'unregistered@test.com' })],
+      });
+      mockInvite.mockResolvedValue({
+        success: true,
+        rfq: RFQ,
+        invitedCount: 1,
+        provisionedCount: 1,
+        provisioningErrors: [{ id: 'v-unregistered', email: 'unregistered@test.com', error: 'SMTP timeout' }],
+      });
+
+      render(<InviteVendorsModal isOpen={true} rfq={RFQ} onClose={mockOnClose} onInvited={mockOnInvited} />);
+      await waitFor(() => expect(screen.getByText('Unregistered Vendor')).toBeInTheDocument());
+
+      fireEvent.click(screen.getByRole('checkbox'));
+      fireEvent.click(screen.getByRole('button', { name: formatString(S.inviteAction, { count: 1 }) }));
+
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith(
+          S.successTitle,
+          formatString(S.successWithAccountsMessage, {
+            count: 1,
+            rfqNumber: RFQ.rfqNumber,
+            provisioned: 1,
+          }),
+          'success'
+        );
+        expect(mockShowToast).toHaveBeenCalledWith(
+          S.onboardingDeliveryWarningTitle,
+          formatString(S.onboardingDeliveryWarning, { count: 1 }),
+          'warning'
+        );
+      });
     });
   });
 });

@@ -17,13 +17,16 @@
   "version_metadata": {
     "binding": "CF_VERSION_METADATA"
   },
-  "vars": {
-    "NODE_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev",
-    "NEXT_PUBLIC_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev"
-  },
   "env": {
-    "dev": {
-      "name": "procucev-enterprise-frontend",
+    "stage": {
+      "name": "procucev-enterprise-frontend-stage",
+      "account_id": "0f0b77c43d76a2c5c5282e7e0f80b607",
+      "version_metadata": {
+        "binding": "CF_VERSION_METADATA"
+      }
+    },
+    "test": {
+      "name": "procucev-enterprise-frontend-test",
       "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
       "vars": {
         "NODE_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev",
@@ -33,8 +36,9 @@
         "binding": "CF_VERSION_METADATA"
       }
     },
-    "test": {
+    "dev": {
       "name": "procucev-enterprise-frontend-test",
+      "account_id": "97a5dd65ad21c0f5dcd8547de147c806",
       "vars": {
         "NODE_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev",
         "NEXT_PUBLIC_BACKEND_URL": "https://procucev-enterprise-backend-test.anshul-goel.workers.dev"
@@ -45,6 +49,7 @@
     },
     "prod": {
       "name": "procucev-enterprise-frontend",
+      "account_id": "0f0b77c43d76a2c5c5282e7e0f80b607",
       "vars": {
         "NODE_BACKEND_URL": "https://procucev-enterprise-backend.srinivas-mukku.workers.dev",
         "NEXT_PUBLIC_BACKEND_URL": "https://procucev-enterprise-backend.srinivas-mukku.workers.dev"
@@ -55,6 +60,7 @@
     },
     "production": {
       "name": "procucev-enterprise-frontend",
+      "account_id": "0f0b77c43d76a2c5c5282e7e0f80b607",
       "vars": {
         "NODE_BACKEND_URL": "https://procucev-enterprise-backend.srinivas-mukku.workers.dev",
         "NEXT_PUBLIC_BACKEND_URL": "https://procucev-enterprise-backend.srinivas-mukku.workers.dev"

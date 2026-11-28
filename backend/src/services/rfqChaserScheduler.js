@@ -44,6 +44,7 @@ const whatsAppService = require('./whatsAppService');
 const mailerService = require('./mailerService');
 const { logger } = require('./loggerService');
 const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const rfqComparisonQueueQueries = require('../db/rfqComparisonQueueQueries');
 const { getD1Binding, getWaitUntil } = require('../db/d1Bridge');
 
@@ -52,6 +53,15 @@ const _ignoreError = (error) => logger.warn(
   { error },
   'RFQ_CHASER'
 );
+
+async function _recordChaserJobFired(jobId, followUpOptions = {}) {
+  if (!jobId) return;
+  if (Array.isArray(followUpOptions?.firedJobIds)) {
+    followUpOptions.firedJobIds.push(jobId);
+    return;
+  }
+  await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+}
 
 // ── Timer registry ────────────────────────────────────────────────────────────
 // Maps rfqNumber → array of NodeJS.Timeout handles.
@@ -344,6 +354,39 @@ function clearScheduledChasers(rfqNumber) {
  * Fire-and-forget WhatsApp invite for one vendor.
  * Returns the Promise so tests can await it; storeService ignores the return.
  */
+function _ensureFollowUpVendorRecord(fup, vendor) {
+  if (!Array.isArray(fup.vendors) || !vendor) return null;
+  const vendorEmailLower = String(vendor.email || '').trim().toLowerCase();
+  const vendorNameLower = String(vendor.name || vendor.vendorName || '').trim().toLowerCase();
+  let vRecord = fup.vendors.find(
+    (v) =>
+      v &&
+      ((vendor.id && (v.vendorId === vendor.id || v.id === vendor.id)) ||
+        (vendorNameLower &&
+          (String(v.vendorName || '').trim().toLowerCase() === vendorNameLower ||
+            String(v.name || '').trim().toLowerCase() === vendorNameLower)) ||
+        (vendorEmailLower && String(v.email || '').trim().toLowerCase() === vendorEmailLower))
+  );
+  if (!vRecord) {
+    vRecord = {
+      id: vendor.id,
+      vendorId: vendor.id,
+      name: vendor.name || vendor.vendorName || '',
+      vendorName: vendor.vendorName || vendor.name || '',
+      overallStatus: 'Pending',
+      bidStatus: 'Pending',
+    };
+    fup.vendors.push(vRecord);
+  } else {
+    if (!vRecord.vendorId && vRecord.id) vRecord.vendorId = vRecord.id;
+    if (!vRecord.vendorName && (vRecord.name || vendor.name)) vRecord.vendorName = vRecord.name || vendor.name;
+    if (!vRecord.name && vRecord.vendorName) vRecord.name = vRecord.vendorName;
+    if (!vRecord.overallStatus) vRecord.overallStatus = vRecord.bidStatus === 'Submitted' ? 'Responded' : 'Pending';
+    if (!vRecord.bidStatus) vRecord.bidStatus = 'Pending';
+  }
+  return vRecord;
+}
+
 /**
  * Updates in-memory RFQ follow-up stats upon successful chaser dispatch.
  */
@@ -365,6 +408,8 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       };
     }
     const fup = liveRfq.followUpData;
+    const timestamp = new Date().toISOString();
+    const vRecord = _ensureFollowUpVendorRecord(fup, vendor);
 
     if (channel === 'whatsapp') {
       // A provider acceptance is counted as "sent". "delivered" needs a real delivery receipt, and none is recorded here.
@@ -373,13 +418,9 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.whatsappStats.sent > (fup.whatsappStats.total || 0)) {
         fup.whatsappStats.total = fup.whatsappStats.sent;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-        vRecord.whatsapp = { status: 'sent', lastAttempt: new Date().toISOString() };
+      if (vRecord) {
+        vRecord.whatsapp = { status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
     } else if (channel === 'sms') {
       if (!fup.smsStats) fup.smsStats = { total: 0, sent: 0, delivered: 0, clicked: 0 };
@@ -387,13 +428,9 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.smsStats.sent > (fup.smsStats.total || 0)) {
         fup.smsStats.total = fup.smsStats.sent;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-        vRecord.sms = { status: 'sent', lastAttempt: new Date().toISOString() };
+      if (vRecord) {
+        vRecord.sms = { status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
     } else if (channel === 'email') {
       if (!fup.emailStats) fup.emailStats = { total: 0, delivered: 0, sent24h: 0, opened: 0 };
@@ -401,16 +438,13 @@ function _updateLiveFollowUpStats(rfqNumber, channel, vendor, fallbackRfq = null
       if (fup.emailStats.sent24h > (fup.emailStats.total || 0)) {
         fup.emailStats.total = fup.emailStats.sent24h;
       }
-      if (Array.isArray(fup.vendors) && vendor) {
-        let vRecord = fup.vendors.find((v) => v && (v.vendorId === vendor.id || v.id === vendor.id || v.vendorName === vendor.name || v.name === vendor.name));
-        if (!vRecord) {
-          vRecord = { id: vendor.id, vendorId: vendor.id, name: vendor.name, vendorName: vendor.name };
-          fup.vendors.push(vRecord);
-        }
-          vRecord.email = { status: 'sent', lastAttempt: new Date().toISOString() };
-          vRecord.emailSent = true;
-        }
+      if (vRecord) {
+        vRecord.email = { status: 'sent', lastAttempt: timestamp };
+        vRecord.emailSent = true;
+        vRecord.email24h = { is24hReminderSent: true, status: 'sent', lastAttempt: timestamp };
+        vRecord.lastInteraction = timestamp;
       }
+    }
 
     if (options.updatedRfqNumbers instanceof Set) options.updatedRfqNumbers.add(rfqNumber);
     if (options.persist !== false) {
@@ -441,7 +475,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOption
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   if (!phone) {
     logger.debug(`[CHASER] WhatsApp skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'whatsapp', skipped: true };
   }
   try {
@@ -461,7 +495,7 @@ async function _dispatchWhatsApp(rfq, vendor, jobId, attempt = 1, followUpOption
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.success) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
     if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'whatsapp', vendor, rfq, followUpOptions);
@@ -482,7 +516,10 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
   if (!phone && vendor.id) {
     try {
       const storeService = require('./storeService');
-      const full = storeService.getVendorById ? storeService.getVendorById(vendor.id, 'all') : null;
+      let full = storeService.getVendorById ? storeService.getVendorById(vendor.id, 'all') : null;
+      if (!full && !storeService.isHydratedFromDB && typeof storeService.getVendorByIdWithDBFallback === 'function') {
+        full = await storeService.getVendorByIdWithDBFallback(vendor.id, 'all');
+      }
       if (full) phone = full.phone || full.mobile || full.mobileNumber;
     } catch (error) {
       logger.warn(
@@ -494,7 +531,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
   }
   if (!phone) {
     logger.debug(`[CHASER] SMS skipped for ${vendor.name} — no phone`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'sms', skipped: true };
   }
   try {
@@ -512,7 +549,7 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.success) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.success) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.error || 'gateway error', attempt).catch(_ignoreError);
     }
     if (result.success) _updateLiveFollowUpStats(rfq.rfqNumber, 'sms', vendor, rfq, followUpOptions);
@@ -527,27 +564,81 @@ async function _dispatchSms(rfq, vendor, jobId, attempt = 1, followUpOptions = {
 /**
  * Fire-and-forget 24h reminder email for one vendor.
  * Uses the same sendRfqInviteEmail used on creation — vendors receive the full
- * RFQ detail email again as a formal reminder, labelled as a follow-up.
+ * RFQ detail email again as a formal reminder, labelled as a follow-up, sent
+ * from the exact mailbox channel originally assigned to this vendor/RFQ invite.
  */
 async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attempt = 1, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'email', skipped: true };
   if (!vendor.email) {
     logger.debug(`[CHASER] Reminder email skipped for ${vendor.name} — no email`, {}, 'RFQ_CHASER');
-    if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+    await _recordChaserJobFired(jobId, followUpOptions);
     return { channel: 'email', skipped: true };
   }
   try {
+    const normEmail = String(vendor.email || '').trim().toLowerCase();
+    const vendorIdStr = vendor.id ? String(vendor.id) : null;
+    const assignedMatch = (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).find((entry) =>
+      entry && (
+        (vendorIdStr && (String(entry.id || '') === vendorIdStr || String(entry.vendorId || '') === vendorIdStr)) ||
+        (normEmail && String(entry.email || entry.corporateEmail || '').trim().toLowerCase() === normEmail)
+      )
+    ) || null;
+    let trackedInvite = null;
+    if (
+      pool.hasStorage() &&
+      typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function' &&
+      rfq.rfqNumber
+    ) {
+      const dbInvites = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+      trackedInvite = (Array.isArray(dbInvites) ? dbInvites : []).find((row) =>
+        row && (
+          (vendorIdStr && String(row.vendor_id || '') === vendorIdStr) ||
+          (normEmail && String(row.vendor_email || '').trim().toLowerCase() === normEmail)
+        )
+      ) || null;
+    }
+
+    const mergedVendor = assignedMatch ? { ...assignedMatch, ...vendor } : vendor;
     const isBuyerUploaded = mailerService.isBuyerUploadedVendor
-      ? mailerService.isBuyerUploadedVendor(vendor)
+      ? mailerService.isBuyerUploadedVendor(mergedVendor, {}, rfq)
       : false;
+    const inviteChannel =
+      trackedInvite?.invite_channel ||
+      mergedVendor.inviteChannel ||
+      null;
+    const inviteOrigin =
+      trackedInvite?.invite_origin ||
+      mergedVendor.inviteOrigin ||
+      null;
+    const senderMailbox =
+      trackedInvite?.sender_mailbox ||
+      mergedVendor.senderMailbox ||
+      null;
+    const replyToQuoteAllowed =
+      typeof trackedInvite?.reply_to_quote_allowed === 'boolean'
+        ? trackedInvite.reply_to_quote_allowed
+        : (trackedInvite?.reply_to_quote_allowed === 1 || trackedInvite?.reply_to_quote_allowed === 0
+          ? trackedInvite.reply_to_quote_allowed === 1
+          : mergedVendor.replyToQuoteAllowed);
+
+    const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+      ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, vendor.id || 'vendor')
+      : undefined;
     const result = await mailerService.sendRfqInviteEmail(vendor.email, {
       rfq,
-      recipientName: vendor.contactPerson || vendor.name,
+      recipientName: mergedVendor.contactPerson || mergedVendor.name,
       freeCreditsRemaining: creditInfo.freeCreditsRemaining ?? null,
       isSubscribed: creditInfo.isSubscribed ?? false,
       isReminder: true,
-      vendor,
+      vendor: mergedVendor,
       isBuyerUploaded,
+      isCmAssigned: Boolean(mergedVendor.isCmAssigned || inviteOrigin === 'cm_assigned'),
+      isCmCreated: Boolean(mergedVendor.isCmCreated || mergedVendor.createdByRole === 'category_manager' || inviteOrigin === 'cm_created'),
+      ...(inviteChannel ? { inviteChannel, mailboxChannel: inviteChannel } : {}),
+      ...(inviteOrigin ? { inviteOrigin } : {}),
+      ...(senderMailbox ? { senderMailbox } : {}),
+      ...(typeof replyToQuoteAllowed === 'boolean' ? { replyToQuoteAllowed } : {}),
+      ...(inviteMessageId ? { messageId: inviteMessageId } : {}),
     });
     logger.info(
       `[CHASER] Reminder email → ${vendor.email} for ${rfq.rfqNumber}: ${result.sent ? 'sent' : `not sent — ${result.reason || 'unknown'}`}`,
@@ -555,7 +646,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
       'RFQ_CHASER'
     );
     if (jobId) {
-      if (result.sent) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+      if (result.sent) await _recordChaserJobFired(jobId, followUpOptions);
       else await domainQueries.markChaserJobFailedInDB(jobId, result.reason || 'email delivery failed', attempt).catch(_ignoreError);
     }
     if (result.sent) {
@@ -573,7 +664,7 @@ async function _dispatchReminderEmail(rfq, vendor, creditInfo = {}, jobId, attem
  * Fire-and-forget call reminder step for one vendor.
  * Kept in the flow/logic as required; actual telephony calling is deferred for now.
  */
-async function _dispatchCall(rfq, vendor, jobId) {
+async function _dispatchCall(rfq, vendor, jobId, followUpOptions = {}) {
   if (process.env.NODE_ENV === 'test') return { channel: 'call', skipped: true };
   const phone = vendor.phone || vendor.mobile || vendor.mobileNumber;
   logger.info(
@@ -581,7 +672,7 @@ async function _dispatchCall(rfq, vendor, jobId) {
     { rfqNumber: rfq.rfqNumber, vendorId: vendor.id, phone },
     'RFQ_CHASER'
   );
-  if (jobId) await domainQueries.markChaserJobFiredInDB(jobId).catch(_ignoreError);
+  await _recordChaserJobFired(jobId, followUpOptions);
   return { channel: 'call', skipped: true, reason: 'calling_not_implemented' };
 }
 
@@ -858,10 +949,12 @@ async function dispatchDueChaserJobs(limit = 25) {
   );
   const rfqCache = new Map();
   const updatedRfqNumbers = new Set();
+  const firedJobIds = [];
   const followUpOptions = {
     persist: false,
     preferFallback: true,
     updatedRfqNumbers,
+    firedJobIds,
   };
   let sent = 0;
   let failed = 0;
@@ -892,7 +985,7 @@ async function dispatchDueChaserJobs(limit = 25) {
           : job.channel === 'sms'
             ? await _dispatchSms(rfq, vendor, job.id, job.attempts, followUpOptions)
             : job.channel === 'call'
-              ? await _dispatchCall(rfq, vendor, job.id)
+              ? await _dispatchCall(rfq, vendor, job.id, followUpOptions)
               : null;
 
       if (!result) {
@@ -908,11 +1001,32 @@ async function dispatchDueChaserJobs(limit = 25) {
     }
   }
 
+  if (firedJobIds.length === 1) {
+    await domainQueries.markChaserJobFiredInDB(firedJobIds[0]).catch(_ignoreError);
+  } else if (firedJobIds.length > 1) {
+    try {
+      if (typeof domainQueries.markChaserJobsFiredInDB === 'function') {
+        await domainQueries.markChaserJobsFiredInDB(firedJobIds);
+      } else {
+        await Promise.all(firedJobIds.map((id) => domainQueries.markChaserJobFiredInDB(id).catch(_ignoreError)));
+      }
+    } catch (error) {
+      _ignoreError(error);
+    }
+  }
+
+  const storeService = require('./storeService');
   for (const rfqNumber of updatedRfqNumbers) {
     const updatedRfq = rfqCache.get(rfqNumber);
     if (!updatedRfq) continue;
     try {
       await domainQueries.upsertRFQInDB(updatedRfq);
+      if (Array.isArray(storeService.rfqs)) {
+        const idx = storeService.rfqs.findIndex((item) => item.rfqNumber === rfqNumber || item.id === updatedRfq.id);
+        if (idx >= 0) {
+          storeService.rfqs[idx] = { ...storeService.rfqs[idx], followUpData: updatedRfq.followUpData };
+        }
+      }
     } catch (error) {
       logger.error('Could not persist RFQ follow-up status after scheduled chaser batch', {
         rfqNumber,
@@ -927,6 +1041,12 @@ async function dispatchDueChaserJobs(limit = 25) {
     'RFQ_CHASER'
   );
   return { claimed: jobs.length, sent, failed, skipped };
+}
+
+/** Dispatch compiled V0 quotations to buyers whose 48-hour window elapsed. */
+async function dispatchDueV0BuyerQuotationJobs(limit = 25, options = {}) {
+  const storeService = require('./storeService');
+  return storeService.dispatchDueV0BuyerQuotations(limit, options);
 }
 
 /**
@@ -1041,6 +1161,7 @@ module.exports = {
   clearScheduledChasers,
   recoverChasersOnBoot,
   dispatchDueChaserJobs,
+  dispatchDueV0BuyerQuotationJobs,
   buildBuyerComparisonJobIntent,
   scheduleBuyerComparison,
   schedulePersistedBuyerComparison,

@@ -312,4 +312,93 @@ describe('NotificationBell — non-inbox roles', () => {
     fireEvent.click(await screen.findByText('RFQ Closed'));
     await waitFor(() => expect(push).toHaveBeenCalledWith('/vendor/quotation-form?rfq=RFQ-CLS-1'));
   });
+
+  it('resets unread badge and refetches when active user session changes', async () => {
+    mockStore({
+      currentRole: 'buyer',
+      isLoggedIn: true,
+      currentUserSession: { id: 'buyer-a', email: 'a@example.com' },
+      aiFeed: [],
+    });
+    mockFetch
+      .mockResolvedValueOnce({ success: true, notifications: [ntf({ id: 'n-a' })], unreadCount: 14 })
+      .mockResolvedValueOnce({ success: true, notifications: [ntf({ id: 'n-b1' }), ntf({ id: 'n-b2' })], unreadCount: 2 });
+
+    const { rerender } = render(<NotificationBell />);
+    expect(await screen.findByText('9+')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /14 unread notifications/i })).toHaveAttribute('title', '14 unread notifications');
+
+    mockStore({
+      currentRole: 'buyer',
+      isLoggedIn: true,
+      currentUserSession: { id: 'buyer-b', email: 'b@example.com' },
+      aiFeed: [],
+    });
+    rerender(<NotificationBell />);
+
+    expect(await screen.findByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('9+')).not.toBeInTheDocument();
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('ignores stale in-flight refresh responses and resyncs when mark-read or mark-all fails', async () => {
+    let resolveFirst!: (val: unknown) => void;
+    const firstPromise = new Promise((resolve) => {
+      resolveFirst = resolve;
+    });
+    mockFetch
+      .mockReturnValueOnce(firstPromise)
+      .mockResolvedValueOnce({
+        success: true,
+        notifications: [
+          ntf({ id: 'n-fresh-1', title: 'Fresh RFQ One' }),
+          ntf({ id: 'n-fresh-2', title: 'Fresh RFQ Two' }),
+        ],
+        unreadCount: 2,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        notifications: [
+          ntf({ id: 'n-fresh-1', title: 'Fresh RFQ One' }),
+          ntf({ id: 'n-fresh-2', title: 'Fresh RFQ Two' }),
+        ],
+        unreadCount: 2,
+      })
+      .mockResolvedValueOnce({
+        success: true,
+        notifications: [
+          ntf({ id: 'n-fresh-1', title: 'Fresh RFQ One' }),
+          ntf({ id: 'n-fresh-2', title: 'Fresh RFQ Two' }),
+        ],
+        unreadCount: 2,
+      });
+
+    render(<NotificationBell />);
+    // Click bell while initial fetch is still in-flight -> triggers a newer refresh
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Notifications' }));
+    });
+    expect(await screen.findByText('2')).toBeInTheDocument();
+
+    // Now the stale first response (unreadCount: 20 -> 9+) resolves late and MUST be ignored
+    await act(async () => {
+      resolveFirst({ success: true, notifications: [], unreadCount: 20 });
+    });
+    expect(screen.getByText('2')).toBeInTheDocument();
+    expect(screen.queryByText('9+')).not.toBeInTheDocument();
+
+    // Failed markAllRead triggers a server resync
+    mockMarkAll.mockResolvedValueOnce(false);
+    await act(async () => {
+      fireEvent.click(await screen.findByText('Mark all read'));
+    });
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(3));
+
+    // Failed single markRead triggers a server resync
+    mockMarkRead.mockResolvedValueOnce(false);
+    await act(async () => {
+      fireEvent.click(await screen.findByText('Fresh RFQ One'));
+    });
+    await waitFor(() => expect(mockFetch).toHaveBeenCalledTimes(4));
+  });
 });

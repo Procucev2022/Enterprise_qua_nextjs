@@ -1,16 +1,21 @@
 const express = require('express');
 const router = express.Router();
 const vendorController = require('../controllers/vendorController');
+const vendorUploadHistoryController = require('../controllers/vendorUploadHistoryController');
 const accountDocumentController = require('../controllers/accountDocumentController');
 const { authenticate, requireRole, requireVendorDirectorySession } = require('../middleware/auth');
 
 router.get('/', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendors);
 router.post('/', authenticate, vendorController.createVendor);
+router.get('/upload-history', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.getUploadHistory);
+router.post('/upload-history', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.createUploadHistory);
+router.delete('/upload-history/:id', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorUploadHistoryController.deleteUploadHistory);
 router.post('/bulk-import', authenticate, vendorController.bulkImportVendors);
 router.post('/bulk-import/invitations', authenticate, vendorController.sendBulkImportInvitations);
 router.post('/bulk-delete', authenticate, vendorController.bulkDeleteVendors);
+router.post('/bulk-status', authenticate, vendorController.bulkUpdateVendorStatus);
 router.get('/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
-router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer'), vendorController.getVendorsPresence);
+router.get('/presence', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorsPresence);
 router.post('/heartbeat', authenticate, requireRole('vendor'), vendorController.recordVendorHeartbeat);
 router.get('/bulk-import/:sessionId', authenticate, vendorController.getBulkImportSessionStatus);
 // Protected Vendor Directory — Category Manager with active directory session only.
@@ -19,9 +24,13 @@ router.get('/public/filters', authenticate, requireRole('category_manager'), req
 router.get('/public/:id', authenticate, requireRole('category_manager'), requireVendorDirectorySession, vendorController.getPublicVendorById);
 
 router.get('/subscription-pricing', vendorController.getSubscriptionPricing);
+router.get('/kpi-stats', authenticate, requireRole('admin', 'category_manager'), vendorController.getSellerDirectoryKPIStats);
+router.get('/analytics', authenticate, requireRole('admin', 'category_manager'), vendorController.getSellerDirectoryKPIStats);
 router.get('/:id/rfq-credits', authenticate, vendorController.getVendorRfqCredits);
 router.get('/:id', authenticate, requireRole('admin', 'category_manager', 'buyer', 'vendor'), vendorController.getVendorById);
 router.put('/:id', authenticate, vendorController.updateVendor);
+router.patch('/:id/status', authenticate, vendorController.updateVendorStatus);
+router.post('/:id/status', authenticate, vendorController.updateVendorStatus);
 router.delete('/:id', authenticate, vendorController.deleteVendor);
 router.post('/:id/rating-revision', authenticate, vendorController.reviseRating);
 router.post('/:id/request-evaluation', authenticate, vendorController.requestEvaluation);
@@ -38,6 +47,8 @@ router.post('/:id/request-credit-approval', authenticate, vendorController.reque
 router.get('/:id/communications', authenticate, vendorController.getVendorCommunications);
 router.post('/:id/communications', authenticate, vendorController.recordVendorCommunication);
 router.get('/:id/payment-history', authenticate, vendorController.getVendorPaymentHistory);
+router.get('/:id/buyer-uploads', authenticate, vendorController.getSellerBuyerUploads);
+router.get('/:id/active-rfqs', authenticate, vendorController.getSellerActiveRFQs);
 
 // Seller Dossier Documents
 router.get('/:id/documents', authenticate, accountDocumentController.getSellerDocuments);

@@ -426,10 +426,9 @@ describe('Buyer RFQ Summary (Screen 1.3)', () => {
 
       renderScreen([persisted]);
 
-      // Column order: identity, status, items, budget, delivery, actions. The items
-      // cell also carries the quote count as a sub-line.
+      // Column order: rfqNumber, title, category, mode, source, status, items, quotes, budget, delivery, actions.
       const cells = dataRows()[0].querySelectorAll('td');
-      expect(cells[2].textContent).toContain('0');
+      expect(cells[6].textContent).toContain('0');
       expect(within(dataRows()[0]).getByText(RFQ.deliveryDateUnset)).toBeInTheDocument();
     });
 
@@ -612,5 +611,28 @@ describe('Buyer RFQ Summary: details action and unset budget', () => {
     renderWith([buildRFQ({ budget: 145000 })]);
 
     expect(within(budgetCell()).getByText(formatCurrency(145000))).toBeInTheDocument();
+  });
+
+  it('triggers refreshRFQs on mount when available so status transitions like Closed appear consistently', () => {
+    const refreshRFQs = jest.fn().mockResolvedValue(undefined);
+    const closedRfq = buildRFQ({ rfqNumber: 'RFQ261611296521', status: 'Closed' });
+
+    (useApp as jest.Mock).mockReturnValue({
+      rfqs: [closedRfq],
+      activeBuyerAccount: TEST_BUYER_ACCOUNT,
+      showToast: jest.fn(),
+      setSelectedRFQForMatrix: jest.fn(),
+      openRFQDeepDive: jest.fn(),
+      refreshRFQs,
+    });
+
+    render(
+      <RFQSummary onViewQuotes={onViewQuotes} onCreateRFQ={onCreateRFQ} onViewDetails={onViewDetails} />
+    );
+
+    expect(refreshRFQs).toHaveBeenCalledTimes(1);
+    const row = screen.getAllByRole('row')[1];
+    expect(within(row).getByText('Closed')).toBeInTheDocument();
+    expect(within(row).queryByText('Quotes Pending')).not.toBeInTheDocument();
   });
 });

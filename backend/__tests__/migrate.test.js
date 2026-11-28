@@ -48,7 +48,7 @@ describe('PostgreSQL migration runner', () => {
 
   test('keeps schema.sql locked to the immutable 0000_schema_baseline checksum', () => {
     const schemaPath = path.resolve(__dirname, '../src/db/schema.sql');
-    const schemaSql = fs.readFileSync(schemaPath, 'utf8');
+    const schemaSql = fs.readFileSync(schemaPath, 'utf8').replace(/\r\n/g, '\n');
     const actualChecksum = require('crypto').createHash('sha256').update(schemaSql).digest('hex');
     expect(actualChecksum).toBe('8d8720f867c6b5b1e0b069d507a2d6b72adedade02f801346533e495459a66f5');
   });
@@ -374,6 +374,14 @@ describe('PostgreSQL migration runner', () => {
         '0034_organization_vendor_master_uploaded',
         '0035_vendor_category_created_at_index',
         '0036_mail_provider_cooldowns',
+        '0037_vendor_pincode_indexes',
+        '0038_rfq_created_email_vendor_plan_gate',
+        '0039_vendor_email_search_indexes',
+        '0040_notifications_and_category_indexes',
+        '0041_user_preferences_and_upload_history',
+        '0042_v0_vendor_quote_tracking_and_dispatch',
+        '0043_rfq_vendor_invite_mailbox_tracking',
+        '0044_vendors_paid_subscription_index',
       ]);
     } finally {
       fs.rmSync(directory, { recursive: true, force: true });

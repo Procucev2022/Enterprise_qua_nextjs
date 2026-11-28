@@ -17,7 +17,7 @@ import { useRouter } from 'next/navigation';
 import { useApp } from '@/lib/store';
 import { isBuyerUploaded, isProcucevVendor } from './vendor-summary';
 import { resolveConfirmationVendorCount, resolveOwnVendorCount, V2_V3_SOURCING_MODES } from './ingestion-wizard';
-import { extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, selectVendorsForCategories } from '@/lib/vendorMatching';
+import { checkVendorRfqCategoryMatch, compareVendorPincodeProximity, extractRfqCategorySignals, getCategoryMatchedProcucevVendors, matchVendorAgainstSignals, scoreVendorLocation, selectVendorsForCategories } from '@/lib/vendorMatching';
 import {
   Plus,
   Trash2,
@@ -44,7 +44,17 @@ import {
   Zap,
 } from 'lucide-react';
 import { getMajorCategories, getMinorCategories, dominantMajorCategory, hasMajorCategory, hasMinorCategory } from '@/lib/categoryTaxonomy';
-import { CURRENCY, SOURCING_MODES, RFQ_MODES, RFQ_MODE_LABELS, entitledSourcingModes, RFQ_DOCUMENT_LIMITS, VENDOR_ASSIGNMENT_LIMITS } from '@/lib/constants';
+import {
+  createBackdropClickHandler,
+  CURRENCY,
+  SOURCING_MODES,
+  RFQ_MODES,
+  RFQ_MODE_LABELS,
+  entitledSourcingModes,
+  RFQ_DOCUMENT_LIMITS,
+  VENDOR_ASSIGNMENT_LIMITS,
+  isVendorActive,
+} from '@/lib/constants';
 import { createRFQ, extractLineItemsFromDocument, classifyLineItems, fetchAllVendors, uploadRFQAttachment, requestVendorCategoryUpdateEmail } from '@/lib/rfqClient';
 import { buildExtractionRequest } from '@/lib/documentExtraction';
 import RfqUpgradePlanModal from './RfqUpgradePlanModal';
@@ -131,9 +141,40 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
   } catch {
     store = null;
   }
-  const buyerVendors: VendorEntry[] = store?.buyerVendors || [];
+  const storeBuyerVendors = store?.buyerVendors;
+  const buyerVendors: VendorEntry[] = useMemo(
+    () => (Array.isArray(storeBuyerVendors) ? storeBuyerVendors : []),
+    [storeBuyerVendors]
+  );
+  const ensureVendors = store?.ensureVendors;
   const activeBuyerAccount = store?.activeBuyerAccount ?? null;
-  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess);
+  const hasRequestedVendorsRef = useRef(false);
+
+  useEffect(() => {
+    if (!isOpen) {
+      hasRequestedVendorsRef.current = false;
+      return;
+    }
+    if (!hasRequestedVendorsRef.current && buyerVendors.length === 0 && typeof ensureVendors === 'function') {
+      hasRequestedVendorsRef.current = true;
+      void ensureVendors();
+    }
+  }, [isOpen, buyerVendors.length, ensureVendors]);
+
+  // All buyer vendors come exclusively from backend API state (never localStorage).
+  const reconciledBuyerVendors = buyerVendors;
+
+  // Exclude inactive/disabled suppliers from all future RFQ creation and invitation flows
+  const activeReconciledVendors = useMemo<VendorEntry[]>(
+    () => reconciledBuyerVendors.filter((v) => isVendorActive(v)),
+    [reconciledBuyerVendors]
+  );
+  const isTrialActive = Boolean(
+    activeBuyerAccount?.trialEndDate &&
+    new Date(activeBuyerAccount.trialEndDate).getTime() > Date.now() &&
+    activeBuyerAccount.trialActive !== false
+  );
+  const hasUnlimited = Boolean(activeBuyerAccount?.unlimitedRfqAccess || activeBuyerAccount?.unlimitedAccess || isTrialActive);
   const reportedPlan = toReportedPlan(activeBuyerAccount?.subscriptionPlan ?? store?.activeSubscription);
   const reportedBalance = toReportedCount(activeBuyerAccount?.remainingFreeRFQs ?? store?.remainingFreeRFQs);
   // With no plan reported, the modes are not restricted here. The server checks the plan on every RFQ it receives.
@@ -278,7 +319,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             for (const v of result.candidates) byId.set(v.id, v as unknown as VendorEntry);
           }
         }
-        setFetchedCategoryVendors(Array.from(byId.values()));
+        setFetchedCategoryVendors(Array.from(byId.values()).filter((v) => isVendorActive(v)));
       });
     }, 350);
     return () => clearTimeout(t);
@@ -631,46 +672,66 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
     }> | undefined = undefined;
 
     if (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_2' || form.sourcingMode === 'mode_3') {
-      if (Array.isArray(buyerVendors)) {
+      if (Array.isArray(activeReconciledVendors)) {
         const pool = (form.sourcingMode === 'mode_1' || form.sourcingMode === 'mode_3')
-          ? buyerVendors.filter((v) => isBuyerUploaded(v))
-          : buyerVendors;
+          ? activeReconciledVendors.filter((v) => isBuyerUploaded(v))
+          : activeReconciledVendors;
         const { signals, minorOnly } = extractRfqCategorySignals(form);
         const candidatePool = selectedVendorIds.length > 0
           ? pool.filter((v) => selectedVendorIds.includes(v.id))
           : pool;
 
-        const matchingVendors: typeof candidatePool = [];
-        const mismatchedVendors: typeof candidatePool = [];
+        let finalMatching: typeof candidatePool = [];
 
-        for (const v of candidatePool) {
-          if (signals.length === 0 || matchVendorAgainstSignals(v, signals, minorOnly).isMatch) {
-            matchingVendors.push(v);
-          } else {
-            mismatchedVendors.push(v);
+        if (selectedVendorIds.length > 0) {
+          // Explicitly selected vendors are always assigned regardless of category
+          finalMatching = candidatePool;
+        } else {
+          const matchingVendors: typeof candidatePool = [];
+          const mismatchedVendors: typeof candidatePool = [];
+
+          for (const v of candidatePool) {
+            const matchEval = checkVendorRfqCategoryMatch(v, {
+              signals: categorySignalSet.signals,
+              rawSignals: categorySignalSet.rawSignals,
+              minorOnly: categorySignalSet.minorOnly,
+              majorCategory: form.majorCategory,
+              minorCategory: form.minorCategory,
+            });
+            if (categoryFetchSignals.length === 0 || matchEval.isMatch) {
+              matchingVendors.push(v);
+            } else {
+              mismatchedVendors.push(v);
+            }
           }
-        }
 
-        if (mismatchedVendors.length > 0) {
-          store?.showToast?.(
-            MODAL.shortlistAdjustedTitle,
-            formatString(MODAL.shortlistMismatchNotice, { count: mismatchedVendors.length }),
-            'info'
-          );
-        }
+          if (typeof window !== 'undefined' && candidatePool.length > 0 && categoryFetchSignals.length > 0) {
+            console.info(
+              `[RFQ_VENDOR_MATCHING] Evaluated ${candidatePool.length} vendors: ${matchingVendors.length} matched, ${mismatchedVendors.length} mismatched for category signals [${categoryFetchSignals.join(', ')}]`
+            );
+          }
 
-        let finalMatching = signals.length > 0
-          ? selectVendorsForCategories(
-              matchingVendors,
-              signals,
-              VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
-              { location: form.deliveryLocation, pincode: form.deliveryPincode },
-              minorOnly
-            ).map((r) => r.vendor)
-          : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          if (mismatchedVendors.length > 0) {
+            store?.showToast?.(
+              MODAL.shortlistAdjustedTitle,
+              formatString(MODAL.shortlistMismatchNotice, { count: mismatchedVendors.length }),
+              'info'
+            );
+          }
 
-        if (finalMatching.length === 0 && matchingVendors.length > 0) {
-          finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          finalMatching = signals.length > 0
+            ? selectVendorsForCategories(
+                matchingVendors,
+                signals,
+                VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY,
+                { location: form.deliveryLocation, pincode: form.deliveryPincode },
+                minorOnly
+              ).map((r) => r.vendor)
+            : matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+
+          if (finalMatching.length === 0 && matchingVendors.length > 0) {
+            finalMatching = matchingVendors.slice(0, VENDOR_ASSIGNMENT_LIMITS.MAX_CLIENT_PER_CATEGORY);
+          }
         }
 
         if (finalMatching.length > 0) {
@@ -686,8 +747,17 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
       if (form.sourcingMode === 'mode_3' && Array.isArray(fetchedCategoryVendors) && fetchedCategoryVendors.length > 0) {
         const already = new Set((mode1AssignedVendors || []).map((v) => v.id));
+        const destination = { location: form.deliveryLocation, pincode: form.deliveryPincode };
         const procAdditions = fetchedCategoryVendors
-          .filter((v) => !already.has(v.id))
+          .filter((v) => isVendorActive(v) && !already.has(v.id))
+          .sort((a, b) => {
+            const locDiff =
+              scoreVendorLocation(b, destination).score - scoreVendorLocation(a, destination).score;
+            if (locDiff !== 0) return locDiff;
+            const ratingDiff = (Number(b.rating) || 0) - (Number(a.rating) || 0);
+            if (ratingDiff !== 0) return ratingDiff;
+            return compareVendorPincodeProximity(a, b, form.deliveryPincode);
+          })
           .slice(0, 10)
           .map((v) => ({
             id: v.id,
@@ -760,6 +830,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
 
   return (
     <div
+      onClick={createBackdropClickHandler(handleClose)}
       className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-4 sm:p-8"
       role="dialog"
       aria-modal="true"
@@ -1097,11 +1168,26 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
               <input
                 id="manual-rfq-budget"
                 type="number"
+                step="any"
                 min={0}
+                inputMode="numeric"
                 value={form.estimatedBudget ?? ''}
                 onChange={(e) =>
                   patchForm('estimatedBudget', e.target.value === '' ? null : Number(e.target.value))
                 }
+                onPaste={(e) => {
+                  const paste = e.clipboardData?.getData('text') || '';
+                  const cleaned = paste.replace(/[^0-9.]/g, '');
+                  if (cleaned !== '') {
+                    e.preventDefault();
+                    patchForm('estimatedBudget', Number(cleaned));
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === ',' || e.key === '₹' || e.key === '$') {
+                    e.preventDefault();
+                  }
+                }}
                 placeholder={MODAL.budgetPlaceholder}
                 className="mono font-semibold"
               />
@@ -1321,11 +1407,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                               // Empty string for null so a blank row shows blank
                               // rather than a zero the buyer never typed.
                               value={item.quantity ?? ''}
-                              onChange={(e) =>
+                              onChange={(e) => {
+                                const qtyVal = e.target.value === '' ? null : Number(e.target.value);
                                 patchItem(item.id, {
-                                  quantity: e.target.value === '' ? null : Number(e.target.value),
-                                })
-                              }
+                                  quantity: qtyVal,
+                                  ...(qtyVal !== null && qtyVal > 0 && !item.unit ? { unit: 'Nos' } : {}),
+                                });
+                              }}
                               placeholder={MODAL.qtyPlaceholder}
                               className="mono w-28"
                             />
@@ -1581,7 +1669,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                       <h4 className="text-xs font-bold text-slate-900 dark:text-white flex items-center gap-2">
                         <span>Mode 1: Buyer&apos;s Approved Vendor Roster</span>
                         <span className="badge badge-blue text-[9px] font-bold">
-                          {buyerVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
+                          {activeReconciledVendors.filter((v) => isBuyerUploaded(v)).length} Suppliers Found
                         </span>
                       </h4>
                       <p className="text-[10px] text-slate-500 dark:text-gray-400">
@@ -1595,7 +1683,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                 </div>
 
                 {(() => {
-                  const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                  const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
                   if (allMyVendors.length === 0) {
                     return (
                       <div className="p-4 text-center rounded-lg bg-white dark:bg-gray-900/60 border border-slate-200 dark:border-gray-800 space-y-1">
@@ -1609,10 +1697,26 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                   }
 
                   const matchingVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
+                    ? allMyVendors.filter((v) =>
+                        checkVendorRfqCategoryMatch(v, {
+                          signals: categorySignalSet.signals,
+                          rawSignals: categorySignalSet.rawSignals,
+                          minorOnly: categorySignalSet.minorOnly,
+                          majorCategory: form.majorCategory,
+                          minorCategory: form.minorCategory,
+                        }).isMatch
+                      )
                     : allMyVendors;
                   const mismatchedVendors = categoryFetchSignals.length > 0
-                    ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
+                    ? allMyVendors.filter((v) =>
+                        !checkVendorRfqCategoryMatch(v, {
+                          signals: categorySignalSet.signals,
+                          rawSignals: categorySignalSet.rawSignals,
+                          minorOnly: categorySignalSet.minorOnly,
+                          majorCategory: form.majorCategory,
+                          minorCategory: form.minorCategory,
+                        }).isMatch
+                      )
                     : [];
 
                   let pool = allMyVendors;
@@ -1746,7 +1850,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             : [];
 
                           const matchResult = categoryFetchSignals.length > 0
-                            ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
+                            ? checkVendorRfqCategoryMatch(vendor, {
+                                signals: categorySignalSet.signals,
+                                rawSignals: categorySignalSet.rawSignals,
+                                minorOnly: categorySignalSet.minorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              })
                             : { isMatch: true };
                           const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -1895,7 +2005,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_2' && (
               <div className="mt-4 rounded-xl border border-emerald-200 dark:border-emerald-900/60 bg-emerald-50/40 dark:bg-emerald-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const allMyVendors = buyerVendors.filter((v) => isBuyerUploaded(v));
+                  const allMyVendors = activeReconciledVendors.filter((v) => isBuyerUploaded(v));
 
                   return (
                     <>
@@ -1952,7 +2062,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             </div>
                             <div className="p-2 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                               <strong className="text-emerald-800 dark:text-emerald-300 block mb-0.5">2. Multi-Signal Supplier Scoring</strong>
-                              Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                              Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                             </div>
                             <div className="p-2 rounded-lg bg-emerald-50/60 dark:bg-emerald-950/40 border border-emerald-100 dark:border-emerald-900/40">
                               <strong className="text-emerald-800 dark:text-emerald-300 block mb-0.5">3. ≥80% Relevance Threshold</strong>
@@ -1973,10 +2083,26 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                         </div>
                       ) : (() => {
                         const matchingVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
+                          ? allMyVendors.filter((v) =>
+                              checkVendorRfqCategoryMatch(v, {
+                                signals: categorySignalSet.signals,
+                                rawSignals: categorySignalSet.rawSignals,
+                                minorOnly: categorySignalSet.minorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              }).isMatch
+                            )
                           : allMyVendors;
                         const mismatchedVendors = categoryFetchSignals.length > 0
-                          ? allMyVendors.filter((v) => !matchVendorAgainstSignals(v, categorySignalSet.signals, categorySignalSet.minorOnly).isMatch)
+                          ? allMyVendors.filter((v) =>
+                              !checkVendorRfqCategoryMatch(v, {
+                                signals: categorySignalSet.signals,
+                                rawSignals: categorySignalSet.rawSignals,
+                                minorOnly: categorySignalSet.minorOnly,
+                                majorCategory: form.majorCategory,
+                                minorCategory: form.minorCategory,
+                              }).isMatch
+                            )
                           : [];
 
                         let pool = allMyVendors;
@@ -2111,7 +2237,13 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                                   : [];
 
                                 const matchResult = categoryFetchSignals.length > 0
-                                  ? matchVendorAgainstSignals(vendor, categorySignalSet.signals, categorySignalSet.minorOnly)
+                                  ? checkVendorRfqCategoryMatch(vendor, {
+                                      signals: categorySignalSet.signals,
+                                      rawSignals: categorySignalSet.rawSignals,
+                                      minorOnly: categorySignalSet.minorOnly,
+                                      majorCategory: form.majorCategory,
+                                      minorCategory: form.minorCategory,
+                                    })
                                   : { isMatch: true };
                                 const isCategoryMismatch = categoryFetchSignals.length > 0 && !matchResult.isMatch;
 
@@ -2275,7 +2407,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
             {form.sourcingMode === 'mode_3' && (
               <div className="mt-4 rounded-xl border border-indigo-200 dark:border-indigo-900/60 bg-indigo-50/40 dark:bg-indigo-950/20 p-4 space-y-3 animate-fade-in shadow-2xs">
                 {(() => {
-                  const myVendors = buyerVendors.filter(isBuyerUploaded);
+                  const myVendors = activeReconciledVendors.filter(isBuyerUploaded);
 
                   return (
                     <>
@@ -2335,7 +2467,7 @@ export default function ManualRFQModal({ isOpen, onClose, onCreated }: ManualRFQ
                             </div>
                             <div className="p-2 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                               <strong className="text-indigo-800 dark:text-indigo-300 block mb-0.5">2. Multi-Signal Supplier Scoring</strong>
-                              Matches vendor primary capabilities, registered minor categories, and historical PO delivery records.
+                              Matches vendor primary capabilities, registered categories, and historical PO delivery records.
                             </div>
                             <div className="p-2 rounded-lg bg-indigo-50/60 dark:bg-indigo-950/40 border border-indigo-100 dark:border-indigo-900/40">
                               <strong className="text-indigo-800 dark:text-indigo-300 block mb-0.5">3. ≥80% Relevance Threshold</strong>

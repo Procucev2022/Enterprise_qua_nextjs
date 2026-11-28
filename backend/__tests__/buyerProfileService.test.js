@@ -149,40 +149,26 @@ describe('Buyer profile service', () => {
       );
     });
 
-    test('enforces the major category cap', () => {
-      const tooMany = ['A', 'B', 'C', 'D', 'E', 'F'].map((major) => ({ major, minor: 'x' }));
-      try {
-        buyerProfileService.normalizeCategories(tooMany);
-        throw new Error('should have thrown');
-      } catch (err) {
-        expect(err.status).toBe(400);
-        expect(err.message).toContain(String(BUYER_PROFILE_CONFIG.MAX_MAJOR_CATEGORIES));
-        expect(err.details).toHaveProperty('categories');
-      }
+    test('accepts unlimited major categories (no longer capped at 5)', () => {
+      const tenMajor = ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J'].map((major) => ({ major, minor: 'x' }));
+      expect(buyerProfileService.normalizeCategories(tenMajor)).toHaveLength(10);
+
+      const twentyMajor = Array.from({ length: 20 }, (_, i) => ({ major: `Major${i}`, minor: `x${i}` }));
+      expect(buyerProfileService.normalizeCategories(twentyMajor)).toHaveLength(20);
     });
 
-    test('enforces the minor category cap', () => {
-      const tooMany = Array.from({ length: BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES + 1 }, (_, i) => ({
-        major: 'IT',
-        minor: `minor-${i}`,
-      }));
-      try {
-        buyerProfileService.normalizeCategories(tooMany);
-        throw new Error('should have thrown');
-      } catch (err) {
-        expect(err.status).toBe(400);
-        expect(err.message).toContain(String(BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES));
-      }
+    test('accepts unlimited minor categories (no longer capped at 10)', () => {
+      const fiftyMinor = Array.from({ length: 50 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(buyerProfileService.normalizeCategories(fiftyMinor)).toHaveLength(50);
+
+      const hundredMinor = Array.from({ length: 100 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      expect(buyerProfileService.normalizeCategories(hundredMinor)).toHaveLength(100);
     });
 
-    test('accepts a selection exactly at both caps', () => {
-      const atCap = Array.from({ length: BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES }, (_, i) => ({
-        major: `major-${i % BUYER_PROFILE_CONFIG.MAX_MAJOR_CATEGORIES}`,
-        minor: `minor-${i}`,
-      }));
-      expect(buyerProfileService.normalizeCategories(atCap)).toHaveLength(
-        BUYER_PROFILE_CONFIG.MAX_MINOR_CATEGORIES
-      );
+    test('the minor-category deduplication still removes duplicate pairs', () => {
+      const nineUnique = Array.from({ length: 9 }, (_, i) => ({ major: 'IT', minor: `minor-${i}` }));
+      const withRepeats = [...nineUnique, nineUnique[0], nineUnique[1], { major: 'IT', minor: 'minor-9' }];
+      expect(buyerProfileService.normalizeCategories(withRepeats)).toHaveLength(10);
     });
   });
 
@@ -948,6 +934,476 @@ describe('Buyer profile service', () => {
 
       expect(taxonomy).toEqual(DEFAULT_CATEGORY_TAXONOMY);
       expect(taxonomy).not.toBe(DEFAULT_CATEGORY_TAXONOMY);
+    });
+
+    test('getProfile auto-heals missing GSTIN, PAN, street, pincode, and country from buyer account mirror', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          street: '',
+          city: '',
+          state: '',
+          pincode: '',
+          country: '',
+          gstNumber: '',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue({
+        corporateEmail: SESSION.email,
+        address: '42 Industrial Estate',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        zipCode: '560099',
+        country: 'India',
+        gst: '29abcde1234f1z5',
+        panNumber: 'abcde1234f',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.street).toBe('42 Industrial Estate');
+      expect(hydrated.gstNumber).toBe('29ABCDE1234F1Z5');
+      expect(hydrated.panNumber).toBe('ABCDE1234F');
+      expect(hydrated.pincode).toBe('560099');
+      expect(hydrated.country).toBe('India');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          street: '42 Industrial Estate',
+          gstNumber: '29ABCDE1234F1Z5',
+          panNumber: 'ABCDE1234F',
+          pincode: '560099',
+          country: 'India',
+        }),
+      }));
+    });
+
+    test('getProfile recovers buyer account by userId fallback, parses primaryPlantLocation, and derives genuine PAN', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          brandName: '',
+          street: '',
+          city: '',
+          state: '',
+          pincode: '',
+          country: '',
+          gstNumber: '',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce({
+        id: 'user-1',
+        brandName: 'Veera Brands',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+        gstin: '27AAACK3921P1Z9',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.brandName).toBe('Veera Brands');
+      expect(hydrated.city).toBe('Bengaluru');
+      expect(hydrated.state).toBe('Karnataka');
+      expect(hydrated.pincode).toBe('560037');
+      expect(hydrated.street).toBe('Bengaluru, Karnataka');
+      expect(hydrated.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: expect.objectContaining({
+          brandName: 'Veera Brands',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          street: 'Bengaluru, Karnataka',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+        }),
+      }));
+    });
+
+    test('saveProfile syncs street, address aliases, constitution, brand, and tax identifiers to buyer_accounts and falls back to userId', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true, fieldsUpdated: 10, categoryCount: 1 });
+      const updateAccSpy = jest
+        .spyOn(storeService, 'updateBuyerAccountDurably')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'user-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Veera Solutions Pvt Ltd',
+        brandName: 'Veera Sourcing',
+        organizationType: 'Private Limited',
+        panNumber: 'AAACK3921P',
+        gstNumber: '27AAACK3921P1Z9',
+        cinNumber: 'L28920MH1946PLC004768',
+        website: 'https://veera.example.com',
+        annualTurnover: 'INR 50 Cr',
+        street: '302, Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+        contactName: 'Veera',
+        contactDesignation: 'Director',
+      });
+
+      expect(updateAccSpy).toHaveBeenNthCalledWith(
+        1,
+        SESSION.email,
+        expect.objectContaining({
+          organizationName: 'Veera Solutions Pvt Ltd',
+          brandName: 'Veera Sourcing',
+          organizationType: 'Private Limited',
+          street: '302, Sharada, AECS Layout',
+          address1: '302, Sharada, AECS Layout',
+          address: '302, Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          zip_code: '560037',
+          zipCode: '560037',
+          country: 'India',
+          primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+          gstin: '27AAACK3921P1Z9',
+          gstNumber: '27AAACK3921P1Z9',
+          pan: 'AAACK3921P',
+          panNumber: 'AAACK3921P',
+        })
+      );
+      expect(updateAccSpy).toHaveBeenNthCalledWith(2, 'user-1', expect.any(Object));
+    });
+
+    test('D1 overload fallback parses primaryPlantLocation and derives real PAN from GSTIN', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        organizationName: 'Veera Solutions',
+        primaryPlantLocation: 'Bengaluru, Karnataka (560037)',
+        gstin: '27AAACK3921P1Z9',
+      });
+
+      const fallbackProfile = await buyerProfileService.getProfile(SESSION);
+      expect(fallbackProfile.city).toBe('Bengaluru');
+      expect(fallbackProfile.state).toBe('Karnataka');
+      expect(fallbackProfile.pincode).toBe('560037');
+      expect(fallbackProfile.street).toBe('Bengaluru, Karnataka');
+      expect(fallbackProfile.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(fallbackProfile.panNumber).toBe('AAACK3921P');
+    });
+
+    test('getProfile derives PAN directly from profile GSTIN when storeService has no buyer account', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValue({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: '',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB').mockResolvedValueOnce(null);
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({ updated: true });
+
+      const hydrated = await buyerProfileService.getProfile(SESSION);
+
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({
+        patch: { panNumber: 'AAACK3921P' },
+      }));
+    });
+
+    test('saveProfile resolves organizationId from buyer account mirror during transient lookup overload', async () => {
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId')
+        .mockRejectedValueOnce(new Error('D1 DB is overloaded'))
+        .mockResolvedValueOnce({ found: true, profile: { ...STORED_PROFILE, companyName: 'Recovered Co' } });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({
+        organizationId: 'org-mirror-1',
+        organizationName: 'Recovered Co',
+      });
+      const updateSpy = jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValue({
+        updated: true,
+        fieldsUpdated: 2,
+        categoryCount: 1,
+      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'org-mirror-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      const result = await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Recovered Co',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+
+      expect(updateSpy).toHaveBeenCalledWith(expect.objectContaining({ organizationId: 'org-mirror-1' }));
+      expect(result.profile.companyName).toBe('Recovered Co');
+    });
+
+    test('saveProfile reports retryable D1 overload errors cleanly across lookup, write, and post-commit re-read', async () => {
+      const { D1_OVERLOAD_CONFIG } = require('../src/config/constants');
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValue(null);
+
+      // 1. Pre-save lookup D1 overload without mirror orgId
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'Test Co' })
+      ).rejects.toMatchObject({ status: 503, message: D1_OVERLOAD_CONFIG.MESSAGE, retryable: true });
+
+      // 2. Write D1 overload
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({ found: true, profile: STORED_PROFILE });
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      await expect(
+        buyerProfileService.saveProfile(SESSION, { companyName: 'Test Co' })
+      ).rejects.toMatchObject({ status: 503, message: D1_OVERLOAD_CONFIG.MESSAGE, retryable: true });
+
+      // 3. Post-commit re-read D1 overload returns normalized saved snapshot instead of failing save
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId')
+        .mockResolvedValueOnce({ found: true, profile: STORED_PROFILE })
+        .mockRejectedValueOnce(new Error('D1 DB is overloaded'));
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({
+        updated: true,
+        fieldsUpdated: 4,
+        categoryCount: 1,
+      });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValue({ id: 'org-1' });
+      jest.spyOn(storeService, 'dispatchPendingQuoteNotifications').mockResolvedValue([]);
+
+      const saved = await buyerProfileService.saveProfile(SESSION, {
+        companyName: 'Snapshot Corp',
+        panNumber: 'aaacl1234f',
+        gstNumber: '27aaacl1234f1z5',
+        cinNumber: 'l28920mh1946plc004768',
+        annualTurnover: '₹ 50 Cr',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+
+      expect(saved.profile).toMatchObject({
+        organizationId: 'org-1',
+        companyName: 'Snapshot Corp',
+        panNumber: 'AAACL1234F',
+        gstNumber: '27AAACL1234F1Z5',
+        cinNumber: 'L28920MH1946PLC004768',
+        annualTurnover: 'INR 50 Cr',
+        categories: [{ major: 'IT', minor: 'Laptop' }],
+      });
+    });
+
+    test('getProfile resolves buyer mirror by organizationId/DB fallback, hydrates streetAddress/registeredAddress, and reverse-backfills canonical org fields onto the mirror', async () => {
+      const domainQueries = require('../src/db/domainQueries');
+      const pool = require('../src/db/pool');
+
+      // 1. Mirror found via storeService.getBuyerAccounts() matching organizationId with streetAddress
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-mem-1',
+          gstNumber: null,
+          panNumber: null,
+          street: null,
+          city: null,
+          state: null,
+          pincode: null,
+          country: '',
+          brandName: null,
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([
+        {
+          id: 'ba-mem-1',
+          organizationId: 'org-mem-1',
+          streetAddress: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          zipCode: '560037',
+          gstNumber: '27aaack3921p1z9',
+          panNumber: 'aaack3921p',
+          brandName: 'Veera Brand',
+          country: 'India',
+        },
+      ]);
+      jest.spyOn(buyerProfileQueries, 'updateProfile').mockResolvedValueOnce({ updated: true });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({ id: 'ba-mem-1' });
+
+      const hydrated = await buyerProfileService.getProfile({ sub: 'u-mem-1', email: 'veera@example.com' });
+      expect(hydrated.street).toBe('302 Sharada, AECS Layout');
+      expect(hydrated.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(hydrated.panNumber).toBe('AAACK3921P');
+      expect(hydrated.pincode).toBe('560037');
+      expect(hydrated.brandName).toBe('Veera Brand');
+
+      // 2. Mirror found via domainQueries.getBuyerAccountByIdFromDB(organizationId) and reverse-backfilled from canonical profile
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-canonical-1',
+          gstNumber: '27AAACK3921P1Z9',
+          panNumber: 'AAACK3921P',
+          street: '302 Sharada, AECS Layout',
+          city: 'Bengaluru',
+          state: 'Karnataka',
+          pincode: '560037',
+          country: 'India',
+          brandName: 'Veera Brand',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce(null);
+      jest.spyOn(storeService, 'getBuyerAccounts').mockReturnValueOnce([]);
+      jest.spyOn(pool, 'hasStorage').mockReturnValueOnce(true);
+      jest.spyOn(domainQueries, 'getBuyerAccountByIdFromDB')
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ id: 'ba-stale-1', corporateEmail: 'veera@example.com' });
+      const backfillSpy = jest.spyOn(storeService, 'updateBuyerAccountDurably').mockResolvedValueOnce({ id: 'ba-stale-1' });
+
+      const canonical = await buyerProfileService.getProfile({ sub: 'u-canonical-1', email: 'veera@example.com' });
+      expect(canonical.gstNumber).toBe('27AAACK3921P1Z9');
+      expect(backfillSpy).toHaveBeenCalledWith('ba-stale-1', expect.objectContaining({
+        organizationId: 'org-canonical-1',
+        gstin: '27AAACK3921P1Z9',
+        pan: 'AAACK3921P',
+        street: '302 Sharada, AECS Layout',
+        streetAddress: '302 Sharada, AECS Layout',
+        registeredAddress: '302 Sharada, AECS Layout',
+        city: 'Bengaluru',
+        state: 'Karnataka',
+        pincode: '560037',
+        country: 'India',
+        brandName: 'Veera Brand',
+      }));
+
+      // 3. Reverse-backfill error is swallowed gracefully
+      jest.spyOn(buyerProfileQueries, 'findProfileByUserId').mockResolvedValueOnce({
+        found: true,
+        profile: {
+          ...STORED_PROFILE,
+          organizationId: 'org-canonical-2',
+          gstNumber: '27AAACK3921P1Z9',
+          street: 'Plot 9',
+        },
+      });
+      jest.spyOn(storeService, 'getBuyerAccountByEmail').mockResolvedValueOnce({ id: 'ba-err-1' });
+      jest.spyOn(storeService, 'updateBuyerAccountDurably').mockRejectedValueOnce(new Error('mirror write failed'));
+
+      const safe = await buyerProfileService.getProfile({ sub: 'u-canonical-2', email: 'veera2@example.com' });
+      expect(safe.gstNumber).toBe('27AAACK3921P1Z9');
+    });
+  });
+
+  describe('checkProfileCompletion', () => {
+    const validFullProfile = {
+      companyName: 'Larsen & Toubro Ltd',
+      organizationType: 'Public Limited',
+      gstNumber: '27AAACL1234F1Z5',
+      panNumber: 'AAACL1234F',
+      street: 'L&T House, Ballard Estate',
+      city: 'Mumbai',
+      state: 'Maharashtra',
+      pincode: '400001',
+      contactName: 'Sanjay Deshmukh',
+      contactEmail: 'sanjay@larsentoubro.com',
+      contactPhone: '9820123456',
+      categories: [{ major: 'Mechanical', minor: 'Pumps' }],
+    };
+
+    test('evaluates a complete profile as 100% complete', () => {
+      const res = buyerProfileService.checkProfileCompletion(validFullProfile);
+      expect(res.isComplete).toBe(true);
+      expect(res.completionPercentage).toBe(100);
+      expect(res.completedCount).toBe(12);
+      expect(res.issues).toHaveLength(0);
+    });
+
+    test('evaluates null or undefined profile as 0% complete', () => {
+      const res = buyerProfileService.checkProfileCompletion(null);
+      expect(res.isComplete).toBe(false);
+      expect(res.completionPercentage).toBe(0);
+      expect(res.issues).toHaveLength(12);
+    });
+
+    test('flags missing or invalid fields and dummy pincodes', () => {
+      const incomplete = {
+        ...validFullProfile,
+        companyName: '',
+        gstNumber: 'INVALID_GST',
+        pincode: '000000',
+        contactPhone: '9999999999',
+        categories: [],
+      };
+      const res = buyerProfileService.checkProfileCompletion(incomplete);
+      expect(res.isComplete).toBe(false);
+      expect(res.issues.some((i) => i.field === 'companyName' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'gstNumber' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'pincode' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactPhone' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'categories' && i.status === 'missing')).toBe(true);
+    });
+
+    test('covers specific length, regex validation, and category fallback branches', () => {
+      const invalidLengths = {
+        companyName: 'A',
+        organizationType: '',
+        gstNumber: '',
+        panNumber: 'INVALID',
+        street: 'AB',
+        city: 'M',
+        state: 'S',
+        pincode: '400',
+        contactName: 'R',
+        contactEmail: 'invalid-email',
+        contactPhone: '12345',
+        categories: [{ major: '', minor: '' }],
+      };
+      const res = buyerProfileService.checkProfileCompletion(invalidLengths);
+      expect(res.isComplete).toBe(false);
+      expect(res.issues.some((i) => i.field === 'companyName' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'organizationType' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'gstNumber' && i.status === 'missing')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'panNumber' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'street' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'city' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'state' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'pincode' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactName' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactEmail' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'contactPhone' && i.status === 'invalid')).toBe(true);
+      expect(res.issues.some((i) => i.field === 'categories' && i.status === 'missing')).toBe(true);
+
+      // Test missing empty fields
+      const missingFields = {
+        companyName: '',
+        organizationType: '',
+        gstNumber: '',
+        panNumber: '',
+        street: '',
+        city: '',
+        state: '',
+        pincode: '',
+        contactName: '',
+        contactEmail: '',
+        contactPhone: '',
+        categories: null,
+      };
+      const resMissing = buyerProfileService.checkProfileCompletion(missingFields);
+      expect(resMissing.completedCount).toBe(0);
+
+      // Test supportedMajorCategories and supportedMinorCategories fallback
+      const supportedCatProfile = {
+        ...validFullProfile,
+        categories: null,
+        supportedMajorCategories: ['Mechanical'],
+        supportedMinorCategories: ['Pumps'],
+      };
+      const resCat = buyerProfileService.checkProfileCompletion(supportedCatProfile);
+      expect(resCat.isComplete).toBe(true);
     });
   });
 });

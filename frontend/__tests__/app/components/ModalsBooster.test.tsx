@@ -183,6 +183,55 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
 
       window.open = origOpen;
     });
+
+    it('handles handleExportPDF when quote has discount and GST', () => {
+      const mockPrintDoc = {
+        open: jest.fn(),
+        write: jest.fn(),
+        close: jest.fn(),
+      };
+      const mockPrintWin = {
+        document: mockPrintDoc,
+        focus: jest.fn(),
+        print: jest.fn(),
+      };
+      const origOpen = window.open;
+      window.open = jest.fn().mockReturnValue(mockPrintWin as any);
+
+      render(
+        <PurchaseOrderModal
+          isOpen={true}
+          onClose={mockOnClose}
+          rfqNumber="RFQ-PO-PRINT-DISC"
+          vendorId="v-print"
+          vendorName="Print Vendor Ltd"
+          unitPrice={100}
+          totalAmount={94.4}
+          leadTime={7}
+          deliveryDate="2026-10-10"
+          quote={{
+            subtotal: 100,
+            discountPercent: 20,
+            discountAmount: 20,
+            taxableAmount: 80,
+            taxRate: 18,
+            taxAmount: 14.4,
+            totalPrice: 94.4,
+          } as any}
+          lineItems={[{ description: 'Item 1', quantity: 1, unit: 'Sets' }]}
+        />
+      );
+
+      const exportPdfBtn = screen.getByTitle('Export complete Pre-Purchase Order as PDF document');
+      fireEvent.click(exportPdfBtn);
+
+      expect(window.open).toHaveBeenCalled();
+      expect(mockPrintDoc.write).toHaveBeenCalledWith(expect.stringContaining('Discount (20%):'));
+      expect(mockPrintDoc.write).toHaveBeenCalledWith(expect.stringContaining('Final Quote Price (Taxable Base):'));
+      expect(mockPrintDoc.close).toHaveBeenCalled();
+
+      window.open = origOpen;
+    });
   });
 
   describe('ActivePipelineModal source filters and metric card clicks', () => {
@@ -555,6 +604,56 @@ describe('ModalsBooster — branch boost suite for Modals.tsx', () => {
       );
 
       expect(screen.getByText('Default Vendor')).toBeInTheDocument();
+    });
+
+    it('covers PurchaseOrderModal with GST tax rate and discount calculations', () => {
+      render(
+        <PurchaseOrderModal
+          {...({
+            isOpen: true,
+            onClose: mockOnClose,
+            rfqNumber: 'RFQ-PO-GST-ONLY',
+            vendorId: 'v-gst',
+            vendorName: 'GST Vendor',
+            unitPrice: 100,
+            totalAmount: 118,
+            quote: {
+              subtotal: 100,
+              discountPercent: 10,
+              discountAmount: 10,
+              taxableAmount: 90,
+              gstPercent: 18,
+              taxAmount: 16.2,
+            },
+          } as any)}
+        />
+      );
+      expect(screen.getByText('Discount (10%):')).toBeInTheDocument();
+      expect(screen.getByText('-₹10')).toBeInTheDocument();
+      expect(screen.getByText('GST / Taxes (18%):')).toBeInTheDocument();
+      expect(screen.getByText('+₹16.2')).toBeInTheDocument();
+    });
+
+    it('covers PurchaseOrderModal with taxes amount fallback to compute rate', () => {
+      render(
+        <PurchaseOrderModal
+          {...({
+            isOpen: true,
+            onClose: mockOnClose,
+            rfqNumber: 'RFQ-PO-TAX-FALLBACK',
+            vendorId: 'v-tax-fb',
+            vendorName: 'Tax Fallback Vendor',
+            unitPrice: 200,
+            totalAmount: 236,
+            quote: {
+              subtotal: 200,
+              taxes: 36,
+            },
+          } as any)}
+        />
+      );
+      expect(screen.getByText('GST / Taxes (18%):')).toBeInTheDocument();
+      expect(screen.getByText('+₹36')).toBeInTheDocument();
     });
   });
 

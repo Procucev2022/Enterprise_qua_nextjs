@@ -14,7 +14,7 @@ export default function CategoryManagerAllRFQsPage() {
     <AllRFQsConsole
       onNavigateToMatrix={(rfq: RFQItem) => {
         setSelectedRFQForMatrix(rfq);
-        router.push('/category-manager/quote-matrix');
+        router.push(`/category-manager/quote-matrix?rfq=${encodeURIComponent(rfq.rfqNumber)}`);
       }}
       onViewDetails={(rfq: RFQItem) => {
         // Addressable by RFQ number so the detail view survives a reload and can

@@ -22,7 +22,6 @@ import {
   CheckCircle2,
   Clock,
   Sparkles,
-  Download,
   AlertCircle,
   TrendingUp,
   Star,
@@ -52,11 +51,13 @@ import {
   SELLER_DIRECTORY_COLUMN_PREF_KEY,
   DEFAULT_SELLER_DIRECTORY_COLUMNS,
   getVendorCreditBalance,
+  normalizeVendorRating,
 } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
 import { usablePan } from '@/lib/validationSchemas';
-import { exportReportToExcel } from '@/lib/reportsClient';
 import { fetchAllVendors } from '@/lib/rfqClient';
+import { fetchSellerDirectoryKPIStats } from '@/lib/accountDocumentsClient';
+import { getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import { withVendorFetchSignal } from '@/lib/vendorFetchSignal';
 import SupplierDossierDrawer from './components/SupplierDossierDrawer';
 import ActionCenterSummaryPopupModal from './components/ActionCenterSummaryPopupModal';
@@ -120,8 +121,8 @@ function formatScore360(value: unknown): string {
 
 // Shows a rating to one decimal place, or a dash when the record has no numeric rating.
 function formatRating(value: unknown): string {
-  const numeric = toNumberOrNull(value);
-  return numeric === null ? EMPTY_VALUE : String(numeric);
+  const normalized = normalizeVendorRating(value);
+  return normalized === null ? EMPTY_VALUE : String(normalized);
 }
 
 // The finite number held by a record field, or null when the record does not hold one. Never a default.
@@ -144,6 +145,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const [selectedSource, setSelectedSource] = useState<string>('all');
   const [selectedCategory, setSelectedCategory] = useState<string>('all');
   const [selectedRating, setSelectedRating] = useState<string>('all');
+  const [selectedSubscription, setSelectedSubscription] = useState<boolean>(false);
 
   // Sorting state
   const [sortColumn, setSortColumn] = useState<SellerDirectoryColumnKey | null>(null);
@@ -161,36 +163,29 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   // Active Dossier Seller
   const [activeSeller, setActiveSeller] = useState<any | null>(null);
 
-  // Load column preferences from localStorage
+  // Load column preferences from backend user preferences API
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem(SELLER_DIRECTORY_COLUMN_PREF_KEY);
-      if (saved) {
-        const parsed: SellerDirectoryColumnConfig[] = JSON.parse(saved);
-        if (Array.isArray(parsed) && parsed.length > 0) {
-          const validKeys = new Set(DEFAULT_SELLER_DIRECTORY_COLUMNS.map((c) => c.key));
-          const validated = parsed.filter((c) => validKeys.has(c.key));
-          const presentKeys = new Set(validated.map((c) => c.key));
-          DEFAULT_SELLER_DIRECTORY_COLUMNS.forEach((defCol) => {
-            if (!presentKeys.has(defCol.key)) {
-              validated.push(defCol);
-            }
-          });
-          setColumns(validated);
+    let cancelled = false;
+    void getUserPreference<SellerDirectoryColumnConfig[]>(SELLER_DIRECTORY_COLUMN_PREF_KEY).then((saved) => {
+      if (cancelled || !Array.isArray(saved) || saved.length === 0) return;
+      const validKeys = new Set(DEFAULT_SELLER_DIRECTORY_COLUMNS.map((c) => c.key));
+      const validated = saved.filter((c) => validKeys.has(c.key));
+      const presentKeys = new Set(validated.map((c) => c.key));
+      DEFAULT_SELLER_DIRECTORY_COLUMNS.forEach((defCol) => {
+        if (!presentKeys.has(defCol.key)) {
+          validated.push(defCol);
         }
-      }
-    } catch {
-      // use defaults on parse error
-    }
+      });
+      setColumns(validated);
+    });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const saveColumns = useCallback((newCols: SellerDirectoryColumnConfig[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(SELLER_DIRECTORY_COLUMN_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(SELLER_DIRECTORY_COLUMN_PREF_KEY, newCols);
   }, []);
 
   const handleToggleColumn = useCallback(
@@ -234,7 +229,19 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   // Reset to first page when search or filters change
   useEffect(() => {
     setCurrentPage(1);
-  }, [searchTerm, selectedSource, selectedCategory, selectedRating]);
+  }, [searchTerm, selectedSource, selectedCategory, selectedRating, selectedSubscription]);
+
+  // Escape key support to close column settings modal
+  useEffect(() => {
+    if (!showColumnSettings) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setShowColumnSettings(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showColumnSettings]);
 
   // Debounce search input for backend querying
   useEffect(() => {
@@ -260,6 +267,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
             pageSize: 150,
             search: query || undefined,
             category: selectedCategory !== 'all' ? selectedCategory : undefined,
+            subscription: selectedSubscription ? true : undefined,
           })
         );
         if (active && seq === fetchSeqRef.current && res.success && (res.candidates || (res as any).data)) {
@@ -278,7 +286,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
       active = false;
       controller.abort();
     };
-  }, [debouncedSearch, selectedCategory]);
+  }, [debouncedSearch, selectedCategory, selectedSubscription]);
 
   // Merge remote vendors and buyer-uploaded vendors into unified seller entities
   const allSellers = useMemo(() => {
@@ -312,13 +320,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         minorCategories: Array.isArray((v as any).minorCategories) ? (v as any).minorCategories : [],
         score: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
         score360: typeof (v as any).matchScore === 'number' ? (v as any).matchScore : null,
-        rating: typeof (v as any).rating === 'number' ? (v as any).rating : null,
+        rating: normalizeVendorRating((v as any).rating, (v as any).score),
         status: (v as any).status || '',
         subscriptionPlan: (v as any).subscriptionPlan || '',
         // Plan balance for Connect/Select subscribers, free-tier balance otherwise.
         freeQuotationCredits: getVendorCreditBalance(v as any),
         rfqDownloadsUsed: toNumberOrNull((v as any).rfqDownloadsUsed),
-        gstNumber: (v as any).gstNumber || '',
+        gstNumber: (v as any).gstNumber || (v as any).gstin || (v as any).gst || '',
+        gstin: (v as any).gstin || (v as any).gst || (v as any).gstNumber || '',
         panNumber: usablePan((v as any).panNumber || (v as any).pan) || '',
         isNetwork: true,
         createdAt: (v as any).createdAt || (v as any).created_at || '',
@@ -353,12 +362,13 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           minorCategories: Array.isArray(bv.minorCategories) ? bv.minorCategories : [],
           score: toNumberOrNull((bv as any).qualityScore ?? bv.score),
           score360: toNumberOrNull((bv as any).qualityScore ?? bv.score),
-          rating: toNumberOrNull(bv.rating),
+          rating: normalizeVendorRating(bv.rating, (bv as any).qualityScore ?? bv.score),
           status: (bv as any).status || '',
           subscriptionPlan: (bv as any).subscriptionPlan || '',
           freeQuotationCredits: getVendorCreditBalance(bv as any),
           rfqDownloadsUsed: toNumberOrNull((bv as any).rfqDownloadsUsed),
-          gstNumber: (bv as any).gstNumber || '',
+          gstNumber: (bv as any).gstNumber || (bv as any).gstin || (bv as any).gst || '',
+          gstin: (bv as any).gstin || (bv as any).gst || (bv as any).gstNumber || '',
           panNumber: usablePan((bv as any).panNumber || (bv as any).pan) || '',
           isNetwork: false,
           createdAt: (bv as any).createdAt || (bv as any).created_at || '',
@@ -378,11 +388,63 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     }
   }, [initialSellerId, allSellers]);
 
+  // Helper to determine whether a vendor is on a paid/active subscription tier
+  const isSubscriptionVendor = useCallback((v: any): boolean => {
+    if (!v) return false;
+    const plan = String(v.subscriptionPlan || v.subscribedPlan || v.plan || '').toLowerCase().trim();
+    const isSub = v.isSubscribed === true || v.isSubscribed === 'true' || v.isSubscribed === 1;
+    return Boolean((plan && !['none', 'free', 'free_tier', 'free_trial', 'premium'].includes(plan)) || isSub);
+  }, []);
+
+  // Live Database KPI counts (Removes 500-cap)
+  const [dbKPIStats, setDbKPIStats] = useState<{
+    totalSuppliers: number;
+    subscriptionVendors?: number;
+    subscriptionVendorsCount?: number;
+    networkSuppliers: number;
+    buyerUploaded: number;
+    verifiedActive: number;
+  } | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    fetchSellerDirectoryKPIStats().then((res) => {
+      if (
+        active &&
+        res &&
+        res.success &&
+        typeof res.totalSuppliers === 'number' &&
+        !isNaN(res.totalSuppliers)
+      ) {
+        setDbKPIStats({
+          totalSuppliers: res.totalSuppliers,
+          subscriptionVendors: typeof res.subscriptionVendors === 'number' ? res.subscriptionVendors : (typeof res.subscriptionVendorsCount === 'number' ? res.subscriptionVendorsCount : 0),
+          subscriptionVendorsCount: typeof res.subscriptionVendorsCount === 'number' ? res.subscriptionVendorsCount : (typeof res.subscriptionVendors === 'number' ? res.subscriptionVendors : 0),
+          networkSuppliers: typeof res.networkSuppliers === 'number' ? res.networkSuppliers : 0,
+          buyerUploaded: typeof res.buyerUploaded === 'number' ? res.buyerUploaded : 0,
+          verifiedActive: typeof res.verifiedActive === 'number' ? res.verifiedActive : 0,
+        });
+      }
+    }).catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, []);
+
   // KPI Metrics Calculation
-  const totalSellersCount = allSellers.length;
-  const networkSellersCount = allSellers.filter((s) => s.source === 'procucev_network').length;
-  const buyerUploadedCount = allSellers.filter((s) => s.source === 'buyer_uploaded').length;
-  const verifiedCount = allSellers.filter((s) => s.status.includes('ACTIVE') || s.status.includes('VERIFIED')).length;
+  const totalSellersCount = dbKPIStats ? dbKPIStats.totalSuppliers : allSellers.length;
+  const subscriptionVendorsCount = dbKPIStats && typeof dbKPIStats.subscriptionVendors === 'number'
+    ? dbKPIStats.subscriptionVendors
+    : allSellers.filter(isSubscriptionVendor).length;
+  const networkSellersCount = dbKPIStats
+    ? dbKPIStats.networkSuppliers
+    : allSellers.filter((s) => s.source === 'procucev_network').length;
+  const buyerUploadedCount = dbKPIStats
+    ? dbKPIStats.buyerUploaded
+    : allSellers.filter((s) => s.source === 'buyer_uploaded').length;
+  const verifiedCount = dbKPIStats
+    ? dbKPIStats.verifiedActive
+    : allSellers.filter((s) => s.status.includes('ACTIVE') || s.status.includes('VERIFIED')).length;
 
   // Averages cover only sellers that have a recorded value. Null when none does.
   const avgScore = useMemo<number | null>(() => {
@@ -450,9 +512,11 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         (selectedRating === '4plus' && Number(seller.rating) >= 4) ||
         (selectedRating === '4.5plus' && Number(seller.rating) >= 4.5);
 
-      return matchesSearch && matchesSource && matchesCategory && matchesRating;
+      const matchesSubscription = !selectedSubscription || isSubscriptionVendor(seller);
+
+      return matchesSearch && matchesSource && matchesCategory && matchesRating && matchesSubscription;
     });
-  }, [allSellers, searchTerm, selectedSource, selectedCategory, selectedRating]);
+  }, [allSellers, searchTerm, selectedSource, selectedCategory, selectedRating, selectedSubscription, isSubscriptionVendor]);
 
   // Sorting Handler
   const handleSort = (columnKey: SellerDirectoryColumnKey) => {
@@ -534,7 +598,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
   const supplierPopupColumns = useMemo<ActionCenterSummaryPopupColumn<Record<string, unknown>>[]>(() => [
     {
       key: 'name',
-      label: 'Supplier Name',
+      label: 'Vendor Name',
       render: (item) => (
         <span className="font-semibold text-slate-900 dark:text-white">
           {String(item.name || EMPTY_VALUE)}
@@ -558,7 +622,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     },
     {
       key: 'category',
-      label: 'Major Category',
+      label: 'Division',
       render: (item) => (
         <span className="px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300">
           {String(item.majorCategory || item.category || EMPTY_VALUE)}
@@ -638,9 +702,10 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     },
   ], []);
 
-  const handleSummaryCardClick = (type: 'total' | 'network' | 'buyer' | 'score' | 'quotes') => {
+  const handleSummaryCardClick = (type: 'total' | 'subscription' | 'network' | 'buyer' | 'score' | 'quotes') => {
     if (type === 'total') {
       setSelectedSource('all');
+      setSelectedSubscription(false);
       setSummaryModalState({
         isOpen: true,
         title: strings.totalSuppliers,
@@ -648,6 +713,18 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
         totalCount: allSellers.length,
         columns: supplierPopupColumns,
         records: allSellers as unknown as Record<string, unknown>[],
+      });
+    } else if (type === 'subscription') {
+      const nextSubscriptionState = !selectedSubscription;
+      setSelectedSubscription(nextSubscriptionState);
+      const filtered = allSellers.filter(isSubscriptionVendor);
+      setSummaryModalState({
+        isOpen: true,
+        title: strings.subscriptionVendors,
+        subtitle: formatString(strings.freeTierSubtext, { count: String(Math.max(0, totalSellersCount - subscriptionVendorsCount)) }),
+        totalCount: filtered.length,
+        columns: supplierPopupColumns,
+        records: filtered as unknown as Record<string, unknown>[],
       });
     } else if (type === 'network') {
       setSelectedSource('network');
@@ -695,34 +772,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
     }
   };
 
-  const handleExportDirectory = () => {
-    const rows = sortedSellers.map((s) => ({
-      CompanyName: s.name || EMPTY_VALUE,
-      ContactPerson: s.contactPerson || EMPTY_VALUE,
-      Email: s.email || EMPTY_VALUE,
-      Phone: s.phone || EMPTY_VALUE,
-      CompanyLocation: s.location || EMPTY_VALUE,
-      DeliveryLocation: s.deliveryLocation || s.location || EMPTY_VALUE,
-      LastLogin: s.lastLogin ? formatIndianDateTime(s.lastLogin) : EMPTY_VALUE,
-      Source: sourceLabelFor(s.source),
-      MajorCategory: s.majorCategory || EMPTY_VALUE,
-      AIScore: s.score ?? EMPTY_VALUE,
-      StarRating: s.rating ?? EMPTY_VALUE,
-      FreeQuotationCredits: s.freeQuotationCredits ?? EMPTY_VALUE,
-      RFQDownloadsUsed: s.rfqDownloadsUsed ?? EMPTY_VALUE,
-      Status: s.status || EMPTY_VALUE,
-    }));
-    exportReportToExcel(rows, `Sellers_Directory_${new Date().toISOString().split('T')[0]}`, 'SellersDirectory');
-  };
-
   const visibleColumns = useMemo(() => {
     return columns.filter((c) => c.visible);
   }, [columns]);
 
   return (
     <div className="space-y-4">
-      {/* 5 SUMMARY CARDS IN ONE HORIZONTAL ROW (Compact & Clickable) */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2 sm:gap-2.5 w-full">
+      {/* 6 SUMMARY CARDS IN ONE HORIZONTAL ROW (Compact & Clickable) */}
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 sm:gap-2.5 w-full">
         {/* Card 1: Total Suppliers */}
         <div
           role="group"
@@ -742,7 +799,30 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 2: Network Suppliers */}
+        {/* Card 2: Subscription Vendors */}
+        <div
+          role="group"
+          tabIndex={0}
+          onClick={() => handleSummaryCardClick('subscription')}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); handleSummaryCardClick('subscription'); } }}
+          className={`bg-white dark:bg-slate-900 px-2.5 py-1.5 rounded-lg border shadow-xs hover:border-indigo-400 hover:bg-slate-50/60 dark:hover:bg-slate-800/40 transition cursor-pointer flex flex-col justify-between text-left h-full ${
+            selectedSubscription
+              ? 'ring-2 ring-indigo-500 border-indigo-500 bg-indigo-50/20 dark:bg-indigo-950/20'
+              : 'border-slate-200 dark:border-slate-800'
+          }`}
+        >
+          <p className="text-[10px] sm:text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-tight whitespace-nowrap">
+            {strings.subscriptionVendors}
+          </p>
+          <p className="text-base sm:text-lg font-bold text-indigo-600 dark:text-indigo-400 leading-none mt-1">
+            {subscriptionVendorsCount}
+          </p>
+          <span className="text-[10px] text-slate-400 dark:text-slate-500 whitespace-nowrap mt-1">
+            {formatString(strings.freeTierSubtext, { count: String(Math.max(0, totalSellersCount - subscriptionVendorsCount)) })}
+          </span>
+        </div>
+
+        {/* Card 3: Network Suppliers */}
         <div
           role="group"
           tabIndex={0}
@@ -761,7 +841,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 3: Buyer Uploaded */}
+        {/* Card 4: Buyer Uploaded */}
         <div
           role="group"
           tabIndex={0}
@@ -780,7 +860,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 4: Average 360° Score */}
+        {/* Card 5: Average 360° Score */}
         <div
           role="group"
           tabIndex={0}
@@ -804,7 +884,7 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           </span>
         </div>
 
-        {/* Card 5: Quoted Opportunities */}
+        {/* Card 6: Quoted Opportunities */}
         <div
           role="group"
           tabIndex={0}
@@ -894,16 +974,8 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           <option value="4.5plus">★ 4.5+ Stars</option>
         </select>
 
-        {/* Export Directory and Gear icon aligned to right */}
+        {/* Gear icon aligned to right */}
         <div className="ml-auto flex items-center gap-2 shrink-0">
-          <button
-            onClick={handleExportDirectory}
-            className="flex items-center gap-1.5 px-3 py-1.5 h-8.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold shadow-sm transition-all shrink-0 cursor-pointer"
-          >
-            <Download className="w-3.5 h-3.5" />
-            <span>{strings.exportDirectory}</span>
-          </button>
-
           <button
             type="button"
             onClick={() => setShowColumnSettings(true)}
@@ -923,8 +995,14 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
           aria-modal="true"
           aria-label="Customize Columns"
           className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setShowColumnSettings(false);
+          }}
         >
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl shadow-2xl w-full max-w-md overflow-hidden flex flex-col max-h-[85vh]"
+          >
             <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50/50 dark:bg-slate-800/30">
               <div className="flex items-center gap-2">
                 <Settings className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
@@ -1186,10 +1264,9 @@ export default function SellersDirectory({ onSelectRFQ, initialSellerId }: Selle
                                 <button
                                   type="button"
                                   onClick={() => setActiveSeller(seller)}
-                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center gap-1 border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
+                                  className="px-3 py-1.5 rounded-lg bg-emerald-50 hover:bg-emerald-100 dark:bg-emerald-950/40 dark:hover:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 font-semibold text-xs transition-colors inline-flex items-center border border-emerald-200/60 dark:border-emerald-800/50 shadow-xs cursor-pointer"
                                 >
                                   <span>{strings.dossierAction}</span>
-                                  <ChevronRight className="w-3.5 h-3.5" />
                                 </button>
                               </td>
                             );

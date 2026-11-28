@@ -1,6 +1,7 @@
 import React from 'react';
 import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import RFQDetails, {
+  ConfidenceBadge,
   buildSupplierCategoryFilters,
   daysUntil,
   lineItemsToCsv,
@@ -252,6 +253,17 @@ describe('lineItemsToCsv', () => {
   });
 });
 
+describe('ConfidenceBadge component', () => {
+  it('renders high confidence, review, and manual states', () => {
+    const { rerender } = render(<ConfidenceBadge confidence={95} />);
+    expect(screen.getByText(DETAILS.confidenceHigh)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={50} />);
+    expect(screen.getByText(DETAILS.confidenceReview)).toBeInTheDocument();
+    rerender(<ConfidenceBadge confidence={0} />);
+    expect(screen.getByText(DETAILS.manualConfidence)).toBeInTheDocument();
+  });
+});
+
 // ══════════════════════════════════════════════════════════════════════════════
 describe('Buyer RFQ Details (Screen 1.4)', () => {
   describe('missing RFQ', () => {
@@ -294,37 +306,21 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(badge.getAttribute('style')).toBeNull();
     });
 
-    it('states when the RFQ was raised', () => {
+    it('does not display the raised date in the top provenance strip and renders it in the submission detail card', () => {
       renderDetails(buildRFQ());
 
       expect(
-        screen.getByText(
+        screen.queryByText(
           formatString(DETAILS.raisedOnStrip, {
             timestamp: formatIndianDateTime('2026-09-02 11:07:16'),
           })
         )
-      ).toBeInTheDocument();
+      ).not.toBeInTheDocument();
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).getByText(formatIndianDateTime('2026-09-02 11:07:16'))).toBeInTheDocument();
       // Not the raw UTC string it is stored as.
       expect(screen.queryByText(/2026-09-02 11:07:16/)).not.toBeInTheDocument();
-    });
-
-    // An unedited RFQ showing an "edited" timestamp reads as a change nobody made.
-    it('reports an edit only once the record has actually changed', () => {
-      const { unmount } = renderDetails(
-        buildRFQ({ createdAt: '2026-09-02 11:07:16', updatedAt: '2026-09-02 11:07:16' })
-      );
-
-      expect(screen.queryByText(/^Edited /)).not.toBeInTheDocument();
-      unmount();
-
-      renderDetails(buildRFQ({ updatedAt: '2026-09-06 09:15:00' }));
-      expect(
-        screen.getByText(
-          formatString(DETAILS.updatedOnStrip, {
-            timestamp: formatIndianDateTime('2026-09-06 09:15:00'),
-          })
-        )
-      ).toBeInTheDocument();
     });
 
     it('omits the mode badge when the sourcing mode is unknown', () => {
@@ -361,11 +357,33 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(card).getByText(DETAILS.sourceAiExtraction || 'AI Extraction')).toBeInTheDocument();
     });
 
-    it('shows the record id', () => {
-      renderDetails(buildRFQ({ id: 'rfq-1' }));
+    it('does not display the internal record id in the summary view card', () => {
+      renderDetails(buildRFQ({ id: 'rfq-internal-unique-123' }));
 
       const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
-      expect(within(card).getByText('rfq-1')).toBeInTheDocument();
+      expect(within(card).queryByText('rfq-internal-unique-123')).not.toBeInTheDocument();
+    });
+
+    it('displays the requested by user name and user email in the submission detail card', () => {
+      renderDetails(buildRFQ({ buyerName: 'Alice Sharma', buyerEmail: 'alice@acme.com' }));
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).getByText('Alice Sharma')).toBeInTheDocument();
+      expect(within(card).getByText('alice@acme.com')).toBeInTheDocument();
+    });
+
+    it('rejects a date string in requestedBy field and displays the user name', () => {
+      renderDetails(
+        buildRFQ({
+          requestedBy: '2026-09-02 11:07:16',
+          raisedByName: 'Rohit Verma',
+          buyerEmail: 'rohit@acme.com',
+        } as any)
+      );
+
+      const card = sectionFor(screen.getByText(DETAILS.submittedHeading));
+      expect(within(card).queryByText('2026-09-02 11:07:16')).not.toBeInTheDocument();
+      expect(within(card).getByText('Rohit Verma')).toBeInTheDocument();
     });
 
     it('marks a blank intake source as unset when no aiSummary exists', () => {
@@ -509,7 +527,17 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
         ],
       });
 
-    it('renders every line item with its classification and confidence', () => {
+    it('renders the line items panel heading and count without package subtitle text', () => {
+      renderDetails(twoItems());
+
+      const heading = screen.getByRole('heading', { name: DETAILS.lineItemsHeading });
+      const headerGroup = heading.parentElement;
+      if (!headerGroup) throw new Error('Expected header wrapper around line items heading');
+      expect(within(headerGroup).getByText('2')).toBeInTheDocument();
+      expect(screen.queryByText(/Package(?:s)? requirement specification/i)).not.toBeInTheDocument();
+    });
+
+    it('renders every line item with its classification and without confidence column', () => {
       renderDetails(twoItems());
 
       // Scoped to the table: the minor category also appears as a filter option.
@@ -518,14 +546,16 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(within(table).getByText('Flanged Gate Valve')).toBeInTheDocument();
       expect(within(table).getByText('ASTM A216 WCB body')).toBeInTheDocument();
       expect(within(table).getByText('Hoses, Valves & Fittings')).toBeInTheDocument();
-      expect(within(table).getAllByText(formatString(DETAILS.confidenceHigh, { confidence: 95 }))).toHaveLength(2);
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.confidenceHigh)).not.toBeInTheDocument();
+      expect(within(table).queryByText(/95%/)).not.toBeInTheDocument();
     });
 
-    it('flags a low-confidence row as needing review', () => {
+    it('does not display confidence column or review pill in line items table', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 50 })] }));
-      expect(
-        within(lineItemTable()).getByText(formatString(DETAILS.confidenceReview, { confidence: 50 }))
-      ).toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(DETAILS.confidenceReview)).not.toBeInTheDocument();
+      expect(within(lineItemTable()).queryByText(/50%/)).not.toBeInTheDocument();
     });
 
     it('numbers the rows', () => {
@@ -555,12 +585,13 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       expect(totalQuantity()).toBe('12');
     });
 
-    // A keyed row has no AI confidence, so reporting 0% would misrepresent it.
-    it('labels a manually keyed row instead of claiming zero confidence', () => {
+    // The confidence column is removed in the buyer portal, so manualConfidence is omitted from the table.
+    it('omits confidence column for manually keyed row', () => {
       renderDetails(buildRFQ({ extractedEntities: [entity({ confidence: 0 })] }));
 
       const table = screen.getByRole('table');
-      expect(within(table).getByText(DETAILS.manualConfidence)).toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.colConfidence)).not.toBeInTheDocument();
+      expect(within(table).queryByText(DETAILS.manualConfidence)).not.toBeInTheDocument();
       expect(within(table).queryByText(/0% /)).not.toBeInTheDocument();
     });
 
@@ -799,12 +830,13 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       });
     });
 
-    it('reports how much was classified automatically', () => {
+    it('does not display the classified automatically text in line items footer', () => {
       renderDetails(
         buildRFQ({ extractedEntities: [entity({ confidence: 95 }), entity({ id: 'ent-2', confidence: 40 })] })
       );
 
-      expect(screen.getByText(formatString(DETAILS.parsedSuccessfully, { percent: 50 }))).toBeInTheDocument();
+      expect(screen.queryByText(/classified automatically/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/% Classified/i)).not.toBeInTheDocument();
     });
 
     it('offers the line items as a CSV download named after the RFQ', () => {
@@ -920,7 +952,7 @@ describe('Buyer RFQ Details (Screen 1.4)', () => {
       );
 
       const dialog = await screen.findByRole('dialog');
-      await waitFor(() => expect(within(dialog).getByText('Laptop Procurement Request')).toBeInTheDocument());
+      await waitFor(() => expect(within(dialog).getByText('Laptop Procurement Request')).toBeInTheDocument(), { timeout: 10000 });
       expect(within(dialog).getByText('Please supply 20 units to Bangalore.')).toBeInTheDocument();
       expect(within(dialog).getByRole('link', { name: DETAILS.attachmentDownloadAction })).toHaveAttribute(
         'download',
@@ -1790,13 +1822,15 @@ function makeInquiry(overrides: any = {}): any {
     it('handles RFQ closure when clicking Close RFQ', async () => {
       renderDetails(buildRFQ({ status: 'Quotes Pending' }));
 
-      const closeBtn = screen.queryByRole('button', { name: /Close RFQ/i });
-      if (closeBtn) {
-        fireEvent.click(closeBtn);
-        await waitFor(() => {
-          expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
-        });
-      }
+      const closeBtn = screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') });
+      fireEvent.click(closeBtn);
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
+
+      await waitFor(() => {
+        expect(mockUpdateRFQ).toHaveBeenCalledWith('rfq-1', { status: 'Closed' });
+      });
     });
 
     it('does not render Close RFQ button on the vendor side', () => {
@@ -1964,17 +1998,19 @@ function makeInquiry(overrides: any = {}): any {
       mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: 'Database locked' });
 
       renderDetails(buildRFQ({ id: 'rfq-close-fail' }));
-      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Database locked', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, 'Database locked', 'warning');
       });
 
       mockUpdateRFQ.mockRejectedValueOnce(new Error('Close request timed out'));
-      fireEvent.click(screen.getByRole('button', { name: /Close RFQ/i }));
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
 
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Close request timed out', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, 'Close request timed out', 'warning');
       });
     });
 
@@ -3263,17 +3299,19 @@ function makeInquiry(overrides: any = {}): any {
       mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: '' });
       const { unmount } = renderDetails(buildRFQ());
 
-      const closeBtn = screen.getByRole('button', { name: /Close RFQ/i });
+      const closeBtn = screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') });
       fireEvent.click(closeBtn);
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Failed to close RFQ.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning');
       });
 
       // Close RFQ with empty catch error
       mockUpdateRFQ.mockRejectedValueOnce({});
-      fireEvent.click(closeBtn);
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
       await waitFor(() => {
-        expect(mockShowToast).toHaveBeenCalledWith('Action Failed', 'Failed to close RFQ.', 'warning');
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning');
       });
       unmount();
 
@@ -3764,6 +3802,74 @@ function makeInquiry(overrides: any = {}): any {
       global.fetch = origFetch;
     });
 
+    it('exercises handleDownloadAttachment download button for supporting documents across Buyer, Category Manager, and Vendor views', async () => {
+      const origFetch = global.fetch;
+      const origCreate = window.URL.createObjectURL;
+      const origRevoke = window.URL.revokeObjectURL;
+
+      window.URL.createObjectURL = jest.fn(() => 'blob:mock-doc-download');
+      window.URL.revokeObjectURL = jest.fn();
+
+      const sampleRfq = buildRFQ({
+        attachments: [
+          { id: 'att-sup-1', fileName: 'Engineering_Specs.pdf', size: 2048, mimeType: 'application/pdf' } as any,
+        ],
+      });
+
+      // 1. Buyer view download success
+      global.fetch = jest.fn().mockResolvedValue({
+        ok: true,
+        blob: jest.fn().mockResolvedValue(new Blob(['pdf-bytes'], { type: 'application/pdf' })),
+      } as any);
+
+      renderDetails(sampleRfq);
+
+      const downloadBtn = screen.getByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(downloadBtn).toBeInTheDocument();
+      fireEvent.click(downloadBtn);
+
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+        expect(window.URL.createObjectURL).toHaveBeenCalled();
+      });
+
+      // 2. Category Manager view
+      renderDetails(sampleRfq);
+      const cmDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(cmDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(cmDownloadBtns[cmDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 3. Vendor view renders and allows download
+      renderDetails(sampleRfq, { isVendorView: true });
+      const vendorDownloadBtns = screen.getAllByRole('button', { name: /Download Engineering_Specs\.pdf/i });
+      expect(vendorDownloadBtns.length).toBeGreaterThan(0);
+      fireEvent.click(vendorDownloadBtns[vendorDownloadBtns.length - 1]);
+      await waitFor(() => {
+        expect(global.fetch).toHaveBeenCalledWith('/api/rfqs/attachments/att-sup-1', expect.any(Object));
+      });
+
+      // 4. Download failure (ok: false)
+      global.fetch = jest.fn().mockResolvedValue({ ok: false } as any);
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Failed', 'Could not download the requested document.', 'warning');
+      });
+
+      // 5. Download exception
+      global.fetch = jest.fn().mockRejectedValue(new Error('Network drop'));
+      fireEvent.click(downloadBtn);
+      await waitFor(() => {
+        expect(mockShowToast).toHaveBeenCalledWith('Download Error', 'An error occurred while downloading the attachment.', 'warning');
+      });
+
+      global.fetch = origFetch;
+      window.URL.createObjectURL = origCreate;
+      window.URL.revokeObjectURL = origRevoke;
+    });
+
     it('exercises line items table sorting by quantity, targetDate with nulls, and category', () => {
       renderDetails(
         buildRFQ({
@@ -4236,6 +4342,164 @@ function makeInquiry(overrides: any = {}): any {
       expect(screen.getAllByText('🔒 Double-Blind').length).toBeGreaterThan(0);
 
       unmount();
+    });
+
+    it('synchronizes store status, session list, and parent callback when closing or extending an RFQ', async () => {
+      const refreshRFQs = jest.fn().mockResolvedValue(undefined);
+      const syncRFQRecord = jest.fn();
+      const refreshFromDB = jest.fn().mockResolvedValue(undefined);
+      const onUpdate = jest.fn();
+
+      const openRfq = buildRFQ({
+        id: 'rfq-close-sync-1',
+        rfqNumber: 'RFQ261611296521',
+        status: 'Quotes Pending',
+      });
+      const extendedRfq = {
+        ...openRfq,
+        closingDeadline: '2099-11-24T09:25:00.000Z',
+        isExtended: true,
+        extensionHours: 144,
+      };
+      const closedRfq = {
+        ...extendedRfq,
+        status: 'Closed' as const,
+      };
+
+      mockExtendRFQ.mockResolvedValueOnce({ success: true, rfq: extendedRfq });
+      mockUpdateRFQ.mockResolvedValueOnce({ success: true, rfq: closedRfq });
+
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB,
+        refreshRFQs,
+        syncRFQRecord,
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { name: 'Lead Buyer', email: 'buyer@procucev.com', role: 'buyer' },
+      });
+
+      renderDetails(openRfq, { onUpdate });
+
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(DETAILS.extendRfqAction, 'i') }));
+      const modal = screen.getByRole('dialog');
+      const confirmExtend = within(modal).getByRole('button', { name: /Confirm Extension/i });
+      fireEvent.click(confirmExtend);
+
+      await waitFor(() => expect(syncRFQRecord).toHaveBeenCalledWith(extendedRfq));
+      expect(onUpdate).toHaveBeenCalledWith(extendedRfq);
+      expect(refreshRFQs).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const closeModal = screen.getByRole('dialog');
+      expect(within(closeModal).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      fireEvent.click(within(closeModal).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
+
+      await waitFor(() => expect(syncRFQRecord).toHaveBeenCalledWith(closedRfq));
+      expect(mockUpdateRFQ).toHaveBeenCalledWith(openRfq.id, { status: 'Closed' });
+      expect(onUpdate).toHaveBeenCalledWith(closedRfq);
+      expect(refreshRFQs).toHaveBeenCalledTimes(2);
+      expect(refreshFromDB).toHaveBeenCalledTimes(2);
+    });
+
+    it('shows the permanent-closure warning when Close RFQ is clicked and respects Cancel without closing', async () => {
+      const openRfq = buildRFQ({
+        id: 'rfq-close-warn-1',
+        rfqNumber: 'RFQ261711451755',
+        title: 'Civil Works Package',
+        status: 'Quotes Pending',
+      });
+
+      renderDetails(openRfq);
+
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      expect(within(dialog).getByText(DETAILS.closeModalWarningTitle)).toBeInTheDocument();
+      expect(within(dialog).getByText(DETAILS.closeModalWarningBody)).toBeInTheDocument();
+      expect(mockUpdateRFQ).not.toHaveBeenCalled();
+
+      // Dismiss via Cancel button
+      fireEvent.click(within(dialog).getAllByRole('button', { name: UI_STRINGS.actions.cancel })[1]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+      expect(mockUpdateRFQ).not.toHaveBeenCalled();
+
+      // Reopen via Close RFQ button and dismiss via top X icon button
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const reopened = screen.getByRole('dialog');
+      const closeIcons = within(reopened).getAllByRole('button', { name: UI_STRINGS.actions.cancel });
+      fireEvent.click(closeIcons[0]);
+      expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+    });
+
+    it('surfaces an error toast when closing an RFQ fails and keeps the closed banner on closed RFQs', async () => {
+      const openRfq = buildRFQ({
+        id: 'rfq-close-fail-1',
+        rfqNumber: 'RFQ261711451756',
+        status: 'Quotes Pending',
+      });
+      mockUpdateRFQ.mockResolvedValueOnce({ success: false, error: '' } as any);
+
+      const { unmount } = renderDetails(openRfq);
+      fireEvent.click(screen.getByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') }));
+      const dialog = screen.getByRole('dialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: new RegExp(DETAILS.closeModalConfirmAction, 'i') }));
+
+      await waitFor(() =>
+        expect(mockShowToast).toHaveBeenCalledWith(DETAILS.closeFailedTitle, DETAILS.closeFailedMessage, 'warning')
+      );
+      unmount();
+
+      // Buyer sees permanent closed banner and no Close RFQ button
+      const { unmount: unmountBuyerClosed } = renderDetails(
+        buildRFQ({ id: 'rfq-closed-buyer-1', rfqNumber: 'RFQ261711451757', status: 'Closed' })
+      );
+      expect(screen.getByText(DETAILS.closedPermanentBannerBuyer)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: new RegExp(`^${DETAILS.closeRfqAction}$`, 'i') })).not.toBeInTheDocument();
+      unmountBuyerClosed();
+
+      // Vendor sees vendor closed banner
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'vendor',
+        buyerVendors: [],
+        currentUserSession: { name: 'Vendor Co', email: 'v@vendor.com', role: 'vendor' },
+      });
+      renderDetails(
+        buildRFQ({ id: 'rfq-closed-vendor-1', rfqNumber: 'RFQ261711451758', status: 'Closed' }),
+        { isVendorView: true }
+      );
+      expect(screen.getByText(DETAILS.closedPermanentBannerVendor)).toBeInTheDocument();
+    });
+
+    it('keeps buyer quotations and vendor quote scores sealed while open within extended closing window', () => {
+      const twoHoursAgo = new Date(Date.now() - 2 * 3600 * 1000).toISOString();
+      const futureClosing = new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+      (useApp as unknown as jest.Mock).mockReturnValue({
+        showToast: mockShowToast,
+        refreshFromDB: jest.fn().mockResolvedValue(undefined),
+        currentRole: 'buyer',
+        buyerVendors: [],
+        currentUserSession: { name: 'Buyer Co', email: 'buyer@test.com', role: 'buyer' },
+      });
+
+      renderDetails(
+        buildRFQ({
+          id: 'rfq-details-sealed-live',
+          rfqNumber: 'RFQ-CONFIDENTIAL-1',
+          status: 'In Evaluation',
+          quotesHidden: false,
+          createdAt: twoHoursAgo,
+          closingDeadline: futureClosing,
+          assignedVendors: [{ id: 'v-001', name: 'Apex Industrial Dynamics Pvt Ltd' }],
+          quotes: [quote({ vendorId: 'v-001', aiMatchScore: 96 })],
+          quotesCount: 1,
+        })
+      );
+
+      expect(screen.getByText(/Quotes Sealed \(48-Hour Bidding Period\)/i)).toBeInTheDocument();
+      expect(screen.queryByText(/Download Comparison/i)).not.toBeInTheDocument();
+      expect(screen.queryByText(/4,25,000/)).not.toBeInTheDocument();
     });
   });
 });

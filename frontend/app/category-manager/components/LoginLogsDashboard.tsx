@@ -24,6 +24,8 @@ import {
   ArrowDown,
 } from 'lucide-react';
 import { UI_STRINGS } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import { deleteUserPreference, getUserPreference, saveUserPreference } from '@/lib/userPreferencesClient';
 import type {
   LoginLogEntry,
   LoginLogsSummary,
@@ -52,20 +54,7 @@ const LOGIN_LOGS_DEFAULT_COLUMNS: ColumnDef[] = [
   { key: 'actions', label: 'Actions', visible: true, required: true },
 ];
 
-const LOGIN_LOGS_COL_PREF_KEY = 'qua_login_logs_col_prefs';
-
-function loadColumnPrefs(): ColumnDef[] {
-  try {
-    const raw = localStorage.getItem(LOGIN_LOGS_COL_PREF_KEY);
-    if (raw) {
-      const parsed = JSON.parse(raw) as ColumnDef[];
-      if (Array.isArray(parsed) && parsed.length > 0) return parsed;
-    }
-  } catch {
-    // ignore
-  }
-  return LOGIN_LOGS_DEFAULT_COLUMNS;
-}
+const LOGIN_LOGS_COL_PREF_KEY = USER_PREFERENCE_KEYS.LOGIN_LOGS_COLUMNS;
 
 // ---------------------------------------------------------------------------
 // SortIcon helper
@@ -121,7 +110,20 @@ export default function LoginLogsDashboard() {
   // Column settings states
   // -------------------------------------------------------------------------
   const [showColumnSettings, setShowColumnSettings] = useState<boolean>(false);
-  const [columns, setColumns] = useState<ColumnDef[]>(() => loadColumnPrefs());
+  const [columns, setColumns] = useState<ColumnDef[]>(LOGIN_LOGS_DEFAULT_COLUMNS);
+
+  // Hydrate login logs column preferences from backend user preferences API
+  useEffect(() => {
+    let cancelled = false;
+    void getUserPreference<ColumnDef[]>(LOGIN_LOGS_COL_PREF_KEY).then((saved) => {
+      if (!cancelled && Array.isArray(saved) && saved.length > 0) {
+        setColumns(saved);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // -------------------------------------------------------------------------
   // Pagination & modal states
@@ -175,6 +177,16 @@ export default function LoginLogsDashboard() {
 
     return () => clearInterval(interval);
   }, [realtimeActive, loadData]);
+
+  // Close details modal on Escape key
+  useEffect(() => {
+    if (!selectedLogForDetails) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedLogForDetails(null);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedLogForDetails]);
 
   // -------------------------------------------------------------------------
   // Filtered + sorted logs
@@ -376,20 +388,12 @@ export default function LoginLogsDashboard() {
   // -------------------------------------------------------------------------
   const saveColumnPrefs = (newCols: ColumnDef[]) => {
     setColumns(newCols);
-    try {
-      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(newCols));
-    } catch {
-      // ignore storage errors
-    }
+    void saveUserPreference(LOGIN_LOGS_COL_PREF_KEY, newCols);
   };
 
   const resetColumnPrefs = () => {
     setColumns(LOGIN_LOGS_DEFAULT_COLUMNS);
-    try {
-      localStorage.setItem(LOGIN_LOGS_COL_PREF_KEY, JSON.stringify(LOGIN_LOGS_DEFAULT_COLUMNS));
-    } catch {
-      // ignore storage errors
-    }
+    void deleteUserPreference(LOGIN_LOGS_COL_PREF_KEY);
   };
 
   // -------------------------------------------------------------------------
@@ -680,7 +684,14 @@ export default function LoginLogsDashboard() {
                   setCustomStartDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 cursor-pointer"
                 aria-label={strings.filters.startDate}
               />
               <span className="text-slate-400 text-xs">to</span>
@@ -691,7 +702,14 @@ export default function LoginLogsDashboard() {
                   setCustomEndDate(e.target.value);
                   setCurrentPage(1);
                 }}
-                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200"
+                onClick={(e) => {
+                  try {
+                    e.currentTarget.showPicker?.();
+                  } catch {
+                    e.currentTarget.focus();
+                  }
+                }}
+                className="px-1.5 py-0.5 text-xs bg-slate-50 dark:bg-slate-800 border border-slate-300 dark:border-slate-700 rounded-md text-slate-800 dark:text-slate-200 cursor-pointer"
                 aria-label={strings.filters.endDate}
               />
             </div>
@@ -758,6 +776,7 @@ export default function LoginLogsDashboard() {
               ) : (
                 paginatedLogs.map((log) => {
                   const isBuyer = log.userType === 'buyer';
+                  const isCategoryManager = log.userType === 'category_manager';
                   const isActive = log.status === 'ACTIVE';
 
                   return (
@@ -776,10 +795,16 @@ export default function LoginLogsDashboard() {
                                   className={`inline-block mt-0.5 px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
                                     isBuyer
                                       ? 'bg-sky-50 text-sky-700 dark:bg-sky-950/60 dark:text-sky-300 border border-sky-200 dark:border-sky-800/50'
+                                      : isCategoryManager
+                                      ? 'bg-purple-50 text-purple-700 dark:bg-purple-950/60 dark:text-purple-300 border border-purple-200 dark:border-purple-800/50'
                                       : 'bg-emerald-50 text-emerald-700 dark:bg-emerald-950/60 dark:text-emerald-300 border border-emerald-200 dark:border-emerald-800/50'
                                   }`}
                                 >
-                                  {isBuyer ? 'Buyer' : 'Seller / Vendor'}
+                                  {isBuyer
+                                    ? strings.roles.buyer
+                                    : isCategoryManager
+                                    ? strings.roles.categoryManager
+                                    : strings.roles.vendor}
                                 </span>
                               </td>
                             );
@@ -916,8 +941,18 @@ export default function LoginLogsDashboard() {
 
       {/* Session Details Modal */}
       {selectedLogForDetails && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4">
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150">
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedLogForDetails(null);
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-xl relative animate-in fade-in zoom-in-95 duration-150"
+          >
             <button
               type="button"
               onClick={() => setSelectedLogForDetails(null)}
@@ -947,7 +982,11 @@ export default function LoginLogsDashboard() {
                 <div className="border border-slate-100 dark:border-slate-800 p-2.5 rounded-lg">
                   <div className="text-slate-400 text-[10px] uppercase font-semibold">{strings.details.userRole}</div>
                   <div className="font-semibold text-slate-800 dark:text-slate-200 mt-0.5 capitalize">
-                    {selectedLogForDetails.userType === 'buyer' ? 'Buyer Account' : 'Seller / Vendor'}
+                    {selectedLogForDetails.userType === 'buyer'
+                      ? strings.details.roleBuyer
+                      : selectedLogForDetails.userType === 'category_manager'
+                      ? strings.details.roleCategoryManager
+                      : strings.details.roleVendor}
                   </div>
                 </div>
 

@@ -23,12 +23,18 @@ const {
   PERSISTENCE_MESSAGES,
   RFQ_AUTO_CLOSE_AFTER_MS,
   RFQ_AUTO_CLOSE_REASON,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
+  RFQ_CLOSURE_MESSAGES,
+  V0_QUOTES_DISPATCH_WINDOW_MS,
   RFQ_STATE_WRITE_RETRIES,
   PERSISTED_RECORD_WRITE_RETRIES,
   RFQ_NOTIFICATION_MESSAGES,
   RFQ_NOTIFICATION_ERROR_CODES,
   EVENT_OUTBOX_TYPES,
+  EVENT_OUTBOX_MAX_BATCH_SIZE,
   EMAIL_REGEX,
+  CHANNEL_DISPATCH_CONCURRENCY,
   MAJOR_CATEGORY_ALIASES,
   KEYWORD_TAXONOMY_MAP,
   DEFAULT_CATEGORY_TAXONOMY,
@@ -41,6 +47,22 @@ const {
   EXTENSION_HOURS_PER_DAY,
   clearDummyPanFields,
   resolveVendorLocationFields,
+  extractIndianAddressLocation,
+  normalizePincodeDigits,
+  resolveVendorPinDigits,
+  compareVendorPincodeProximity,
+  foldCategoryDashes,
+  VENDOR_CATEGORY_VALIDATION_MESSAGES,
+  isPlaceholderVendorCategory,
+  normalizeVendorCategoryList,
+  resolveValidVendorCategories,
+  VENDOR_ACTIVE_STATUSES,
+  VENDOR_STATUS_MESSAGES,
+  VENDOR_INGESTION_MESSAGES,
+  VENDOR_MAILBOX_CHANNELS,
+  VENDOR_INVITE_ORIGINS,
+  VENDOR_CM_ONBOARDING_NOTIFICATION,
+  isVendorInactive,
 } = require('../config/constants');
 const { validatePayload, VALIDATION_SCHEMAS } = require('../config/validationSchemas');
 const crypto = require('crypto');
@@ -121,19 +143,26 @@ function buildTaxonomyMaps(taxonomy) {
     if (!group || !group.majorCategory) continue;
     const majorCanonical = String(group.majorCategory).trim();
     const majorKey = majorCanonical.toLowerCase();
+    const foldedMajorKey = foldCategoryDashes(majorKey);
     if (!MAJOR_TO_MINORS_MAP.has(majorKey)) {
       MAJOR_TO_MINORS_MAP.set(majorKey, new Set());
+    }
+    if (foldedMajorKey !== majorKey && !MAJOR_TO_MINORS_MAP.has(foldedMajorKey)) {
+      MAJOR_TO_MINORS_MAP.set(foldedMajorKey, MAJOR_TO_MINORS_MAP.get(majorKey));
     }
     const minorSet = MAJOR_TO_MINORS_MAP.get(majorKey);
     for (const minor of Array.isArray(group.minorCategories) ? group.minorCategories : []) {
       if (!minor) continue;
       const mTrimmed = String(minor).trim();
       const mKey = mTrimmed.toLowerCase();
+      const foldedMinorKey = foldCategoryDashes(mKey);
       minorSet.add(mKey);
-      if (!MINOR_TO_MAJORS_MAP.has(mKey)) MINOR_TO_MAJORS_MAP.set(mKey, new Set());
-      MINOR_TO_MAJORS_MAP.get(mKey).add(majorCanonical);
-      if (!MINOR_TO_MAJOR_MAP.has(mKey)) {
-        MINOR_TO_MAJOR_MAP.set(mKey, majorCanonical);
+      for (const lookupKey of foldedMinorKey !== mKey ? [mKey, foldedMinorKey] : [mKey]) {
+        if (!MINOR_TO_MAJORS_MAP.has(lookupKey)) MINOR_TO_MAJORS_MAP.set(lookupKey, new Set());
+        MINOR_TO_MAJORS_MAP.get(lookupKey).add(majorCanonical);
+        if (!MINOR_TO_MAJOR_MAP.has(lookupKey)) {
+          MINOR_TO_MAJOR_MAP.set(lookupKey, majorCanonical);
+        }
       }
     }
   }
@@ -144,7 +173,7 @@ function resolveCanonicalCategory(cat) {
   if (!cat) return '';
   const trimmed = String(cat).trim();
   const lower = trimmed.toLowerCase();
-  const alias = MAJOR_CATEGORY_ALIASES && MAJOR_CATEGORY_ALIASES[lower];
+  const alias = MAJOR_CATEGORY_ALIASES && (MAJOR_CATEGORY_ALIASES[lower] || MAJOR_CATEGORY_ALIASES[foldCategoryDashes(lower)]);
   if (alias) return alias;
   return trimmed;
 }
@@ -160,14 +189,14 @@ function minorCategoryKey(value) {
   return String(value || '')
     .toLowerCase()
     .replace(/&/g, 'and')
-    .replace(/[/_.,-]/g, ' ')
+    .replace(/[/_.,–—-]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
 }
 
 /** Lookup key for the taxonomy maps above, which are keyed by trimmed lower case. */
 function taxonomyKeyOf(value) {
-  return String(value || '').trim().toLowerCase();
+  return foldCategoryDashes(String(value || '').trim().toLowerCase());
 }
 
 /** True when the name is a taxonomy minor and not also a taxonomy major. */
@@ -240,20 +269,35 @@ function extractCategories(val) {
   return [];
 }
 
+/** Resolves the primary contact email for a vendor, falling back to `corporateEmail`. */
+function resolveVendorEmail(vendor) {
+  return String((vendor && (vendor.email || vendor.corporateEmail)) || '').trim();
+}
+
 /** Dedupe key for a vendor: its id, else its email, else its name, in lower case. Empty when none is set. */
 function vendorKey(vendor) {
-  return String(vendor?.id || vendor?.email || vendor?.name || '').toLowerCase().trim();
+  return String(vendor?.id || resolveVendorEmail(vendor) || vendor?.name || '').toLowerCase().trim();
 }
 
 /** Lower-case major names a vendor is filed under: majorCategory, or category on a legacy record that carries only that. */
 function vendorMajorKeys(vendor) {
-  return extractCategories(vendor?.majorCategory || vendor?.category).map((name) => name.toLowerCase());
+  const keys = new Set();
+  for (const name of extractCategories(vendor?.majorCategory || vendor?.category)) {
+    const lower = name.toLowerCase();
+    keys.add(lower);
+    const folded = foldCategoryDashes(lower);
+    if (folded) keys.add(folded);
+  }
+  return Array.from(keys);
 }
+
+const deferredVendorPlanRfqs = new WeakSet();
 
 function normalizeRFQForRead(rfq) {
   const normalized = { ...rfq };
   delete normalized.vendorInvitationTargets;
   delete normalized.gatewayNotificationTarget;
+  delete normalized.vendorPlanPending;
   if ((normalized.poFinalised || normalized.poNumber) && normalized.status === 'Closed') {
     normalized.status = 'PO Generated';
     normalized.poFinalised = true;
@@ -351,6 +395,8 @@ class StoreService {
     this._lastRfqSyncMap = new Map();
     this._lastRfqSyncTime = 0;
     this._auditWriteQueue = Promise.resolve();
+    this._rfqVendorInvites = new Map();
+    this._v0DispatchClaimedRfqs = new Set();
   }
 
   reset() {
@@ -370,6 +416,8 @@ class StoreService {
     this._lastRfqSyncMap = new Map();
     this._lastRfqSyncTime = 0;
     this._auditWriteQueue = Promise.resolve();
+    this._rfqVendorInvites = new Map();
+    this._v0DispatchClaimedRfqs = new Set();
     this._pendingQuoteNotifications = new Map();
     this._rfqQuoteAckSent = new Set();
     if (this._delayedQuoteTimers) {
@@ -460,6 +508,8 @@ class StoreService {
       this.auditLogs = auditLogs;
 
       this.isHydratedFromDB = true;
+      this._lastRfqSyncTime = Date.now();
+      this._lastRfqSyncMap.clear();
       // The admin infrastructure list should describe the connection this load
       // just used, not a placeholder, so it is refreshed off the same boot.
       await this.refreshInfrastructureHealth().catch((err) =>
@@ -566,9 +616,69 @@ class StoreService {
   _sendWithFeedOutcome(sendPromise, errorMessage, metadata, feedDetails) {
     const tracked = this._background(sendPromise, errorMessage, metadata);
     tracked
-      .then((result) => this._recordChannelFeedItem(feedDetails, toChannelOutcome(result)))
+      .then((result) => {
+        const outcome = toChannelOutcome(result);
+        this._recordChannelFeedItem(feedDetails, outcome);
+        if (
+          outcome.success &&
+          feedDetails?.rfqNumber &&
+          feedDetails?.vendor &&
+          (feedDetails.channel === 'sms' || feedDetails.channel === 'whatsapp')
+        ) {
+          this._recordDirectChannelSentOnRfq(feedDetails.rfqNumber, feedDetails.channel, feedDetails.vendor, outcome);
+        }
+      })
       .catch((error) => logger.error('Could not record the outcome of a channel send', { error }, 'STORE_SERVICE'));
     return tracked;
+  }
+
+  /**
+   * Drain queued channel notifications with bounded concurrency so large RFQ
+   * fan-outs never exhaust Worker outbound socket pools and abort in-flight SMS/HTTP calls.
+   */
+  _dispatchChannelWave(tasks) {
+    if (!Array.isArray(tasks) || tasks.length === 0) return Promise.resolve([]);
+    let nextIndex = 0;
+    const workerCount = Math.min(CHANNEL_DISPATCH_CONCURRENCY, tasks.length);
+    const workers = [];
+    for (let i = 0; i < workerCount; i += 1) {
+      workers.push((async () => {
+        while (nextIndex < tasks.length) {
+          const runTask = tasks[nextIndex];
+          nextIndex += 1;
+          const { promise, errorMessage, metadata, feedDetails } = runTask();
+          await this._sendWithFeedOutcome(promise, errorMessage, metadata, feedDetails);
+        }
+      })());
+    }
+    return this._background(Promise.all(workers), 'Failed to drain queued channel dispatches');
+  }
+
+  /** Records a direct (initial) SMS or WhatsApp send onto RFQ follow-up vendor status and sent counter. */
+  _recordDirectChannelSentOnRfq(rfqNumber, channel, vendor, outcome) {
+    const stored = this.rfqs.find((candidate) => candidate.rfqNumber === rfqNumber || candidate.id === rfqNumber);
+    if (!stored) return;
+    this._reconcileRFQFollowUpStats(stored);
+    const followUp = stored.followUpData;
+    if (!followUp) return;
+
+    const record = this._followUpVendorRecord(followUp, vendor);
+    const recordedAt = new Date().toISOString();
+    const prevStatus = record?.[channel]?.status;
+    record[channel] = {
+      status: 'sent',
+      lastAttempt: recordedAt,
+      messageId: outcome.messageId,
+      error: null,
+    };
+    record.lastInteraction = recordedAt;
+
+    const statsKey = channel === 'whatsapp' ? 'whatsappStats' : 'smsStats';
+    if (!followUp[statsKey]) followUp[statsKey] = { total: 0, delivered: 0, sent: 0 };
+    if (!['sent', 'delivered', 'read', 'replied', 'clicked'].includes(prevStatus || '')) {
+      followUp[statsKey].sent = (followUp[statsKey].sent || 0) + 1;
+    }
+    this._persistRFQ(stored);
   }
 
   /** Adds one feed entry for a channel message, using the real outcome as its status. */
@@ -652,11 +762,20 @@ class StoreService {
     this._background(domainQueries.upsertPaymentLinkInDB(link), 'Failed to persist payment link');
   }
 
+  isVendorPlanDeferred(rfq) {
+    return Boolean(rfq && deferredVendorPlanRfqs.has(rfq));
+  }
+
   async confirmRfqPersisted(rfq) {
     this._lastRfqSyncTime = 0;
     if (!pool.hasStorage()) return { persisted: null };
     try {
-      await domainQueries.upsertRFQInDB(rfq);
+      const deferred = this.isVendorPlanDeferred(rfq);
+      const payload = deferred ? { ...rfq, vendorPlanPending: true } : rfq;
+      await domainQueries.upsertRFQInDB(payload);
+      if (!deferred) {
+        this._dispatchRFQCreatedEmailOutbox(rfq);
+      }
       return { persisted: true };
     } catch (err) {
       logger.error('Failed to confirm RFQ persisted in database', err, 'STORE_SERVICE');
@@ -672,7 +791,8 @@ class StoreService {
   async persistRFQDurably(rfq) {
     try {
       const storageConfigured = pool.hasStorage();
-      const persistedRFQ = await domainQueries.upsertRFQInDB(rfq);
+      const payload = this.isVendorPlanDeferred(rfq) ? { ...rfq, vendorPlanPending: true } : rfq;
+      const persistedRFQ = await domainQueries.upsertRFQInDB(payload);
       if (storageConfigured && !persistedRFQ) {
         throw new Error('RFQ upsert completed without a persisted row');
       }
@@ -852,24 +972,27 @@ class StoreService {
    * other in-process paths that still iterate `this.buyerAccounts` directly
    * (e.g. `getBuyerAccounts()`) stay consistent with what was just read.
    */
-  async getBuyerAccountByEmail(email) {
+  async getBuyerAccountByEmail(email, { fresh = false } = {}) {
     if (!email) return null;
     const target = email.toLowerCase();
 
     if (pool.hasStorage()) {
       try {
-        const fresh = await domainQueries.getBuyerAccountByEmailFromDB(email);
-        if (fresh) {
-          const idx = this.buyerAccounts.findIndex((a) => a.id === fresh.id);
+        const freshAccount = await domainQueries.getBuyerAccountByEmailFromDB(
+          email,
+          ...(fresh ? [{ fresh: true }] : [])
+        );
+        if (freshAccount) {
+          const idx = this.buyerAccounts.findIndex((a) => a.id === freshAccount.id);
           if (idx === -1) {
-            this.buyerAccounts.unshift(fresh);
+            this.buyerAccounts.unshift(freshAccount);
           } else {
-            this.buyerAccounts[idx] = fresh;
+            this.buyerAccounts[idx] = freshAccount;
           }
-          if (this.activeBuyerAccount && this.activeBuyerAccount.id === fresh.id) {
-            this.activeBuyerAccount = fresh;
+          if (this.activeBuyerAccount && this.activeBuyerAccount.id === freshAccount.id) {
+            this.activeBuyerAccount = freshAccount;
           }
-          return fresh;
+          return freshAccount;
         }
         return null;
       } catch (error) {
@@ -934,9 +1057,25 @@ class StoreService {
     }
 
     if (existing) {
-      if (profile && (!existing.gstin || !existing.mobileNumber || !existing.city)) {
+      if (
+        profile &&
+        (
+          !existing.gstin ||
+          !existing.pan ||
+          !existing.street ||
+          !existing.city ||
+          !existing.state ||
+          !existing.pincode ||
+          !existing.mobileNumber ||
+          (profile.organizationId && !existing.organizationId)
+        )
+      ) {
+        const resolvedOrgId = profile.organizationId || existing.organizationId || user.orgId || null;
         const enriched = {
           ...existing,
+          ...(resolvedOrgId !== undefined && (resolvedOrgId !== null || existing.organizationId !== undefined)
+            ? { organizationId: resolvedOrgId }
+            : {}),
           organizationName: profile.companyName || existing.organizationName,
           brandName: profile.brandName || existing.brandName,
           organizationType: profile.organizationType || existing.organizationType,
@@ -955,6 +1094,28 @@ class StoreService {
           country: profile.country || existing.country,
           categories: profile.categories || existing.categories,
         };
+        const hasNewFieldData =
+          (profile.organizationId && enriched.organizationId !== existing.organizationId) ||
+          enriched.organizationName !== existing.organizationName ||
+          enriched.brandName !== existing.brandName ||
+          enriched.organizationType !== existing.organizationType ||
+          enriched.contactPerson !== existing.contactPerson ||
+          enriched.contactDesignation !== existing.contactDesignation ||
+          enriched.mobileNumber !== existing.mobileNumber ||
+          enriched.corporateEmail !== existing.corporateEmail ||
+          enriched.gstin !== existing.gstin ||
+          enriched.pan !== existing.pan ||
+          enriched.cinNumber !== existing.cinNumber ||
+          enriched.website !== existing.website ||
+          enriched.street !== existing.street ||
+          enriched.city !== existing.city ||
+          enriched.state !== existing.state ||
+          enriched.pincode !== existing.pincode ||
+          enriched.country !== existing.country ||
+          (Array.isArray(profile.categories) && profile.categories.length > 0 && (!Array.isArray(existing.categories) || existing.categories.length === 0));
+        if (!hasNewFieldData) {
+          return existing;
+        }
         const saved = await this.updateBuyerAccountDurably(existing.id, enriched);
         if (!saved && pool.hasStorage()) {
           throw new Error('Buyer profile enrichment did not find a durable account row.');
@@ -1105,12 +1266,28 @@ class StoreService {
       created_at: _createdAtRaw,
       ...claimable
     } = details || {};
+    const cleanCategories = resolveValidVendorCategories(claimable);
+    const cleanedClaimable = { ...claimable };
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'majorCategory')) {
+      if (cleanCategories.majorCategory) {
+        cleanedClaimable.majorCategory = cleanCategories.majorCategory;
+      } else {
+        delete cleanedClaimable.majorCategory;
+      }
+    }
+    if (Object.prototype.hasOwnProperty.call(cleanedClaimable, 'minorCategories')) {
+      if (cleanCategories.minorCategories.length > 0) {
+        cleanedClaimable.minorCategories = cleanCategories.minorCategories;
+      } else {
+        delete cleanedClaimable.minorCategories;
+      }
+    }
     const updates = {
-      ...claimable,
+      ...cleanedClaimable,
       buyerId: buyerId || null,
       buyerAccountId: buyerId || null,
-      source: claimable.source || (buyerId || claimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
-      isCategoryAligned: claimable.isCategoryAligned !== undefined ? claimable.isCategoryAligned : true,
+      source: cleanedClaimable.source || (buyerId || cleanedClaimable.addedByBuyerCompany ? 'buyer_manual' : 'procucev_network'),
+      isCategoryAligned: cleanedClaimable.isCategoryAligned !== undefined ? cleanedClaimable.isCategoryAligned : true,
       onboardingEmailStatus: 'account_exists',
     };
 
@@ -1188,7 +1365,11 @@ class StoreService {
   updateBuyerAccount(idOrEmail, updates, { persist = true } = {}) {
     const key = String(idOrEmail || '').trim().toLowerCase();
     const idx = this.buyerAccounts.findIndex(
-      (a) => a.id === idOrEmail || (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
+      (a) => a.id === idOrEmail ||
+             a.userId === idOrEmail ||
+             a.buyerId === idOrEmail ||
+             a.organizationId === idOrEmail ||
+             (a.corporateEmail && a.corporateEmail.toLowerCase() === key)
     );
     if (idx === -1) return null;
 
@@ -1210,7 +1391,11 @@ class StoreService {
   async updateBuyerAccountDurably(idOrEmail, updates) {
     const key = String(idOrEmail || '').trim().toLowerCase();
     let idx = this.buyerAccounts.findIndex(
-      (account) => account.id === idOrEmail || (account.corporateEmail && account.corporateEmail.toLowerCase() === key)
+      (account) => account.id === idOrEmail ||
+                   account.userId === idOrEmail ||
+                   account.buyerId === idOrEmail ||
+                   account.organizationId === idOrEmail ||
+                   (account.corporateEmail && account.corporateEmail.toLowerCase() === key)
     );
     const storageConfigured = pool.hasStorage();
     let updated;
@@ -1222,12 +1407,21 @@ class StoreService {
           ? domainQueries.getBuyerAccountSnapshotByEmailFromDB
           : domainQueries.getBuyerAccountSnapshotByIdFromDB;
         let snapshot = await snapshotReader(idOrEmail);
+        if (!snapshot && !String(idOrEmail || '').includes('@') && updates && updates.corporateEmail) {
+          snapshot = await domainQueries.getBuyerAccountSnapshotByEmailFromDB(updates.corporateEmail);
+        }
         if (!snapshot) return null;
 
+        const canonicalId = snapshot.id || snapshot.account?.id;
         for (let attempt = 0; attempt < PERSISTED_RECORD_WRITE_RETRIES; attempt += 1) {
+          const { id: requestedId, ...restUpdates } = updates || {};
           updated = {
             ...snapshot.account,
-            ...updates,
+            ...restUpdates,
+            ...(canonicalId ? { id: canonicalId } : {}),
+            ...(requestedId && requestedId !== canonicalId && !snapshot.account?.userId && !restUpdates.userId
+              ? { userId: requestedId }
+              : {}),
             syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
           };
           savedAccount = await domainQueries.updateBuyerAccountIfUnchangedInDB(snapshot, updated);
@@ -1239,9 +1433,14 @@ class StoreService {
       } else {
         const previous = idx >= 0 ? this.buyerAccounts[idx] : null;
         if (!previous) return null;
+        const { id: requestedId, ...restUpdates } = updates || {};
         updated = {
           ...previous,
-          ...updates,
+          ...restUpdates,
+          id: previous.id,
+          ...(requestedId && requestedId !== previous.id && !previous.userId && !restUpdates.userId
+            ? { userId: requestedId }
+            : {}),
           syncTimestamp: new Date().toISOString().replace('T', ' ').substring(0, 16) + ' UTC',
         };
         savedAccount = updated;
@@ -1536,6 +1735,26 @@ class StoreService {
   }
 
   /**
+   * True when an RFQ is public (Mode 0 / V0, Mode 3 / V3 double-blind, marketplace, or marked isPublic).
+   */
+  isPublicRfq(rfq) {
+    if (!rfq) return false;
+    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+    return (
+      mode === 'mode_0' ||
+      mode === 'v0' ||
+      mode === 'version_0' ||
+      mode === 'mode_3' ||
+      mode === 'v3' ||
+      mode === 'version_3' ||
+      Boolean(rfq.isPublic) ||
+      rfq.type === 'marketplace' ||
+      rfq.type === 'network_open' ||
+      rfq.type === 'public_enquiry'
+    );
+  }
+
+  /**
    * Apply the sourcing-credit rule for a single RFQ creation, regardless of
    * how the RFQ was raised (portal, AI wizard, or inbound email gateway).
    *
@@ -1632,7 +1851,10 @@ class StoreService {
   }
 
   getVendorById(id, scopedBuyerId = null) {
-    const vendor = this.vendors.find((v) => v.id === id || v.email === id);
+    const masterSuffix = typeof id === 'string' && id.startsWith('v-master-') ? id.slice('v-master-'.length) : '';
+    const vendor = this.vendors.find(
+      (v) => v.id === id || v.email === id || (masterSuffix && v.masterRecordId === masterSuffix)
+    );
     if (!vendor) return undefined;
     if (scopedBuyerId === 'all') return vendor;
     if (!vendor.buyerId && !vendor.buyerAccountId) return vendor;
@@ -1644,7 +1866,9 @@ class StoreService {
       (sId) =>
         (vendor.buyerId && String(vendor.buyerId).toLowerCase() === sId) ||
         (vendor.buyerAccountId && String(vendor.buyerAccountId).toLowerCase() === sId) ||
-        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId)
+        (vendor.buyerEmail && String(vendor.buyerEmail).toLowerCase() === sId) ||
+        (vendor.email && String(vendor.email).toLowerCase() === sId) ||
+        (vendor.addedByBuyerCompany && String(vendor.addedByBuyerCompany).toLowerCase() === sId)
     );
     return matches ? vendor : undefined;
   }
@@ -1677,6 +1901,11 @@ class StoreService {
       : domainQueries.getVendorByEmailFromDB(normalizedId);
     let vendor = isEmail ? await lookupByEmail() : await lookupById();
     if (!vendor && !isEmail) vendor = await lookupByEmail();
+    if (!vendor && inMemory?.id && inMemory.id !== normalizedId) {
+      vendor = await (fresh
+        ? domainQueries.getVendorByIdFromDB(inMemory.id, { fresh: true })
+        : domainQueries.getVendorByIdFromDB(inMemory.id));
+    }
     if (!vendor) {
       const normalizedEmail = isEmail
         ? normalizedId.toLowerCase()
@@ -1731,16 +1960,37 @@ class StoreService {
     );
     const resolvedLocation = hasLocationInput
       ? resolveVendorLocationFields({
-          location: safeVendorData.location,
-          address: safeVendorData.address,
-          factoryAddress: safeVendorData.factoryAddress,
-          city: safeVendorData.city,
-          state: safeVendorData.state,
-          pincode: safeVendorData.pincode,
-        })
+        location: safeVendorData.location,
+        address: safeVendorData.address,
+        factoryAddress: safeVendorData.factoryAddress,
+        city: safeVendorData.city,
+        state: safeVendorData.state,
+        pincode: safeVendorData.pincode,
+      })
       : null;
+    const cleanCategories = resolveValidVendorCategories(safeVendorData);
+    const resolvedMajorCategory = cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || ''
+        : '');
+    const resolvedMinorCategories = cleanCategories.minorCategories;
+    const shouldSyncClientMapped =
+      resolvedMinorCategories.length > 0 && safeVendorData.clientMappedCategories === undefined;
+    const resolvedGstin = String(
+      safeVendorData.gstin ||
+      safeVendorData.gst ||
+      safeVendorData.gstNumber ||
+      ''
+    ).trim().toUpperCase();
+
     return clearDummyPanFields({
       ...safeVendorData,
+      ...(resolvedGstin ? { gstin: resolvedGstin, gst: resolvedGstin } : {}),
+      ...(resolvedMajorCategory ? { majorCategory: resolvedMajorCategory } : safeVendorData.majorCategory !== undefined ? { majorCategory: '' } : {}),
+      ...(safeVendorData.minorCategories !== undefined || resolvedMinorCategories.length > 0
+        ? { minorCategories: resolvedMinorCategories }
+        : {}),
+      ...(shouldSyncClientMapped ? { clientMappedCategories: [...resolvedMinorCategories] } : {}),
       ...(resolvedLocation?.location ? { location: resolvedLocation.location } : {}),
       ...(resolvedLocation?.city ? { city: resolvedLocation.city } : {}),
       ...(resolvedLocation?.state ? { state: resolvedLocation.state } : {}),
@@ -1827,7 +2077,13 @@ class StoreService {
       throw persistError;
     }
 
-    const savedVendor = persistedVendor || newVendor;
+    const savedVendor = persistedVendor
+      ? {
+        ...persistedVendor,
+        ...(newVendor.isCmCreated ? { isCmCreated: true } : {}),
+        ...(newVendor.createdByRole ? { createdByRole: newVendor.createdByRole } : {}),
+      }
+      : newVendor;
     this.vendors.unshift(savedVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
@@ -1867,7 +2123,14 @@ class StoreService {
     }
   }
 
-  async _provisionVendorOnboarding(vendor, actorEmail = null, { skipEmail = false } = {}) {
+  async _provisionVendorOnboarding(vendor, actorEmail = null, { skipEmail = false, isCmCreated = false, mailboxChannel = null } = {}) {
+    const cmCreatedFlag = Boolean(
+      isCmCreated ||
+      vendor?.isCmCreated ||
+      vendor?.createdByCategoryManager ||
+      String(vendor?.createdByRole || '').toLowerCase() === 'category_manager'
+    );
+    const onboardingMailboxChannel = mailboxChannel || (cmCreatedFlag ? VENDOR_MAILBOX_CHANNELS.DIRECT : null);
     // Real, previously-shipped bug found live: identityQueries.insertVendorAccount
     // unconditionally resets password + phone on an *existing* identity
     // account when one is found for the email — correct for the CLI
@@ -1940,6 +2203,8 @@ class StoreService {
           payload: {
             vendorId: vendor.id,
             encryptedTempPassword: encryptedTempPassword.encoded,
+            ...(cmCreatedFlag ? { isCmCreated: true } : {}),
+            ...(onboardingMailboxChannel ? { mailboxChannel: onboardingMailboxChannel } : {}),
           },
         };
       } catch (error) {
@@ -2013,25 +2278,43 @@ class StoreService {
     }
 
     if (onboardingEvent) {
+      if (vendor.onboardingEmailStatus !== 'pending') {
+        await this._persistVendorOnboardingStatus(vendor, 'pending');
+      }
       logger.info('Vendor onboarding email recorded for durable delivery', {
         vendorId: vendor.id,
         email: vendor.email,
         outboxId: onboardingEvent.id,
       }, 'STORE_SERVICE');
+      this._background(
+        eventOutboxService.dispatchDueEventOutboxJobs(1, [onboardingEvent.id]),
+        'Failed to immediately dispatch vendor onboarding event',
+        { vendorId: vendor.id, outboxId: onboardingEvent.id }
+      );
       return { status: 'pending', error: null };
     }
 
     const emailPayload = mailerService.buildVendorOnboardingEmail({
       to: vendor.email,
       recipientName: vendor.contactPerson || vendor.name,
-      buyerOrganizationName: 'Procucev Enterprise',
+      buyerOrganizationName: cmCreatedFlag
+        ? VENDOR_CM_ONBOARDING_NOTIFICATION.DEFAULT_ORGANIZATION_NAME
+        : (vendor.addedByBuyerCompany || 'Procucev Enterprise'),
       vendorCode: vendor.id,
       tempPassword,
       contactPhone: vendor.phone,
+      isCmCreated: cmCreatedFlag,
+      mailboxChannel: onboardingMailboxChannel,
     });
 
     try {
-      const delivery = await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
+      const delivery = onboardingMailboxChannel
+        ? await mailerService.sendVendorIngestionEmail(
+          emailPayload,
+          'onboarding',
+          { vendorChannel: onboardingMailboxChannel }
+        )
+        : await mailerService.sendVendorIngestionEmail(emailPayload, 'onboarding');
       if (delivery.sent) {
         const statusWrite = await this._persistVendorOnboardingStatus(vendor, 'sent');
         logger.info(`Onboarding email sent to ${vendor.email}`, { vendorId: vendor.id }, 'STORE_SERVICE');
@@ -2070,6 +2353,14 @@ class StoreService {
       state: row.state,
       pincode: row.pincode,
     });
+    const cleanCategories = resolveValidVendorCategories(row);
+    const inferredMajor =
+      cleanCategories.majorCategory ||
+      (cleanCategories.minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([cleanCategories.minorCategories[0]])?.[0] || cleanCategories.minorCategories[0]
+        : '');
+    const resolvedMajor = inferredMajor || (row.buyerId ? '' : 'Uncategorised');
+
     return {
       id: `v-bulk-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
       vendorCode: row.vendorCode || '',
@@ -2077,13 +2368,15 @@ class StoreService {
       contactPerson: row.contactPerson || '',
       phone: row.phone,
       email: row.email || null,
-      majorCategory: row.majorCategory || 'Uncategorised',
-      minorCategories: row.minorCategories || [],
+      majorCategory: resolvedMajor,
+      minorCategories: cleanCategories.minorCategories,
+      ...(cleanCategories.minorCategories.length > 0 ? { clientMappedCategories: [...cleanCategories.minorCategories] } : {}),
       location: resolvedLocation.location || '',
       city: resolvedLocation.city || '',
       state: resolvedLocation.state || '',
       pincode: resolvedLocation.pincode || '',
-      gstin: row.gstin || '',
+      gstin: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
+      gst: String(row.gstin || row.gst || row.gstNumber || '').trim().toUpperCase(),
       products: row.products || '',
       // Not evaluated yet, so no rating or score is recorded. An unrated supplier
       // must not carry a score that nobody assessed.
@@ -2096,6 +2389,8 @@ class StoreService {
       // attribution the single-add createVendor path already applies.
       source: row.source || 'excel',
       ...(row.buyerId ? { buyerId: row.buyerId } : {}),
+      ...(row.buyerAccountId || row.buyerId ? { buyerAccountId: row.buyerAccountId || row.buyerId } : {}),
+      ...(row.buyerEmail ? { buyerEmail: row.buyerEmail } : {}),
       ...(row.addedByBuyerCompany ? { addedByBuyerCompany: row.addedByBuyerCompany } : {}),
       status: 'REGISTERED / NOT EVALUATED',
       evaluated: false,
@@ -2437,6 +2732,70 @@ class StoreService {
     }
   }
 
+  /**
+   * Builds normalized state fields when toggling a vendor between active and inactive.
+   * Preserves prior evaluation/approval status across deactivation so reactivation restores it.
+   */
+  buildVendorActiveStatusUpdates(currentVendor, isActive, actorEmail = null) {
+    const active = Boolean(isActive);
+    const nowIso = new Date().toISOString();
+    const currentStatus = String(currentVendor?.status || '').trim();
+    if (!active) {
+      const preservedStatus =
+        currentStatus && currentStatus.toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+          ? currentStatus
+          : (currentVendor?.previousStatus || 'REGISTERED / NOT EVALUATED');
+      return {
+        isActive: false,
+        disabled: true,
+        status: VENDOR_ACTIVE_STATUSES.INACTIVE,
+        previousStatus: preservedStatus,
+        disabledAt: nowIso,
+        disabledBy: actorEmail || null,
+      };
+    }
+
+    const restoredStatus =
+      currentVendor?.previousStatus &&
+      String(currentVendor.previousStatus).trim().toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+        ? currentVendor.previousStatus
+        : (currentStatus && currentStatus.toUpperCase() !== VENDOR_ACTIVE_STATUSES.INACTIVE
+          ? currentStatus
+          : 'REGISTERED / NOT EVALUATED');
+    return {
+      isActive: true,
+      disabled: false,
+      status: restoredStatus,
+      previousStatus: null,
+      disabledAt: null,
+      disabledBy: null,
+      reactivatedAt: nowIso,
+      reactivatedBy: actorEmail || null,
+    };
+  }
+
+  async updateVendorActiveStatusDurably(
+    id,
+    isActive,
+    actorEmail = null,
+    { preloadedVendor = null, skipAuditLog = false } = {}
+  ) {
+    const existing = preloadedVendor || (await this.getVendorByIdWithDBFallback(id, 'all', { fresh: true }));
+    if (!existing) return null;
+    const statusUpdates = this.buildVendorActiveStatusUpdates(existing, isActive, actorEmail);
+    const updated = await this.updateVendorDurably(existing.id, statusUpdates);
+    if (!updated) return null;
+    if (!skipAuditLog) {
+      this.addAuditLog({
+        userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+        action: isActive
+          ? `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) ACTIVE and eligible for future workflows`
+          : `Marked vendor ${updated.name || existing.id} (${updated.email || 'no email'}) INACTIVE (historical data preserved; excluded from future flows)`,
+      });
+    }
+    return updated;
+  }
+
   deleteVendor(id, actorEmail = null, { deferPersistence = false, deferAudit = false } = {}) {
     const target = this.vendors.find((v) => v.id === id || v.email === id);
     const beforeLen = this.vendors.length;
@@ -2486,6 +2845,31 @@ class StoreService {
       action: `Removed vendor ${target.name || id} (${target.email || 'no email on record'}) from the vendor master`,
     });
     return true;
+  }
+
+  async deleteVendorsDurably(ids, actorEmail = null) {
+    const uniqueIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map((v) => String(v || '').trim()).filter(Boolean)));
+    if (uniqueIds.length === 0) return [];
+
+    if (pool.hasStorage() && typeof domainQueries.deleteVendorsInDB === 'function') {
+      try {
+        await domainQueries.deleteVendorsInDB(uniqueIds);
+      } catch (error) {
+        logger.error('Failed to persist bulk vendor deletion', error, 'STORE_SERVICE');
+        const persistError = new Error('The selected vendors could not be deleted from storage. Try again.');
+        persistError.statusCode = 503;
+        persistError.code = 'PERSISTENCE_UNAVAILABLE';
+        throw persistError;
+      }
+    }
+
+    const removedSet = new Set(uniqueIds);
+    this.vendors = this.vendors.filter((vendor) => !removedSet.has(vendor.id));
+    this.addAuditLog({
+      userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
+      action: `Removed ${uniqueIds.length} vendor${uniqueIds.length === 1 ? '' : 's'} from the vendor master`,
+    });
+    return uniqueIds;
   }
 
 
@@ -2649,36 +3033,67 @@ class StoreService {
     const hasUnlimitedQuotes = hasUnlimitedQuoteAccess(vendor);
     const isBuyerMapped = Boolean(rfq && this.isVendorMappedToRfqBuyer(vendor, rfq));
 
-    const freeCredits = vendor.freeQuotationCredits !== undefined
-      ? Number(vendor.freeQuotationCredits)
-      : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
-
-    const isSubscribed = Boolean(
-      vendor.subscriptionPlan === 'connect' ||
-      vendor.subscriptionPlan === 'select' ||
+    const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+    const planQuota = hasUnlimitedQuotes ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+    const isGenericSubscribed = Boolean(
       vendor.isSubscribed === true ||
       vendor.subscriptionStatus === 'active' ||
       hasUnlimitedQuotes
     );
+    const isSubscribed = Boolean(
+      plan === 'connect' ||
+      plan === 'select' ||
+      isGenericSubscribed
+    );
 
-    // If buyer-mapped for this respective buyer's RFQ or has unlimited quotes: unlimited quotations, no subscription needed.
-    const eligible = hasUnlimitedQuotes || isBuyerMapped || freeCredits > 0 || isSubscribed;
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? vendor.unlockedRfqIds : [];
+    const quotedList = Array.isArray(vendor.quotedRfqIds) ? vendor.quotedRfqIds : [];
+    const rfqIdStr = rfq?.id ? String(rfq.id) : null;
+    const rfqNumStr = rfq?.rfqNumber ? String(rfq.rfqNumber) : null;
+    const isAlreadyUnlockedOrQuoted = Boolean(
+      (rfqIdStr && (unlockedList.includes(rfqIdStr) || quotedList.includes(rfqIdStr))) ||
+      (rfqNumStr && (unlockedList.includes(rfqNumStr) || quotedList.includes(rfqNumStr)))
+    );
+
+    let remainingCredits;
+    let eligible;
+
+    if (hasUnlimitedQuotes) {
+      remainingCredits = 999999;
+      eligible = true;
+    } else if (planQuota !== undefined) {
+      const planUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+      remainingCredits = Math.max(0, planQuota - planUsed);
+      eligible = isBuyerMapped || isAlreadyUnlockedOrQuoted || remainingCredits > 0;
+    } else if (isGenericSubscribed) {
+      remainingCredits = 999999;
+      eligible = true;
+    } else {
+      const freeCredits = vendor.freeQuotationCredits !== undefined
+        ? Number(vendor.freeQuotationCredits)
+        : (vendor.freeRfqDownloadCredits !== undefined ? Number(vendor.freeRfqDownloadCredits) : VENDOR_FREE_CREDITS_LIMIT);
+      remainingCredits = Math.max(0, freeCredits);
+      eligible = isBuyerMapped || remainingCredits > 0;
+    }
 
     return {
       eligible,
-      freeCreditsRemaining: hasUnlimitedQuotes ? 999999 : Math.max(0, freeCredits),
+      freeCreditsRemaining: remainingCredits,
       isSubscribed: isSubscribed || isBuyerMapped || hasUnlimitedQuotes,
       isBuyerMapped,
       hasUnlimitedQuotes,
       subscriptionPlan: vendor.subscriptionPlan || 'premium',
+      planQuota,
+      rfqDownloadsUsed: Math.max(0, Number(vendor.rfqDownloadsUsed) || 0),
     };
   }
 
   /**
    * Retrieves authoritative RFQ download credit balance & stats for a vendor.
    */
-  getVendorRfqCredits(vendorIdOrEmail) {
-    const vendor = this.getVendorById(vendorIdOrEmail, 'all');
+  getVendorRfqCredits(vendorIdOrEmail, resolvedVendor = null) {
+    const vendor = (resolvedVendor && typeof resolvedVendor === 'object' ? resolvedVendor : null)
+      || this.getVendorById(vendorIdOrEmail, 'all');
     if (!vendor) {
       return {
         vendorId: vendorIdOrEmail,
@@ -2749,8 +3164,9 @@ class StoreService {
     if (!vendor) return false;
     const rfq = this.getRFQById(rfqIdOrNumber);
 
-    // Direct buyer-mapped vendors always have access without lock
-    if (rfq && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
+    // Direct buyer-mapped vendors always have access without lock on private (non-public) RFQs
+    const isPublic = this.isPublicRfq(rfq);
+    if (rfq && !isPublic && this.isVendorMappedToRfqBuyer(vendor, rfq)) {
       return true;
     }
 
@@ -2823,23 +3239,31 @@ class StoreService {
     const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
     const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
     const isNetworkMode = isV0 || isV2 || isV3;
+    const isPublicRfq = this.isPublicRfq(rfq);
+    const isBuyerMapped = this.isVendorMappedToRfqBuyer(vendor, rfq);
+    const isDirect = !isPublicRfq && isBuyerMapped;
+    const isInvited = this._isInvitedVendor(vendor, rfq);
+    const coversRfq = this.vendorCoversRFQ(vendor, rfq);
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
+    const normRfqId = String(rfq.id);
+    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
+    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
-    const categoryMatches = this._vendorCoversRFQCategories(vendor, rfq);
+    const hasAccess =
+      hasUnlimitedDownloads ||
+      isAlreadyUnlocked ||
+      isDirect ||
+      isInvited ||
+      isNetworkMode ||
+      coversRfq;
 
-    if (!hasUnlimitedDownloads && !this.vendorCoversRFQ(vendor, rfq) && !(isNetworkMode && categoryMatches)) {
+    if (!hasAccess) {
       return {
         success: false,
         error: RFQ_DOWNLOAD_ERRORS.UNAUTHORIZED,
         unauthorized: true,
       };
     }
-
-    // Check if RFQ has already been unlocked for this vendor
-    const isDirect = this.isVendorMappedToRfqBuyer(vendor, rfq);
-    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
-    const normRfqId = String(rfq.id);
-    const normRfqNum = rfq.rfqNumber ? String(rfq.rfqNumber) : normRfqId;
-    const isAlreadyUnlocked = unlockedList.includes(normRfqId) || unlockedList.includes(normRfqNum) || isDirect;
 
     const creditInfo = this.getVendorRfqCredits(vendor.id);
 
@@ -2934,7 +3358,7 @@ class StoreService {
       // Only a first-time download of a non-buyer-mapped RFQ counts against a
       // subscriber's plan quota; re-downloads and direct invites are free.
       const updates = { unlockedRfqIds: unlockedList };
-      if (!isDirect) updates.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
+      if (!isBuyerMapped) updates.rfqDownloadsUsed = (Number(vendor.rfqDownloadsUsed) || 0) + 1;
       Object.assign(vendor, updates);
       this.updateVendor(vendor.id, updates);
       const balanceAfter = this.getVendorRfqCredits(vendor.id).freeCreditsRemaining;
@@ -2943,7 +3367,7 @@ class StoreService {
         vendorId: vendor.id,
         rfqId: rfq.id,
         creditCharged: 0,
-        source: isDirect ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
+        source: isBuyerMapped ? 'buyer_mapped' : (hasUnlimitedDownloads ? 'unlimited_entitlement' : 'subscription'),
       });
 
       this.addAuditLog({
@@ -3073,13 +3497,37 @@ class StoreService {
       (rfqId && quotedRfqIds.includes(String(rfqId).trim()))
     );
 
+    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
+    const alreadyUnlocked = Boolean(
+      (canonicalId && unlockedList.includes(canonicalId)) ||
+      (canonicalRfqNumber && unlockedList.includes(canonicalRfqNumber))
+    );
+
+    const plan = String(vendor.subscriptionPlan || 'premium').toLowerCase();
+    const planQuota = eligibility.hasUnlimitedQuotes ? undefined : VENDOR_PLAN_RFQ_QUOTA[plan];
+    const shouldDeductCredit = planQuota !== undefined
+      ? (!alreadyQuoted && !alreadyUnlocked && !isBuyerMapped && !eligibility.hasUnlimitedQuotes)
+      : (!alreadyQuoted && !isBuyerMapped && !eligibility.hasUnlimitedQuotes);
+
+    let nextDownloadsUsed = Math.max(0, Number(vendor.rfqDownloadsUsed) || 0);
+    let newCredits = eligibility.freeCreditsRemaining;
+
+    if (shouldDeductCredit) {
+      if (planQuota !== undefined) {
+        nextDownloadsUsed += 1;
+        newCredits = Math.max(0, planQuota - nextDownloadsUsed);
+      } else {
+        nextDownloadsUsed += 1;
+        newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
+      }
+    }
+
     if (!alreadyQuoted) {
       if (canonicalId) quotedRfqIds.push(canonicalId);
       if (canonicalRfqNumber && canonicalRfqNumber !== canonicalId) quotedRfqIds.push(canonicalRfqNumber);
     }
 
     // Also ensure RFQ is marked in unlockedRfqIds
-    const unlockedList = Array.isArray(vendor.unlockedRfqIds) ? [...vendor.unlockedRfqIds] : [];
     if (canonicalId && !unlockedList.includes(canonicalId)) {
       unlockedList.push(canonicalId);
     }
@@ -3087,22 +3535,27 @@ class StoreService {
       unlockedList.push(canonicalRfqNumber);
     }
 
-    let newCredits = eligibility.freeCreditsRemaining;
-    if (!alreadyQuoted && !eligibility.isSubscribed && !isBuyerMapped) {
-      newCredits = Math.max(0, eligibility.freeCreditsRemaining - 1);
-    }
-
-    vendor.freeQuotationCredits = newCredits;
-    vendor.freeRfqDownloadCredits = newCredits;
     vendor.quotedRfqIds = quotedRfqIds;
     vendor.unlockedRfqIds = unlockedList;
+    vendor.rfqDownloadsUsed = nextDownloadsUsed;
 
-    const updated = this.updateVendor(vendor.id, {
-      freeQuotationCredits: newCredits,
-      freeRfqDownloadCredits: newCredits,
+    const updates = {
       quotedRfqIds,
       unlockedRfqIds: unlockedList,
-    });
+      rfqDownloadsUsed: nextDownloadsUsed,
+    };
+    if (planQuota === undefined) {
+      vendor.freeQuotationCredits = newCredits;
+      vendor.freeRfqDownloadCredits = newCredits;
+      updates.freeQuotationCredits = newCredits;
+      updates.freeRfqDownloadCredits = newCredits;
+      if (shouldDeductCredit) {
+        vendor.freeCreditsUsed = (Number(vendor.freeCreditsUsed) || 0) + 1;
+        updates.freeCreditsUsed = vendor.freeCreditsUsed;
+      }
+    }
+
+    const updated = this.updateVendor(vendor.id, updates);
 
     logger.info(
       `Quotation credit updated for vendor ${vendor.name || vendor.id}: remaining ${newCredits} (RFQ ${rfqId || 'N/A'}, subscribed: ${eligibility.isSubscribed}, buyerMapped: ${isBuyerMapped})`,
@@ -3291,14 +3744,19 @@ class StoreService {
 
   /** Same as getPaymentLinksForVendor, scoped to a buyer account instead. */
   async getPaymentLinksForBuyer(buyerAccountId) {
+    const candidateIds = Array.isArray(buyerAccountId)
+      ? buyerAccountId.filter(Boolean)
+      : [buyerAccountId].filter(Boolean);
     if (pool.hasStorage()) {
-      const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(buyerAccountId);
-      const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
-      for (const link of fromDB) byId.set(link.id, link);
-      this.paymentLinks = Array.from(byId.values());
+      for (const id of candidateIds) {
+        const fromDB = await domainQueries.getPaymentLinksByBuyerFromDB(id);
+        const byId = new Map(this.paymentLinks.map((l) => [l.id, l]));
+        for (const link of fromDB) byId.set(link.id, link);
+        this.paymentLinks = Array.from(byId.values());
+      }
     }
     return this.paymentLinks
-      .filter((l) => l.payerType === 'buyer' && l.buyerAccountId === buyerAccountId)
+      .filter((l) => l.payerType === 'buyer' && candidateIds.includes(l.buyerAccountId))
       .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   }
 
@@ -3712,6 +4170,13 @@ class StoreService {
     if (!vendor && pool.hasStorage()) {
       vendor = await this.getVendorByIdWithDBFallback(vendorId, scopedBuyerId, { fresh: true });
     }
+    if (!vendor && ratingData && (ratingData.vendorEmail || ratingData.email)) {
+      const emailHint = String(ratingData.vendorEmail || ratingData.email).trim().toLowerCase();
+      vendor = this.getVendorById(emailHint, scopedBuyerId);
+      if (!vendor && pool.hasStorage()) {
+        vendor = await this.getVendorByIdWithDBFallback(emailHint, scopedBuyerId, { fresh: true });
+      }
+    }
     if (!vendor) return null;
     let revisionSource = vendor;
     let prepared;
@@ -3812,7 +4277,8 @@ class StoreService {
 
     if (vendor.email) {
       try {
-        void mailerService.sendVendorEvaluationRequestEmail({
+        // Await delivery so serverless runtimes (Cloudflare Workers) complete the outbound mail request before closing the response.
+        const deliveryResult = await mailerService.sendVendorEvaluationRequestEmail({
           to: vendor.email,
           recipientName: vendor.contactPerson || vendor.name,
           vendorName: vendor.name,
@@ -3821,6 +4287,13 @@ class StoreService {
           buyerEmail,
           notes,
         });
+        if (deliveryResult && deliveryResult.sent === false && deliveryResult.status !== 'skipped') {
+          logger.warn('Evaluation request email was not dispatched by mail provider', {
+            vendorId: vendor.id,
+            status: deliveryResult.status,
+            reason: deliveryResult.reason,
+          }, 'STORE_SERVICE');
+        }
       } catch (emailErr) {
         logger.error('Failed to dispatch evaluation request email', emailErr, 'STORE_SERVICE');
       }
@@ -3903,6 +4376,10 @@ class StoreService {
         }
         return closed;
       }, []);
+    }
+
+    if (pool.hasStorage() && closedList.length > 0 && !this.isHydratedFromDB) {
+      await this.hydrateFromDB().catch(() => { });
     }
 
     for (const updated of closedList) {
@@ -4029,11 +4506,41 @@ class StoreService {
     if (Array.isArray(fup.vendors)) {
       fup.vendors.forEach((v) => {
         if (!v) return;
+        if (!v.vendorId && v.id) v.vendorId = v.id;
+        if (!v.vendorName && v.name) v.vendorName = v.name;
+        if (!v.name && v.vendorName) v.name = v.vendorName;
+        if (!v.bidStatus) v.bidStatus = 'Pending';
+        if (!v.overallStatus) v.overallStatus = v.bidStatus === 'Submitted' ? 'Responded' : 'Pending';
         if (typeof v.emailSent !== 'boolean') v.emailSent = false;
-        if (!v.email24h) v.email24h = v.email ? { ...v.email } : { status: 'pending' };
+        if (!v.email24h) v.email24h = v.email && typeof v.email === 'object' ? { ...v.email } : { status: 'pending' };
         if (!v.sms) v.sms = { status: 'pending' };
         if (!v.whatsapp) v.whatsapp = { status: 'pending' };
       });
+      const smsSentVendorCount = fup.vendors.filter(
+        (v) => v?.sms && ['sent', 'delivered', 'clicked'].includes(v.sms.status)
+      ).length;
+      if (smsSentVendorCount > 0 || fup.smsStats.sent !== undefined) {
+        fup.smsStats.sent = Math.max(recordedCount(fup.smsStats.sent), smsSentVendorCount);
+      }
+      const waSentVendorCount = fup.vendors.filter(
+        (v) => v?.whatsapp && ['sent', 'delivered', 'read', 'replied'].includes(v.whatsapp.status)
+      ).length;
+      if (waSentVendorCount > 0 || fup.whatsappStats.sent !== undefined) {
+        fup.whatsappStats.sent = Math.max(recordedCount(fup.whatsappStats.sent), waSentVendorCount);
+      }
+      const waRepliedVendorCount = fup.vendors.filter((v) => v?.whatsapp?.status === 'replied').length;
+      if (waRepliedVendorCount > 0) {
+        fup.whatsappStats.replied = Math.max(recordedCount(fup.whatsappStats.replied), waRepliedVendorCount);
+      }
+      const email24hVendorCount = fup.vendors.filter(
+        (v) =>
+          v?.email24h?.is24hReminderSent ||
+          ['sent', 'delivered', 'reminded_24h'].includes(v?.email24h?.status || '') ||
+          (typeof v?.email === 'object' && v.email !== null && ['sent', 'delivered'].includes(v.email.status || ''))
+      ).length;
+      if (email24hVendorCount > 0) {
+        fup.emailStats.sent24h = Math.max(recordedCount(fup.emailStats.sent24h), email24hVendorCount);
+      }
     }
 
     return rfq;
@@ -4116,6 +4623,87 @@ class StoreService {
     })();
     this._rfqSyncPromises.set(cacheKey, syncPromise);
     return syncPromise;
+  }
+
+  async getRFQsPage({
+    page = 1,
+    limit = 100,
+    search = '',
+    status = '',
+    buyer = '',
+    startDate = '',
+    endDate = '',
+  } = {}) {
+    const parsedPage = Math.max(1, parseInt(page, 10) || 1);
+    const parsedLimit = Math.max(1, Math.min(parseInt(limit, 10) || 100, 500));
+
+    if (pool.hasStorage()) {
+      const { rows, total } = await domainQueries.getRFQsPageFromDB({
+        page: parsedPage,
+        limit: parsedLimit,
+        search,
+        status,
+        buyer,
+        startDate,
+        endDate,
+      });
+      const reconciled = rows.map((r) => this._reconcileRFQFollowUpStats(normalizeRFQForRead(r)));
+      return {
+        rows: reconciled,
+        total,
+        page: parsedPage,
+        limit: parsedLimit,
+        totalPages: Math.max(1, Math.ceil(total / parsedLimit)),
+      };
+    }
+
+    // In-memory fallback (used when authoritative storage is not connected or in unit tests)
+    const q = (search || '').trim().toLowerCase();
+    const trimmedStatus = (status || '').trim();
+    const trimmedBuyer = (buyer || '').trim();
+    let startMs = null;
+    let endMs = null;
+    if (startDate) {
+      try { startMs = new Date(`${startDate}T00:00:00`).getTime(); } catch {}
+    }
+    if (endDate) {
+      try { endMs = new Date(`${endDate}T23:59:59.999`).getTime(); } catch {}
+    }
+
+    const all = this.getRFQs().slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
+    const filtered = all.filter((r) => {
+      if (trimmedStatus && trimmedStatus !== 'all' && r.status !== trimmedStatus) return false;
+      if (trimmedBuyer && trimmedBuyer !== 'all') {
+        const matchesBuyer = (r.buyerAccountName === trimmedBuyer) || (r.buyerAccountId === trimmedBuyer) || (r.buyerId === trimmedBuyer);
+        if (!matchesBuyer) return false;
+      }
+      if (startMs || endMs) {
+        const createdMs = r.createdAt ? new Date(r.createdAt).getTime() : 0;
+        if (!createdMs) return false;
+        if (startMs && createdMs < startMs) return false;
+        if (endMs && createdMs > endMs) return false;
+      }
+      if (!q) return true;
+      return (
+        (r.rfqNumber || '').toLowerCase().includes(q) ||
+        (r.title || '').toLowerCase().includes(q) ||
+        (r.category || '').toLowerCase().includes(q) ||
+        (r.buyerAccountName || '').toLowerCase().includes(q) ||
+        (r.quotes || []).some((qt) => (qt.vendorName || '').toLowerCase().includes(q)) ||
+        (r.assignedVendors || []).some((av) => (av.name || av.vendorName || '').toLowerCase().includes(q))
+      );
+    });
+
+    const total = filtered.length;
+    const start = (parsedPage - 1) * parsedLimit;
+    const pageRows = filtered.slice(start, start + parsedLimit);
+    return {
+      rows: pageRows,
+      total,
+      page: parsedPage,
+      limit: parsedLimit,
+      totalPages: Math.max(1, Math.ceil(total / parsedLimit)),
+    };
   }
 
   async getRFQByIdAsync(id) {
@@ -4227,6 +4815,25 @@ class StoreService {
       (parseStoredRfqTime(createdAt) ?? Date.now()) + RFQ_AUTO_CLOSE_AFTER_MS
     ).toISOString();
 
+    const resolvedCity = rfqData.deliveryCity || (resolvedBuyer ? (resolvedBuyer.city || resolvedBuyer.deliveryCity || '') : '');
+    const resolvedState = rfqData.deliveryState || (resolvedBuyer ? (resolvedBuyer.state || resolvedBuyer.deliveryState || '') : '');
+    const resolvedPincode = rfqData.deliveryPincode || (resolvedBuyer ? (resolvedBuyer.pincode || resolvedBuyer.zipCode || resolvedBuyer.deliveryPincode || '') : '');
+    let resolvedLocation = rfqData.deliveryLocation || (resolvedBuyer ? (resolvedBuyer.location || resolvedBuyer.deliveryLocation || resolvedBuyer.primaryPlantLocation || resolvedBuyer.street || resolvedBuyer.address1 || '') : '');
+    if (!resolvedLocation && (resolvedCity || resolvedState || resolvedPincode)) {
+      resolvedLocation = [resolvedCity, resolvedState, resolvedPincode].filter(Boolean).join(', ');
+    }
+
+    const resolvedDeadline = rfqData.deadline
+      ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+      : (rfqData.targetDeliveryDate
+        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+        : rfqIngestionService.ensureFutureDeliveryDate(null, 5));
+    const resolvedTargetDeliveryDate = rfqData.targetDeliveryDate
+      ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
+      : (rfqData.deadline
+        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
+        : rfqIngestionService.ensureFutureDeliveryDate(null, 5));
+
     const newRFQ = {
       id,
       rfqNumber,
@@ -4235,26 +4842,21 @@ class StoreService {
       // Mechanical' used to be substituted here, which silently mis-filed the RFQ
       // and routed it to the wrong vendor pool.
       category: rfqData.category || null,
+      majorCategory: rfqData.majorCategory || null,
+      minorCategory: rfqData.minorCategory || null,
+      minorCategories: Array.isArray(rfqData.minorCategories) ? rfqData.minorCategories : [],
       createdAt,
       closingDeadline,
-      deadline: rfqData.deadline
-        ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-        : (rfqData.targetDeliveryDate
-          ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
-      targetDeliveryDate: rfqData.targetDeliveryDate
-        ? (new Date(rfqData.targetDeliveryDate) >= new Date() ? rfqData.targetDeliveryDate : rfqIngestionService.ensureFutureDeliveryDate(rfqData.targetDeliveryDate, 5))
-        : (rfqData.deadline
-          ? (new Date(rfqData.deadline) >= new Date() ? rfqData.deadline : rfqIngestionService.ensureFutureDeliveryDate(rfqData.deadline, 5))
-          : rfqIngestionService.ensureFutureDeliveryDate(null, 5)),
+      deadline: resolvedDeadline,
+      targetDeliveryDate: resolvedTargetDeliveryDate,
       // Budget is optional (VALIDATION_SCHEMAS.createRFQ). An RFQ that states none keeps
       // null, and the UI shows it as not stated. Zero is never stored in its place.
       budget: budgetAmount,
       // Vendors price freight against these, so they round-trip with the RFQ.
-      deliveryLocation: rfqData.deliveryLocation || '',
-      deliveryCity: rfqData.deliveryCity || '',
-      deliveryState: rfqData.deliveryState || '',
-      deliveryPincode: rfqData.deliveryPincode || '',
+      deliveryLocation: resolvedLocation || '',
+      deliveryCity: resolvedCity || '',
+      deliveryState: resolvedState || '',
+      deliveryPincode: resolvedPincode || '',
       // Metadata only. The bytes live in object storage under
       // rfqAttachmentService, so the bootstrap payload stays a fixed size no
       // matter how much is attached.
@@ -4274,6 +4876,7 @@ class StoreService {
       buyerEmail,
       raisedByName: rfqData.raisedByName || null,
       creationAcknowledgementRequested: rfqData.creationAcknowledgementRequested === true,
+      ...(rfqData.vendorPlanPending === true || deferVendorPlan ? { vendorPlanPending: true } : {}),
       ...(rfqData.gatewayNotificationTarget && typeof rfqData.gatewayNotificationTarget === 'object' ? {
         gatewayNotificationTarget: {
           recipientEmail: String(rfqData.gatewayNotificationTarget.recipientEmail || '').trim(),
@@ -4319,7 +4922,24 @@ class StoreService {
       // from this persisted shape) showed none, and PO generation
       // (approvePurchaseOrder, which reads rfq.extractedEntities) produced
       // an empty line-item PO for any RFQ created this way.
-      extractedEntities: rfqData.extractedEntities || rfqData.lineItems || [],
+      extractedEntities: rfqData.source === 'email_gateway'
+        ? (Array.isArray(rfqData.extractedEntities) ? rfqData.extractedEntities : (Array.isArray(rfqData.lineItems) ? rfqData.lineItems : [])).map((entity) => {
+            if (!entity || typeof entity !== 'object') return entity;
+            const eCity = entity.deliveryCity || resolvedCity || '';
+            const eState = entity.deliveryState || resolvedState || '';
+            const ePincode = entity.deliveryPincode || resolvedPincode || '';
+            const eLoc = entity.deliveryLocation || resolvedLocation || [eCity, eState, ePincode].filter(Boolean).join(', ');
+            const eDate = entity.targetDate || resolvedTargetDeliveryDate;
+            return {
+              ...entity,
+              deliveryCity: eCity,
+              deliveryState: eState,
+              deliveryPincode: ePincode,
+              deliveryLocation: eLoc,
+              targetDate: eDate,
+            };
+          })
+        : (rfqData.extractedEntities || rfqData.lineItems || []),
       // AI-generated headline/scope/risk-notes built from the line items above,
       // before the RFQ is constructed here (see rfqController.createRFQ) — a
       // deterministic fallback when there's nothing to summarise or the model
@@ -4343,23 +4963,48 @@ class StoreService {
     };
 
     // Private vendor records belong only to the buyer account that uploaded
-    // them. Never carry another buyer's private roster entry onto this RFQ.
+    // them, and inactive vendors cannot be included in new RFQs or invitations.
     const foreignPrivateVendors = [];
+    const inactiveExcludedVendors = [];
     newRFQ.assignedVendors = newRFQ.assignedVendors.filter((entry) => {
       const vendor = entry && entry.id ? this.getVendorById(entry.id, 'all') : null;
-      if (!this.isVendorPrivateToDifferentBuyer(vendor || entry, newRFQ)) return true;
-      foreignPrivateVendors.push(vendor || entry);
-      return false;
+      const targetVendor = vendor || entry;
+      if (this.isVendorPrivateToDifferentBuyer(targetVendor, newRFQ)) {
+        foreignPrivateVendors.push(targetVendor);
+        return false;
+      }
+      if (isVendorInactive(targetVendor)) {
+        inactiveExcludedVendors.push(targetVendor);
+        return false;
+      }
+      return true;
     });
-    if (foreignPrivateVendors.length > 0) {
-      logger.warn(
-        `Excluded ${foreignPrivateVendors.length} private vendor(s) owned by another buyer from RFQ ${newRFQ.rfqNumber}.`,
-        {
-          rfqNumber: newRFQ.rfqNumber,
-          vendorIds: foreignPrivateVendors.map((vendor) => vendor.id).filter(Boolean),
-        },
-        'STORE_SERVICE'
-      );
+    if (foreignPrivateVendors.length > 0 || inactiveExcludedVendors.length > 0) {
+      if (foreignPrivateVendors.length > 0) {
+        logger.warn(
+          `Excluded ${foreignPrivateVendors.length} private vendor(s) owned by another buyer from RFQ ${newRFQ.rfqNumber}.`,
+          {
+            rfqNumber: newRFQ.rfqNumber,
+            vendorIds: foreignPrivateVendors.map((vendor) => vendor.id).filter(Boolean),
+          },
+          'STORE_SERVICE'
+        );
+      }
+      if (inactiveExcludedVendors.length > 0) {
+        logger.warn(
+          `Excluded ${inactiveExcludedVendors.length} inactive vendor(s) from RFQ ${newRFQ.rfqNumber}.`,
+          {
+            rfqNumber: newRFQ.rfqNumber,
+            vendorIds: inactiveExcludedVendors.map((vendor) => vendor.id).filter(Boolean),
+          },
+          'STORE_SERVICE'
+        );
+        this.addAuditLog({
+          userEmail: buyerEmail || SYSTEM_ACTOR_EMAIL,
+          action: `Excluded ${inactiveExcludedVendors.length} inactive vendor(s) from new RFQ ${newRFQ.rfqNumber}`,
+          rfqNumber,
+        });
+      }
       if (newRFQ.followUpData) {
         newRFQ.followUpData.vendors = newRFQ.assignedVendors;
         const remCount = newRFQ.assignedVendors.length;
@@ -4432,10 +5077,12 @@ class StoreService {
       const shortlisted = [];
       const matchesRfq = this._rfqVendorMatcher(newRFQ);
       const mismatched = [];
+      const rfqWithoutInvitations = { ...newRFQ, assignedVendors: [], followUpData: null };
 
       for (const v of newRFQ.assignedVendors) {
         const full = (v.id ? this.getVendorById(v.id, 'all') : null);
         const resolved = full ? { ...v, ...full } : v;
+        const isBuyerVendor = this.isBuyerUploaded(resolved) || this.isVendorMappedToRfqBuyer(resolved, rfqWithoutInvitations);
         const hasCategory = Boolean(
           resolved.majorCategory ||
           extractCategories(resolved.minorCategories).length > 0 ||
@@ -4443,7 +5090,8 @@ class StoreService {
           extractCategories(resolved.clientMappedCategories).length > 0 ||
           extractCategories(resolved.categories).length > 0
         );
-        const isMatch = !hasCategory || matchesRfq(resolved);
+        // Buyer-uploaded or buyer-mapped vendors are preserved regardless of registered category
+        const isMatch = isBuyerVendor || !hasCategory || matchesRfq(resolved);
         if (isMatch) {
           shortlisted.push(resolved);
         } else {
@@ -4462,7 +5110,9 @@ class StoreService {
             location: newRFQ.deliveryLocation ? String(newRFQ.deliveryLocation).trim() : null,
           }
         );
-        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? selected : shortlisted;
+        const selectedSet = new Set((selected || []).map((v) => v.id || v.email || v.name));
+        const nonCategoryVendors = shortlisted.filter((v) => !selectedSet.has(v.id || v.email || v.name) && (this.isBuyerUploaded(v) || this.isVendorMappedToRfqBuyer(v, rfqWithoutInvitations)) && !matchesRfq(v));
+        newRFQ.assignedVendors = Array.isArray(selected) && selected.length > 0 ? [...selected, ...nonCategoryVendors] : shortlisted;
       } else {
         newRFQ.assignedVendors = shortlisted;
       }
@@ -4495,12 +5145,12 @@ class StoreService {
         };
         // A minor-level RFQ reads every in-memory vendor of the buyer, so the major top-up can reach them.
         const clientCandidates = (minorScoped ? this.vendors : this.candidateVendorsForRFQ(newRFQ)).filter(
-          (v) => !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
+          (v) => !isVendorInactive(v) && !this.isProcucevVendor(v) && this.isVendorMappedToRfqBuyer(v, newRFQ)
         );
         let clientMatches = minorScoped
           ? this.planMinorInvites(newRFQ, { candidatePool: clientCandidates, targetLocation: v1Location, limit: maxClientPerCat }).selected
           : this.selectVendorsForRFQ(clientCandidates, newRFQ, maxClientPerCat, v1Location);
-        if (clientMatches.length === 0 && clientCandidates.length > 0 && !minorScoped) {
+        if (clientMatches.length === 0 && clientCandidates.length > 0) {
           clientMatches = clientCandidates.slice(0, targetCategories.length * maxClientPerCat);
         }
         if (clientMatches.length > 0) {
@@ -4582,6 +5232,8 @@ class StoreService {
             phone: v.phone || null,
             pincode: v.pincode || null,
             source: v.source || 'procucev_network',
+            majorCategory: v.majorCategory || v.category || null,
+            minorCategories: Array.isArray(v.minorCategories) ? v.minorCategories : [],
           }));
 
         if (additions.length > 0) {
@@ -5081,6 +5733,8 @@ class StoreService {
       quotesCount: quotes.length,
     };
     this.rfqs[idx] = updated;
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     if (persist) this._persistRFQ(updated);
 
     if (notify) this._notifyRFQUpdate(updated, oldStatus, updates);
@@ -5168,15 +5822,21 @@ class StoreService {
     const updatedIndex = this.rfqs.findIndex((rfq) => rfq.id === publicUpdated.id);
     if (updatedIndex >= 0) this.rfqs[updatedIndex] = publicUpdated;
     else this.rfqs.unshift(publicUpdated);
+    this._lastRfqSyncTime = 0;
+    this._lastRfqSyncMap.clear();
     this._notifyRFQUpdate(publicUpdated, previous.status, appliedUpdates);
     return publicUpdated;
   }
 
-  _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false } = {}) {
+  _buildRFQVendorInviteTargets(rfq, vendors, { includeBuyerEmail = false, actorRole = null, isCmAssigned = false } = {}) {
     const targetsByEmail = new Map();
+    const normalizedActorRole = actorRole ? String(actorRole).trim().toLowerCase() : '';
+    const cmRoleActor = normalizedActorRole === 'category_manager' || normalizedActorRole === 'admin';
     for (const vendor of Array.isArray(vendors) ? vendors : []) {
-      const recipientEmail = String((vendor && vendor.email) || '').trim();
-      if (!recipientEmail) continue;
+      const resolved = vendor && vendor.id ? this.getVendorById(vendor.id, 'all') : null;
+      if (isVendorInactive(resolved || vendor)) continue;
+      const recipientEmail = resolveVendorEmail(vendor);
+      if (!recipientEmail || !EMAIL_REGEX.test(recipientEmail)) continue;
 
       const emailKey = recipientEmail.toLowerCase();
       if (targetsByEmail.has(emailKey)) continue;
@@ -5184,6 +5844,39 @@ class StoreService {
       const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
       const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
       const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+      const cmAssigned = Boolean(isCmAssigned || cmRoleActor || vendor.isCmAssigned || resolvedVendor.isCmAssigned);
+      const cmCreated = Boolean(
+        vendor.isCmCreated ||
+        resolvedVendor.isCmCreated ||
+        resolvedVendor.createdByCategoryManager ||
+        String(resolvedVendor.createdByRole || vendor.createdByRole || '').toLowerCase() === 'category_manager'
+      );
+      const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+        ? mailerService.resolveVendorInviteRouting(
+          resolvedVendor,
+          {
+            isBuyerUploaded,
+            isCmAssigned: cmAssigned,
+            isCmCreated: cmCreated,
+            assignedByRole: actorRole || null,
+            inviteChannel: vendor.inviteChannel,
+            inviteOrigin: vendor.inviteOrigin,
+            replyToQuoteAllowed: vendor.replyToQuoteAllowed,
+          },
+          rfq
+        )
+        : {
+          channel: (isBuyerUploaded || cmAssigned || cmCreated) ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE,
+          origin: cmAssigned
+            ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED
+            : cmCreated
+              ? VENDOR_INVITE_ORIGINS.CM_CREATED
+              : isBuyerUploaded
+                ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED
+                : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK,
+          replyToQuoteAllowed: Boolean(isBuyerUploaded || cmAssigned || cmCreated),
+          replyTo: null,
+        };
       const vendorContext = {
         id: resolvedVendor.id || vendor.id,
         email: recipientEmail,
@@ -5191,14 +5884,29 @@ class StoreService {
         contactPerson: resolvedVendor.contactPerson || vendor.contactPerson,
         source: resolvedVendor.source || vendor.source,
         isBuyerUploaded,
+        isCmAssigned: cmAssigned,
+        isCmCreated: cmCreated,
+        inviteChannel: routing.channel,
+        inviteOrigin: routing.origin,
+        replyToQuoteAllowed: routing.replyToQuoteAllowed,
       };
       const key = crypto.createHash('sha256').update(`${rfq.id}:${emailKey}`).digest('hex');
+      const inviteMessageId = rfq.rfqNumber && typeof mailerService.buildRfqInviteMessageId === 'function'
+        ? mailerService.buildRfqInviteMessageId(rfq.rfqNumber, vendorContext.id)
+        : null;
 
       targetsByEmail.set(emailKey, {
         key,
         vendorId: vendorContext.id,
         recipientEmail,
         recipientName: vendorContext.contactPerson || vendorContext.name,
+        inviteMessageId,
+        inviteChannel: routing.channel,
+        inviteOrigin: routing.origin,
+        senderMailbox: routing.replyTo || null,
+        replyToQuoteAllowed: routing.replyToQuoteAllowed,
+        isCmAssigned: cmAssigned,
+        isCmCreated: cmCreated,
         freeCreditsRemaining: creditInfo.freeCreditsRemaining,
         isSubscribed: creditInfo.isSubscribed,
         buyerEmail: includeBuyerEmail ? this.resolveBuyerEmailForRFQ(rfq) : null,
@@ -5208,13 +5916,48 @@ class StoreService {
     return Array.from(targetsByEmail.values());
   }
 
-  _dispatchRFQVendorInviteOutbox(rfq, operation) {
+  _resolveDispatchedInviteEventIds(rfq, invitationTargets, additions = [], { includeBuyerEmail = false, actorRole = null, isCmAssigned = false, maxCount = null } = {}) {
+    if (!rfq || !rfq.id) return [];
+    const targets = Array.isArray(invitationTargets) && invitationTargets.length > 0
+      ? invitationTargets
+      : this._buildRFQVendorInviteTargets(rfq, additions, { includeBuyerEmail, actorRole, isCmAssigned });
+    const ids = targets
+      .map((target) => (target && target.key ? `rfq-vendor-invite:${target.key}` : ''))
+      .filter(Boolean);
+    if (Number.isInteger(maxCount) && maxCount > 0 && ids.length > maxCount) {
+      return ids.slice(0, maxCount);
+    }
+    return ids;
+  }
+
+  _dispatchRFQVendorInviteOutbox(rfq, operation, targetEventIds = null) {
     if (!pool.hasStorage()) return false;
+    const ids = Array.isArray(targetEventIds) && targetEventIds.length > 0 ? targetEventIds : null;
+    const dispatchPromise = ids
+      ? eventOutboxService.dispatchDueEventOutboxJobs(ids.length, ids)
+      : eventOutboxService.dispatchDueEventOutboxJobs();
     this._background(
-      eventOutboxService.dispatchDueEventOutboxJobs(),
+      dispatchPromise,
       'Failed to dispatch durable RFQ vendor invitation events',
       {
         operation,
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        ...(ids ? { targetEventCount: ids.length } : {}),
+      }
+    );
+    return true;
+  }
+
+  _dispatchRFQCreatedEmailOutbox(rfq) {
+    if (!pool.hasStorage() || !rfq || !rfq.id || rfq.creationAcknowledgementRequested !== true) {
+      return false;
+    }
+    this._background(
+      eventOutboxService.dispatchDueEventOutboxJobs(1, [`rfq-created-email:${rfq.id}`]),
+      'Failed to dispatch durable RFQ creation acknowledgement event',
+      {
+        operation: 'rfq-created-email-outbox',
         rfqId: rfq.id,
         rfqNumber: rfq.rfqNumber,
       }
@@ -5228,19 +5971,35 @@ class StoreService {
     clearCategoryNotAvailable = false,
     advanceStatus = false,
     includeBuyerEmailInInvite = false,
+    clearVendorPlanPending = false,
+    actorRole = null,
+    isCmAssigned = false,
   } = {}) {
     let committedAdditions = [];
+    let invitationTargets = [];
     const updatedRFQ = await this.updateRFQDurably(id, (current) => {
-      const existing = Array.isArray(current.assignedVendors) ? current.assignedVendors : [];
-      const assignedIds = new Set(existing.map((vendor) => vendor.id));
+      const existing = Array.isArray(current.assignedVendors) ? [...current.assignedVendors] : [];
+      const existingIndexById = new Map();
+      existing.forEach((vendor, idx) => {
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, idx);
+      });
       committedAdditions = [];
       for (const vendor of additions) {
-        if (assignedIds.has(vendor.id)) continue;
-        assignedIds.add(vendor.id);
+        const existingIdx = vendor && vendor.id ? existingIndexById.get(vendor.id) : undefined;
+        if (existingIdx !== undefined) {
+          const prev = existing[existingIdx];
+          if (!resolveVendorEmail(prev) && resolveVendorEmail(vendor)) {
+            existing[existingIdx] = { ...prev, ...vendor };
+            committedAdditions.push(existing[existingIdx]);
+          }
+          continue;
+        }
+        if (vendor && vendor.id) existingIndexById.set(vendor.id, existing.length);
+        existing.push(vendor);
         committedAdditions.push(vendor);
       }
 
-      const assignedVendors = [...existing, ...committedAdditions];
+      const assignedVendors = existing;
       const isV1 = current.sourcingMode === 'mode_1' || current.sourcingMode === 'v1' || current.sourcingMode === 'version_1';
       const procucevCount = isV1
         ? 0
@@ -5248,14 +6007,15 @@ class StoreService {
           const resolved = (v && v.id ? this.getVendorById(v.id, 'all') : null) || v;
           return v.vendorCategory === 'Procucev Network' || (!v.vendorCategory && this.isProcucevVendor(resolved));
         }).length;
+      invitationTargets = this._buildRFQVendorInviteTargets(
+        { ...current, assignedVendors },
+        committedAdditions,
+        { includeBuyerEmail: includeBuyerEmailInInvite, actorRole, isCmAssigned }
+      );
       const updates = {
         assignedVendors,
         procucevVendorCount: procucevCount,
-        vendorInvitationTargets: this._buildRFQVendorInviteTargets(
-          { ...current, assignedVendors },
-          committedAdditions,
-          { includeBuyerEmail: includeBuyerEmailInInvite }
-        ),
+        vendorInvitationTargets: invitationTargets,
       };
       if (current.followUpData || ensureFollowUpData) {
         updates.followUpData = {
@@ -5266,13 +6026,14 @@ class StoreService {
       }
       if (clearCategoryManagerAssignment) updates.needsCategoryManagerAssignment = false;
       if (clearCategoryNotAvailable) updates.categoryNotAvailable = false;
+      if (clearVendorPlanPending) updates.vendorPlanPending = false;
       if (advanceStatus && (current.status === 'Parsing' || current.status === 'Draft' || !current.status)) {
         updates.status = 'Quotes Pending';
       }
       return updates;
     });
 
-    return { updatedRFQ, committedAdditions };
+    return { updatedRFQ, committedAdditions, invitationTargets };
   }
 
   _notifyRFQUpdate(updated, oldStatus, updates) {
@@ -5582,11 +6343,15 @@ class StoreService {
   async submitVendorQuoteDurably(rfqId, quote, {
     includeDeliveryState = false,
     vendorQuoteAcknowledgement = null,
+    deferV0BuyerDispatch = false,
   } = {}) {
     const durableQuoteId = quote.id || crypto.randomUUID();
     if (!pool.hasStorage()) {
       const existingRfq = this.getRFQById(rfqId);
-      const updated = this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
+      const isV0NoStorage = existingRfq && this.isV0SourcingMode(existingRfq.sourcingMode);
+      const updated = isV0NoStorage && deferV0BuyerDispatch
+        ? this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId }, { notify: false })
+        : this.addQuoteToRFQ(rfqId, { ...quote, id: durableQuoteId });
       if (!updated) {
         return includeDeliveryState
           ? { rfq: null, quoteId: durableQuoteId, buyerQuoteNotificationQueued: false, buyerProfileReminderQueued: false, vendorQuoteAcknowledgementQueued: false, autoClosureEmailQueued: false, autoClosedByQuote: false }
@@ -5595,12 +6360,17 @@ class StoreService {
       if (quote && quote.vendorId) this.consumeVendorQuotationCredit(quote.vendorId, rfqId);
       const autoClosedByQuote = updated.status === 'Closed' && existingRfq?.status !== 'Closed';
       const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(updated);
+      if (isV0NoStorage && !deferV0BuyerDispatch && updated.rfqNumber) {
+        await this.checkAndDispatchBuyerQuotations(updated.rfqNumber, { trigger: 'vendor_quote_portal' }).catch((err) => {
+          logger.warn('Deferred V0 buyer quote dispatch check failed', { rfqNumber: updated.rfqNumber, error: err?.message }, 'STORE_SERVICE');
+        });
+      }
       return includeDeliveryState
         ? {
           rfq: updated,
           quoteId: durableQuoteId,
-          buyerQuoteNotificationQueued: Boolean(buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion && !autoClosedByQuote),
-          buyerProfileReminderQueued: Boolean(buyerEmailPlan?.requiresProfileCompletion && !autoClosedByQuote),
+          buyerQuoteNotificationQueued: isV0NoStorage ? false : Boolean(buyerEmailPlan && !buyerEmailPlan.requiresProfileCompletion && !autoClosedByQuote),
+          buyerProfileReminderQueued: isV0NoStorage ? false : Boolean(buyerEmailPlan?.requiresProfileCompletion && !autoClosedByQuote),
           vendorQuoteAcknowledgementQueued: false,
           autoClosureEmailQueued: autoClosedByQuote,
           autoClosedByQuote,
@@ -5675,15 +6445,16 @@ class StoreService {
       else this.rfqs[cachedIndex] = previousCached;
       if (!updatedRFQ) return null;
 
+      const isV0Durable = this.isV0SourcingMode(rfq.sourcingMode);
       const autoClosedByQuote = updatedRFQ.status === 'Closed' && rfq.status !== 'Closed';
       const buyerEmailPlan = this._buildBuyerQuoteEmailPlan(rfq);
-      const quoteNotificationEventId = !autoClosedByQuote && buyerEmailPlan
+      const quoteNotificationEventId = !isV0Durable && !autoClosedByQuote && buyerEmailPlan
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.RFQ_QUOTE_RECEIVED_EMAIL,
           `${rfq.id}:${durableQuoteId}`
         )
         : null;
-      const buyerProfileReminderEventId = buyerEmailPlan?.requiresProfileCompletion
+      const buyerProfileReminderEventId = !isV0Durable && buyerEmailPlan?.requiresProfileCompletion
         ? eventOutboxService.buildEventOutboxId(
           EVENT_OUTBOX_TYPES.BUYER_PROFILE_COMPLETION_REMINDER_EMAIL,
           rfq.id
@@ -5811,8 +6582,17 @@ class StoreService {
           ...(autoClosureEmailEventId ? { skipAutoClosureEmail: true } : {}),
           ...(autoClosureComparisonIntent ? { comparisonJob: autoClosureComparisonIntent } : {}),
         });
-      } else {
+      } else if (!isV0Durable) {
         this._dispatchQuoteSubmissionSideEffects(rfq, savedRFQ, durableQuote, autoClosed);
+      } else {
+        this.notifyBuyerOfQuote(rfq, durableQuote);
+      }
+      if (isV0Durable && !deferV0BuyerDispatch && savedRFQ.rfqNumber) {
+        this._background(
+          this.checkAndDispatchBuyerQuotations(savedRFQ.rfqNumber, { trigger: 'vendor_quote_portal' }),
+          'Failed to evaluate V0 buyer quotation dispatch after quote commit',
+          { rfqId: savedRFQ.id, rfqNumber: savedRFQ.rfqNumber, vendorId: vendor.id }
+        );
       }
       if (quoteNotificationEventId && buyerEmailPlan.requiresProfileCompletion) {
         try {
@@ -5926,7 +6706,11 @@ class StoreService {
     const freshRfq = this.getRFQById(rfq.id || rfq.rfqNumber) || rfq;
     const quotes = Array.isArray(freshRfq.quotes) ? freshRfq.quotes : [];
     const buyerEmail = this.resolveBuyerEmailForRFQ(freshRfq);
-    const buyer = (freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId)) || {
+    let matchedBuyer = freshRfq.buyerAccountId && this.buyerAccounts.find((account) => account.id === freshRfq.buyerAccountId);
+    if (!matchedBuyer && buyerEmail && pool.hasStorage()) {
+      matchedBuyer = await this.getBuyerAccountByEmail(buyerEmail).catch(() => null);
+    }
+    const buyer = matchedBuyer || {
       id: freshRfq.buyerAccountId || null,
       corporateEmail: buyerEmail,
       organizationName: freshRfq.buyerAccountName || freshRfq.buyerName || 'Buyer',
@@ -6250,6 +7034,47 @@ class StoreService {
     return { updatedRfq: updated, inquiry: updatedInquiry };
   }
 
+  async addBroadcastToRFQ(rfqId, broadcast) {
+    const rfq = await this.getRFQByIdAsync(rfqId);
+    if (!rfq) return null;
+
+    const existingBroadcasts = Array.isArray(rfq.broadcasts) ? [...rfq.broadcasts] : [];
+    const timestamp = broadcast.createdAt || new Date().toISOString();
+    const newBroadcast = {
+      id: broadcast.id || (globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `bcast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`),
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title: broadcast.title ? String(broadcast.title).trim() : '',
+      message: String(broadcast.message || '').trim(),
+      attachments: Array.isArray(broadcast.attachments) ? broadcast.attachments : [],
+      authorName: broadcast.authorName || 'Procurement Team',
+      authorRole: broadcast.authorRole || 'buyer',
+      authorEmail: broadcast.authorEmail || null,
+      createdAt: timestamp,
+    };
+
+    const updatedBroadcasts = [...existingBroadcasts, newBroadcast];
+    const updated = await this.updateRFQDurably(rfq.id, { broadcasts: updatedBroadcasts });
+    if (!updated) return null;
+
+    this.addFeedItem({
+      type: 'system',
+      channel: 'email',
+      title: `Information Broadcast on ${rfq.rfqNumber}`,
+      message: `Announcement: "${newBroadcast.title ? `${newBroadcast.title}: ` : ''}${newBroadcast.message.slice(0, 100)}"`,
+      recipient: 'All Vendors',
+      rfqNumber: rfq.rfqNumber,
+    });
+
+    this.addAuditLog({
+      action: `Information broadcast published on ${rfq.rfqNumber}: "${(newBroadcast.title || newBroadcast.message).slice(0, 80)}"`,
+      rfqNumber: rfq.rfqNumber,
+      userEmail: broadcast.authorEmail || 'system@procucev.ai',
+    });
+
+    return { updatedRfq: updated, broadcast: newBroadcast };
+  }
+
   deleteRFQ(id) {
     const rfq = this.rfqs.find((record) => record.id === id || record.rfqNumber === id);
     if (!rfq) return false;
@@ -6325,6 +7150,18 @@ class StoreService {
   /** Count of that recipient's unread notifications. */
   getUnreadNotificationCountFor(recipientType, recipientId) {
     return this.getNotificationsFor(recipientType, recipientId).filter((n) => !n.read).length;
+  }
+
+  /** Direct per-recipient notification query whenever persistent storage is configured; uses in-memory store only when storage is absent. */
+  async getNotificationsSummaryForDurably(recipientType, recipientId, limit = 50) {
+    if (!recipientType || !recipientId) return { data: [], unreadCount: 0 };
+    if (pool.hasStorage() && typeof domainQueries.getNotificationsForRecipientFromDB === 'function') {
+      return domainQueries.getNotificationsForRecipientFromDB(recipientType, recipientId, limit);
+    }
+    return {
+      data: this.getNotificationsFor(recipientType, recipientId, limit),
+      unreadCount: this.getUnreadNotificationCountFor(recipientType, recipientId),
+    };
   }
 
   // Both producers pass a real RFQ and a meta object; keep it that way so this
@@ -6406,16 +7243,20 @@ class StoreService {
     const notification = this.notifications.find(
       (item) => item.id === id && item.recipientType === recipientType && item.recipientId === recipientId
     );
-    if (!notification) return null;
 
     try {
       const persisted = await domainQueries.markNotificationReadInDB(id, recipientType, recipientId);
       if (!persisted) {
-        this.notifications = this.notifications.filter((item) => item.id !== id);
+        if (notification) {
+          this.notifications = this.notifications.filter((item) => item.id !== id);
+        }
         return null;
       }
-      notification.read = true;
-      return notification;
+      if (notification) {
+        notification.read = true;
+        return notification;
+      }
+      return { id, recipientType, recipientId, read: true };
     } catch (error) {
       logger.error('Failed to persist notification read state', error, 'STORE_SERVICE');
       const persistError = new Error(PERSISTENCE_MESSAGES.DATABASE_UNAVAILABLE);
@@ -6498,6 +7339,47 @@ class StoreService {
   }
 
   /**
+   * Extracts cleaned delivery location and pincode from an RFQ or destination object.
+   * Falls back to extracting a 6-digit Indian PIN from deliveryLocation text when deliveryPincode is empty.
+   */
+  _extractTargetLocation(source) {
+    if (!source) return { pincode: null, location: null };
+    if (typeof source === 'string') {
+      const trimmed = source.trim();
+      const digits = normalizePincodeDigits(trimmed);
+      if (digits && /^\d+$/.test(trimmed.replace(/\s+/g, ''))) {
+        return { pincode: digits, location: null };
+      }
+      return {
+        pincode: extractIndianAddressLocation(trimmed).pincode || null,
+        location: trimmed || null,
+      };
+    }
+    const rawLocation = source.deliveryLocation || source.location || '';
+    const location = String(rawLocation || '').trim() || null;
+    const rawPin = String(source.deliveryPincode || source.pincode || '').replace(/\s+/g, '');
+    const directPin = /^\d{3,6}$/.test(rawPin) ? rawPin : '';
+    const pincode = directPin || (location ? extractIndianAddressLocation(location).pincode : '') || null;
+    return { pincode, location };
+  }
+
+  /**
+   * Deterministic vendor comparator: location proximity score, then rating descending,
+   * then closer PIN prefix / numerical PIN distance on ties.
+   */
+  _compareVendorsByLocationAndRating(a, b, destination) {
+    if (destination) {
+      const aLoc = this.scoreVendorLocation(a, destination);
+      const bLoc = this.scoreVendorLocation(b, destination);
+      if (aLoc !== bLoc) return bLoc - aLoc;
+    }
+    const ratingDiff = (Number(b?.rating) || 0) - (Number(a?.rating) || 0);
+    if (ratingDiff !== 0) return ratingDiff;
+    const destPin = this._extractTargetLocation(destination).pincode;
+    return compareVendorPincodeProximity(a, b, destPin);
+  }
+
+  /**
    * Scores vendor location relevance to delivery destination.
    * Priority:
    *  - Exact 6-digit pincode match: 100
@@ -6510,12 +7392,9 @@ class StoreService {
    */
   scoreVendorLocation(vendor, destination) {
     if (!vendor || !destination) return 40;
-    const vendorPin = String(vendor.pincode || '').replace(/\D/g, '');
-    const destPin = String(
-      (typeof destination === 'string' && /^\d{6}$/.test(destination.trim())
-        ? destination
-        : destination.pincode || destination.deliveryPincode) || ''
-    ).replace(/\D/g, '');
+    const vendorPin = resolveVendorPinDigits(vendor);
+    const { pincode: extractedDestPin, location: extractedDestLoc } = this._extractTargetLocation(destination);
+    const destPin = String(extractedDestPin || '').replace(/\D/g, '');
 
     if (vendorPin.length === 6 && destPin.length === 6) {
       if (vendorPin === destPin) return 100;
@@ -6523,13 +7402,7 @@ class StoreService {
       if (vendorPin[0] === destPin[0]) return 70;
     }
 
-    const destText = String(
-      (typeof destination === 'string' && !/^\d{6}$/.test(destination.trim())
-        ? destination
-        : destination.location || destination.deliveryLocation) || ''
-    )
-      .toLowerCase()
-      .trim();
+    const destText = String(extractedDestLoc || '').toLowerCase().trim();
 
     const vendorText = `${vendor.location || ''} ${vendor.city || ''} ${vendor.state || ''}`.toLowerCase().trim();
 
@@ -6814,6 +7687,13 @@ class StoreService {
    */
   _majorCategoriesForMinors(minors, { allMajors = false } = {}) {
     const majors = new Set();
+    const addMajorWithDashVariants = (raw) => {
+      const key = String(raw || '').trim().toLowerCase();
+      if (!key) return;
+      majors.add(key);
+      const folded = foldCategoryDashes(key);
+      if (folded !== key) majors.add(folded);
+    };
     for (const minor of minors) {
       const key = taxonomyKeyOf(minor);
       const parents = allMajors
@@ -6821,9 +7701,11 @@ class StoreService {
         : [MINOR_TO_MAJOR_MAP.get(key)].filter(Boolean);
       for (const parent of parents) {
         const parentKey = parent.toLowerCase();
-        majors.add(parentKey);
+        const foldedParentKey = foldCategoryDashes(parentKey);
+        addMajorWithDashVariants(parentKey);
         for (const [alias, canonical] of Object.entries(MAJOR_CATEGORY_ALIASES || {})) {
-          if (String(canonical).trim().toLowerCase() === parentKey) majors.add(alias.toLowerCase());
+          const canonicalFolded = foldCategoryDashes(String(canonical).trim().toLowerCase());
+          if (canonicalFolded === foldedParentKey) addMajorWithDashVariants(alias);
         }
       }
     }
@@ -6904,7 +7786,7 @@ class StoreService {
    * @param {string} minorCategory
    * @returns {boolean}
    */
-  vendorCoversMinorCategory(vendor, minorCategory) {
+  _vendorHasExplicitMinorTag(vendor, minorCategory) {
     if (!vendor || !minorCategory) return false;
     const target = minorCategoryKey(minorCategory);
     if (!target) return false;
@@ -6916,12 +7798,55 @@ class StoreService {
       ...extractCategories(vendor.clientMappedCategories),
       ...extractCategories(vendor.categories),
       ...extractCategories(vendor.category),
+      ...extractCategories(vendor.products),
     ];
 
     return pools.some((category) => {
       const key = minorCategoryKey(category);
       return Boolean(key) && minorKeysMatch(key, target);
     });
+  }
+
+  vendorCoversMinorCategory(vendor, minorCategory) {
+    if (!vendor || !minorCategory) return false;
+    if (this._vendorHasExplicitMinorTag(vendor, minorCategory)) return true;
+
+    const target = minorCategoryKey(minorCategory);
+    if (!target || target.length < 4) return false;
+
+    // Mirror getVendorsPageFromDB's minor matching rule (domainQueries.js):
+    // When a vendor sits under the minor's parent major category (e.g. IT > Laptop, where the
+    // bulk catalogue filed suppliers under a broader minor such as Hardware while their company
+    // name or products field carries the minor product), match whole-word occurrences of the minor
+    // search terms in the vendor's name or products.
+    const majorKeys = new Set(this._majorCategoriesForMinors([minorCategory], { allMajors: true }));
+    if (majorKeys.size === 0 || !vendorMajorKeys(vendor).some((key) => majorKeys.has(key))) {
+      return false;
+    }
+
+    const searchTerms = minorSearchTerms([minorCategory])
+      .map((term) => minorCategoryKey(term))
+      .filter((term) => term.length >= 4);
+    if (searchTerms.length === 0) return false;
+
+    const nonTaxonomyCategoryLabels = [
+      ...extractCategories(vendor.minorCategories),
+      ...extractCategories(vendor.vendorSelectedCategories),
+      ...extractCategories(vendor.clientMappedCategories),
+      ...extractCategories(vendor.categories),
+    ].filter((label) => !MINOR_TO_MAJOR_MAP.has(taxonomyKeyOf(label)));
+
+    const candidateTexts = [vendor.name, vendor.products, ...nonTaxonomyCategoryLabels]
+      .map((text) => minorCategoryKey(text))
+      .filter(Boolean);
+
+    return candidateTexts.some((normalizedText) =>
+      searchTerms.some((term) => {
+        if (normalizedText === term) return true;
+        const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return new RegExp(`(?:^|\\s)${escaped}s?(?:\\s|$)`).test(normalizedText);
+      })
+    );
   }
 
   /**
@@ -7040,14 +7965,7 @@ class StoreService {
     }
 
     const sortCandidates = (list) => {
-      list.sort((a, b) => {
-        if (targetLocationOrPincode) {
-          const aLoc = this.scoreVendorLocation(a, targetLocationOrPincode);
-          const bLoc = this.scoreVendorLocation(b, targetLocationOrPincode);
-          if (aLoc !== bLoc) return bLoc - aLoc;
-        }
-        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-      });
+      list.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, targetLocationOrPincode));
     };
 
     const selectedMap = new Map();
@@ -7156,17 +8074,50 @@ class StoreService {
     }
     for (const candidate of Array.isArray(candidatePool) ? candidatePool : []) {
       const key = vendorKey(candidate);
-      if (key && !seeds.has(key) && !pool.has(key)) pool.set(key, { vendor: candidate, view: candidate });
+      if (!key) continue;
+      if (seeds.has(key)) {
+        const seedEntry = seeds.get(key);
+        const mergedMinors = Array.from(
+          new Set([
+            ...extractCategories(seedEntry.view.minorCategories),
+            ...extractCategories(candidate.minorCategories),
+          ])
+        );
+        seedEntry.view = {
+          ...candidate,
+          ...seedEntry.view,
+          majorCategory: seedEntry.view.majorCategory || candidate.majorCategory || candidate.category,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : candidate.minorCategories,
+          vendorSelectedCategories:
+            Array.isArray(seedEntry.view.vendorSelectedCategories) && seedEntry.view.vendorSelectedCategories.length > 0
+              ? seedEntry.view.vendorSelectedCategories
+              : candidate.vendorSelectedCategories,
+          clientMappedCategories:
+            Array.isArray(seedEntry.view.clientMappedCategories) && seedEntry.view.clientMappedCategories.length > 0
+              ? seedEntry.view.clientMappedCategories
+              : candidate.clientMappedCategories,
+          categories:
+            Array.isArray(seedEntry.view.categories) && seedEntry.view.categories.length > 0
+              ? seedEntry.view.categories
+              : candidate.categories,
+          products: seedEntry.view.products || candidate.products,
+        };
+        seedEntry.vendor = {
+          ...candidate,
+          ...seedEntry.vendor,
+          email: resolveVendorEmail(seedEntry.vendor) || resolveVendorEmail(candidate) || null,
+          phone: seedEntry.vendor.phone || candidate.phone || candidate.mobile || candidate.mobileNumber || null,
+          contactPerson: seedEntry.vendor.contactPerson || candidate.contactPerson || null,
+          pincode: seedEntry.vendor.pincode || candidate.pincode || null,
+          majorCategory: seedEntry.vendor.majorCategory || candidate.majorCategory || candidate.category || null,
+          minorCategories: mergedMinors.length > 0 ? mergedMinors : (Array.isArray(candidate.minorCategories) ? candidate.minorCategories : []),
+        };
+      } else if (!pool.has(key)) {
+        pool.set(key, { vendor: candidate, view: candidate });
+      }
     }
 
-    const rank = (a, b) => {
-      if (targetLocation) {
-        const aLoc = this.scoreVendorLocation(a.view, targetLocation);
-        const bLoc = this.scoreVendorLocation(b.view, targetLocation);
-        if (aLoc !== bLoc) return bLoc - aLoc;
-      }
-      return (Number(b.view.rating) || 0) - (Number(a.view.rating) || 0);
-    };
+    const rank = (a, b) => this._compareVendorsByLocationAndRating(a.view, b.view, targetLocation);
 
     const shortfalls = [];
     // Each minor takes its own vendors first. A vendor is invited once, so a vendor an earlier minor has
@@ -7308,14 +8259,31 @@ class StoreService {
    * @returns {Promise<Object>} The RFQ with its assigned vendors.
    */
   async completeRFQVendorPlan(rfq, { notifyShortfall = false, rethrowOnDatabaseError = false } = {}) {
-    if (!rfq || !this._isDbPlannedRFQ(rfq)) return rfq;
-    // Only the outbox retry asks for rethrowOnDatabaseError. The other callers pass the options they always did.
-    const options = rethrowOnDatabaseError ? { notifyShortfall, rethrowOnDatabaseError } : { notifyShortfall };
-    const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
-    if (mode === 'mode_0' || mode === 'v0' || mode === 'version_0') {
-      return this.augmentV0AssignmentsFromDB(rfq, options);
+    if (!rfq) return rfq;
+    const planned = this._isDbPlannedRFQ(rfq);
+    if (!planned && rfq.vendorPlanPending !== true) return rfq;
+    let completed = rfq;
+    if (planned) {
+      // Only the outbox retry asks for rethrowOnDatabaseError. The other callers pass the options they always did.
+      const options = rethrowOnDatabaseError ? { notifyShortfall, rethrowOnDatabaseError } : { notifyShortfall };
+      const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+      completed = (mode === 'mode_0' || mode === 'v0' || mode === 'version_0')
+        ? await this.augmentV0AssignmentsFromDB(rfq, options)
+        : await this.autoAssignVendorsFromDB(rfq, options);
     }
-    return this.autoAssignVendorsFromDB(rfq, options);
+    const shouldReleaseAck = !this.isVendorPlanDeferred(completed) && (
+      rfq.vendorPlanPending === true
+      || completed.vendorPlanPending === true
+      || (planned && pool.hasStorage() && rfq.creationAcknowledgementRequested === true)
+    );
+    if (shouldReleaseAck) {
+      if (completed === rfq || completed.vendorPlanPending === true) {
+        const released = await this.updateRFQDurably(completed.id, { vendorPlanPending: false });
+        if (released) completed = released;
+      }
+      this._dispatchRFQCreatedEmailOutbox(completed);
+    }
+    return completed;
   }
 
   /**
@@ -7332,6 +8300,7 @@ class StoreService {
    */
   async _deferMinorVendorPlan(rfq, path, error, { rethrowOnDatabaseError = false } = {}) {
     if (rethrowOnDatabaseError) throw error;
+    deferredVendorPlanRfqs.add(rfq);
     logger.error(
       'RFQ vendor plan could not read the database; queued a retry instead of planning from the in-memory subset',
       { rfqNumber: rfq.rfqNumber, path, error: error?.message },
@@ -7570,7 +8539,7 @@ class StoreService {
    * @param {string[]} minors
    * @returns {Promise<Object[]>}
    */
-  async _fetchMajorFallbackFromDB(minors) {
+  async _fetchMajorFallbackFromDB(minors, targetLocation = null) {
     const perMinor = this._minorLookupLimit();
     const majorBuckets = new Map();
     for (const minor of minors) {
@@ -7582,18 +8551,21 @@ class StoreService {
       }
       majorBuckets.get(setKey).minorKeys.add(taxonomyKeyOf(minor));
     }
+    const targetPin = this._extractTargetLocation(targetLocation).pincode;
     const rows = [];
     for (const { majors, minorKeys } of majorBuckets.values()) {
       const majorLimit = Math.min(perMinor * minorKeys.size, RFQ_MINOR_INVITE_LOOKUP.MAX_ROWS);
-      const majorRows = await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
+      const majorRows = targetPin
+        ? await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit, { pincode: targetPin })
+        : await domainQueries.getPublicVendorsByMajorCategoryFromDB(majors, majorLimit);
       if (Array.isArray(majorRows)) rows.push(...majorRows);
     }
     return rows;
   }
 
-  /** Every in-memory vendor the RFQ may see, before any category match. Other buyers' private vendors are left out. */
+  /** Every active in-memory vendor the RFQ may see, before any category match. Other buyers' private vendors are left out. */
   _visibleVendorsForRFQ(rfq) {
-    return this.vendors.filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq));
+    return this.vendors.filter((v) => !isVendorInactive(v) && !this.isVendorPrivateToDifferentBuyer(v, rfq));
   }
 
   /** The full in-memory record behind an assignment entry, or the entry itself when that vendor is not in memory. */
@@ -7677,6 +8649,8 @@ class StoreService {
     // RFQs without a minor.
     const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
+    const targetLocation = this._extractTargetLocation(rfq);
+    const pinLookupOpts = targetLocation.pincode ? [{ pincode: targetLocation.pincode }] : [];
 
     let dbMatches = [];
     if (pool.hasStorage()) {
@@ -7684,23 +8658,32 @@ class StoreService {
         // 1. Public vendors carrying one of the RFQ's minor categories, plus vendors under the minors'
         // parent majors for the top-up. Each minor is looked up on its own when the combined lookup is full.
         try {
-          const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => domainQueries.getPublicVendorsByMinorCategoryFromDB(
-            minorSearchTerms(subset),
-            this._majorCategoriesForMinors(subset, { allMajors: true }),
-            rowLimit
-          ));
-          const majorRows = await this._fetchMajorFallbackFromDB(minors);
+          const minorRows = await this._fetchMinorCandidatesFromDB(minors, (subset, rowLimit) => {
+            const lookupMajors = this._majorCategoriesForMinors(subset, { allMajors: true });
+            if (lookupMajors.length > 0 && typeof domainQueries.getPublicVendorsByMinorCategoryFromDB === 'function') {
+              return domainQueries.getPublicVendorsByMinorCategoryFromDB(
+                minorSearchTerms(subset),
+                lookupMajors,
+                rowLimit,
+                ...pinLookupOpts
+              );
+            }
+            return domainQueries.getPublicVendorsMatchingCategories(
+              minorSearchTerms(subset),
+              rowLimit,
+              ...pinLookupOpts
+            );
+          });
+          const majorRows = await this._fetchMajorFallbackFromDB(minors, targetLocation);
           dbMatches = [...minorRows, ...majorRows];
         } catch (err) {
           return this._deferMinorVendorPlan(rfq, 'v0-augment', err, { rethrowOnDatabaseError });
         }
       } else {
-        // 1. Category-matched public vendors from the whole directory.
+        // 1. Category-matched public vendors from the whole directory, prioritized by delivery pincode.
         if (Array.isArray(signals) && signals.length > 0) {
           try {
-            // Indexed major-category lookup. The LIKE scan over the raw JSON read about a million
-            // rows per call on D1 and was the query that failed under overload, leaving the RFQ with no vendors.
-            dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit);
+            dbMatches = await domainQueries.getPublicVendorsByMajorCategoryFromDB(signals, limit, ...pinLookupOpts);
           } catch (err) {
             logger.warn(
               'V0 DB-backed vendor assignment query failed',
@@ -7711,13 +8694,26 @@ class StoreService {
         }
         if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
           try {
-            const page = await domainQueries.getVendorsPageFromDB({
-              limit,
-              offset: 0,
-              publicOnly: true,
-              skipCount: true,
-            });
-            dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+            const districtPin = targetLocation.pincode ? targetLocation.pincode.slice(0, 3) : '';
+            if (districtPin) {
+              const pinPage = await domainQueries.getVendorsPageFromDB({
+                limit,
+                offset: 0,
+                publicOnly: true,
+                skipCount: true,
+                pincode: districtPin,
+              });
+              dbMatches = (pinPage && Array.isArray(pinPage.rows)) ? pinPage.rows : [];
+            }
+            if (!Array.isArray(dbMatches) || dbMatches.length === 0) {
+              const page = await domainQueries.getVendorsPageFromDB({
+                limit,
+                offset: 0,
+                publicOnly: true,
+                skipCount: true,
+              });
+              dbMatches = (page && Array.isArray(page.rows)) ? page.rows : [];
+            }
           } catch (err) {
             logger.warn(
               'V0 DB-backed network fallback query failed',
@@ -7737,11 +8733,9 @@ class StoreService {
       dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
     }
 
-    const network = (Array.isArray(dbMatches) ? dbMatches : []).filter((v) => this.isProcucevVendor(v));
-    const targetLocation = {
-      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
+    const network = (Array.isArray(dbMatches) ? dbMatches : []).filter(
+      (v) => !isVendorInactive(v) && this.isProcucevVendor(v)
+    );
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
 
     let sorted;
@@ -7763,14 +8757,7 @@ class StoreService {
       sorted = network.length === 0 ? [] : this.selectVendorsForRFQ(network, rfq, maxProcucevPerCat, targetLocation);
       if (!sorted || sorted.length === 0) {
         sorted = network
-          .sort((a, b) => {
-            if (targetLocation.pincode || targetLocation.location) {
-              const aLoc = this.scoreVendorLocation(a, targetLocation);
-              const bLoc = this.scoreVendorLocation(b, targetLocation);
-              if (aLoc !== bLoc) return bLoc - aLoc;
-            }
-            return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-          })
+          .sort((a, b) => this._compareVendorsByLocationAndRating(a, b, targetLocation))
           .slice(0, limit);
       }
     }
@@ -7781,19 +8768,24 @@ class StoreService {
       const updated = await this.updateRFQDurably(rfq.id, (current) => ({
         needsCategoryManagerAssignment: !Array.isArray(current.assignedVendors) || current.assignedVendors.length === 0,
         procucevVendorCount: 0,
+        vendorPlanPending: false,
       }));
       return updated || rfq;
     }
 
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = sorted
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => ({
         id: v.id,
         name: v.name,
-        email: v.email || null,
+        email: resolveVendorEmail(v) || null,
         contactPerson: v.contactPerson || null,
         phone: v.phone || v.mobile || v.mobileNumber || null,
         source: v.source || 'procucev_network',
@@ -7816,10 +8808,10 @@ class StoreService {
     }
     if (additions.length === 0) return rfq;
 
-    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
+    const { updatedRFQ: updated, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true, advanceStatus: minorScoped }
+      { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: true }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
@@ -7830,7 +8822,7 @@ class StoreService {
       return {
         ...v,
         phone: full.phone || full.mobile || full.mobileNumber || v.phone,
-        email: full.email || v.email,
+        email: resolveVendorEmail(full) || resolveVendorEmail(v) || null,
         name: full.name || v.name,
         contactPerson: full.contactPerson || v.contactPerson,
       };
@@ -7845,6 +8837,7 @@ class StoreService {
     }
 
     const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+    const v0ChannelTasks = [];
 
     for (const vendor of resolvedAdditions) {
       const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -7878,7 +8871,21 @@ class StoreService {
         }
       }
 
-      if (vendor.email) {
+      // With a database, the queue (rfq_vendor_invite_email) sends every invitation e-mail, so each vendor gets
+      // one. The request path sends it only when there is no database, because then there is no queue.
+      const sendEmailViaOutboxOnly = pool.hasStorage();
+      if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(vendor, { isBuyerUploaded }, updated)
+          : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
+        const inviteRecord = this.recordRfqVendorInvite(updated, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
+        });
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         this._sendWithFeedOutcome(
           mailerService.sendRfqInviteEmail(vendor.email, {
@@ -7888,6 +8895,10 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor,
             isBuyerUploaded,
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to DB-augmented vendor',
           {
@@ -7902,21 +8913,24 @@ class StoreService {
       }
 
       if (vendor.phone) {
-        const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-        this._sendWithFeedOutcome(
-          smsService.sendRFQChaserSms({
-            mobile: vendor.phone,
-            vendorName: vendor.name,
-            rfqNumber: updated.rfqNumber,
-            rfqTitle: updated.title,
-            bidLink: bidUrl,
-          }),
-          'Failed to dispatch initial SMS alert',
-          {},
-          { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-        );
+        v0ChannelTasks.push(() => {
+          const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+          return {
+            promise: smsService.sendRFQChaserSms({
+              mobile: vendor.phone,
+              vendorName: vendor.name,
+              rfqNumber: updated.rfqNumber,
+              rfqTitle: updated.title,
+              bidLink: bidUrl,
+            }),
+            errorMessage: 'Failed to dispatch initial SMS alert',
+            metadata: {},
+            feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+          };
+        });
       }
     }
+    this._dispatchChannelWave(v0ChannelTasks);
 
     if (updated.followUpData) {
       const assignedCount = Array.isArray(updated.assignedVendors) ? updated.assignedVendors.length : 0;
@@ -7938,7 +8952,17 @@ class StoreService {
     }
 
     this._persistRFQ(updated);
-    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-v0-augmented-vendor-invites');
+    this.recordRfqVendorInvites(
+      updated,
+      Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : committedAdditions
+    );
+    this._dispatchRFQVendorInviteOutbox(
+      updated,
+      'rfq-v0-augmented-vendor-invites',
+      this._resolveDispatchedInviteEventIds(updated, invitationTargets, committedAdditions, {
+        maxCount: EVENT_OUTBOX_MAX_BATCH_SIZE,
+      })
+    );
 
     logger.info(
       `V0 RFQ ${rfq.rfqNumber}: assigned ${updated.assignedVendors.length} Procucev vendors from DB match (${committedAdditions.length} added)`,
@@ -7958,7 +8982,7 @@ class StoreService {
    * @param {Object} rfq The RFQ to assign vendors to.
    * @returns {Promise<Object>} The updated RFQ with assigned vendors.
    */
-  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false } = {}) {
+  async autoAssignVendorsFromDB(rfq, { deferChasers = false, notifyShortfall, rethrowOnDatabaseError = false, preserveVendorPlanPending = false } = {}) {
     if (!rfq) return rfq;
     const mode = String(rfq.sourcingMode || '');
     const isV1 = mode === 'mode_1' || mode === 'v1' || mode === 'version_1';
@@ -7987,10 +9011,8 @@ class StoreService {
     const targetCategories = minorScoped ? minors : (categories.length > 0 ? categories : signals);
     const limit = Math.max(targetCategories.length, 1) * maxProcucevPerCat;
 
-    const targetLocation = {
-      pincode: rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
+    const targetLocation = this._extractTargetLocation(rfq);
+    const pinLookupOpts = targetLocation.pincode ? [{ pincode: targetLocation.pincode }] : [];
     let clientCandidates = [];
     if (isV1 || isV2) {
       let clientDbMatches = [];
@@ -8015,6 +9037,7 @@ class StoreService {
       ];
       const seenClient = new Set();
       for (const v of rawClient) {
+        if (isVendorInactive(v)) continue;
         const k = (v.id || v.email || v.name || '').toLowerCase();
         if (k && !seenClient.has(k)) {
           seenClient.add(k);
@@ -8067,18 +9090,24 @@ class StoreService {
                 return domainQueries.getPublicVendorsByMinorCategoryFromDB(
                   minorSearchTerms(subset),
                   lookupMajors,
-                  rowLimit
+                  rowLimit,
+                  ...pinLookupOpts
                 );
               }
               return domainQueries.getPublicVendorsMatchingCategories(
                 minorSearchTerms(subset),
-                rowLimit
+                rowLimit,
+                ...pinLookupOpts
               );
             });
-            const majorRows = await this._fetchMajorFallbackFromDB(minors);
+            const majorRows = await this._fetchMajorFallbackFromDB(minors, targetLocation);
             dbMatches = [...minorRows, ...majorRows];
           } else {
-            dbMatches = await domainQueries.getPublicVendorsMatchingCategories(this._rfqMatchSignals(rfq), limit * 2);
+            dbMatches = await domainQueries.getPublicVendorsMatchingCategories(
+              this._rfqMatchSignals(rfq),
+              limit * 2,
+              ...pinLookupOpts
+            );
           }
         } catch (err) {
           if (minorScoped) return this._deferMinorVendorPlan(rfq, 'auto-assign', err, { rethrowOnDatabaseError });
@@ -8096,7 +9125,7 @@ class StoreService {
         dbMatches = inMemory.filter((v) => this.isProcucevVendor(v));
       }
 
-      const network = (dbMatches || []).filter((v) => this.isProcucevVendor(v));
+      const network = (dbMatches || []).filter((v) => !isVendorInactive(v) && this.isProcucevVendor(v));
       if (minorScoped) {
         const plan = this.planMinorInvites(rfq, {
           candidatePool: network,
@@ -8126,17 +9155,21 @@ class StoreService {
     }
 
     const existing = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    const existingKeys = new Set(
-      existing.map((v) => (v.id || v.email || v.name || '').toLowerCase())
+    const existingByKey = new Map(
+      existing.map((v) => [(v.id || v.email || v.name || '').toLowerCase(), v])
     );
     const additions = candidatePool
-      .filter((v) => !existingKeys.has((v.id || v.email || v.name || '').toLowerCase()))
+      .filter((v) => {
+        const key = (v.id || v.email || v.name || '').toLowerCase();
+        const prev = existingByKey.get(key);
+        return !prev || (!resolveVendorEmail(prev) && Boolean(resolveVendorEmail(v)));
+      })
       .map((v) => {
         const isProc = this.isProcucevVendor(v);
         return {
           id: v.id,
           name: v.name,
-          email: v.email || null,
+          email: resolveVendorEmail(v) || null,
           contactPerson: v.contactPerson || null,
           phone: v.phone || v.mobile || v.mobileNumber || null,
           source: v.source || (isProc ? 'procucev_network' : 'buyer_uploaded'),
@@ -8161,10 +9194,10 @@ class StoreService {
     }
     if (additions.length === 0) return rfq;
 
-    const { updatedRFQ: updated, committedAdditions } = await this._appendRFQAssignmentsDurably(
+    const { updatedRFQ: updated, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(
       rfq.id,
       additions,
-      { ensureFollowUpData: true, advanceStatus: minorScoped }
+      { ensureFollowUpData: true, advanceStatus: minorScoped, clearVendorPlanPending: !preserveVendorPlanPending }
     );
     if (!updated) return rfq;
     if (committedAdditions.length === 0) return updated;
@@ -8175,7 +9208,7 @@ class StoreService {
         return {
           ...vendor,
           phone: full.phone || vendor.phone || null,
-          email: full.email || vendor.email || null,
+          email: resolveVendorEmail(full) || resolveVendorEmail(vendor) || null,
           name: full.name || vendor.name,
           contactPerson: full.contactPerson || vendor.contactPerson || null,
         };
@@ -8194,6 +9227,7 @@ class StoreService {
       }
 
       const categoryLabel = updated.category || this._rfqCategorySignals(updated)[0] || 'your categories';
+      const autoChannelTasks = [];
       try {
         for (const vendor of resolvedAdditions) {
           const isBuyerUploaded = this.isBuyerUploaded(vendor);
@@ -8227,7 +9261,20 @@ class StoreService {
             }
           }
 
-          if (vendor.email) {
+          // The queue is the only sender when a database is configured (see augmentV0AssignmentsFromDB).
+          const sendEmailViaOutboxOnly = pool.hasStorage();
+          if (vendor.email && EMAIL_REGEX.test(vendor.email) && !sendEmailViaOutboxOnly) {
+            const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+              ? mailerService.resolveVendorInviteRouting(vendor, { isBuyerUploaded }, updated)
+              : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
+            const inviteRecord = this.recordRfqVendorInvite(updated, {
+              vendorId: vendor.id,
+              vendorEmail: vendor.email,
+              inviteChannel: routing.channel,
+              inviteOrigin: routing.origin,
+              senderMailbox: routing.replyTo || null,
+              replyToQuoteAllowed: routing.replyToQuoteAllowed,
+            });
             const creditInfo = this.checkVendorQuotationEligibility(vendor);
             this._sendWithFeedOutcome(
               mailerService.sendRfqInviteEmail(vendor.email, {
@@ -8237,6 +9284,10 @@ class StoreService {
                 isSubscribed: creditInfo.isSubscribed,
                 vendor,
                 isBuyerUploaded,
+                inviteChannel: routing.channel,
+                inviteOrigin: routing.origin,
+                replyToQuoteAllowed: routing.replyToQuoteAllowed,
+                messageId: inviteRecord?.inviteMessageId,
               }),
               'Failed to email RFQ invite to DB auto-assigned vendor',
               {
@@ -8251,23 +9302,25 @@ class StoreService {
           }
 
           if (vendor.phone) {
-            const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
-            this._sendWithFeedOutcome(
-              smsService.sendRFQChaserSms({
-                mobile: vendor.phone,
-                vendorName: vendor.name,
-                rfqNumber: updated.rfqNumber,
-                rfqTitle: updated.title,
-                bidLink: bidUrl,
-              }),
-              'Failed to dispatch initial SMS alert',
-              {},
-              { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-            );
+            autoChannelTasks.push(() => {
+              const bidUrl = whatsAppService.generateOneClickBidUrl(updated.rfqNumber, vendor.email);
+              return {
+                promise: smsService.sendRFQChaserSms({
+                  mobile: vendor.phone,
+                  vendorName: vendor.name,
+                  rfqNumber: updated.rfqNumber,
+                  rfqTitle: updated.title,
+                  bidLink: bidUrl,
+                }),
+                errorMessage: 'Failed to dispatch initial SMS alert',
+                metadata: {},
+                feedDetails: { channel: 'sms', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              };
+            });
 
             if (updated.sourcingMode === 'mode_2' || updated.sourcingMode === 'mode_3') {
-              this._sendWithFeedOutcome(
-                whatsAppService.sendRFQInvitationWhatsApp({
+              autoChannelTasks.push(() => ({
+                promise: whatsAppService.sendRFQInvitationWhatsApp({
                   phone: vendor.phone,
                   vendorName: vendor.name,
                   contactPerson: vendor.contactPerson,
@@ -8277,13 +9330,14 @@ class StoreService {
                   deliveryDate: updated.targetDeliveryDate || updated.deadline,
                   deliveryLocation: updated.deliveryLocation || updated.deliveryCity,
                 }),
-                'Failed to dispatch initial WhatsApp prompt',
-                {},
-                { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId }
-              );
+                errorMessage: 'Failed to dispatch initial WhatsApp prompt',
+                metadata: {},
+                feedDetails: { channel: 'whatsapp', vendor, rfqNumber: updated.rfqNumber, buyerAccountId: updated.buyerAccountId },
+              }));
             }
           }
         }
+        this._dispatchChannelWave(autoChannelTasks);
       } catch (dispatchError) {
         logger.error('RFQ assignments were saved but automatic vendor dispatch failed', {
           rfqId: updated.id,
@@ -8313,8 +9367,18 @@ class StoreService {
       updated.followUpData.whatsappStats.total = Math.max(updated.followUpData.whatsappStats.total || 0, assignedCount);
     }
 
-    this._persistRFQ(updated);
-    this._dispatchRFQVendorInviteOutbox(updated, 'rfq-auto-assigned-vendor-invites');
+    this._persistRFQ(preserveVendorPlanPending ? { ...updated, vendorPlanPending: true } : updated);
+    this.recordRfqVendorInvites(
+      updated,
+      Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : committedAdditions
+    );
+    this._dispatchRFQVendorInviteOutbox(
+      updated,
+      'rfq-auto-assigned-vendor-invites',
+      this._resolveDispatchedInviteEventIds(updated, invitationTargets, committedAdditions, {
+        maxCount: EVENT_OUTBOX_MAX_BATCH_SIZE,
+      })
+    );
     logger.info(
       `RFQ ${rfq.rfqNumber}: auto-assigned ${updated.assignedVendors.length} vendors from DB (${committedAdditions.length} added)`,
       { rfqNumber: rfq.rfqNumber, assigned: updated.assignedVendors.length },
@@ -8336,6 +9400,9 @@ class StoreService {
    */
   vendorCoversRFQ(vendor, rfq) {
     if (!vendor || !rfq) return false;
+    if (isVendorInactive(vendor)) {
+      return this._isInvitedVendor(vendor, rfq);
+    }
     if (rfq.needsCategoryManagerAssignment || rfq.categoryNotAvailable) {
       return this._isInvitedVendor(vendor, rfq);
     }
@@ -8348,9 +9415,18 @@ class StoreService {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
 
-    // Buyer-specific vendor access rule:
-    // When a buyer uploads or adds a vendor to their vendor list, that vendor can view and cover
-    // RFQs created by that respective buyer across all modes.
+    // Explicitly invited vendor always covers the RFQ regardless of registered category
+    if (this._isInvitedVendor(vendor, rfq)) {
+      return true;
+    }
+
+    // When an RFQ has an explicit assigned vendors list, only invited vendors cover it
+    const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+    if (hasExplicitAssigned) {
+      return false;
+    }
+
+    // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists
     if (this.isVendorMappedToRfqBuyer(vendor, rfq)) {
       return this._vendorCoversRFQCategories(vendor, rfq) || this._isInvitedVendor(vendor, rfq);
     }
@@ -8366,16 +9442,29 @@ class StoreService {
     return this._isInvitedVendor(vendor, rfq);
   }
 
-  /** Whether a vendor is on the RFQ's assignedVendors invite list. */
+  /** Whether a vendor is on the RFQ's assignedVendors or followUpData.vendors invite list. */
   _isInvitedVendor(vendor, rfq) {
-    const invited = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
-    return invited.some(
-      (v) =>
-        v &&
-        ((v.id && v.id === vendor.id) ||
-          (v.email && vendor.email && v.email.toLowerCase() === vendor.email.toLowerCase()) ||
-          (v.name && vendor.name && v.name.toLowerCase() === vendor.name.toLowerCase()))
-    );
+    if (!vendor || !rfq) return false;
+    const vId = String(vendor.id || vendor.vendorId || '').toLowerCase().trim();
+    const targetEmail = resolveVendorEmail(vendor).toLowerCase().trim();
+    const vName = String(vendor.name || '').toLowerCase().trim();
+
+    const checkList = (list) => {
+      if (!Array.isArray(list)) return false;
+      return list.some((v) => {
+        if (!v) return false;
+        const targetId = String(v.id || v.vendorId || '').toLowerCase().trim();
+        const candEmail = resolveVendorEmail(v).toLowerCase().trim();
+        const targetName = String(v.name || '').toLowerCase().trim();
+        return Boolean(
+          (vId && targetId && vId === targetId) ||
+          (targetEmail && candEmail && targetEmail === candEmail) ||
+          (vName && targetName && vName === targetName)
+        );
+      });
+    };
+
+    return checkList(rfq.assignedVendors) || checkList(rfq.followUpData && rfq.followUpData.vendors);
   }
 
   /**
@@ -8386,23 +9475,15 @@ class StoreService {
    */
   candidateVendorsForRFQ(rfq, limit = null) {
     const signals = this._rfqCategorySignals(rfq);
-    const destination = {
-      pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-      location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-    };
+    const destination = this._extractTargetLocation(rfq);
     const matches = this._rfqVendorMatcher(rfq);
     const candidates = this.vendors
-      .filter((v) => !this.isVendorPrivateToDifferentBuyer(v, rfq))
+      .filter((v) => !isVendorInactive(v) && !this.isVendorPrivateToDifferentBuyer(v, rfq))
       .filter((v) => signals.length === 0 || matches(v))
       .map((v) => ({ ...v, alreadyInvited: this._isInvitedVendor(v, rfq) }));
 
     if (destination.pincode || destination.location) {
-      candidates.sort((a, b) => {
-        const aLoc = this.scoreVendorLocation(a, destination);
-        const bLoc = this.scoreVendorLocation(b, destination);
-        if (aLoc !== bLoc) return bLoc - aLoc;
-        return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-      });
+      candidates.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, destination));
     }
 
     if (limit && Number.isInteger(Number(limit)) && Number(limit) > 0) {
@@ -8424,26 +9505,19 @@ class StoreService {
           const fetchLimit = (limit && Number.isInteger(Number(limit)) && Number(limit) > 0)
             ? Number(limit)
             : 100;
+          const destination = this._extractTargetLocation(rfq);
+          const pinOpts = destination.pincode ? [{ pincode: destination.pincode }] : [];
           const dbVendors = this._narrowDbVendorsToRFQ(
             rfq,
-            await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit)
-          );
+            await domainQueries.getPublicVendorsMatchingCategories(signals, fetchLimit, ...pinOpts)
+          ).filter((v) => !isVendorInactive(v));
           if (Array.isArray(dbVendors) && dbVendors.length > 0) {
-            const destination = {
-              pincode: rfq?.deliveryPincode ? String(rfq.deliveryPincode).trim() : null,
-              location: rfq?.deliveryLocation ? String(rfq.deliveryLocation).trim() : null,
-            };
             candidates = dbVendors.map((v) => ({
               ...v,
               alreadyInvited: this._isInvitedVendor(v, rfq),
             }));
             if (destination.pincode || destination.location) {
-              candidates.sort((a, b) => {
-                const aLoc = this.scoreVendorLocation(a, destination);
-                const bLoc = this.scoreVendorLocation(b, destination);
-                if (aLoc !== bLoc) return bLoc - aLoc;
-                return (Number(b.rating) || 0) - (Number(a.rating) || 0);
-              });
+              candidates.sort((a, b) => this._compareVendorsByLocationAndRating(a, b, destination));
             }
           }
         } catch (err) {
@@ -8472,7 +9546,9 @@ class StoreService {
    * does not automatically match, logging the override and sending normal RFQ
    * invitation emails. Category mismatch emails are disabled.
    */
-  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail) {
+  async inviteVendorsToRFQ(rfqId, vendorIds, actorEmail, { actorRole = 'category_manager' } = {}) {
+    const normalizedActorRole = String(actorRole || 'category_manager').trim().toLowerCase();
+    const isCmActor = normalizedActorRole === 'category_manager' || normalizedActorRole === 'admin';
     // Load the authoritative row before merging assignments. Isolate-local RFQ
     // state can lag behind another Worker or Node process.
     const rfq = await this.getRFQByIdAsync(rfqId);
@@ -8494,6 +9570,19 @@ class StoreService {
         }
       }
       if (!vendor) continue;
+      if (isVendorInactive(vendor)) {
+        excludedVendors.push({
+          id: vendor.id,
+          name: vendor.name,
+          reason: VENDOR_STATUS_MESSAGES.INACTIVE_RFQ_INVITE_BLOCKED,
+        });
+        logger.warn(
+          `Rejected invitation of inactive vendor ${vendor.id} to RFQ ${rfq.rfqNumber}.`,
+          { rfqNumber: rfq.rfqNumber, vendorId: vendor.id },
+          'STORE_SERVICE'
+        );
+        continue;
+      }
       if (this.isVendorPrivateToDifferentBuyer(vendor, rfq)) {
         excludedVendors.push({
           id: vendor.id,
@@ -8536,7 +9625,7 @@ class StoreService {
     const entries = newlyInvited.map((v) => ({
       id: v.id,
       name: v.name,
-      email: v.email || null,
+      email: resolveVendorEmail(v) || null,
       contactPerson: v.contactPerson || null,
       phone: v.phone || v.mobile || v.mobileNumber || null,
       source: v.source || (this.isProcucevVendor(v) ? 'procucev_network' : 'buyer_uploaded'),
@@ -8546,15 +9635,23 @@ class StoreService {
       state: v.state || null,
       location: v.location || (v.city ? `${v.city}${v.state ? ', ' + v.state : ''}` : null),
       pincode: v.pincode || null,
+      ...(isCmActor ? {
+        isCmAssigned: true,
+        inviteChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+        inviteOrigin: VENDOR_INVITE_ORIGINS.CM_ASSIGNED,
+        replyToQuoteAllowed: true,
+      } : {}),
     }));
     // Persist the assignment before emitting any invitation side effects or
     // acknowledging the request. A configured database failure must not leave
     // vendors notified about an invitation that disappears after restart.
-    const { updatedRFQ, committedAdditions } = await this._appendRFQAssignmentsDurably(rfq.id, entries, {
+    const { updatedRFQ, committedAdditions, invitationTargets } = await this._appendRFQAssignmentsDurably(rfq.id, entries, {
       clearCategoryManagerAssignment: true,
       clearCategoryNotAvailable: true,
       advanceStatus: true,
       includeBuyerEmailInInvite: true,
+      actorRole: normalizedActorRole,
+      isCmAssigned: isCmActor,
     });
     if (!updatedRFQ) return null;
     const committedIds = new Set(committedAdditions.map((vendor) => vendor.id));
@@ -8576,6 +9673,8 @@ class StoreService {
       };
     }
 
+    const newlyProvisioned = [];
+    const provisioningErrors = [];
     for (const vendor of dispatchedInvites) {
       const isOverride = dispatchedOverrides.some((ov) => ov.id === vendor.id);
       this.addAuditLog({
@@ -8585,6 +9684,37 @@ class StoreService {
           : `Category Manager manual assignment: Vendor ${vendor.name} (${vendor.id}) invited to RFQ ${rfq.rfqNumber}`,
         rfqNumber: rfq.rfqNumber,
       });
+
+      // Auto-Provision Directory/Unregistered Vendors on RFQ Invite
+      const vendorEmail = resolveVendorEmail(vendor);
+      if (vendorEmail) {
+        try {
+          const existingIdentity = await identityQueries.findUserByEmail(vendorEmail);
+          if (!existingIdentity) {
+            logger.info(
+              `Auto-provisioning login account for invited vendor ${vendorEmail} (${vendor.id}) on RFQ ${rfq.rfqNumber}`,
+              { vendorId: vendor.id, rfqNumber: rfq.rfqNumber },
+              'STORE_SERVICE'
+            );
+            const onboardingVendorPayload = isCmActor
+              ? { ...vendor, email: vendor.email || vendorEmail, isCmCreated: true, createdByRole: normalizedActorRole }
+              : { ...vendor, email: vendor.email || vendorEmail };
+            const onboarding = await this._provisionVendorOnboarding(onboardingVendorPayload, actorEmail);
+            if (onboarding?.status === 'sent' || onboarding?.status === 'pending') {
+              newlyProvisioned.push({ id: vendor.id, email: vendorEmail, status: onboarding.status });
+            } else if (onboarding?.status === 'failed') {
+              provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: onboarding.error });
+            }
+          }
+        } catch (provErr) {
+          logger.warn(
+            `Failed to check or auto-provision identity for invited vendor ${vendorEmail}`,
+            { error: provErr, vendorId: vendor.id },
+            'STORE_SERVICE'
+          );
+          provisioningErrors.push({ id: vendor.id, email: vendorEmail, error: provErr?.message || 'Provisioning error' });
+        }
+      }
 
       // Real in-app notification
       const categoryLabel = updatedRFQ.category || this._rfqCategorySignals(updatedRFQ)[0] || 'your categories';
@@ -8603,25 +9733,41 @@ class StoreService {
       this._persistNotification(notification);
 
       // Real invite email
-      if (vendor.email && !pool.hasStorage()) {
+      if (vendorEmail && !pool.hasStorage()) {
+        const directReply = isCmActor ? true : undefined;
+        const inviteRecord = this.recordRfqVendorInvite(updatedRFQ, {
+          vendorId: vendor.id,
+          vendorEmail,
+          ...(isCmActor ? {
+            inviteChannel: VENDOR_MAILBOX_CHANNELS.DIRECT,
+            inviteOrigin: VENDOR_INVITE_ORIGINS.CM_ASSIGNED,
+            replyToQuoteAllowed: true,
+          } : {}),
+        });
         const buyerEmail = this.resolveBuyerEmailForRFQ(updatedRFQ);
         const creditInfo = this.checkVendorQuotationEligibility(vendor);
         logger.info(
-          `Checking quotation credits for invited vendor ${vendor.name || vendor.email}: ${creditInfo.freeCreditsRemaining} free credits, subscribed: ${creditInfo.isSubscribed}`,
+          `Checking quotation credits for invited vendor ${vendor.name || vendorEmail}: ${creditInfo.freeCreditsRemaining} free credits, subscribed: ${creditInfo.isSubscribed}`,
           { vendorId: vendor.id, freeCreditsRemaining: creditInfo.freeCreditsRemaining, isSubscribed: creditInfo.isSubscribed },
           'STORE_SERVICE'
         );
         const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
         const resolvedIsBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
         this._background(
-          mailerService.sendRfqInviteEmail(vendor.email, {
+          mailerService.sendRfqInviteEmail(vendorEmail, {
             rfq: updatedRFQ,
             recipientName: vendor.contactPerson || vendor.name,
             freeCreditsRemaining: creditInfo.freeCreditsRemaining,
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded: resolvedIsBuyerUploaded,
+            isCmAssigned: isCmActor,
+            assignedByRole: normalizedActorRole,
+            inviteChannel: isCmActor ? VENDOR_MAILBOX_CHANNELS.DIRECT : inviteRecord?.inviteChannel,
+            inviteOrigin: isCmActor ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED : inviteRecord?.inviteOrigin,
+            replyToQuoteAllowed: directReply,
             buyerEmail,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to vendor',
           {
@@ -8636,7 +9782,17 @@ class StoreService {
     }
 
     if (pool.hasStorage()) {
-      this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment');
+      this.recordRfqVendorInvites(
+        updatedRFQ,
+        Array.isArray(invitationTargets) && invitationTargets.length > 0 ? invitationTargets : dispatchedInvites
+      );
+      const targetEventIds = this._resolveDispatchedInviteEventIds(
+        updatedRFQ,
+        invitationTargets,
+        dispatchedInvites,
+        { includeBuyerEmail: true, actorRole: normalizedActorRole, isCmAssigned: isCmActor }
+      );
+      this._dispatchRFQVendorInviteOutbox(updatedRFQ, 'manual-vendor-assignment', targetEventIds);
     }
 
     this.addAuditLog({
@@ -8651,7 +9807,7 @@ class StoreService {
       return {
         ...v,
         phone: full.phone || full.mobile || full.mobileNumber || v.phone,
-        email: full.email || v.email,
+        email: resolveVendorEmail(full) || resolveVendorEmail(v) || null,
         name: full.name || v.name,
         contactPerson: full.contactPerson || v.contactPerson,
       };
@@ -8669,6 +9825,8 @@ class StoreService {
       overrideCount: dispatchedOverrides.length,
       excludedCount: excludedVendors.length,
       excludedVendors,
+      provisionedCount: newlyProvisioned.length,
+      provisioningErrors,
     };
   }
 
@@ -8684,6 +9842,18 @@ class StoreService {
     const shortlisted = [];
     const excluded = [];
 
+    // Precompute parent major keys for the RFQ's minor and major categories
+    const rfqMinors = this._rfqMinorCategories(rfq);
+    const parentMajors = new Set(this._majorCategoriesForMinors(rfqMinors, { allMajors: true }));
+    if (rfq.majorCategory || rfq.category) {
+      const directMajor = String(rfq.majorCategory || rfq.category).trim().toLowerCase();
+      if (directMajor) {
+        parentMajors.add(directMajor);
+        const folded = foldCategoryDashes(directMajor);
+        if (folded) parentMajors.add(folded);
+      }
+    }
+
     for (const v of vendorList) {
       const vendorRecord = (v.id ? this.getVendorById(v.id, 'all') : null) || v;
       const hasCategory = Boolean(
@@ -8692,7 +9862,24 @@ class StoreService {
         (Array.isArray(vendorRecord.vendorSelectedCategories) && vendorRecord.vendorSelectedCategories.length > 0) ||
         (Array.isArray(vendorRecord.clientMappedCategories) && vendorRecord.clientMappedCategories.length > 0)
       );
-      const isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendorRecord));
+
+      // 1. Direct rfq matching (strict minor if minors exist, else signals)
+      let isMatch = signals.length === 0 || (hasCategory && matchesRfq(vendorRecord));
+
+      // 2. Division / parent major fallback: if vendor's major matches RFQ's major or parent major of RFQ's minors
+      if (!isMatch && hasCategory && parentMajors.size > 0) {
+        const vMajors = vendorMajorKeys(vendorRecord);
+        if (vMajors.some((k) => parentMajors.has(k))) {
+          isMatch = true;
+        }
+      }
+
+      // 3. Broad category coverage fallback for buyer-uploaded vendors
+      if (!isMatch && hasCategory && this.isBuyerUploaded(vendorRecord) && signals.length > 0) {
+        if (signals.some((sig) => this.vendorCoversCategory(vendorRecord, sig))) {
+          isMatch = true;
+        }
+      }
 
       if (isMatch) {
         shortlisted.push(v);
@@ -8729,7 +9916,7 @@ class StoreService {
    */
   notifyVendorsOfNewRFQ(rfq) {
     if (!rfq || rfq.needsCategoryManagerAssignment || rfq.categoryNotAvailable) return [];
-    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
+    const matches = this.vendors.filter((v) => !isVendorInactive(v) && this.vendorCoversRFQ(v, rfq));
     if (matches.length === 0) return [];
 
     const categoryLabel = rfq.category || this._rfqCategorySignals(rfq)[0] || 'your categories';
@@ -8822,7 +10009,26 @@ class StoreService {
       meta: meta || {},
     });
     this.notifications.unshift(notification);
-    this._persistNotification(notification);
+    if (!buyerAccount && String(emailOrId).includes('@') && pool.hasStorage()) {
+      this._background(
+        (async () => {
+          const resolved = await this.getBuyerAccountByEmail(emailOrId).catch(() => null);
+          if (resolved && resolved.id) {
+            notification.recipientId = resolved.id;
+          }
+          return eventOutboxService.persistWithOutboxFallback({
+            eventType: EVENT_OUTBOX_TYPES.NOTIFICATION,
+            idempotencyKey: notification.id,
+            payload: notification,
+            operation: 'persist-notification',
+            write: () => domainQueries.insertNotificationInDB(notification),
+          });
+        })(),
+        'Failed to persist notification or schedule its retry'
+      );
+    } else {
+      this._persistNotification(notification);
+    }
     return notification;
   }
 
@@ -8880,7 +10086,181 @@ class StoreService {
     return notification;
   }
 
+  _normalizeClosureVendorEntry(rawEntry) {
+    if (!rawEntry) return null;
+    if (typeof rawEntry === 'string') {
+      const token = rawEntry.trim();
+      if (!token) return null;
+      const resolved = this.getVendorById(token, 'all');
+      if (resolved) return { ...resolved };
+      return token.includes('@') ? { email: token } : { id: token };
+    }
+    if (typeof rawEntry !== 'object') return null;
+
+    const candidateId = String(rawEntry.id || rawEntry.vendorId || '').trim() || null;
+    const candidateEmail = resolveVendorEmail(rawEntry) || null;
+    const resolved =
+      (candidateId ? this.getVendorById(candidateId, 'all') : null) ||
+      (candidateEmail ? this.getVendorById(candidateEmail, 'all') : null);
+
+    const id = candidateId || (resolved && resolved.id) || null;
+    const email = candidateEmail || (resolved && resolveVendorEmail(resolved)) || null;
+    const phone =
+      rawEntry.phone ||
+      rawEntry.mobile ||
+      rawEntry.mobileNumber ||
+      (resolved && (resolved.phone || resolved.mobile || resolved.mobileNumber)) ||
+      null;
+    const name = rawEntry.name || rawEntry.vendorName || (resolved && resolved.name) || null;
+    const contactPerson = rawEntry.contactPerson || (resolved && resolved.contactPerson) || null;
+
+    return {
+      ...(resolved || {}),
+      ...rawEntry,
+      ...(id ? { id, vendorId: id } : {}),
+      ...(email ? { email } : {}),
+      ...(phone ? { phone } : {}),
+      ...(name ? { name } : {}),
+      ...(contactPerson ? { contactPerson } : {}),
+    };
+  }
+
+  _resolveInvitedVendorEntries(rfq) {
+    const rawLists = [
+      ...(Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []),
+      ...((rfq.followUpData && Array.isArray(rfq.followUpData.vendors)) ? rfq.followUpData.vendors : []),
+      ...(Array.isArray(this.vendors) ? this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq)) : []),
+    ];
+
+    const merged = [];
+    const indexById = new Map();
+    const indexByEmail = new Map();
+    const indexByName = new Map();
+
+    for (const rawEntry of rawLists) {
+      const entry = this._normalizeClosureVendorEntry(rawEntry);
+      if (!entry) continue;
+
+      const idKey = entry.id ? String(entry.id).trim().toLowerCase() : '';
+      const emailKey = entry.email ? String(entry.email).trim().toLowerCase() : '';
+      const nameKey = entry.name ? String(entry.name).trim().toLowerCase() : '';
+      if (!idKey && !emailKey && !nameKey) continue;
+
+      let existingIdx = idKey && indexById.has(idKey) ? indexById.get(idKey) : undefined;
+      if (existingIdx === undefined && emailKey && indexByEmail.has(emailKey)) existingIdx = indexByEmail.get(emailKey);
+      if (existingIdx === undefined && nameKey && indexByName.has(nameKey)) existingIdx = indexByName.get(nameKey);
+
+      if (existingIdx !== undefined) {
+        const current = merged[existingIdx];
+        merged[existingIdx] = {
+          ...entry,
+          ...current,
+          id: current.id || entry.id,
+          vendorId: current.vendorId || entry.vendorId,
+          email: current.email || entry.email,
+          phone: current.phone || entry.phone,
+          name: current.name || entry.name,
+          contactPerson: current.contactPerson || entry.contactPerson,
+        };
+        if (idKey && !indexById.has(idKey)) indexById.set(idKey, existingIdx);
+        if (emailKey && !indexByEmail.has(emailKey)) indexByEmail.set(emailKey, existingIdx);
+        if (nameKey && !indexByName.has(nameKey)) indexByName.set(nameKey, existingIdx);
+      } else {
+        const idx = merged.length;
+        merged.push(entry);
+        if (idKey) indexById.set(idKey, idx);
+        if (emailKey) indexByEmail.set(emailKey, idx);
+        if (nameKey) indexByName.set(nameKey, idx);
+      }
+    }
+
+    const missingDbIds = Array.from(
+      new Set(
+        merged
+          .filter((v) => v.id && !v.phone)
+          .map((v) => String(v.id).trim())
+      )
+    );
+
+    return { vendors: merged, missingDbIds };
+  }
+
+  _dispatchVendorClosureMessages(rfq, vendors, tracking = {}) {
+    const notifiedIds = tracking.notifiedIds || new Set();
+    const messagedPhones = tracking.messagedPhones || new Set();
+
+    const rfqNumber = rfq.rfqNumber || rfq.id || '';
+    const rfqTitle = rfq.title || 'Requisition';
+    const notifTitle = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_TITLE, { rfqNumber });
+    const notifMessage = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_NOTIFICATION_MESSAGE, { rfqNumber, rfqTitle });
+
+    const vendorNotifs = [];
+    for (const vendor of Array.isArray(vendors) ? vendors : []) {
+      if (!vendor) continue;
+      if (vendor.id && !notifiedIds.has(vendor.id)) {
+        notifiedIds.add(vendor.id);
+        vendorNotifs.push(
+          this._buildNotification({
+            recipientType: 'vendor',
+            recipientId: vendor.id,
+            kind: 'rfq_closed',
+            rfq,
+            title: notifTitle,
+            message: notifMessage,
+            meta: {
+              rfqNumber: rfq.rfqNumber,
+              closedReason: rfq.closedReason || null,
+              closedAt: rfq.closedAt || null,
+            },
+          })
+        );
+      }
+
+      const rawPhone = vendor.phone || vendor.mobile || vendor.mobileNumber;
+      const phoneKey = rawPhone ? String(rawPhone).replace(/\D/g, '') : '';
+      if (phoneKey && phoneKey.length >= 10 && !messagedPhones.has(phoneKey)) {
+        messagedPhones.add(phoneKey);
+        const smsText = formatMessage(RFQ_CLOSURE_MESSAGES.VENDOR_SMS_MESSAGE, { rfqNumber });
+        if (typeof smsService.sendActionCenterSms === 'function') {
+          this._background(
+            smsService.sendActionCenterSms({
+              mobile: rawPhone,
+              recipientName: vendor.contactPerson || vendor.name,
+              message: smsText,
+              entityType: 'rfq_closed',
+            }),
+            'Failed to send RFQ closed SMS alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+        if (typeof whatsAppService.sendRFQClosedWhatsApp === 'function') {
+          this._background(
+            whatsAppService.sendRFQClosedWhatsApp({
+              phone: rawPhone,
+              contactPerson: vendor.contactPerson || vendor.name,
+              rfqNumber: rfq.rfqNumber,
+              rfqTitle: rfq.title,
+            }),
+            'Failed to send RFQ closed WhatsApp alert to invited vendor',
+            { rfqNumber: rfq.rfqNumber, vendorId: vendor.id || null }
+          );
+        }
+      }
+    }
+
+    if (vendorNotifs.length > 0) {
+      this.notifications.unshift(...vendorNotifs);
+      this._persistNotificationBatch(vendorNotifs);
+    }
+  }
+
   notifyOfRFQClosure(rfq) {
+    if (!rfq) return;
+
+    if (rfq.rfqNumber && typeof rfqChaserScheduler.clearScheduledChasers === 'function') {
+      rfqChaserScheduler.clearScheduledChasers(rfq.rfqNumber);
+    }
+
     if (rfq.buyerAccountId) {
       const buyerNotif = this._buildNotification({
         recipientType: 'buyer',
@@ -8923,21 +10303,28 @@ class StoreService {
         this._delayedQuoteTimers.delete(rfq.id);
       }
     }
-    const matches = this.vendors.filter((v) => this.vendorCoversRFQ(v, rfq));
-    if (matches.length > 0) {
-      const vendorNotifs = matches.map((vendor) =>
-        this._buildNotification({
-          recipientType: 'vendor',
-          recipientId: vendor.id,
-          kind: 'rfq_closed',
-          rfq,
-          title: `RFQ Closed: ${rfq.rfqNumber}`,
-          message: `Requisition ${rfq.rfqNumber} has been closed by the buyer. Bidding is now concluded.`,
-          meta: { rfqNumber: rfq.rfqNumber },
-        })
+
+    const tracking = {
+      notifiedIds: new Set(),
+      messagedPhones: new Set(),
+    };
+    const { vendors, missingDbIds } = this._resolveInvitedVendorEntries(rfq);
+    this._dispatchVendorClosureMessages(rfq, vendors, tracking);
+
+    if (
+      pool.hasStorage() &&
+      missingDbIds.length > 0 &&
+      typeof domainQueries.getVendorsByIdsFromDB === 'function'
+    ) {
+      this._background(
+        domainQueries.getVendorsByIdsFromDB(missingDbIds).then((dbVendors) => {
+          if (Array.isArray(dbVendors) && dbVendors.length > 0) {
+            this._dispatchVendorClosureMessages(rfq, dbVendors, tracking);
+          }
+        }),
+        'Failed to resolve missing invited vendor contacts for RFQ closure alert',
+        { rfqId: rfq.id, rfqNumber: rfq.rfqNumber, missingCount: missingDbIds.length }
       );
-      this.notifications.unshift(...vendorNotifs);
-      this._persistNotificationBatch(vendorNotifs);
     }
   }
 
@@ -8994,7 +10381,7 @@ class StoreService {
    * rating so the enquiry lands with the best-matched suppliers first.
    */
   selectVendorsForRFQEmail(rfq, limit = 10) {
-    const pincode = rfq.deliveryPincode ? String(rfq.deliveryPincode).trim() : null;
+    const destination = this._extractTargetLocation(rfq);
     const minors = this._rfqMinorCategories(rfq);
     const rawSignals = minors.length > 0 ? minors : this._rfqCategorySignals(rfq);
     const distinctSignals = Array.from(new Set(rawSignals.map((s) => String(s || '').trim().toLowerCase()).filter(Boolean)));
@@ -9006,11 +10393,11 @@ class StoreService {
       vendor: v,
       score:
         this._vendorTierRank(v.subscriptionPlan) * 1000 +
-        (pincode && v.pincode && String(v.pincode).trim() === pincode ? 100 : 0) +
+        ((destination.pincode || destination.location) ? this.scoreVendorLocation(v, destination) : 0) +
         (Number(v.rating) || 0),
     });
 
-    const eligible = this.vendors.filter((v) => v.email && this.vendorCoversRFQ(v, rfq));
+    const eligible = this.vendors.filter((v) => !isVendorInactive(v) && v.email && this.vendorCoversRFQ(v, rfq));
 
     if (distinctSignals.length > 3) {
       const selected = new Map();
@@ -9049,7 +10436,10 @@ class StoreService {
     const allEmails = new Set();
 
     if (pool.hasStorage()) {
-      this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
+      if (Array.isArray(rfq.vendorInvitationTargets) && rfq.vendorInvitationTargets.length > 0) {
+        this.recordRfqVendorInvites(rfq, rfq.vendorInvitationTargets);
+        this._dispatchRFQVendorInviteOutbox(rfq, 'rfq-creation-vendor-invites');
+      }
       return Array.isArray(rfq.vendorInvitationTargets) ? rfq.vendorInvitationTargets.length : 0;
     }
 
@@ -9059,6 +10449,17 @@ class StoreService {
         const resolvedVendor = (vendor.id ? this.getVendorById(vendor.id, 'all') : null) || vendor;
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(resolvedVendor, { isBuyerUploaded }, rfq)
+          : { channel: isBuyerUploaded ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK, replyToQuoteAllowed: isBuyerUploaded, replyTo: null };
+        const inviteRecord = this.recordRfqVendorInvite(rfq, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
+        });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
@@ -9067,6 +10468,10 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to matched vendor',
           {
@@ -9082,10 +10487,28 @@ class StoreService {
 
     for (const vendor of assigned) {
       if (vendor.email && !allEmails.has(vendor.email.toLowerCase())) {
-        allEmails.add(vendor.email.toLowerCase());
         const resolvedVendor = this.getVendorById(vendor.id || vendor.email, 'all') || vendor;
+        if (isVendorInactive(resolvedVendor)) continue;
+        allEmails.add(vendor.email.toLowerCase());
         const creditInfo = this.checkVendorQuotationEligibility(resolvedVendor);
         const isBuyerUploaded = this.isBuyerUploaded(resolvedVendor);
+        const routing = typeof mailerService.resolveVendorInviteRouting === 'function'
+          ? mailerService.resolveVendorInviteRouting(resolvedVendor, {
+            isBuyerUploaded,
+            isCmAssigned: Boolean(vendor.isCmAssigned),
+            inviteChannel: vendor.inviteChannel,
+            inviteOrigin: vendor.inviteOrigin,
+            replyToQuoteAllowed: vendor.replyToQuoteAllowed,
+          }, rfq)
+          : { channel: (isBuyerUploaded || vendor.isCmAssigned) ? VENDOR_MAILBOX_CHANNELS.DIRECT : VENDOR_MAILBOX_CHANNELS.INVITE, origin: vendor.isCmAssigned ? VENDOR_INVITE_ORIGINS.CM_ASSIGNED : (isBuyerUploaded ? VENDOR_INVITE_ORIGINS.BUYER_UPLOADED : VENDOR_INVITE_ORIGINS.AUTO_MATCHED_NETWORK), replyToQuoteAllowed: Boolean(isBuyerUploaded || vendor.isCmAssigned), replyTo: null };
+        const inviteRecord = this.recordRfqVendorInvite(rfq, {
+          vendorId: vendor.id,
+          vendorEmail: vendor.email,
+          inviteChannel: routing.channel,
+          inviteOrigin: routing.origin,
+          senderMailbox: routing.replyTo || null,
+          replyToQuoteAllowed: routing.replyToQuoteAllowed,
+        });
         this._background(
           mailerService.sendRfqInviteEmail(vendor.email, {
             rfq,
@@ -9094,6 +10517,11 @@ class StoreService {
             isSubscribed: creditInfo.isSubscribed,
             vendor: resolvedVendor,
             isBuyerUploaded,
+            isCmAssigned: Boolean(vendor.isCmAssigned),
+            inviteChannel: routing.channel,
+            inviteOrigin: routing.origin,
+            replyToQuoteAllowed: routing.replyToQuoteAllowed,
+            messageId: inviteRecord?.inviteMessageId,
           }),
           'Failed to email RFQ invite to assigned vendor',
           {
@@ -9131,40 +10559,24 @@ class StoreService {
    * Whether an RFQ is currently within its 48-hour bidding integrity window.
    */
   isWithin48HourWindow(rfq) {
-    if (!rfq || rfq.status === 'Closed' || rfq.status === 'PO Generated' || rfq.poFinalised || Boolean(rfq.poNumber) || rfq.status === 'Expired') return false;
+    if (!rfq || isRfqConcluded(rfq)) return false;
     const isV0 =
       rfq.sourcingMode === 'mode_0' ||
       rfq.sourcingMode === 'v0' ||
       rfq.sourcingMode === 'version_0';
     if (isV0) return false;
-    if (rfq.quotesHidden) return true;
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return true;
-    return Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return true;
+    return Date.now() < windowEndMs;
   }
 
   /**
    * Calculates the remaining milliseconds in the 48-hour bidding window.
    */
   getRemaining48HourMs(rfq) {
-    const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-    let createdAtMs = 0;
-    if (rfq && rfq.createdAt) {
-      const parsed = Date.parse(rfq.createdAt);
-      if (!isNaN(parsed) && parsed > 0) {
-        createdAtMs = parsed;
-      }
-    }
-    if (createdAtMs <= 0) return FORTY_EIGHT_HOURS_MS;
-    const elapsed = Date.now() - createdAtMs;
-    return Math.max(0, FORTY_EIGHT_HOURS_MS - elapsed);
+    const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+    if (windowEndMs <= 0) return RFQ_AUTO_CLOSE_AFTER_MS;
+    return Math.max(0, windowEndMs - Date.now());
   }
 
   /**
@@ -9997,6 +11409,7 @@ class StoreService {
     let unmappedEmailsQueued = 0;
     const failedEmails = [];
     const vendorsToEmail = [];
+    const seenBatchEmails = new Set();
 
     for (let idx = 0; idx < vendorRecords.length; idx++) {
       const rec = vendorRecords[idx];
@@ -10014,6 +11427,18 @@ class StoreService {
         });
         continue;
       }
+
+      const normalizedBatchEmail = email.toLowerCase();
+      if (seenBatchEmails.has(normalizedBatchEmail)) {
+        skipped.push({
+          row: idx + 1,
+          vendorName: name,
+          email,
+          reason: VENDOR_INGESTION_MESSAGES.DUPLICATE_EMAIL_BATCH_SKIPPED.replace('{value}', normalizedBatchEmail),
+        });
+        continue;
+      }
+      seenBatchEmails.add(normalizedBatchEmail);
 
       const isMapped = isMappedRecord(rec);
       if (isMapped) mappedCount++;
@@ -10075,8 +11500,12 @@ class StoreService {
         if (recLoc.state) updatedVendor.state = recLoc.state;
         if (recLoc.pincode) updatedVendor.pincode = recLoc.pincode;
         if (rec.vendorCode) updatedVendor.vendorCode = String(rec.vendorCode).trim();
-        const rawGstin = rec.gstin || rec.gstNumber;
-        if (rawGstin) updatedVendor.gstin = String(rawGstin).trim().toUpperCase();
+        const rawGstin = rec.gstin || rec.gstNumber || rec.gst;
+        if (rawGstin) {
+          const cleanGstin = String(rawGstin).trim().toUpperCase();
+          updatedVendor.gstin = cleanGstin;
+          updatedVendor.gst = cleanGstin;
+        }
         if (majorCategory) updatedVendor.majorCategory = majorCategory;
         if (minorCategories.length > 0) {
           updatedVendor.minorCategories = minorCategories;
@@ -10111,7 +11540,8 @@ class StoreService {
         continue;
       }
 
-      const rawNewGstin = rec.gstin || rec.gstNumber;
+      const rawNewGstin = rec.gstin || rec.gstNumber || rec.gst;
+      const cleanNewGstin = rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null;
       const newVendor = {
         id: `v-hist-${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
         buyerId: buyerId || null,
@@ -10119,7 +11549,8 @@ class StoreService {
         buyerEmail: buyerEmail || null,
         addedByBuyerCompany: (attributedAccount && attributedAccount.organizationName) || null,
         vendorCode: rec.vendorCode ? String(rec.vendorCode).trim() : null,
-        gstin: rawNewGstin ? String(rawNewGstin).trim().toUpperCase() : null,
+        gstin: cleanNewGstin,
+        gst: cleanNewGstin,
         name,
         email,
         contactPerson: (rec.contactPerson || '').trim() || null,
@@ -10458,8 +11889,20 @@ class StoreService {
    * stays absent: rating, score and evaluated are null/false until a real
    * evaluation produces them.
    */
-  async empanelIngestedVendor(vendorData, actorEmail = null) {
-    const minorCategories = Array.isArray(vendorData.minorCategories) ? vendorData.minorCategories : [];
+  async empanelIngestedVendor(vendorData, actorEmail = null, { allowUnassignedCategory = false } = {}) {
+    const cleanCategories = resolveValidVendorCategories(vendorData);
+    if (!allowUnassignedCategory && !cleanCategories.hasCategory) {
+      const categoryError = new Error(VENDOR_CATEGORY_VALIDATION_MESSAGES.CATEGORY_REQUIRED);
+      categoryError.statusCode = 400;
+      categoryError.code = 'VENDOR_CATEGORY_REQUIRED';
+      throw categoryError;
+    }
+    const minorCategories = cleanCategories.minorCategories;
+    const majorCategory =
+      cleanCategories.majorCategory ||
+      (minorCategories.length > 0 && typeof this._majorCategoriesForMinors === 'function'
+        ? this._majorCategoriesForMinors([minorCategories[0]])?.[0] || minorCategories[0]
+        : '');
     const loc = resolveVendorLocationFields({
       location: vendorData.location,
       factoryAddress: vendorData.factoryAddress,
@@ -10467,8 +11910,11 @@ class StoreService {
       state: vendorData.state,
       pincode: vendorData.pincode,
     });
+    const isDeactivated = vendorData.isActive === false || vendorData.disabled === true ||
+      String(vendorData.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
     const newVendor = {
       id: `v-ingest-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+      ...(vendorData.masterRecordId ? { masterRecordId: vendorData.masterRecordId } : {}),
       name: vendorData.name,
       email: vendorData.email,
       contactPerson: vendorData.contactPerson || null,
@@ -10477,14 +11923,15 @@ class StoreService {
       city: loc.city || null,
       state: loc.state || null,
       pincode: loc.pincode || null,
-      gstin: vendorData.gstin || null,
+      gstin: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
+      gst: String(vendorData.gstin || vendorData.gst || vendorData.gstNumber || '').trim().toUpperCase() || null,
       vendorCode: vendorData.vendorCode || null,
-      majorCategory: vendorData.majorCategory || null,
+      majorCategory,
       minorCategories,
       // The buyer mapped these from PO history; the vendor has not confirmed
       // them yet, so there is nothing to align against.
       clientMappedCategories: Array.isArray(vendorData.clientMappedCategories)
-        ? vendorData.clientMappedCategories
+        ? normalizeVendorCategoryList(vendorData.clientMappedCategories)
         : minorCategories,
       vendorSelectedCategories: [],
       isCategoryAligned: false,
@@ -10493,7 +11940,16 @@ class StoreService {
       evaluated: false,
       hasRecord: true,
       isExistingInDatabase: true,
-      status: 'REGISTERED / NOT EVALUATED',
+      status: isDeactivated ? VENDOR_ACTIVE_STATUSES.INACTIVE : 'REGISTERED / NOT EVALUATED',
+      ...(isDeactivated
+        ? {
+            isActive: false,
+            disabled: true,
+            previousStatus: vendorData.previousStatus || 'REGISTERED / NOT EVALUATED',
+            disabledAt: vendorData.disabledAt || new Date().toISOString(),
+            disabledBy: vendorData.disabledBy || actorEmail || null,
+          }
+        : {}),
       source: 'vendor_master_ingestion',
       onboardingEmailStatus: 'pending',
       profileCompletionStatus: 'pending',
@@ -10527,7 +11983,13 @@ class StoreService {
       throw persistError;
     }
 
-    const savedVendor = persistedVendor || newVendor;
+    const savedVendor = persistedVendor
+      ? {
+        ...persistedVendor,
+        ...(newVendor.isCmCreated ? { isCmCreated: true } : {}),
+        ...(newVendor.createdByRole ? { createdByRole: newVendor.createdByRole } : {}),
+      }
+      : newVendor;
     this.vendors.unshift(savedVendor);
     this.addAuditLog({
       userEmail: actorEmail || SYSTEM_ACTOR_EMAIL,
@@ -10572,23 +12034,43 @@ class StoreService {
     return updated;
   }
 
-  async updateVendorCategoriesDurably(vendorId, { clientMappedCategories = [], vendorSelectedCategories = [] }) {
-    const vendor = this.getVendorById(vendorId, 'all');
+  async updateVendorCategoriesDurably(
+    vendorId,
+    { majorCategory, minorCategories, clientMappedCategories = [], vendorSelectedCategories = [] } = {}
+  ) {
+    const vendor =
+      this.getVendorById(vendorId, 'all') ||
+      (await this.getVendorByIdWithDBFallback(vendorId, 'all'));
     if (!vendor) return null;
 
+    const cleanedClientMapped = normalizeVendorCategoryList(clientMappedCategories);
+    const cleanedVendorSelected = normalizeVendorCategoryList(vendorSelectedCategories).slice(0, 10);
+    const cleanedMinors = Array.isArray(minorCategories) ? normalizeVendorCategoryList(minorCategories) : null;
+    const cleanedMajor =
+      typeof majorCategory === 'string' && !isPlaceholderVendorCategory(majorCategory)
+        ? majorCategory.trim()
+        : '';
+
     const isCategoryAligned =
-      clientMappedCategories.length === 0 ||
-      clientMappedCategories.every((category) => vendorSelectedCategories.includes(category));
-    const updated = await this.updateVendorDurably(vendor.id, {
-      clientMappedCategories,
-      vendorSelectedCategories: vendorSelectedCategories.slice(0, 10),
+      cleanedClientMapped.length === 0 ||
+      cleanedClientMapped.every((category) => cleanedVendorSelected.includes(category));
+    const categoryUpdates = {
+      clientMappedCategories: cleanedClientMapped,
+      vendorSelectedCategories: cleanedVendorSelected,
       isCategoryAligned,
-    });
+      ...(cleanedMajor ? { majorCategory: cleanedMajor } : {}),
+      ...(cleanedMinors !== null
+        ? { minorCategories: cleanedMinors }
+        : cleanedClientMapped.length > 0 && (!Array.isArray(vendor.minorCategories) || vendor.minorCategories.length === 0)
+          ? { minorCategories: cleanedClientMapped }
+          : {}),
+    };
+    const updated = await this.updateVendorDurably(vendor.id, categoryUpdates);
     if (!updated) return null;
 
     this.addAuditLog({
       userEmail: vendor.email,
-      action: `Reconciled categories for ${vendor.name}: ${vendorSelectedCategories.length} categories active (Aligned: ${isCategoryAligned})`,
+      action: `Reconciled categories for ${vendor.name}: ${(cleanedMinors || cleanedVendorSelected).length} categories active (Aligned: ${isCategoryAligned})`,
     });
     return updated;
   }
@@ -11146,7 +12628,8 @@ class StoreService {
    * present even if it falls outside the cap, since several screens resolve
    * "my own vendor" purely from this list (billing, opportunity feed).
    */
-  async getBootstrapData(scopedBuyerId = null, sessionEmail = null) {
+  async getBootstrapData(scopedBuyerId = null, sessionEmail = null, options = {}) {
+    const includeManagementCollections = options.includeManagementCollections !== false;
     const MAX_BOOTSTRAP_VENDORS = 500;
     let vendors;
     let vendorsTotal;
@@ -11169,28 +12652,16 @@ class StoreService {
       }
     };
 
-    // The common case (no buyer scoping — anonymous, vendor, CM, or admin
-    // bootstrap) is answered straight from Postgres with LIMIT, the same way
-    // the paginated vendors endpoint is: this used to call this.getVendors(),
-    // which re-syncs (fetches + re-serializes) every row in the table on
-    // every call. At 500 vendors that was unnoticeable; once the table
-    // reached 80k+ (a bulk Vendor Master import), it meant every single page
-    // load / login / refreshFromDB() call across the whole app re-fetched
-    // the entire vendor table just to keep the first 500 — the same
-    // performance disaster the CM's "Load more" pagination hit, just
-    // triggered by something as ordinary as loading the app.
+    // Always read bounded vendor pages from configured storage rather than returning
+    // stale boot-time isolate memory (`this.vendors`), so all browsers/isolates see
+    // consistent live vendor data.
     if (!scopedBuyerId && pool.hasStorage()) {
-      if (this.isHydratedFromDB && Array.isArray(this.vendors) && this.vendors.length > 0) {
-        vendors = this.vendors.slice(0, MAX_BOOTSTRAP_VENDORS);
-        vendorsTotal = this.vendorsTotal || vendors.length;
-      } else {
-        const page = await readBootstrapVendors(
-          'public-vendor-page',
-          () => domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true })
-        );
-        vendors = page.rows;
-        vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
-      }
+      const page = await readBootstrapVendors(
+        'public-vendor-page',
+        () => domainQueries.getVendorsPageFromDB({ limit: MAX_BOOTSTRAP_VENDORS, offset: 0, publicOnly: true, skipCount: true })
+      );
+      vendors = page.rows;
+      vendorsTotal = page.total || (Array.isArray(this.vendors) ? this.vendors.length : 0);
       if (sessionEmail) {
         const email = String(sessionEmail).toLowerCase();
         if (!vendors.some((v) => (v.email || '').toLowerCase() === email)) {
@@ -11280,34 +12751,34 @@ class StoreService {
 
     let buyerAccounts = this.buyerAccounts;
     let activeBuyerAccount = this.activeBuyerAccount;
-    if ((!Array.isArray(buyerAccounts) || buyerAccounts.length === 0) && pool.hasStorage()) {
+    if (includeManagementCollections && pool.hasStorage()) {
       try {
         const buyerAccountsResult = await domainQueries.getBuyerAccountsFromDB(500);
         buyerAccounts = buyerAccountsResult.accounts || [];
         activeBuyerAccount = buyerAccounts.find((a) => a.id === buyerAccountsResult.activeId) || buyerAccounts[0] || null;
         this.buyerAccounts = buyerAccounts;
         this.activeBuyerAccount = activeBuyerAccount;
-      } catch (err) {
+      } catch {
         buyerAccounts = this.buyerAccounts || [];
       }
     }
 
     let evaluations = this.evaluations;
-    if ((!Array.isArray(evaluations) || evaluations.length === 0) && pool.hasStorage()) {
+    if (pool.hasStorage()) {
       try {
         evaluations = await domainQueries.getEvaluationsFromDB(50);
         this.evaluations = evaluations || [];
-      } catch (err) {
+      } catch {
         evaluations = this.evaluations || [];
       }
     }
 
     let auditLogs = this.auditLogs;
-    if ((!Array.isArray(auditLogs) || auditLogs.length === 0) && pool.hasStorage()) {
+    if (includeManagementCollections && pool.hasStorage()) {
       try {
         auditLogs = await domainQueries.getAuditLogsFromDB(100);
         this.auditLogs = auditLogs || [];
-      } catch (err) {
+      } catch {
         auditLogs = this.auditLogs || [];
       }
     }
@@ -11328,6 +12799,481 @@ class StoreService {
 
   minorSearchTerms(minors) {
     return minorSearchTerms(Array.isArray(minors) ? minors : []);
+  }
+
+  /**
+   * Track an outbound RFQ vendor invitation (Message-ID + invitedAt) both in memory
+   * and durably in PostgreSQL/D1, stamping the 48-hour V0 quotation dispatch due date.
+   */
+  recordRfqVendorInvite(rfq, invite = {}) {
+    const rfqNumber = rfq && rfq.rfqNumber ? String(rfq.rfqNumber).trim() : String(invite.rfqNumber || '').trim();
+    const vendorEmail = String(invite.vendorEmail || invite.recipientEmail || invite.email || '').trim().toLowerCase();
+    if (!rfqNumber || !vendorEmail) return null;
+
+    this._rfqVendorInvites = this._rfqVendorInvites || new Map();
+    const key = `${rfqNumber}:${vendorEmail}`;
+    const invitedAt = invite.invitedAt || new Date().toISOString();
+    const invitedAtMs = Date.parse(invitedAt);
+    const dueIso = new Date(
+      (Number.isFinite(invitedAtMs) ? invitedAtMs : Date.now()) + V0_QUOTES_DISPATCH_WINDOW_MS
+    ).toISOString();
+    const vendorId = invite.vendorId || invite.id || null;
+    const inviteMessageId = invite.inviteMessageId || (
+      typeof mailerService.buildRfqInviteMessageId === 'function'
+        ? mailerService.buildRfqInviteMessageId(rfqNumber, vendorId || 'vendor', invitedAtMs || Date.now())
+        : null
+    );
+
+    const existing = this._rfqVendorInvites.get(key);
+    const resolvedChannel = invite.inviteChannel || invite.channel || existing?.inviteChannel || null;
+    const resolvedOrigin = invite.inviteOrigin || invite.origin || existing?.inviteOrigin || null;
+    const resolvedSenderMailbox = invite.senderMailbox || existing?.senderMailbox || null;
+    const resolvedReplyAllowed = invite.replyToQuoteAllowed !== undefined
+      ? invite.replyToQuoteAllowed
+      : existing?.replyToQuoteAllowed !== undefined
+        ? existing.replyToQuoteAllowed
+        : null;
+    const record = {
+      id: `invite:${rfqNumber}:${vendorEmail}`,
+      rfqId: (rfq && rfq.id) || invite.rfqId || existing?.rfqId || null,
+      rfqNumber,
+      vendorId: vendorId || existing?.vendorId || null,
+      vendorEmail,
+      inviteMessageId: existing?.inviteMessageId || inviteMessageId,
+      invitedAt: existing?.invitedAt && existing.invitedAt < invitedAt ? existing.invitedAt : invitedAt,
+      ...(resolvedChannel ? { inviteChannel: resolvedChannel } : {}),
+      ...(resolvedOrigin ? { inviteOrigin: resolvedOrigin } : {}),
+      ...(resolvedSenderMailbox ? { senderMailbox: resolvedSenderMailbox } : {}),
+      ...(resolvedReplyAllowed !== null ? { replyToQuoteAllowed: resolvedReplyAllowed } : {}),
+    };
+    this._rfqVendorInvites.set(key, record);
+
+    const memRfq = (rfq && rfq.rfqNumber === rfqNumber ? rfq : null) ||
+      this.rfqs.find((r) => r && r.rfqNumber === rfqNumber);
+    if (memRfq && !memRfq.quotesDispatchDueAt) {
+      memRfq.quotesDispatchDueAt = dueIso;
+    }
+
+    if (pool.hasStorage() && typeof domainQueries.recordRfqVendorInviteInDB === 'function') {
+      this._background(
+        domainQueries.recordRfqVendorInviteInDB({
+          rfqId: record.rfqId,
+          rfqNumber: record.rfqNumber,
+          vendorId: record.vendorId,
+          vendorEmail: record.vendorEmail,
+          inviteMessageId: record.inviteMessageId,
+          invitedAt: record.invitedAt,
+          quotesDispatchDueAt: dueIso,
+          ...(resolvedChannel ? { inviteChannel: resolvedChannel } : {}),
+          ...(resolvedOrigin ? { inviteOrigin: resolvedOrigin } : {}),
+          ...(resolvedSenderMailbox ? { senderMailbox: resolvedSenderMailbox } : {}),
+          ...(resolvedReplyAllowed !== null ? { replyToQuoteAllowed: resolvedReplyAllowed } : {}),
+        }),
+        'Failed to persist RFQ vendor invite metadata',
+        { rfqNumber: record.rfqNumber, vendorEmail: record.vendorEmail }
+      );
+    }
+
+    return record;
+  }
+
+  /** Record multiple outbound vendor invites for one RFQ. */
+  recordRfqVendorInvites(rfq, vendors = []) {
+    if (!rfq || !rfq.rfqNumber || !Array.isArray(vendors)) return [];
+    const results = [];
+    for (const item of vendors) {
+      if (!item) continue;
+      const vendorObj = item.vendor && typeof item.vendor === 'object' ? item.vendor : item;
+      const email = resolveVendorEmail(vendorObj) || item.recipientEmail || item.vendorEmail || null;
+      if (!email) continue;
+      const recorded = this.recordRfqVendorInvite(rfq, {
+        rfqId: rfq.id,
+        rfqNumber: rfq.rfqNumber,
+        vendorId: item.vendorId || vendorObj.id || null,
+        vendorEmail: email,
+        inviteMessageId: item.inviteMessageId || null,
+        invitedAt: item.invitedAt || null,
+        ...(item.inviteChannel || vendorObj.inviteChannel ? { inviteChannel: item.inviteChannel || vendorObj.inviteChannel } : {}),
+        ...(item.inviteOrigin || vendorObj.inviteOrigin ? { inviteOrigin: item.inviteOrigin || vendorObj.inviteOrigin } : {}),
+        ...(item.senderMailbox ? { senderMailbox: item.senderMailbox } : {}),
+        ...(item.replyToQuoteAllowed !== undefined
+          ? { replyToQuoteAllowed: item.replyToQuoteAllowed }
+          : vendorObj.replyToQuoteAllowed !== undefined
+            ? { replyToQuoteAllowed: vendorObj.replyToQuoteAllowed }
+            : {}),
+      });
+      if (recorded) results.push(recorded);
+    }
+    return results;
+  }
+
+  /** Find an invite record in local memory matching any RFC2822 Message-ID token. */
+  findVendorInviteByMessageId(messageIds = []) {
+    if (!this._rfqVendorInvites || !Array.isArray(messageIds) || messageIds.length === 0) return null;
+    const targetSet = new Set(messageIds.map((m) => String(m || '').trim().toLowerCase()).filter(Boolean));
+    if (targetSet.size === 0) return null;
+    for (const rec of this._rfqVendorInvites.values()) {
+      const msgId = String(rec.inviteMessageId || '').trim().toLowerCase();
+      if (msgId && targetSet.has(msgId)) return rec;
+    }
+    return null;
+  }
+
+  /** Return open RFQ invites for a vendor within the active window from memory/DB. */
+  async getOpenVendorInvitesWithinWindow(vendorRecord, senderEmail, windowMs = V0_QUOTES_DISPATCH_WINDOW_MS) {
+    const cutoffIso = new Date(Date.now() - windowMs).toISOString();
+    const normEmail = String(senderEmail || vendorRecord?.email || vendorRecord?.corporateEmail || '').trim().toLowerCase();
+    const vendorId = vendorRecord?.id ? String(vendorRecord.id).trim() : null;
+    const matchesByRfqNumber = new Map();
+
+    if (pool.hasStorage() && typeof domainQueries.findOpenVendorInvitesWithinWindowFromDB === 'function') {
+      try {
+        const dbRows = await domainQueries.findOpenVendorInvitesWithinWindowFromDB({
+          vendorId,
+          vendorEmail: normEmail || null,
+          cutoffIso,
+        });
+        for (const row of Array.isArray(dbRows) ? dbRows : []) {
+          if (row && row.rfq_number) {
+            matchesByRfqNumber.set(row.rfq_number, {
+              rfqId: row.rfq_id || null,
+              rfqNumber: row.rfq_number,
+              vendorId: row.vendor_id || null,
+              vendorEmail: row.vendor_email || normEmail,
+              inviteMessageId: row.invite_message_id || null,
+              invitedAt: row.invited_at || null,
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn('Failed to query open vendor invites from DB', { error: err?.message, vendorId, senderEmail: normEmail }, 'STORE_SERVICE');
+      }
+    }
+
+    if (this._rfqVendorInvites) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        const emailMatch = normEmail && rec.vendorEmail === normEmail;
+        const idMatch = vendorId && rec.vendorId && String(rec.vendorId) === vendorId;
+        if ((!emailMatch && !idMatch) || (rec.invitedAt && rec.invitedAt < cutoffIso)) continue;
+        const memRfq = this.rfqs.find((r) => r && r.rfqNumber === rec.rfqNumber);
+        if (memRfq && ['Closed', 'Expired', 'PO Generated'].includes(memRfq.status)) continue;
+        if (!matchesByRfqNumber.has(rec.rfqNumber)) {
+          matchesByRfqNumber.set(rec.rfqNumber, rec);
+        }
+      }
+    }
+
+    // Also inspect open in-memory RFQs created/assigned within the 48h window
+    for (const rfq of Array.isArray(this.rfqs) ? this.rfqs : []) {
+      if (!rfq || !rfq.rfqNumber || ['Closed', 'Expired', 'PO Generated'].includes(rfq.status)) continue;
+      const createdIso = rfq.createdAt || null;
+      const dueIso = rfq.quotesDispatchDueAt || null;
+      const withinWindow = (dueIso && dueIso >= new Date().toISOString()) ||
+        (createdIso && Date.parse(createdIso) >= Date.parse(cutoffIso));
+      if (!withinWindow) continue;
+      const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+      const isAssigned = assigned.some((av) => {
+        if (!av) return false;
+        const avId = av.id || av.vendorId;
+        const avEmail = String(av.email || av.corporateEmail || '').trim().toLowerCase();
+        return (vendorId && avId && String(avId) === vendorId) || (normEmail && avEmail === normEmail);
+      });
+      if (isAssigned && !matchesByRfqNumber.has(rfq.rfqNumber)) {
+        matchesByRfqNumber.set(rfq.rfqNumber, {
+          rfqId: rfq.id,
+          rfqNumber: rfq.rfqNumber,
+          vendorId,
+          vendorEmail: normEmail,
+          invitedAt: createdIso,
+        });
+      }
+    }
+
+    return Array.from(matchesByRfqNumber.values());
+  }
+
+  /**
+   * Check whether a vendor was invited to a specific RFQ when explicit invitations
+   * exist on assignedVendors or rfq_vendor_invites.
+   */
+  async isVendorInvitedToRfq(rfq, vendorRecord, senderEmail = null) {
+    if (!rfq) return false;
+    const normEmail = String(senderEmail || vendorRecord?.email || vendorRecord?.corporateEmail || '').trim().toLowerCase();
+    const vendorId = vendorRecord?.id ? String(vendorRecord.id).trim() : null;
+    const emailDomain = normEmail.includes('@') ? normEmail.split('@')[1] : null;
+    const assigned = Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : [];
+    const followUpVendors = Array.isArray(rfq.followUpData?.vendors) ? rfq.followUpData.vendors : [];
+    const trackedInMem = [];
+    if (this._rfqVendorInvites && rfq.rfqNumber) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        if (rec && rec.rfqNumber === rfq.rfqNumber) trackedInMem.push(rec);
+      }
+    }
+    let trackedInDb = [];
+    if (pool.hasStorage() && rfq.rfqNumber && typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function') {
+      trackedInDb = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+    }
+
+    const totalTrackedCount = assigned.length + followUpVendors.length + trackedInMem.length + trackedInDb.length;
+    if (totalTrackedCount === 0) return true;
+
+    const matchesEntry = (entryId, entryEmail) => {
+      if (vendorId && entryId && String(entryId) === vendorId) return true;
+      const eLower = String(entryEmail || '').trim().toLowerCase();
+      if (normEmail && eLower && eLower === normEmail) return true;
+      if (emailDomain && eLower && eLower.endsWith(`@${emailDomain}`)) return true;
+      return false;
+    };
+
+    if (assigned.some((av) => av && matchesEntry(av.id || av.vendorId, av.email || av.corporateEmail))) return true;
+    if (followUpVendors.some((fv) => fv && matchesEntry(fv.id || fv.vendorId, fv.email || fv.corporateEmail))) return true;
+    if (trackedInMem.some((rec) => rec && matchesEntry(rec.vendorId, rec.vendorEmail))) return true;
+    if (trackedInDb.some((row) => row && matchesEntry(row.vendor_id, row.vendor_email))) return true;
+    if (vendorRecord && Array.isArray(vendorRecord.unlockedRfqIds) &&
+      (vendorRecord.unlockedRfqIds.includes(rfq.id) || vendorRecord.unlockedRfqIds.includes(rfq.rfqNumber))) {
+      return true;
+    }
+    return false;
+  }
+
+  /**
+   * Idempotent Dual-Trigger Buyer Quotation Dispatch for V0 RFQs:
+   * - Exits immediately if buyer_quotes_sent_at is already stamped.
+   * - Trigger A (Immediate): All invited vendors have submitted quotes (receivedBids >= totalInvited > 0).
+   * - Trigger B (48-Hour Timeout): NOW() >= quotes_dispatch_due_at and >= 1 quote exists.
+   * Atomically claims dispatch, resolves buyer email strictly from the RFQ's owner,
+   * and invokes mailerService.sendRfqFinalComparisonEmail.
+   */
+  async checkAndDispatchBuyerQuotations(rfqNumber, { trigger = 'auto', now = new Date() } = {}) {
+    if (!rfqNumber) return { dispatched: false, reason: 'missing_rfq_number' };
+    const cleanNumber = String(rfqNumber).trim();
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const nowMs = nowDate.getTime();
+
+    const rfq = pool.hasStorage()
+      ? (await domainQueries.getRFQByNumberFromDB(cleanNumber).catch(() => null)) || this.getRFQById(cleanNumber)
+      : this.getRFQById(cleanNumber);
+    if (!rfq) return { dispatched: false, reason: 'not_found' };
+    if (
+      rfq.buyerQuotesSentAt ||
+      rfq.buyer_quotes_sent_at ||
+      (!pool.hasStorage() && this._v0DispatchClaimedRfqs?.has(rfq.rfqNumber))
+    ) {
+      return { dispatched: false, reason: 'already_sent', rfqNumber: rfq.rfqNumber };
+    }
+
+    const resolveCanonicalVendorKey = (entry, { isInviteRow = false, fallbackIndex = null } = {}) => {
+      if (!entry) return fallbackIndex !== null ? `idx:${fallbackIndex}` : null;
+      const rawId = isInviteRow
+        ? (entry.vendorId || entry.vendor_id || null)
+        : (entry.vendorId || entry.vendor_id || entry.id || null);
+      const rawEmail = entry.vendorEmail || entry.vendor_email || entry.email || entry.corporateEmail || '';
+      const normEmail = String(rawEmail).trim().toLowerCase();
+      const knownVendor =
+        (rawId && Array.isArray(this.vendors) && this.vendors.find((v) => v && String(v.id) === String(rawId))) ||
+        (normEmail && Array.isArray(this.vendors) && this.vendors.find((v) => v && String(v.email || v.corporateEmail || '').trim().toLowerCase() === normEmail)) ||
+        null;
+      const canonicalId = (knownVendor && knownVendor.id) || rawId;
+      if (canonicalId) return `id:${String(canonicalId)}`;
+      if (normEmail) return `email:${normEmail}`;
+      if (entry.vendorName) return `name:${String(entry.vendorName).trim().toLowerCase()}`;
+      return fallbackIndex !== null ? `idx:${fallbackIndex}` : null;
+    };
+
+    const quotes = Array.isArray(rfq.quotes) ? rfq.quotes : [];
+    const uniqueBidderKeys = new Set();
+    quotes.forEach((q, idx) => {
+      const key = resolveCanonicalVendorKey(q, { isInviteRow: true, fallbackIndex: idx });
+      if (key) uniqueBidderKeys.add(key);
+    });
+    const receivedBids = uniqueBidderKeys.size;
+
+    const invitedKeys = new Set();
+    const addInvitedKey = (entry, options = {}) => {
+      const key = resolveCanonicalVendorKey(entry, options);
+      if (key) invitedKeys.add(key);
+    };
+    (Array.isArray(rfq.assignedVendors) ? rfq.assignedVendors : []).forEach((entry) => addInvitedKey(entry, { isInviteRow: false }));
+    (Array.isArray(rfq.followUpData?.vendors) ? rfq.followUpData.vendors : []).forEach((entry) => addInvitedKey(entry, { isInviteRow: false }));
+    let earliestInviteAt = null;
+    if (this._rfqVendorInvites) {
+      for (const rec of this._rfqVendorInvites.values()) {
+        if (rec && rec.rfqNumber === rfq.rfqNumber) {
+          addInvitedKey(rec, { isInviteRow: true });
+          if (rec.invitedAt && (!earliestInviteAt || rec.invitedAt < earliestInviteAt)) earliestInviteAt = rec.invitedAt;
+        }
+      }
+    }
+    if (pool.hasStorage() && typeof domainQueries.findRfqVendorInvitesByRfqNumberFromDB === 'function') {
+      const dbInvites = await domainQueries.findRfqVendorInvitesByRfqNumberFromDB(rfq.rfqNumber).catch(() => []);
+      dbInvites.forEach((row) => {
+        addInvitedKey(row, { isInviteRow: true });
+        if (row?.invited_at && (!earliestInviteAt || row.invited_at < earliestInviteAt)) earliestInviteAt = row.invited_at;
+      });
+    }
+
+    const totalInvited = Math.max(invitedKeys.size, Number(rfq.followUpData?.totalInvited) || 0);
+    const dueAtIso = rfq.quotesDispatchDueAt ||
+      rfq.quotes_dispatch_due_at ||
+      (earliestInviteAt && Number.isFinite(Date.parse(earliestInviteAt))
+        ? new Date(Date.parse(earliestInviteAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString()
+        : (rfq.createdAt && Number.isFinite(Date.parse(rfq.createdAt))
+          ? new Date(Date.parse(rfq.createdAt) + V0_QUOTES_DISPATCH_WINDOW_MS).toISOString()
+          : null));
+    const dueMs = dueAtIso ? Date.parse(dueAtIso) : NaN;
+
+    const triggerAllReplied = totalInvited > 0 && receivedBids >= totalInvited && quotes.length > 0;
+    const triggerTimeout = Number.isFinite(dueMs) && nowMs >= dueMs && quotes.length > 0;
+    if (!triggerAllReplied && !triggerTimeout) {
+      return {
+        dispatched: false,
+        reason: 'conditions_not_met',
+        rfqNumber: rfq.rfqNumber,
+        receivedBids,
+        totalInvited,
+        quotesDispatchDueAt: dueAtIso,
+      };
+    }
+
+    const sentAtIso = nowDate.toISOString();
+    let claimedRfq = null;
+    if (pool.hasStorage() && typeof domainQueries.claimRfqBuyerQuotesDispatchInDB === 'function') {
+      claimedRfq = await domainQueries.claimRfqBuyerQuotesDispatchInDB(rfq.rfqNumber, sentAtIso);
+      if (!claimedRfq) {
+        return { dispatched: false, reason: 'already_claimed', rfqNumber: rfq.rfqNumber };
+      }
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      if (idx >= 0) this.rfqs[idx] = { ...this.rfqs[idx], ...claimedRfq, buyerQuotesSentAt: sentAtIso };
+    } else {
+      // Atomic synchronous claim before any await for in-memory execution
+      if (!this._v0DispatchClaimedRfqs) this._v0DispatchClaimedRfqs = new Set();
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      const liveRfq = idx >= 0 ? this.rfqs[idx] : null;
+      if (this._v0DispatchClaimedRfqs.has(rfq.rfqNumber) || liveRfq?.buyerQuotesSentAt || rfq.buyerQuotesSentAt) {
+        return { dispatched: false, reason: 'already_claimed', rfqNumber: rfq.rfqNumber };
+      }
+      this._v0DispatchClaimedRfqs.add(rfq.rfqNumber);
+      if (liveRfq) liveRfq.buyerQuotesSentAt = sentAtIso;
+      rfq.buyerQuotesSentAt = sentAtIso;
+      claimedRfq = liveRfq || rfq;
+    }
+
+    const releaseClaim = async () => {
+      if (pool.hasStorage() && typeof domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB === 'function') {
+        await domainQueries.releaseRfqBuyerQuotesDispatchClaimInDB(rfq.rfqNumber).catch(() => false);
+      }
+      if (this._v0DispatchClaimedRfqs) this._v0DispatchClaimedRfqs.delete(rfq.rfqNumber);
+      const idx = this.rfqs.findIndex((item) => item.rfqNumber === rfq.rfqNumber || item.id === rfq.id);
+      if (idx >= 0 && this.rfqs[idx]) delete this.rfqs[idx].buyerQuotesSentAt;
+      if (rfq) delete rfq.buyerQuotesSentAt;
+    };
+
+    // Resolve buyer email strictly from the RFQ's own buyer account record
+    let ownerBuyer = null;
+    if (claimedRfq.buyerAccountId) {
+      ownerBuyer = this.buyerAccounts.find((b) => b && b.id === claimedRfq.buyerAccountId) || null;
+      if (!ownerBuyer && pool.hasStorage() && typeof domainQueries.getBuyerAccountByIdFromDB === 'function') {
+        ownerBuyer = await domainQueries.getBuyerAccountByIdFromDB(claimedRfq.buyerAccountId).catch(() => null);
+      }
+    }
+    const buyerEmail = (ownerBuyer && ownerBuyer.corporateEmail) || this.resolveBuyerEmailForRFQ(claimedRfq);
+    if (!buyerEmail) {
+      await releaseClaim();
+      logger.warn('Cannot dispatch compiled V0 buyer quotations: no buyer email on RFQ', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerAccountId: claimedRfq.buyerAccountId || null,
+      }, 'STORE_SERVICE');
+      return { dispatched: false, reason: 'missing_buyer_email', rfqNumber: claimedRfq.rfqNumber };
+    }
+
+    const recipientName = (ownerBuyer && ownerBuyer.organizationName) || claimedRfq.buyerAccountName || claimedRfq.buyerName || 'Buyer';
+    const resolvedQuotes = Array.isArray(claimedRfq.quotes) && claimedRfq.quotes.length > 0 ? claimedRfq.quotes : quotes;
+
+    try {
+      const delivery = await mailerService.sendRfqFinalComparisonEmail(buyerEmail, {
+        rfq: claimedRfq,
+        quotes: resolvedQuotes,
+        recipientName,
+      });
+      if (delivery && (delivery.sent === false || delivery.success === false)) {
+        await releaseClaim();
+        return {
+          dispatched: false,
+          reason: delivery.reason || 'email_delivery_not_accepted',
+          rfqNumber: claimedRfq.rfqNumber,
+        };
+      }
+      this.addAuditLog({
+        userEmail: buyerEmail,
+        action: `Dispatched compiled ${resolvedQuotes.length} V0 vendor quotation(s) to ${buyerEmail} for ${claimedRfq.rfqNumber} (trigger: ${triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h'}/${trigger})`,
+        rfqNumber: claimedRfq.rfqNumber,
+      });
+      logger.info('Compiled V0 buyer quotations dispatched via sendRfqFinalComparisonEmail', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerAccountId: claimedRfq.buyerAccountId || null,
+        buyerEmail,
+        quotesCount: resolvedQuotes.length,
+        trigger: triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h',
+        callerTrigger: trigger,
+      }, 'STORE_SERVICE');
+      return {
+        dispatched: true,
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerEmail,
+        quotesCount: resolvedQuotes.length,
+        trigger: triggerAllReplied ? 'all_vendors_replied' : 'timeout_48h',
+        buyerQuotesSentAt: sentAtIso,
+      };
+    } catch (error) {
+      await releaseClaim();
+      logger.error('Failed to dispatch compiled V0 buyer quotations', {
+        rfqNumber: claimedRfq.rfqNumber,
+        buyerEmail,
+        error,
+      }, 'STORE_SERVICE');
+      throw error;
+    }
+  }
+
+  /**
+   * Sweep open V0 RFQs whose 48-hour dispatch window has elapsed without a
+   * sent buyer comparison email and dispatch compiled quotations once per RFQ.
+   */
+  async dispatchDueV0BuyerQuotations(limit = 25, { now = new Date() } = {}) {
+    const nowDate = now instanceof Date ? now : new Date(now);
+    const nowIso = nowDate.toISOString();
+    const candidates = pool.hasStorage() && typeof domainQueries.listDueV0RfqsForQuotesDispatchFromDB === 'function'
+      ? await domainQueries.listDueV0RfqsForQuotesDispatchFromDB(nowIso, limit).catch(() => [])
+      : (this.rfqs || []).filter((r) => (
+          r &&
+          this.isV0SourcingMode(r.sourcingMode) &&
+          !r.buyerQuotesSentAt &&
+          !['Closed', 'Expired', 'PO Generated'].includes(r.status) &&
+          r.quotesDispatchDueAt &&
+          Date.parse(r.quotesDispatchDueAt) <= nowDate.getTime()
+        )).slice(0, limit);
+
+    let dispatched = 0;
+    let skipped = 0;
+    let failed = 0;
+    for (const candidate of candidates) {
+      if (!candidate || !candidate.rfqNumber) continue;
+      try {
+        const res = await this.checkAndDispatchBuyerQuotations(candidate.rfqNumber, {
+          trigger: 'scheduler_48h',
+          now: nowDate,
+        });
+        if (res && res.dispatched) dispatched += 1;
+        else skipped += 1;
+      } catch (err) {
+        failed += 1;
+        logger.error('Scheduled V0 buyer quotation dispatch failed for RFQ', {
+          rfqNumber: candidate.rfqNumber,
+          error: err,
+        }, 'STORE_SERVICE');
+      }
+    }
+    return { checked: candidates.length, dispatched, skipped, failed };
   }
 
 }

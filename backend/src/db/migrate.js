@@ -73,6 +73,8 @@ const REPORTED_TABLES = [
   'document_vault',
   'account_documents',
   'mail_provider_cooldowns',
+  'user_preferences',
+  'vendor_upload_history',
 ];
 
 function checksum(content) {

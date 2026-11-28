@@ -1,22 +1,42 @@
 import React from 'react';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import BuyersDirectory, { isPendingBuyer } from '@/app/category-manager/buyers-directory';
 import { useApp } from '@/lib/store';
-import { exportReportToExcel } from '@/lib/reportsClient';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
 import { CURRENCY, RFQ_MODES, RFQ_MODE_LABELS, formatCurrency, formatIndianDateTime } from '@/lib/constants';
 import type { AuditLogEntry, BuyerAccount, RFQItem } from '@/lib/types';
 import { UI_STRINGS } from '@/lib/uiStrings';
 
-jest.mock('@/lib/store', () => ({
-  useApp: jest.fn(),
-}));
+jest.mock('@/lib/store', () => {
+  const fn = jest.fn();
+  return {
+    useApp: fn,
+    useOptionalApp: fn,
+  };
+});
 
-jest.mock('@/lib/reportsClient', () => ({
-  exportReportToExcel: jest.fn(),
-}));
+jest.mock('@/lib/buyerProfileClient', () => {
+  const actual = jest.requireActual('@/lib/buyerProfileClient');
+  return {
+    ...actual,
+    fetchBuyerDirectoryKPIStats: jest.fn().mockResolvedValue({
+      success: true,
+      totalBuyers: 3,
+      verifiedBuyers: 2,
+      subscriptionBuyers: 1,
+      modeCounts: { mode_1: 2, mode_2: 1 },
+    }),
+  };
+});
 
 jest.mock('@/lib/documentVaultClient', () => ({
   fetchDocuments: jest.fn().mockResolvedValue([]),
+}));
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
 }));
 
 type Fields = Record<string, unknown>;
@@ -68,10 +88,6 @@ const openTab = (name: RegExp): void => {
   fireEvent.click(screen.getByRole('button', { name }));
 };
 
-const exportDirectory = (): void => {
-  fireEvent.click(screen.getByRole('button', { name: /Export Directory/ }));
-};
-
 beforeEach(() => {
   jest.clearAllMocks();
   window.sessionStorage.clear();
@@ -97,17 +113,11 @@ describe('BuyersDirectory with no store data', () => {
     expect(screen.queryByLabelText('Rows per page')).not.toBeInTheDocument();
   });
 
-  test('exports an empty row set under a dated Buyers_Directory file name', () => {
+  test('does not render an Export Directory button when the store is empty', () => {
     render(<BuyersDirectory />);
 
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledTimes(1);
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [],
-      expect.stringMatching(/^Buyers_Directory_\d{4}-\d{2}-\d{2}$/),
-      'BuyersDirectory',
-    );
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customize Columns' })).toBeInTheDocument();
   });
 });
 
@@ -332,7 +342,7 @@ describe('BuyersDirectory sourced spend', () => {
 
     openDossier(organizationName);
 
-    expect(valueBelow('Total Sourced Spend')).toBe(expectedSpend);
+    expect(valueBelow('Total spend')).toBe(expectedSpend);
   });
 
   test('counts every matched RFQ for the buyer even when only some carry a value', () => {
@@ -358,8 +368,8 @@ describe('BuyersDirectory dossier when the buyer leaves the store', () => {
     rerender(<BuyersDirectory />);
 
     expect(screen.getByRole('heading', { name: 'Vanishing Co' })).toBeInTheDocument();
-    expect(valueBelow('Total RFQs Sourced')).toBe(expectedRfqCount);
-    expect(valueBelow('Total Sourced Spend')).toBe(expectedSpend);
+    expect(valueBelow('Total RFQ')).toBe(expectedRfqCount);
+    expect(valueBelow('Total spend')).toBe(expectedSpend);
     openTab(/^RFQs \(0\)$/);
     expect(screen.getByText('No RFQs created by this buyer yet.')).toBeInTheDocument();
   });
@@ -520,9 +530,9 @@ describe('BuyersDirectory dossier credits', () => {
 });
 
 describe('BuyersDirectory dossier communications and payments', () => {
-  test('restores saved plan filters and treats a missing buyer as not pending', () => {
+  test('ignores stale sessionStorage filters and treats a missing buyer as not pending', () => {
     window.sessionStorage.setItem('buyer_directory_state', JSON.stringify({
-      searchTerm: '',
+      searchTerm: 'StaleFilter',
       selectedMode: 'all',
       selectedStatus: 'all',
       selectedPlan: 'growth_tier',
@@ -541,7 +551,7 @@ describe('BuyersDirectory dossier communications and payments', () => {
     render(<BuyersDirectory />);
 
     expect(screen.getByText('Growth Plan Buyer')).toBeInTheDocument();
-    expect(screen.queryByText('Custom Plan Buyer')).not.toBeInTheDocument();
+    expect(screen.getByText('Custom Plan Buyer')).toBeInTheDocument();
     expect(isPendingBuyer(null)).toBe(false);
   });
 
@@ -601,99 +611,23 @@ describe('BuyersDirectory dossier audit history', () => {
   });
 });
 
-describe('BuyersDirectory export', () => {
-  const exportBuyers = [
-    makeBuyer({
-      id: 'e-1',
-      organizationName: 'Export One',
-      contactPerson: 'Asha Rao',
-      corporateEmail: 'asha@export-one.example',
-      mobileNumber: '+910000000001',
-      city: 'Chennai',
-      primaryPlantLocation: 'Ennore Plant',
-      sourcingMode: RFQ_MODES.MODE_2,
-      subscriptionPlan: 'version_2',
-      remainingFreeRFQs: 0,
-      totalRFQsCreated: 3,
-      totalSpend: `${CURRENCY.SYMBOL}1,00,000`,
-      status: 'ACTIVE_VERIFIED',
-    }),
-    makeBuyer({ id: 'e-2', organizationName: 'Export Two', corporateEmail: 'two@export.example', sourcingMode: 'legacy_mode', totalSpend: '$250' }),
-    makeBuyer({ id: 'e-3', organizationName: 'Export Three', corporateEmail: 'three@export.example', sourcingMode: RFQ_MODES.MODE_1, totalSpend: '$0' }),
-  ];
-  const exportRfqs = [
-    makeRfq({ id: 'e-r1', rfqNumber: 'RFQ-E-1', buyerAccountId: 'e-1', budget: 30000 }),
-    makeRfq({ id: 'e-r2', rfqNumber: 'RFQ-E-2', buyerAccountId: 'e-1', budget: 20000 }),
-  ];
-
-  test('exports one row per buyer with live spend, fallbacks applied and a dated file name', () => {
-    jest.useFakeTimers({ now: new Date('2026-05-17T10:00:00Z') });
-    mockStore({ buyerAccounts: exportBuyers, rfqs: exportRfqs });
-    render(<BuyersDirectory />);
-
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledTimes(1);
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [
-        {
-          OrganizationName: 'Export One',
-          ContactPerson: 'Asha Rao',
-          Email: 'asha@export-one.example',
-          Phone: '+910000000001',
-          City: 'Chennai',
-          PlantLocation: 'Ennore Plant',
-          SourcingMode: RFQ_MODE_LABELS[RFQ_MODES.MODE_2],
-          Plan: 'version_2',
-          RemainingFreeRFQs: 0,
-          TotalRFQsCreated: 3,
-          TotalSpend: formatCurrency(50000),
-          Status: 'ACTIVE_VERIFIED',
-        },
-        {
-          OrganizationName: 'Export Two',
-          ContactPerson: '',
-          Email: 'two@export.example',
-          City: '',
-          PlantLocation: '',
-          SourcingMode: 'Mode 0',
-          Plan: 'standard',
-          RemainingFreeRFQs: 5,
-          TotalRFQsCreated: 0,
-          TotalSpend: formatCurrency(250),
-          Status: 'ACTIVE',
-        },
-        {
-          OrganizationName: 'Export Three',
-          ContactPerson: '',
-          Email: 'three@export.example',
-          City: '',
-          PlantLocation: '',
-          SourcingMode: RFQ_MODE_LABELS[RFQ_MODES.MODE_1],
-          Plan: 'standard',
-          RemainingFreeRFQs: 5,
-          TotalRFQsCreated: 0,
-          TotalSpend: `${CURRENCY.SYMBOL}0`,
-          Status: 'ACTIVE',
-        },
+describe('BuyersDirectory toolbar', () => {
+  test('does not render an Export Directory button while keeping the column settings button', () => {
+    mockStore({
+      buyerAccounts: [
+        makeBuyer({
+          id: 'e-1',
+          organizationName: 'Export One',
+          corporateEmail: 'asha@export-one.example',
+          sourcingMode: RFQ_MODES.MODE_2,
+          status: 'ACTIVE_VERIFIED',
+        }),
       ],
-      'Buyers_Directory_2026-05-17',
-      'BuyersDirectory',
-    );
-  });
-
-  test('exports only the buyers that match the current search', () => {
-    mockStore({ buyerAccounts: exportBuyers, rfqs: exportRfqs });
+    });
     render(<BuyersDirectory />);
-    fireEvent.change(screen.getByPlaceholderText(SEARCH_PLACEHOLDER), { target: { value: 'ASHA@' } });
 
-    exportDirectory();
-
-    expect(exportReportToExcel).toHaveBeenCalledWith(
-      [expect.objectContaining({ OrganizationName: 'Export One', TotalRFQsCreated: 3 })],
-      expect.stringMatching(/^Buyers_Directory_\d{4}-\d{2}-\d{2}$/),
-      'BuyersDirectory',
-    );
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Customize Columns' })).toBeInTheDocument();
   });
 });
 
@@ -831,7 +765,7 @@ describe('BuyersDirectory pagination', () => {
   });
 });
 describe('BuyersDirectory Additional Branch Coverage', () => {
-  test('exercises sorting with undefined / empty fields across all columns', () => {
+  test('exercises sorting with undefined / empty fields across all columns', async () => {
     const allColsVisible = [
       { key: 'organizationName', label: 'Buyer', visible: true, required: true },
       { key: 'contactPerson', label: 'Contact Person', visible: true },
@@ -847,7 +781,7 @@ describe('BuyersDirectory Additional Branch Coverage', () => {
       { key: 'createdDate', label: 'Registration Date', visible: true },
       { key: 'actions', label: 'Actions', visible: true, required: true },
     ];
-    window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(allColsVisible));
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce(allColsVisible);
 
     const b1 = makeBuyer({
       id: 'b-empty-1',
@@ -897,6 +831,9 @@ describe('BuyersDirectory Additional Branch Coverage', () => {
 
     mockStore({ buyerAccounts: [b1, b2, b3], rfqs: [] });
     render(<BuyersDirectory />);
+    await waitFor(() => {
+      expect(screen.getByRole('columnheader', { name: /Registration Date/i })).toBeInTheDocument();
+    });
 
     const columnHeaders = [
       'Buyer',

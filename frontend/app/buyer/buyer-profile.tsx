@@ -9,9 +9,30 @@ import {
   flattenCategorySelection,
   saveBuyerProfile,
 } from '@/lib/buyerProfileClient';
-import { BUYER_PROFILE_LIMITS, ORGANIZATION_TYPE_OPTIONS } from '@/lib/constants';
+import { ORGANIZATION_TYPE_OPTIONS, BUYER_PROFILE_LIMITS } from '@/lib/constants';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { FORM_SCHEMAS, validateFormData, validatePincode, PostOfficeDetail, PINCODE_PATTERN, isDummyPincode } from '@/lib/validationSchemas';
+import {
+  FORM_SCHEMAS,
+  validateFormData,
+  validatePincode,
+  PostOfficeDetail,
+  PINCODE_PATTERN,
+  isDummyPincode,
+  derivePanFromGstin,
+  parsePrimaryPlantLocation,
+  validateGstin,
+  isGstValid,
+} from '@/lib/validationSchemas';
+
+const BUYER_DUMMY_PANS = new Set(['ABCDE1234F', 'ABCPE1234F', 'AAACL1234F', 'AAMCP4349L']);
+const REPEATED_LETTER_PAN_PATTERN = /^([A-Z])\1{4}[0-9]{4}\1$/;
+
+export function isDummyBuyerPan(pan: unknown): boolean {
+  if (!pan || typeof pan !== 'string') return false;
+  const clean = pan.trim().toUpperCase();
+  if (!clean) return false;
+  return BUYER_DUMMY_PANS.has(clean) || REPEATED_LETTER_PAN_PATTERN.test(clean);
+}
 import { logger } from '@/lib/logger';
 import AccountSecurityPanel from '@/app/components/AccountSecurityPanel';
 import type { BuyerProfileUpdatePayload, MajorMinorCategory, OrganizationType } from '@/lib/types';
@@ -25,8 +46,6 @@ import {
   MapPin,
   User,
   Search,
-  CheckSquare,
-  Square,
   ChevronDown,
   ChevronRight,
   Save,
@@ -47,13 +66,17 @@ import {
  * never names an organisation and a buyer can only ever reach their own record.
  */
 export default function BuyerProfilePage() {
-  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy } = useApp();
+  const { addAuditLog, showToast, activeBuyerAccount, categoryTaxonomy, refreshActiveBuyerAccount, currentUserSession } = useApp();
   const activeBuyerAccountRef = useRef(activeBuyerAccount);
+  const currentSessionEmailRef = useRef(currentUserSession?.email || '');
   useEffect(() => {
     activeBuyerAccountRef.current = activeBuyerAccount;
   }, [activeBuyerAccount]);
+  useEffect(() => {
+    currentSessionEmailRef.current = currentUserSession?.email || '';
+  }, [currentUserSession?.email]);
 
-  const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+  // Unlimited major and minor procurement category selections supported.
 
   // Organization Form State
   const [companyName, setCompanyName] = useState('');
@@ -170,6 +193,7 @@ export default function BuyerProfilePage() {
   // filled in.
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSavingCategories, setIsSavingCategories] = useState(false);
   const [isLoaded, setIsLoaded] = useState(false);
 
   /**
@@ -240,22 +264,37 @@ export default function BuyerProfilePage() {
     }
 
     const profile = profileResult.data;
-    const activeAcc = activeBuyerAccountRef.current;
-    const resolvedCity = profile.city || activeAcc?.city || '';
-    const resolvedState = profile.state || activeAcc?.state || '';
-    const resolvedPincode = profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || '';
+    const rawActiveAcc = activeBuyerAccountRef.current;
+    const sessionEmail = String(currentSessionEmailRef.current || '').trim().toLowerCase();
+    const rawAccEmail = String(rawActiveAcc?.corporateEmail || '').trim().toLowerCase();
+    const activeAcc =
+      rawActiveAcc && (!sessionEmail || !rawAccEmail || sessionEmail === rawAccEmail)
+        ? rawActiveAcc
+        : null;
+    const parsedPlant = parsePrimaryPlantLocation(activeAcc?.primaryPlantLocation);
+    const resolvedCity = profile.city || activeAcc?.city || parsedPlant.city || '';
+    const resolvedState = profile.state || activeAcc?.state || parsedPlant.state || '';
+    const resolvedPincode =
+      profile.pincode || activeAcc?.pincode || activeAcc?.zip_code || activeAcc?.zipCode || parsedPlant.pincode || '';
     const resolvedCountry = profile.country || activeAcc?.country || 'India';
     const resolvedStreet =
       profile.street ||
       activeAcc?.street ||
+      activeAcc?.streetAddress ||
       activeAcc?.address1 ||
+      activeAcc?.address ||
+      activeAcc?.registeredAddress ||
       (resolvedCity && resolvedState ? `${resolvedCity}, ${resolvedState}` : resolvedCity || '');
-    const resolvedGst = profile.gstNumber || activeAcc?.gstin || '';
-    const resolvedPan =
-      profile.panNumber ||
-      activeAcc?.panNumber ||
-      activeAcc?.pan ||
-      '';
+    const resolvedGst = (profile.gstNumber || activeAcc?.gstin || activeAcc?.gstNumber || activeAcc?.gst || '').toUpperCase();
+    const rawPan =
+      (
+        profile.panNumber ||
+        activeAcc?.panNumber ||
+        activeAcc?.pan ||
+        derivePanFromGstin(resolvedGst) ||
+        ''
+      ).toUpperCase();
+    const resolvedPan = isDummyBuyerPan(rawPan) ? '' : rawPan;
 
     setCompanyName(profile.companyName || activeAcc?.organizationName || '');
     setBrandName(profile.brandName || activeAcc?.brandName || '');
@@ -298,37 +337,58 @@ export default function BuyerProfilePage() {
     void loadProfile();
   }, [loadProfile]);
 
-  // Backfill any empty form fields if activeBuyerAccount loads or carries onboarding data
+  // Backfill any empty form fields once activeBuyerAccount loads or carries onboarding
+  // data — once per account, not on every keystroke. The field values (companyName,
+  // gstNumber, panNumber, ...) used to sit in this effect's dependency array, which
+  // meant clearing any one of them (e.g. to retype a corrected PAN/GSTIN) changed the
+  // dependency, re-ran the effect, saw the field now empty, and immediately refilled it
+  // from activeBuyerAccount — the field could never actually be left blank or edited from
+  // scratch. Backfill now runs only when the account identity changes, is guarded so it
+  // applies at most once per account, and reads/writes form state through updater
+  // functions (prev => prev || fallback) instead of the reactive variables, so it never
+  // overwrites a value the buyer has already typed (including an intentional blank).
+  //
+  // Scope: `loadProfile` (above) already resolves companyName, city, state, pincode,
+  // country, street and every contact field against `activeBuyerAccountRef.current` the
+  // moment the profile load settles, and it never re-runs (empty dependency array), so
+  // those fields need no second fallback pass here. Only brandName (loadProfile falls
+  // back to activeBuyerAccount.brandName but not organizationName) and gstNumber/
+  // panNumber (so the account is still consulted if it resolves only after loadProfile's
+  // one-time read of the ref) are handled here.
+  const backfilledAccountKeyRef = useRef<string | null>(null);
   useEffect(() => {
     if (!activeBuyerAccount) return;
-    if (!companyName && activeBuyerAccount.organizationName) setCompanyName(activeBuyerAccount.organizationName);
-    if (!brandName && (activeBuyerAccount.brandName || activeBuyerAccount.organizationName)) {
-      setBrandName(activeBuyerAccount.brandName || activeBuyerAccount.organizationName);
-    }
-    if (!city && activeBuyerAccount.city) setCity(activeBuyerAccount.city);
-    if (!state && activeBuyerAccount.state) setState(activeBuyerAccount.state);
-    if (!pincode && (activeBuyerAccount.pincode || activeBuyerAccount.zip_code)) {
-      setPincode(activeBuyerAccount.pincode || activeBuyerAccount.zip_code || '');
-    }
-    if (!country && activeBuyerAccount.country) setCountry(activeBuyerAccount.country);
-    if (!gstNumber && activeBuyerAccount.gstin) setGstNumber(activeBuyerAccount.gstin);
-    if (!panNumber) {
-      const savedPan = activeBuyerAccount.panNumber || activeBuyerAccount.pan || '';
-      if (savedPan) setPanNumber(savedPan);
-    }
-    if (!street) {
-      const fallbackStreet = activeBuyerAccount.street || activeBuyerAccount.address1 || (activeBuyerAccount.city && activeBuyerAccount.state ? `${activeBuyerAccount.city}, ${activeBuyerAccount.state}` : activeBuyerAccount.city || '');
-      if (fallbackStreet) setStreet(fallbackStreet);
-    }
-    if (!contactName && activeBuyerAccount.contactPerson) setContactName(activeBuyerAccount.contactPerson);
-    if (!contactPhone && activeBuyerAccount.mobileNumber) setContactPhone(activeBuyerAccount.mobileNumber);
-    if (!contactEmail && activeBuyerAccount.corporateEmail) setContactEmail(activeBuyerAccount.corporateEmail);
-  }, [activeBuyerAccount, companyName, brandName, city, state, pincode, country, gstNumber, panNumber, street, contactName, contactPhone, contactEmail]);
+    // Wait for the mount-time profile load to settle first. Backfilling on
+    // the very first render (before `loadProfile`'s fetch resolves) would be
+    // clobbered moments later when that fetch resolves and unconditionally
+    // sets each field from the loaded profile — the backfilled value would
+    // flash in and then disappear.
+    if (!isLoaded) return;
+    const expectedEmail = String(currentUserSession?.email || '').trim().toLowerCase();
+    const accountEmail = String(activeBuyerAccount.corporateEmail || '').trim().toLowerCase();
+    if (expectedEmail && accountEmail && expectedEmail !== accountEmail) return;
+
+    const accountKey = String(activeBuyerAccount.id || accountEmail || '');
+    if (accountKey && backfilledAccountKeyRef.current === accountKey) return;
+    backfilledAccountKeyRef.current = accountKey;
+
+    setBrandName((prev) => prev || activeBuyerAccount.brandName || activeBuyerAccount.organizationName || prev);
+
+    const savedGst = (activeBuyerAccount.gstin || activeBuyerAccount.gstNumber || activeBuyerAccount.gst || '').toUpperCase();
+    setGstNumber((prev) => prev || savedGst || prev);
+    const rawSavedPan = (
+      activeBuyerAccount.panNumber ||
+      activeBuyerAccount.pan ||
+      derivePanFromGstin(savedGst) ||
+      ''
+    ).toUpperCase();
+    const savedPan = isDummyBuyerPan(rawSavedPan) ? '' : rawSavedPan;
+    setPanNumber((prev) => prev || savedPan || prev);
+  }, [activeBuyerAccount, currentUserSession?.email, isLoaded]);
 
   // PAN Validation Helper
   const isPanValid = (pan: string) => /^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(pan.toUpperCase());
-  // GST Validation Helper
-  const isGstValid = (gst: string) => /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(gst.toUpperCase());
+  // No longer need local isGstValid - using imported comprehensive validation
 
   // Calculate totals
   const totalSelectedMinorCount = Object.values(selectedMinor).reduce((acc, curr) => acc + curr.length, 0);
@@ -340,63 +400,7 @@ export default function BuyerProfilePage() {
   const minorsOf = (majorName: string) =>
     activeTaxonomy.find((c) => c.majorCategory === majorName)?.minorCategories || [];
 
-  /**
-   * Report that a cardinality cap blocked a selection.
-   *
-   * The caps exist because the RFQ distribution engine fans out per selected
-   * category, so an unbounded scope would broadcast every RFQ to the whole vendor
-   * base. The old screen let "Select All" bypass them; here every path goes
-   * through these checks.
-   */
-  const rejectForMajorCap = () => {
-    showToast(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
-      'warning'
-    );
-  };
-
-  const rejectForMinorCap = () => {
-    showToast(
-      UI_STRINGS.buyerProfile.limitReachedTitle,
-      formatString(UI_STRINGS.buyerProfile.maxMinorReached, {
-        count: totalSelectedMinorCount,
-        max: MAX_MINOR_CATEGORIES,
-      }),
-      'warning'
-    );
-  };
-
-  // Toggle Major Category
-  const toggleMajorCategory = (majorName: string) => {
-    if (selectedMajor.includes(majorName)) {
-      setSelectedMajor((prev) => prev.filter((m) => m !== majorName));
-      setSelectedMinor((prev) => {
-        const next = { ...prev };
-        delete next[majorName];
-        return next;
-      });
-      return;
-    }
-
-    if (selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
-      return;
-    }
-
-    const remainingSlots = MAX_MINOR_CATEGORIES - totalSelectedMinorCount;
-    if (remainingSlots <= 0) {
-      rejectForMinorCap();
-      return;
-    }
-
-    setSelectedMajor((prev) => [...prev, majorName]);
-    // Select as many minors as the remaining allowance permits, rather than all
-    // of them and then silently discarding the overflow at save time.
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: minorsOf(majorName).slice(0, remainingSlots) }));
-  };
-
-  // Toggle Minor Category
+  // Toggle Minor Category, capped at BUYER_PROFILE_LIMITS.MAX_MINOR_CATEGORIES in total.
   const toggleMinorCategory = (majorName: string, minorName: string) => {
     const currentList = selectedMinor[majorName] || [];
     const isChecked = currentList.includes(minorName);
@@ -415,12 +419,25 @@ export default function BuyerProfilePage() {
       return;
     }
 
-    if (totalSelectedMinorCount >= MAX_MINOR_CATEGORIES) {
-      rejectForMinorCap();
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (
+      typeof MAX_MAJOR_CATEGORIES === 'number' &&
+      !selectedMajor.includes(majorName) &&
+      selectedMajor.length >= MAX_MAJOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
       return;
     }
-    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
+    if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount >= MAX_MINOR_CATEGORIES) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
+        'warning'
+      );
       return;
     }
 
@@ -430,31 +447,36 @@ export default function BuyerProfilePage() {
     setSelectedMinor((prev) => ({ ...prev, [majorName]: [...(prev[majorName] || []), minorName] }));
   };
 
-  // Select all minor for a major
+  // Select all minor for a major, capped at MAX_MAJOR_CATEGORIES and MAX_MINOR_CATEGORIES.
   const selectAllMinorInMajor = (majorName: string) => {
-    const alreadySelected = selectedMinor[majorName] || [];
-    if (!selectedMajor.includes(majorName) && selectedMajor.length >= MAX_MAJOR_CATEGORIES) {
-      rejectForMajorCap();
+    const { MAX_MAJOR_CATEGORIES, MAX_MINOR_CATEGORIES } = BUYER_PROFILE_LIMITS;
+    if (
+      !selectedMajor.includes(majorName) &&
+      typeof MAX_MAJOR_CATEGORIES === 'number' &&
+      selectedMajor.length >= MAX_MAJOR_CATEGORIES
+    ) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMajorReached, { max: MAX_MAJOR_CATEGORIES }),
+        'warning'
+      );
       return;
     }
-
-    // Room left once this major's current selection is set aside, since those
-    // minors are being replaced rather than added to.
-    const remainingSlots = MAX_MINOR_CATEGORIES - (totalSelectedMinorCount - alreadySelected.length);
-    if (remainingSlots <= 0) {
-      rejectForMinorCap();
-      return;
-    }
-
     const allMinor = minorsOf(majorName);
-    if (allMinor.length > remainingSlots) {
-      rejectForMinorCap();
+    const alreadySelected = selectedMinor[majorName] || [];
+    const additional = allMinor.filter((m) => !alreadySelected.includes(m)).length;
+    if (typeof MAX_MINOR_CATEGORIES === 'number' && totalSelectedMinorCount + additional > MAX_MINOR_CATEGORIES) {
+      showToast(
+        UI_STRINGS.buyerProfile.limitReachedTitle,
+        formatString(UI_STRINGS.buyerProfile.maxMinorReached, { count: totalSelectedMinorCount, max: MAX_MINOR_CATEGORIES }),
+        'warning'
+      );
+      return;
     }
-
     if (!selectedMajor.includes(majorName)) {
       setSelectedMajor((prev) => [...prev, majorName]);
     }
-    setSelectedMinor((prev) => ({ ...prev, [majorName]: allMinor.slice(0, remainingSlots) }));
+    setSelectedMinor((prev) => ({ ...prev, [majorName]: [...allMinor] }));
   };
 
   // Clear minor for a major
@@ -548,8 +570,26 @@ export default function BuyerProfilePage() {
 
     setIsSaving(true);
     logger.info('Saving buyer organization profile', { categoryCount: categories.length }, 'BUYER_PROFILE');
-    const result = await saveBuyerProfile(payload);
-    setIsSaving(false);
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer organization profile', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          UI_STRINGS.buyerProfile.saveFailedTitle,
+          err instanceof Error ? err.message : UI_STRINGS.buyerProfile.saveUnreachable,
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSaving(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
 
     if (!result.success) {
       showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
@@ -559,13 +599,28 @@ export default function BuyerProfilePage() {
     // Re-apply the stored record: the server normalises several fields, and
     // leaving the pre-save text on screen would misrepresent what was persisted.
     if (result.data) {
-      setCompanyName(result.data.companyName);
-      setBrandName(result.data.brandName);
-      setPanNumber(result.data.panNumber);
-      setGstNumber(result.data.gstNumber);
-      setCinNumber(result.data.cinNumber);
-      setAnnualTurnover(result.data.annualTurnover);
-      setContactName(result.data.contactName);
+      const storedFieldSetters: Array<[string | undefined, React.Dispatch<React.SetStateAction<string>>]> = [
+        [result.data.companyName, setCompanyName],
+        [result.data.brandName, setBrandName],
+        [result.data.panNumber, setPanNumber],
+        [result.data.gstNumber, setGstNumber],
+        [result.data.cinNumber, setCinNumber],
+        [result.data.website, setWebsite],
+        [result.data.annualTurnover, setAnnualTurnover],
+        [result.data.contactName, setContactName],
+        [result.data.contactDesignation, setContactDesignation],
+        [result.data.street, setStreet],
+        [result.data.city, setCity],
+        [result.data.state, setState],
+        [result.data.pincode, setPincode],
+        [result.data.country, setCountry],
+      ];
+      storedFieldSetters.forEach(([value, setter]) => {
+        if (value !== undefined) setter(value);
+      });
+    }
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
     }
 
     addAuditLog(`Updated Buyer Organization Profile for ${companyName}`);
@@ -578,23 +633,113 @@ export default function BuyerProfilePage() {
     );
   };
 
+  /**
+   * Save ONLY procurement categories without validating organization profile fields.
+   */
+  const handleSaveCategories = async (e: React.FormEvent | React.MouseEvent) => {
+    e.preventDefault();
+    if (isSaving || isSavingCategories) return;
+
+    if (!isLoaded) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, UI_STRINGS.buyerProfile.loadUnreachable, 'warning');
+      return;
+    }
+
+    const categories = flattenCategorySelection(selectedMajor, selectedMinor);
+    if (categories.length === 0) {
+      showToast(
+        UI_STRINGS.buyerProfile.validationErrorTitle,
+        UI_STRINGS.buyerProfile.categoriesRequired,
+        'warning'
+      );
+      return;
+    }
+
+    const payload: BuyerProfileUpdatePayload = {
+      companyName,
+      brandName,
+      organizationType: orgType,
+      panNumber,
+      gstNumber,
+      cinNumber,
+      website,
+      annualTurnover,
+      street,
+      city,
+      state,
+      pincode,
+      country,
+      contactName,
+      contactDesignation,
+      categories,
+    };
+
+    setIsSavingCategories(true);
+    logger.info('Saving buyer procurement categories only', { categoryCount: categories.length }, 'BUYER_PROFILE');
+    let result: Awaited<ReturnType<typeof saveBuyerProfile>>;
+    try {
+      result = await saveBuyerProfile(payload);
+    } catch (err: unknown) {
+      logger.error('Failed to save buyer procurement categories', { error: err }, 'BUYER_PROFILE');
+      if (isMountedRef.current) {
+        showToast(
+          UI_STRINGS.buyerProfile.saveFailedTitle,
+          err instanceof Error ? err.message : UI_STRINGS.buyerProfile.saveUnreachable,
+          'warning'
+        );
+      }
+      return;
+    } finally {
+      if (isMountedRef.current) {
+        setIsSavingCategories(false);
+      }
+    }
+
+    if (!isMountedRef.current) return;
+
+    if (!result.success) {
+      showToast(UI_STRINGS.buyerProfile.saveFailedTitle, result.error || '', 'warning');
+      return;
+    }
+
+    if (Array.isArray(result.data?.categories)) {
+      const expanded = expandCategorySelection(result.data.categories);
+      setSelectedMajor(expanded.selectedMajor);
+      setSelectedMinor(expanded.selectedMinor);
+    }
+
+    if (typeof refreshActiveBuyerAccount === 'function') {
+      void refreshActiveBuyerAccount();
+    }
+
+    addAuditLog(`Updated Procurement Categories (${categories.length} categories)`);
+    showToast(
+      'Categories Saved',
+      formatString('{categoryCount} procurement categories updated successfully.', {
+        categoryCount: result.categoryCount ?? categories.length,
+      }),
+      'success'
+    );
+  };
+
   return (
     <div className="space-y-2.5 animate-fade-in pb-4">
       {/* Top Action Bar */}
       <div className="flex items-center justify-end">
         <button
+          type="button"
           onClick={handleSaveProfile}
-          disabled={isLoading || isSaving}
+          disabled={isLoading || isSaving || isSavingCategories}
           aria-busy={isSaving}
           className="btn btn-primary btn-sm shadow-sm font-bold flex items-center gap-1.5"
         >
-          <Save size={14} /> Save Organization Profile
+          {isSaving ? <Loader2 size={14} className="animate-spin" /> : <Save size={14} />} Save Organization Profile
         </button>
       </div>
 
       <form onSubmit={handleSaveProfile} className="space-y-2.5">
         {/* Section 1: Legal Entity & Tax Compliance */}
-        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+        <div id="section-organization" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex items-center justify-between border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
               <ShieldCheck className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 1: Organization & Tax Registration
@@ -656,11 +801,13 @@ export default function BuyerProfilePage() {
                 <label className="text-[10px] sm:text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-gray-400">
                   PAN Number *
                 </label>
-                {isPanValid(panNumber) ? (
-                  <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
-                ) : (
-                  <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
-                )}
+                {panNumber.trim() ? (
+                  isPanValid(panNumber) && !isDummyBuyerPan(panNumber) ? (
+                    <span className="text-[10px] font-bold text-emerald-600 dark:text-emerald-400">✓ Valid PAN</span>
+                  ) : (
+                    <span className="text-[10px] font-bold text-rose-500">Invalid Format</span>
+                  )
+                ) : null}
               </div>
               <input
                 type="text"
@@ -687,7 +834,14 @@ export default function BuyerProfilePage() {
               <input
                 type="text"
                 value={gstNumber}
-                onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
+                onChange={(e) => {
+                  const nextGst = e.target.value.toUpperCase();
+                  setGstNumber(nextGst);
+                  if (!panNumber.trim()) {
+                    const derivedPan = derivePanFromGstin(nextGst);
+                    if (derivedPan && !isDummyBuyerPan(derivedPan)) setPanNumber(derivedPan);
+                  }
+                }}
                 maxLength={15}
                 required
                 className="w-full px-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-mono font-bold bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white uppercase tracking-widest"
@@ -741,7 +895,7 @@ export default function BuyerProfilePage() {
         {/* Section 2: Address & Primary Contact */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 sm:gap-4">
           {/* Registered Address */}
-          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div id="section-address" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
               <MapPin className="text-indigo-600 dark:text-indigo-400" size={16} /> Registered Corporate Address
             </h2>
@@ -822,7 +976,7 @@ export default function BuyerProfilePage() {
           </div>
 
           {/* Primary Contact Person */}
-          <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+          <div id="section-contact" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
             <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2 border-b border-slate-100 dark:border-gray-800 pb-2.5">
               <User className="text-indigo-600 dark:text-indigo-400" size={16} /> Key Procurement Contact Person
             </h2>
@@ -871,12 +1025,27 @@ export default function BuyerProfilePage() {
           </div>
         </div>
 
+        {/* Save Category Button - positioned after profile sections */}
+        <div className="flex justify-end">
+          <button
+            type="button"
+            data-testid="save-category-button"
+            onClick={handleSaveCategories}
+            disabled={isLoading || isSaving || isSavingCategories}
+            aria-busy={isSavingCategories}
+            className="btn btn-primary btn-md shadow-md font-bold flex items-center gap-2"
+          >
+            {isSavingCategories ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}{' '}
+            Save Category
+          </button>
+        </div>
+
         {/* Section 3: Consolidated Major & Minor Categories Selector */}
-        <div className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
+        <div id="section-categories" className="glass-panel p-3.5 sm:p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-gray-900/80 shadow-xs space-y-3">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 border-b border-slate-100 dark:border-gray-800 pb-2.5">
             <div>
               <h2 className="text-xs sm:text-sm font-extrabold text-slate-900 dark:text-white uppercase tracking-wider flex items-center gap-2">
-                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Major & 120+ Minor)
+                <Sliders className="text-indigo-600 dark:text-indigo-400" size={16} /> Section 3: Relevant Procurement Categories (13 Divisions &amp; 120+ Categories)
               </h2>
               <p className="text-[11px] text-slate-500 dark:text-gray-400 mt-0.5">
                 Select your organization&apos;s active procurement scopes. This governs automated AI vendor matching &amp; RFQ distribution.
@@ -885,7 +1054,7 @@ export default function BuyerProfilePage() {
 
             <div className="flex items-center gap-2">
               <span className="badge badge-purple font-mono text-[11px]">
-                {selectedMajor.length} Major • {totalSelectedMinorCount} Minor Selected
+                {selectedMajor.length} {selectedMajor.length === 1 ? 'Division' : 'Divisions'} • {totalSelectedMinorCount} {totalSelectedMinorCount === 1 ? 'Category' : 'Categories'} Selected
               </span>
             </div>
           </div>
@@ -897,7 +1066,7 @@ export default function BuyerProfilePage() {
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search across all 13 Major and 120+ Minor categories (e.g. Cables, Valves, Pumps, IT, Logistics)..."
+              placeholder="Search across all 13 Divisions and 120+ Categories (e.g. Cables, Valves, Pumps, IT, Logistics)..."
               className="w-full pl-9 pr-3 py-1.5 rounded-lg border border-slate-200 dark:border-gray-800 text-xs font-medium bg-slate-50 dark:bg-gray-950 text-slate-900 dark:text-white"
             />
           </div>
@@ -928,17 +1097,17 @@ export default function BuyerProfilePage() {
                   }`}
                 >
                   {/* Major Category Bar */}
-                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3 cursor-pointer">
-                    <div className="flex items-center gap-2.5 flex-1" onClick={() => toggleMajorCategory(cat.majorCategory)}>
-                      <button type="button" className="text-indigo-600 dark:text-indigo-400">
-                        {isMajorSelected ? <CheckSquare size={16} /> : <Square size={16} className="text-slate-400" />}
-                      </button>
+                  <div className="p-2.5 sm:p-3 flex items-center justify-between gap-3">
+                    <div 
+                      className="flex items-center gap-2.5 flex-1 cursor-pointer hover:opacity-80 transition-opacity"
+                      onClick={() => setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))}
+                    >
                       <div>
                         <h3 className="text-xs font-bold text-slate-900 dark:text-white">
                           {cat.majorCategory}
                         </h3>
                         <p className="text-[10px] text-slate-500 dark:text-gray-400">
-                          {cat.minorCategories.length} Minor Categories available
+                          {cat.minorCategories.length} Categories available
                         </p>
                       </div>
                     </div>
@@ -949,10 +1118,12 @@ export default function BuyerProfilePage() {
                       </span>
                       <button
                         type="button"
-                        onClick={() =>
-                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }))
-                        }
-                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setExpandedMajor((prev) => ({ ...prev, [cat.majorCategory]: !prev[cat.majorCategory] }));
+                        }}
+                        className="p-1 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-gray-200 transition-colors"
+                        aria-label={`${isExpanded ? 'Collapse' : 'Expand'} ${cat.majorCategory}`}
                       >
                         {isExpanded ? <ChevronDown size={15} /> : <ChevronRight size={15} />}
                       </button>
@@ -964,7 +1135,7 @@ export default function BuyerProfilePage() {
                     <div className="p-3 pt-0 border-t border-slate-200/60 dark:border-gray-800/80 space-y-2">
                       <div className="flex items-center justify-between text-[11px] pt-1.5">
                         <span className="font-bold text-slate-500 dark:text-gray-400 uppercase tracking-wider text-[10px]">
-                          Minor Procurement Categories
+                          Procurement Categories
                         </span>
                         <div className="flex items-center gap-2">
                           <button

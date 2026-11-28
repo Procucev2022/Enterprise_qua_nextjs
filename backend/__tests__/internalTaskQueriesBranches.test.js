@@ -13,12 +13,14 @@ const pool = require('../src/db/pool');
 const { logger } = require('../src/services/loggerService');
 const storeService = require('../src/services/storeService');
 const internalTaskQueries = require('../src/db/internalTaskQueries');
+const { DEFAULT_INTERNAL_ASSIGNEES } = require('../src/config/constants');
 
 const ACTOR = { uuid: 'ops-1', name: 'Ops Lead', email: 'ops@procure.test' };
 
 let taskRow;
 let buyerCredits;
 let vendorCredits;
+let failApprovalSync = false;
 
 function baseTaskRow(overrides = {}) {
   return {
@@ -49,6 +51,9 @@ function baseTaskRow(overrides = {}) {
 
 function routeQuery(sql, params = []) {
   const text = String(sql);
+  if (text.includes('WHERE internal_task_id =') && failApprovalSync) {
+    return Promise.reject(new Error('Sync failed'));
+  }
   if (text.includes('FROM internal_tasks t') && text.includes('LEFT JOIN internal_task_types')) {
     const match = taskRow && (params[0] === taskRow.id || params[0] === taskRow.task_number);
     return Promise.resolve({ rows: match ? [taskRow] : [] });
@@ -465,6 +470,112 @@ describe('approveCreditTask fallbacks and deductions on the D1 path', () => {
       storeService.updateVendor = original;
     }
   });
+
+  test('updates vendor record for SELLER / VENDOR discounts, trial periods, and offline payments', async () => {
+    const updateSpy = jest.spyOn(storeService, 'updateVendor').mockReturnValue({});
+
+    // 1. Discounts
+    taskRow = baseTaskRow({
+      task_type: 'Discounts',
+      credit_account_type: 'VENDOR',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'VENDOR',
+      raw: JSON.stringify({ discount_percentage: 25, selected_mode: 'Connect Model' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Approved discount');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      discountPercentage: 25,
+      subscriptionDiscount: '25%',
+      discountMode: 'Connect Model',
+    }), { persist: false });
+
+    // 2. Trial Periods
+    taskRow = baseTaskRow({
+      task_type: 'Trial Periods',
+      credit_account_type: 'SELLER',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'SELLER',
+      raw: JSON.stringify({ duration_days: 60, selected_mode: 'Select Model', start_date: '2026-01-01', end_date: '2026-03-01' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Approved trial');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      trialPeriodDays: 60,
+      trialTier: 'Select Model',
+      isTrialActive: true,
+    }), { persist: false });
+
+    // 3. Offline Payments
+    taskRow = baseTaskRow({
+      task_type: 'Offline Payments',
+      credit_account_type: 'SELLER',
+      credit_account_id: 'vendor-1',
+      related_entity_type: 'SELLER',
+      raw: JSON.stringify({ request_type: 'Offline Payments' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR, 'Verified payment');
+    expect(updateSpy).toHaveBeenCalledWith('vendor-1', expect.objectContaining({
+      offlinePaymentStatus: 'VERIFIED',
+      lastPaymentStatus: 'VERIFIED',
+    }), { persist: false });
+
+    updateSpy.mockRestore();
+  });
+
+  test('updates buyer record for BUYER discounts, trial periods, and offline payments and handles syncErr', async () => {
+    const updateSpy = jest.spyOn(storeService, 'updateBuyerAccount').mockReturnValue({});
+
+    // 1. Discounts
+    taskRow = baseTaskRow({
+      task_type: 'Discounts',
+      credit_account_type: 'BUYER',
+      credit_account_id: 'buyer-1',
+      related_entity_type: 'BUYER',
+      raw: JSON.stringify({ discount_percentage: 20 }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    expect(updateSpy).toHaveBeenCalledWith('buyer-1', expect.objectContaining({
+      discountPercentage: 20,
+      subscriptionDiscount: '20%',
+    }), { persist: false });
+
+    // 2. Trial Periods
+    taskRow = baseTaskRow({
+      task_type: 'Trial Periods',
+      credit_account_type: 'BUYER',
+      credit_account_id: 'buyer-1',
+      related_entity_type: 'BUYER',
+      raw: JSON.stringify({ duration_days: 14 }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    expect(updateSpy).toHaveBeenCalledWith('buyer-1', expect.objectContaining({
+      subscriptionTier: 'Free_trial',
+      trialPeriodDays: 14,
+    }), { persist: false });
+
+    // 3. Offline Payments with sync error catch
+    taskRow = baseTaskRow({
+      task_type: 'Offline Payments',
+      credit_account_type: 'BUYER',
+      credit_account_id: 'buyer-1',
+      related_entity_type: 'BUYER',
+      raw: JSON.stringify({ request_type: 'Offline Payments' }),
+    });
+    d1Bridge.batchD1.mockResolvedValueOnce(committedBatch());
+    failApprovalSync = true;
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    failApprovalSync = false;
+    expect(updateSpy).toHaveBeenCalledWith('buyer-1', expect.objectContaining({
+      offlinePaymentStatus: 'VERIFIED',
+      lastPaymentStatus: 'VERIFIED',
+    }), { persist: false });
+
+    updateSpy.mockRestore();
+  });
 });
 
 describe('storage outage errors carry a 503 status', () => {
@@ -487,5 +598,108 @@ describe('storage outage errors carry a 503 status', () => {
       statusCode: 503,
       cause,
     });
+  });
+});
+
+describe('internal task approval branches for non-credit request types and sync failures', () => {
+  test('rejectCreditTask logs warning when approvals sync query fails', async () => {
+    taskRow = baseTaskRow({ status: 'Pending', approval_status: 'PENDING' });
+    pool.hasStorage.mockReturnValue(true);
+    pool.query.mockImplementation(async (sql) => {
+      if (typeof sql === 'string' && sql.includes('UPDATE approvals SET')) {
+        throw new Error('sync failed');
+      }
+      return { rows: [taskRow] };
+    });
+
+    const res = await internalTaskQueries.rejectCreditTask('task-1', ACTOR, 'Too expensive');
+    expect(res).toBeDefined();
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Internal task rejected but approvals sync failed',
+      expect.objectContaining({ error: 'sync failed', taskId: 'task-1' }),
+      'INTERNAL_TASK_APPROVAL'
+    );
+  });
+
+  test('D1 approveCreditTask updates buyer account for Discounts, Trial Periods, and Offline Payments', async () => {
+    d1Bridge.getD1Binding.mockReturnValue(true);
+    storeService.updateBuyerAccount = jest.fn();
+
+    // 1. Discounts
+    taskRow = baseTaskRow({
+      task_type: 'Discounts',
+      credit_quantity: 15,
+      raw: JSON.stringify({ request_type: 'Discounts', discount_percentage: 15 }),
+    });
+    const batchResDiscount = [
+      { rows: [taskRow] },
+      { rows: [{ id: 'buyer-1' }] },
+      { rows: [] },
+      { rows: [{ id: 'task-1' }] },
+      { rows: [{ id: 'ledger-1' }] },
+      { rows: [] },
+    ];
+    d1Bridge.batchD1.mockResolvedValueOnce(batchResDiscount);
+    // Force pool.query to throw on approvals update to also cover line 1308-1310
+    pool.query.mockImplementation((sql, params) => {
+      if (String(sql).includes('UPDATE approvals SET')) {
+        throw new Error('d1 sync error');
+      }
+      return routeQuery(sql, params);
+    });
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    expect(logger.warn).toHaveBeenCalledWith(
+      'Internal task approved but approvals sync failed',
+      expect.objectContaining({ error: 'd1 sync error', taskId: 'task-1' }),
+      'INTERNAL_TASK_APPROVAL'
+    );
+    expect(storeService.updateBuyerAccount).toHaveBeenCalledWith(
+      'buyer-1',
+      expect.objectContaining({ discountPercentage: 15, subscriptionDiscount: '15%' }),
+      { persist: false }
+    );
+
+    // 2. Trial Periods
+    taskRow = baseTaskRow({
+      task_type: 'Trial Periods',
+      credit_quantity: 60,
+      raw: JSON.stringify({ request_type: 'Trial Periods', duration_days: 60 }),
+    });
+    const batchResTrial = [
+      { rows: [taskRow] },
+      { rows: [{ id: 'buyer-1' }] },
+      { rows: [] },
+      { rows: [{ id: 'task-1' }] },
+      { rows: [{ id: 'ledger-2' }] },
+      { rows: [] },
+    ];
+    d1Bridge.batchD1.mockResolvedValueOnce(batchResTrial);
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    expect(storeService.updateBuyerAccount).toHaveBeenCalledWith(
+      'buyer-1',
+      expect.objectContaining({ subscriptionTier: 'Free_trial', trialPeriodDays: 60 }),
+      { persist: false }
+    );
+
+    // 3. Offline Payments
+    taskRow = baseTaskRow({
+      task_type: 'Offline Payments',
+      raw: JSON.stringify({ request_type: 'Offline Payments' }),
+    });
+    const batchResOffline = [
+      { rows: [taskRow] },
+      { rows: [{ id: 'buyer-1' }] },
+      { rows: [] },
+      { rows: [{ id: 'task-1' }] },
+      { rows: [{ id: 'ledger-3' }] },
+      { rows: [] },
+    ];
+    d1Bridge.batchD1.mockResolvedValueOnce(batchResOffline);
+    await internalTaskQueries.approveCreditTask('task-1', ACTOR);
+    expect(storeService.updateBuyerAccount).toHaveBeenCalledWith(
+      'buyer-1',
+      expect.objectContaining({ offlinePaymentStatus: 'VERIFIED', lastPaymentStatus: 'VERIFIED' }),
+      { persist: false }
+    );
   });
 });

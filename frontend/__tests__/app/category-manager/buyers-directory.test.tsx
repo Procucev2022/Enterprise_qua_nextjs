@@ -3,24 +3,33 @@ import { render, screen, fireEvent, waitFor, within } from '@testing-library/rea
 import BuyersDirectory from '@/app/category-manager/buyers-directory';
 import CategoryManagerBuyersDirectoryPage from '@/app/category-manager/buyers-directory/page';
 import { useApp } from '@/lib/store';
-import * as reportsClient from '@/lib/reportsClient';
 import { RFQ_MODES } from '@/lib/constants';
 
-jest.mock('@/lib/store', () => ({
-  useApp: jest.fn(),
-}));
+jest.mock('@/lib/store', () => {
+  const fn = jest.fn();
+  return {
+    useApp: fn,
+    useOptionalApp: fn,
+  };
+});
+
+jest.mock('@/lib/buyerProfileClient', () => {
+  const actual = jest.requireActual('@/lib/buyerProfileClient');
+  return {
+    ...actual,
+    fetchBuyerDirectoryKPIStats: jest.fn().mockResolvedValue({
+      success: true,
+      totalBuyers: 3,
+      verifiedBuyers: 2,
+      subscriptionBuyers: 1,
+      modeCounts: { mode_1: 2, mode_2: 1 },
+    }),
+  };
+});
 
 jest.mock('next/navigation', () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
-
-jest.mock('@/lib/reportsClient', () => {
-  const actual = jest.requireActual('@/lib/reportsClient');
-  return {
-    ...actual,
-    exportReportToExcel: jest.fn(),
-  };
-});
 
 describe('BuyersDirectory Component Suite', () => {
   const mockBuyerAccounts = [
@@ -136,7 +145,8 @@ describe('BuyersDirectory Component Suite', () => {
   test('renders page header, summary KPI cards, and buyers table', () => {
     render(<BuyersDirectory />);
 
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
     expect(screen.getByText('L&T Heavy Engineering')).toBeInTheDocument();
     expect(screen.getByText('Pune')).toBeInTheDocument();
@@ -201,13 +211,11 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.getByText('No buyer accounts found matching your query.')).toBeInTheDocument();
   });
 
-  test('export directory button invokes exportReportToExcel', () => {
+  test('does not render Export Directory button in toolbar', () => {
     render(<BuyersDirectory />);
 
-    const exportBtn = screen.getByText('Export Directory');
-    fireEvent.click(exportBtn);
-
-    expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
   });
 
   test('clicking 360 Dossier opens drawer, allows browsing tabs, and closing via X button', async () => {
@@ -241,7 +249,7 @@ describe('BuyersDirectory Component Suite', () => {
     // Check Tab 4: Communications
     const commsTab = screen.getByRole('button', { name: /Communications|Messages/i });
     fireEvent.click(commsTab);
-    expect(await screen.findByText(/No recorded EMAIL communications found for this buyer/)).toBeInTheDocument();
+    expect(await screen.findByText(/No recorded (?:EMAIL )?communications found for this buyer/)).toBeInTheDocument();
 
     // Check Tab 5: Payments
     const payTab = screen.getByRole('button', { name: /Payments/i });
@@ -323,7 +331,8 @@ describe('BuyersDirectory Component Suite', () => {
     });
 
     render(<CategoryManagerBuyersDirectoryPage />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /Export Directory/i })).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     // Open first buyer dossier
     const dossierBtns = screen.getAllByText('360° Dossier');
@@ -509,7 +518,7 @@ describe('BuyersDirectory Component Suite', () => {
     window.localStorage.setItem('buyer_directory_columns_pref', JSON.stringify(partialPrefs));
 
     render(<BuyersDirectory />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
 
@@ -517,7 +526,7 @@ describe('BuyersDirectory Component Suite', () => {
     window.localStorage.setItem('buyer_directory_columns_pref', '{invalid_json');
 
     render(<BuyersDirectory />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
     window.localStorage.clear();
   });
   test('filters buyers by Source Type (Web App, WhatsApp, Email, All)', () => {
@@ -637,7 +646,7 @@ describe('BuyersDirectory Component Suite', () => {
     expect(screen.queryByText('New Client Awaiting Approval')).not.toBeInTheDocument();
   });
 
-  test('restores saved state from sessionStorage on mount', () => {
+  test('ignores stale sessionStorage filter state on mount so view is consistent across browsers', () => {
     const savedState = {
       searchTerm: 'Tata',
       selectedMode: RFQ_MODES.MODE_1,
@@ -652,8 +661,8 @@ describe('BuyersDirectory Component Suite', () => {
 
     render(<BuyersDirectory />);
 
-    expect(screen.getByDisplayValue('Tata')).toBeInTheDocument();
-    expect(screen.getByDisplayValue('Web App')).toBeInTheDocument();
+    expect(screen.queryByDisplayValue('Tata')).not.toBeInTheDocument();
+    expect(screen.getByDisplayValue('All Sources')).toBeInTheDocument();
     expect(screen.getByText('Tata Motors Corp')).toBeInTheDocument();
 
     window.sessionStorage.clear();
@@ -663,7 +672,7 @@ describe('BuyersDirectory Component Suite', () => {
     window.sessionStorage.setItem('buyer_directory_state', '{corrupted_json');
 
     render(<BuyersDirectory />);
-    expect(screen.getByText('Export Directory')).toBeInTheDocument();
+    expect(screen.getByLabelText('Customize Columns')).toBeInTheDocument();
 
     window.sessionStorage.clear();
   });
@@ -995,10 +1004,8 @@ describe('BuyersDirectory Component Suite', () => {
       }
       expect(screen.getByText('...')).toBeInTheDocument();
 
-      // Test export directory with null/sparse/fallback values
-      const exportBtn = screen.getByRole('button', { name: /export directory/i });
-      fireEvent.click(exportBtn);
-      expect(reportsClient.exportReportToExcel).toHaveBeenCalled();
+      // Verify Export Directory button is removed from toolbar
+      expect(screen.queryByRole('button', { name: /export directory/i })).not.toBeInTheDocument();
 
       // Test sorting through all column headers (asc and desc)
       const columnHeaders = screen.getAllByRole('columnheader');

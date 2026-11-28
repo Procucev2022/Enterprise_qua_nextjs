@@ -2,6 +2,7 @@ import { authClient } from './authClient';
 import { logger } from './logger';
 import { UI_STRINGS, formatString } from './uiStrings';
 import type { AccountDocument } from './types';
+import type { BuyerProfileRequestType, SellerProfileRequestType } from './constants';
 
 const ACCOUNT_DOCS_LOG_CATEGORY = 'ACCOUNT_DOCS_CLIENT';
 const RESOURCES = UI_STRINGS.dataLoad.resources;
@@ -33,19 +34,68 @@ export interface UploadAccountDocumentPayload {
 }
 
 export interface RequestBuyerCreditApprovalPayload {
-  amount: number;
+  amount?: number;
   reason?: string;
   approverName: string;
+  approverId?: string;
   initiatorName: string;
+  initiatorId?: string;
+  startDate?: string;
+  endDate?: string;
   idempotencyKey?: string;
+  requestType?: BuyerProfileRequestType;
+  discountPercentage?: number;
+  durationDays?: number;
+  paymentReference?: string;
+  selectedMode?: string;
+  billingDuration?: string;
+  originalPrice?: number;
+  discountAmount?: number;
+  remainingAmount?: number;
+  gstAmount?: number;
+  finalPayableAmount?: number;
+  paymentDate?: string;
+  paymentType?: string;
+  transactionId?: string;
+  buyerSourceMode?: string;
+  paymentAmount?: number;
+  proofFileName?: string;
+  proofFileUrl?: string;
+  proofFileType?: string;
+  proofFileSize?: number;
 }
 
 export interface RequestSellerQuoteCreditApprovalPayload {
   amount: number;
   reason?: string;
   approverName: string;
+  approverId?: string;
   initiatorName: string;
+  initiatorId?: string;
+  startDate?: string;
+  endDate?: string;
   idempotencyKey?: string;
+  requestType?: SellerProfileRequestType | string;
+  discountPercentage?: number;
+  durationDays?: number;
+  paymentReference?: string;
+  selectedMode?: string;
+  billingDuration?: string;
+  originalPrice?: number;
+  discountAmount?: number;
+  remainingAmount?: number;
+  gstAmount?: number;
+  finalPayableAmount?: number;
+  paymentDate?: string;
+  paymentType?: string;
+  transactionId?: string;
+  sellerSourceMode?: string;
+  buyerSourceMode?: string;
+  paymentAmount?: number;
+  proofFileName?: string;
+  proofFileUrl?: string;
+  proofFileType?: string;
+  proofFileSize?: number;
 }
 
 /** Result of loading an account's documents. `error` is set when the list could not be loaded. */
@@ -333,5 +383,54 @@ export async function addSellerQuoteCredits(
     const errorMsg = (err as Error).message || 'Network error during quote credits addition.';
     logger.error('addSellerQuoteCredits network error', { error: errorMsg }, ACCOUNT_DOCS_LOG_CATEGORY);
     return { success: false, error: errorMsg };
+  }
+}
+
+/**
+ * Fetch exact database KPI stats for Sellers Directory (removing 500 pagination cap).
+ */
+export async function fetchSellerDirectoryKPIStats(): Promise<{
+  success: boolean;
+  totalSuppliers: number;
+  subscriptionVendors?: number;
+  subscriptionVendorsCount?: number;
+  networkSuppliers: number;
+  buyerUploaded: number;
+  verifiedActive: number;
+  error?: string;
+}> {
+  try {
+    const url = '/api/vendors/kpi-stats';
+    const res = await fetch(url, {
+      method: 'GET',
+      headers: authHeaders(),
+    });
+    const json = await res.json();
+    if (!json || typeof json.totalSuppliers !== 'number') {
+      return {
+        success: false,
+        totalSuppliers: 0,
+        subscriptionVendors: 0,
+        subscriptionVendorsCount: 0,
+        networkSuppliers: 0,
+        buyerUploaded: 0,
+        verifiedActive: 0,
+        error: 'Invalid KPI stats response',
+      };
+    }
+    return json;
+  } catch (err) {
+    const errorMsg = (err as Error).message || 'Failed to fetch seller KPI stats.';
+    logger.error('fetchSellerDirectoryKPIStats network error', { error: errorMsg }, ACCOUNT_DOCS_LOG_CATEGORY);
+    return {
+      success: false,
+      totalSuppliers: 0,
+      subscriptionVendors: 0,
+      subscriptionVendorsCount: 0,
+      networkSuppliers: 0,
+      buyerUploaded: 0,
+      verifiedActive: 0,
+      error: errorMsg,
+    };
   }
 }

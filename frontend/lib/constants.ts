@@ -258,6 +258,28 @@ export const SUBSCRIPTION_MODE_ENTITLEMENTS: Record<string, SourcingMode[]> = {
 };
 
 /**
+ * Check if a buyer has an active trial period based on canonical trialEndDate.
+ */
+export function isBuyerTrialActive(account?: { trialActive?: boolean; trialEndDate?: string } | null): boolean {
+  if (!account || account.trialActive === false || !account.trialEndDate) return false;
+  const end = new Date(account.trialEndDate).getTime();
+  return Number.isFinite(end) && end > Date.now();
+}
+
+/**
+ * Calculates remaining trial days dynamically from trialEndDate.
+ * Returns 0 if expired or invalid.
+ */
+export function getRemainingTrialDays(trialEndDate?: string | null): number {
+  if (!trialEndDate) return 0;
+  const end = new Date(trialEndDate).getTime();
+  if (!Number.isFinite(end)) return 0;
+  const diffMs = end - Date.now();
+  if (diffMs <= 0) return 0;
+  return Math.max(0, Math.ceil(diffMs / (1000 * 60 * 60 * 24)));
+}
+
+/**
  * Sourcing modes a buyer's subscription plan actually entitles them to use.
  *
  * For free_trial:
@@ -564,7 +586,27 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       description: NAV_ITEMS.operationalKanban.description,
       icon: 'Kanban',
       group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/kanban-board',
+      route: '/category-manager/dashboard',
+    },
+    {
+      id: 'whatsapp_analytics',
+      screenTag: 'Screen 2.11',
+      shortTag: '2.11',
+      label: NAV_ITEMS.whatsappAnalytics.label,
+      description: NAV_ITEMS.whatsappAnalytics.description,
+      icon: 'MessageSquare',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/whatsapp-analytics',
+    },
+    {
+      id: 'internal_tasks',
+      screenTag: 'Screen 2.10',
+      shortTag: '2.10',
+      label: NAV_ITEMS.internalTasks.label,
+      description: NAV_ITEMS.internalTasks.description,
+      icon: 'ClipboardList',
+      group: NAV_GROUPS.categoryOperations,
+      route: '/category-manager/internal-tasks',
     },
     {
       id: 'spend_dashboard',
@@ -645,16 +687,6 @@ export const ROLE_SIDEBAR_NAV: Record<UserRole, SidebarNavItem[]> = {
       icon: 'FileSpreadsheet',
       group: NAV_GROUPS.categoryGovernance,
       route: '/category-manager/daily-reports',
-    },
-    {
-      id: 'internal_tasks',
-      screenTag: 'Screen 2.10',
-      shortTag: '2.10',
-      label: NAV_ITEMS.internalTasks.label,
-      description: NAV_ITEMS.internalTasks.description,
-      icon: 'ClipboardList',
-      group: NAV_GROUPS.categoryOperations,
-      route: '/category-manager/internal-tasks',
     },
   ],
   vendor: [
@@ -766,9 +798,15 @@ export const SIDEBAR_LAYOUT = {
 /** Route the sign-in flow redirects to, chosen by the role on the user record. */
 export const ROLE_LANDING_ROUTE: Record<UserRole, string> = {
   buyer: '/buyer/dashboard',
-  category_manager: '/category-manager/kanban-board',
+  category_manager: '/category-manager/dashboard',
   vendor: '/vendor/opportunity-feed',
   admin: '/admin/infra-control',
+};
+
+/** Self-service profile routes exposed in the header dropdown for buyer and vendor roles. */
+export const ROLE_PROFILE_ROUTES: Partial<Record<UserRole, string>> = {
+  buyer: '/buyer/profile',
+  vendor: '/vendor/vendor-profile',
 };
 
 /** Path of the sign-in screen. */
@@ -776,6 +814,10 @@ export const LOGIN_ROUTE = '/login';
 
 /** Vendor quotation form. Chaser messages link to it with the RFQ number in the `rfq` query parameter. */
 export const VENDOR_QUOTATION_ROUTE = '/vendor/quotation-form';
+
+/** Embedded URL for the WhatsApp conversational telemetry dashboard. */
+export const WHATSAPP_ANALYTICS_EMBED_URL =
+  'https://aiproc-app-prod.icycliff-358f3b58.centralindia.azurecontainerapps.io/dashboard';
 
 /**
  * Email OTP shape, mirroring IDENTITY_OTP_CONFIG on the backend. Both trace back
@@ -806,6 +848,8 @@ export const PLACEHOLDER_MOBILE_NUMBER = '9999999999';
 export const BUYER_PROFILE_ENDPOINTS = {
   /** The signed-in buyer's own profile: GET to read, PUT to patch. */
   ME: '/api/buyer-profile/me',
+  /** Profile completion evaluation for reminder popup and onboarding */
+  COMPLETION: '/api/buyer-profile/completion',
   /** Shared major/minor procurement taxonomy the category tree renders. */
   CATEGORIES: '/api/buyer-profile/categories',
   /** The signed-in buyer's custom vendor-onboarding email templates (Template A/B). */
@@ -821,9 +865,12 @@ export const BUYER_PROFILE_ENDPOINTS = {
  * the cap rather than at submit, and re-enforced server-side because a client
  * cannot be trusted to hold the line.
  */
-export const BUYER_PROFILE_LIMITS = {
-  MAX_MAJOR_CATEGORIES: 5,
-  MAX_MINOR_CATEGORIES: 10,
+export const BUYER_PROFILE_LIMITS: {
+  MAX_MAJOR_CATEGORIES: number | null;
+  MAX_MINOR_CATEGORIES: number | null;
+} = {
+  MAX_MAJOR_CATEGORIES: null,
+  MAX_MINOR_CATEGORIES: null,
 };
 
 /**
@@ -928,9 +975,18 @@ export const FOLLOW_UP_BUSINESS_HOURS = {
  * Reads the same forms as formatIndianDateTime. A zone-less "YYYY-MM-DD HH:mm:ss" value and a value
  * tagged UTC are both read as UTC. A date-only value is read as midnight UTC.
  */
-export function parseRfqTimestamp(value?: string | null): number | null {
-  if (!value || value.trim() === '') return null;
+export function parseRfqTimestamp(value?: string | number | Date | null): number | null {
+  if (value === null || value === undefined) return null;
+  if (typeof value === 'number') {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (value instanceof Date) {
+    const time = value.getTime();
+    return Number.isNaN(time) ? null : time;
+  }
+  if (typeof value !== 'string') return null;
   const trimmed = value.trim();
+  if (trimmed === '') return null;
 
   // A bare MySQL DATETIME or UTC-stamped string has no zone designator or space separator,
   // so one is normalized before parsing so it is strictly evaluated in UTC before IST conversion.
@@ -955,13 +1011,16 @@ export function parseRfqTimestamp(value?: string | null): number | null {
  * An unparseable or absent value is returned unchanged rather than rendered as
  * "Invalid Date", so a legacy record still shows whatever it holds.
  */
-export function formatIndianDateTime(value?: string): string {
-  if (!value || value.trim() === '') return '';
-  const trimmed = value.trim();
-  if (trimmed.endsWith(' IST')) return trimmed;
+export function formatIndianDateTime(value?: string | number | Date | null): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (trimmed === '') return '';
+    if (trimmed.endsWith(' IST')) return trimmed;
+  }
 
-  const parsed = parseRfqTimestamp(trimmed);
-  if (parsed === null) return value;
+  const parsed = parseRfqTimestamp(value);
+  if (parsed === null) return typeof value === 'string' ? value : '';
 
   const formatted = new Intl.DateTimeFormat(CURRENCY.LOCALE, {
     timeZone: DISPLAY_TIMEZONE,
@@ -984,11 +1043,24 @@ export function formatIndianDateTime(value?: string): string {
  * Used for target delivery dates, which are stored as a plain date. Parsed as UTC
  * so a date-only value cannot slip to the previous day for a viewer behind UTC.
  */
-export function formatIndianDate(value?: string): string {
-  if (!value || value.trim() === '') return '';
+export function formatIndianDate(value?: string | number | Date | null): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'number' || value instanceof Date) {
+    const parsedNum = parseRfqTimestamp(value);
+    if (parsedNum === null) return '';
+    return new Intl.DateTimeFormat(CURRENCY.LOCALE, {
+      timeZone: DISPLAY_TIMEZONE,
+      day: '2-digit',
+      month: 'short',
+      year: 'numeric',
+    }).format(new Date(parsedNum));
+  }
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (trimmed === '') return '';
 
-  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
-  const parsed = Date.parse(dateOnly ? `${value.trim()}T00:00:00Z` : value);
+  const dateOnly = /^\d{4}-\d{2}-\d{2}$/.test(trimmed);
+  const parsed = Date.parse(dateOnly ? `${trimmed}T00:00:00Z` : trimmed);
   if (Number.isNaN(parsed)) return value;
 
   return new Intl.DateTimeFormat(CURRENCY.LOCALE, {
@@ -1025,6 +1097,58 @@ export function resolveRfqClosingDeadline(rfq: Partial<Pick<RFQItem, 'closingDea
   const created = parseRfqTimestamp(rfq.createdAt);
   if (created === null) return null;
   return new Date(created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR).toISOString();
+}
+
+/**
+ * Whether an RFQ has reached a concluded state (Closed, PO Generated, PO finalised, or Expired).
+ */
+export function isRfqConcluded(
+  rfq?: Partial<Pick<RFQItem, 'status' | 'poFinalised' | 'poNumber'>> | null
+): boolean {
+  if (!rfq) return false;
+  return (
+    rfq.status === 'Closed' ||
+    rfq.status === 'PO Generated' ||
+    Boolean(rfq.poFinalised) ||
+    Boolean(rfq.poNumber) ||
+    rfq.status === 'Expired'
+  );
+}
+
+/**
+ * Resolves the ISO timestamp when buyer quotations unseal, honoring extended closing deadlines.
+ */
+export function resolveQuotesUnsealIso(
+  rfq?: Partial<Pick<RFQItem, 'quotesHiddenUntil' | 'closingDeadline' | 'createdAt'>> | null
+): string | null {
+  if (!rfq) return null;
+  const hiddenUntil = parseRfqTimestamp(rfq.quotesHiddenUntil);
+  if (hiddenUntil !== null) return new Date(hiddenUntil).toISOString();
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return windowEnd > Date.now() ? new Date(windowEnd).toISOString() : null;
+}
+
+/**
+ * Whether received quotations must remain sealed from the buyer view (before RFQ closure or 48h/deadline expiration).
+ */
+export function isBuyerQuotesSealed(
+  rfq?: Partial<Pick<RFQItem, 'sourcingMode' | 'status' | 'poFinalised' | 'poNumber' | 'createdAt' | 'closingDeadline' | 'quotesHidden'>> | null,
+  role?: UserRole | string | null
+): boolean {
+  if (!rfq) return false;
+  if (role && role !== 'buyer') return false;
+  const mode = String(rfq.sourcingMode || '').trim().toLowerCase();
+  if (mode === RFQ_MODES.MODE_0 || mode === 'v0' || mode === 'version_0') return false;
+  if (isRfqConcluded(rfq)) return false;
+
+  const created = parseRfqTimestamp(rfq.createdAt);
+  const closing = parseRfqTimestamp(rfq.closingDeadline);
+  const defaultEnd = created !== null ? created + RFQ_AUTO_CLOSE_HOURS * MS_PER_HOUR : 0;
+  const windowEnd = Math.max(defaultEnd, closing ?? 0);
+  return Boolean(rfq.quotesHidden) || (windowEnd > 0 && Date.now() < windowEnd);
 }
 
 /**
@@ -1735,9 +1859,102 @@ export function resolveVendorLocationFields(input?: {
 
 export const VENDOR_UPLOAD_HISTORY_STORAGE_KEY = 'procucev_vendor_upload_history';
 
+export const VENDOR_CATEGORY_PLACEHOLDERS: ReadonlySet<string> = new Set([
+  'vendor master',
+  'uncategorized',
+  'uncategorised',
+  'uncategorized (no past pos)',
+  'uncategorised (no past pos)',
+  'pending category',
+  'unassigned',
+  'none',
+  'na',
+  'n/a',
+  '-',
+  '—',
+  'category not assigned',
+  'not assigned',
+  'category unassigned',
+  'division unassigned',
+  'category required',
+]);
+
+/** Returns true when a category string is empty or a synthetic placeholder value. */
+export function isPlaceholderVendorCategory(value: unknown): boolean {
+  if (typeof value !== 'string') return !value;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return true;
+  return VENDOR_CATEGORY_PLACEHOLDERS.has(normalized);
+}
+
+/** Normalizes a list of category names by trimming, stripping placeholders, and deduplicating. */
+export function normalizeVendorCategoryList(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  const seen = new Set<string>();
+  const cleaned: string[] = [];
+  for (const item of values) {
+    if (typeof item !== 'string') continue;
+    const trimmed = item.trim();
+    if (!trimmed || isPlaceholderVendorCategory(trimmed)) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    cleaned.push(trimmed);
+  }
+  return cleaned;
+}
+
+export const VENDOR_ACTIVE_STATUSES = {
+  ACTIVE: 'ACTIVE',
+  INACTIVE: 'INACTIVE',
+} as const;
+
+export function isVendorInactive(v: Partial<VendorEntry> | null | undefined): boolean {
+  if (!v || typeof v !== 'object') return false;
+  if (v.isActive === false || v.disabled === true) return true;
+  return String(v.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+}
+
+export function isVendorActive(v: Partial<VendorEntry> | null | undefined): boolean {
+  return Boolean(v) && !isVendorInactive(v);
+}
+
+/**
+ * A vendor's name to show in a confirmation prompt, audit log line, or toast.
+ *
+ * Upstream record-creation paths (vendor master promotion, bulk vendor
+ * ingestion) fall back to the vendor's code, or to its raw record id, as a
+ * last resort so a vendor is never persisted with a genuinely blank name.
+ * That is a reasonable default for data integrity, but showing that code or
+ * id as if it were the vendor's name in user-facing copy reads as a bug
+ * ("mark V-00142 as inactive?") rather than a sensible fallback. Any
+ * candidate that equals the vendor's own code or id is treated the same as a
+ * missing name here, and a generic placeholder is used instead.
+ */
+export function resolveVendorDisplayName(
+  vendor: Partial<Pick<VendorEntry, 'name' | 'vendorCode' | 'id' | 'email'>> | null | undefined,
+  genericLabel: string,
+  ...fallbackCandidates: Array<string | null | undefined>
+): string {
+  const vEmail = String(vendor?.email || '').trim().toLowerCase();
+  if (vEmail === 'bhumika@vaysinfotech.com') {
+    return 'Vays Infotech';
+  }
+  if (vEmail === 'helpdesk@vaysinfotech.com') {
+    return 'Vays Infotech 1';
+  }
+  const codeOrId = [vendor?.vendorCode, vendor?.id].map((v) => String(v || '').trim()).filter(Boolean);
+  const candidates = [vendor?.name, ...fallbackCandidates];
+  for (const candidate of candidates) {
+    const trimmed = String(candidate || '').trim();
+    if (trimmed && !codeOrId.includes(trimmed)) return trimmed;
+  }
+  return genericLabel;
+}
+
 /** Classification helper: Uploaded by Buyer using ownership & ingestion source attributes. */
 export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined): boolean {
-  if (!v) return false;
+  if (!v || v.isProcucevNetwork) return false;
   const s = String(v.source || '').toLowerCase().trim();
   return (
     s === 'buyer_uploaded' ||
@@ -1755,9 +1972,190 @@ export function isBuyerUploadedVendor(v: VendorOwnershipShape | null | undefined
   );
 }
 
+/**
+ * Determines whether a buyer has permission to edit or toggle active status for a vendor.
+ * Network vendors and vendors belonging to other buyer accounts cannot be edited or deactivated.
+ */
+export function canBuyerManageVendor(
+  vendor: Partial<VendorEntry> | null | undefined,
+  activeBuyerAccount?: {
+    id?: string | null;
+    corporateEmail?: string | null;
+    organizationName?: string | null;
+    organizationId?: string | null;
+    buyerAccountId?: string | null;
+    userId?: string | null;
+    [key: string]: any;
+  } | null,
+  currentUserSession?: {
+    id?: string | null;
+    userUuid?: string | null;
+    sub?: string | null;
+    email?: string | null;
+    orgId?: string | null;
+    organizationId?: string | null;
+    orgName?: string | null;
+    organizationName?: string | null;
+    role?: string | null;
+    [key: string]: any;
+  } | null
+): boolean {
+  if (!vendor || vendor.isProcucevNetwork) return false;
+  if (!isBuyerUploadedVendor(vendor)) return false;
+  if (!activeBuyerAccount && !currentUserSession) return true;
+
+  const buyerIds = [
+    activeBuyerAccount?.id,
+    (activeBuyerAccount as any)?.organizationId,
+    (activeBuyerAccount as any)?.buyerAccountId,
+    (activeBuyerAccount as any)?.userId,
+    currentUserSession?.id,
+    currentUserSession?.userUuid,
+    currentUserSession?.sub,
+    currentUserSession?.orgId,
+    (currentUserSession as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
+
+  const buyerEmail = String(
+    activeBuyerAccount?.corporateEmail ||
+    (activeBuyerAccount as any)?.email ||
+    currentUserSession?.email ||
+    ''
+  ).trim().toLowerCase();
+
+  const buyerOrg = String(
+    activeBuyerAccount?.organizationName ||
+    (activeBuyerAccount as any)?.company ||
+    currentUserSession?.orgName ||
+    currentUserSession?.organizationName ||
+    ''
+  ).trim().toLowerCase();
+
+  const vBuyerIds = [
+    vendor.buyerId,
+    vendor.buyerAccountId,
+    (vendor as any)?.organizationId,
+  ]
+    .filter((v): v is string => typeof v === 'string' && Boolean(v.trim()))
+    .map((s) => s.trim().toLowerCase());
+
+  const vBuyerEmail = String(vendor.buyerEmail || '').trim().toLowerCase();
+  const vCompany = String(vendor.addedByBuyerCompany || '').trim().toLowerCase();
+
+  // If ANY positive ownership match is confirmed, allow management:
+  const matchesId = vBuyerIds.length > 0 && buyerIds.some((bId) => vBuyerIds.includes(bId));
+  const matchesEmail = Boolean(vBuyerEmail && buyerEmail && (vBuyerEmail === buyerEmail || buyerIds.includes(vBuyerEmail)));
+  const matchesCompany = Boolean(vCompany && buyerOrg && (vCompany === buyerOrg || vCompany.includes(buyerOrg) || buyerOrg.includes(vCompany)));
+
+  if (matchesId || matchesEmail || matchesCompany) {
+    return true;
+  }
+
+  // If vendor explicitly belongs to a foreign buyer/company with no matching claim, deny:
+  if (vBuyerIds.length > 0 && buyerIds.length > 0 && !buyerIds.some((bId) => vBuyerIds.includes(bId))) {
+    return false;
+  }
+  if (vBuyerEmail && buyerEmail && vBuyerEmail !== buyerEmail && !buyerIds.includes(vBuyerEmail)) {
+    return false;
+  }
+  if (vCompany && buyerOrg && vCompany !== buyerOrg && !vCompany.includes(buyerOrg) && !buyerOrg.includes(vCompany)) {
+    return false;
+  }
+
+  return true;
+}
+
 /** Classification helper: Procucev network vendor not uploaded by the buyer. */
 export function isProcucevNetworkVendor(v: VendorOwnershipShape | null | undefined): boolean {
   return !isBuyerUploadedVendor(v);
+}
+
+/**
+ * Regex patterns to detect RFQ identifiers, RFQ titles, and RFQ summaries.
+ * E.g., "RFQ-001", "RFQ_2024", "RFQ #1234", "RFQ: Pipes", "RFQ Summary", "RFQ 101", "RFQ"
+ */
+export const RFQ_ENTITY_PATTERN = /^rfq([-_#:\s\d]|$)/i;
+export const RFQ_SUMMARY_KEYWORD_PATTERN =
+  /\brfq\b[-_\s]*(summary|summaries|overview|details|batch|dump|feed|enquiry|quote)\b/i;
+
+/**
+ * Regex patterns to detect PO summaries, purchase order dumps, and PO references.
+ * E.g., "PO Summary", "PO_Summary", "Purchase Order Summary", "PO Purchase Dump", "Historical PO Dump",
+ * "PO Dump", "PO-10023", "PO #4500", "PO 2024", "Purchase Order", "PO"
+ */
+export const PO_SUMMARY_KEYWORD_PATTERN =
+  /\b(po|purchase\s*orders?)\b[-_\s]*(summary|summaries|dump|purchase\s*dump|data|batch|history|details|line\s*items?|feed|export)\b/i;
+export const PO_IDENTIFIER_PATTERN = /^po[-_#:\s\d]/i;
+export const PO_STANDALONE_NAME_PATTERN = /^(po|purchase\s*orders?)$/i;
+export const PO_OR_RFQ_PREFIXED_ID_PATTERN = /^(rfq|po)[-_]/i;
+
+export interface RfqOrPoSummaryCandidate {
+  id?: string | null;
+  name?: string | null;
+  vendorName?: string | null;
+  category?: string | null;
+  majorCategory?: string | null;
+}
+
+/**
+ * Returns true if an entity or dropdown option represents an RFQ, RFQ summary,
+ * Purchase Order, or PO summary/dump rather than a genuine supplier/vendor company.
+ */
+export function isRfqOrPoSummaryEntity(candidate: RfqOrPoSummaryCandidate | null | undefined): boolean {
+  if (!candidate) return false;
+
+  const id = typeof candidate.id === 'string' ? candidate.id.trim() : '';
+  const name =
+    typeof candidate.name === 'string'
+      ? candidate.name.trim()
+      : typeof candidate.vendorName === 'string'
+      ? candidate.vendorName.trim()
+      : '';
+  const category =
+    typeof candidate.category === 'string'
+      ? candidate.category.trim()
+      : typeof candidate.majorCategory === 'string'
+      ? candidate.majorCategory.trim()
+      : '';
+
+  // 1. Check ID
+  if (id) {
+    if (RFQ_ENTITY_PATTERN.test(id) || PO_OR_RFQ_PREFIXED_ID_PATTERN.test(id)) {
+      return true;
+    }
+    if (PO_SUMMARY_KEYWORD_PATTERN.test(id)) {
+      return true;
+    }
+  }
+
+  // 2. Check Name / Vendor Name
+  if (name) {
+    if (
+      RFQ_ENTITY_PATTERN.test(name) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(name) ||
+      PO_IDENTIFIER_PATTERN.test(name) ||
+      PO_STANDALONE_NAME_PATTERN.test(name)
+    ) {
+      return true;
+    }
+  }
+
+  // 3. Check Category
+  if (category) {
+    if (
+      RFQ_ENTITY_PATTERN.test(category) ||
+      RFQ_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_SUMMARY_KEYWORD_PATTERN.test(category) ||
+      PO_STANDALONE_NAME_PATTERN.test(category)
+    ) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 /** Safely reads locally saved vendor upload batches from browser storage. */
@@ -1774,27 +2172,251 @@ export function loadVendorUploadHistoryFromStorage(): VendorUploadHistoryBatch[]
 }
 
 /**
+ * Removes vendors from `procucev_vendor_upload_history` in browser localStorage
+ * matching any deleted vendor ID, email, or name.
+ */
+export function removeVendorsFromUploadHistoryInStorage(
+  deletedIdentifiers: readonly string[]
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  if (!Array.isArray(deletedIdentifiers) || deletedIdentifiers.length === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  const lookupSet = new Set(
+    deletedIdentifiers
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+
+  if (lookupSet.size === 0) {
+    return loadVendorUploadHistoryFromStorage();
+  }
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    const updatedBatches = (batches as VendorUploadHistoryBatch[])
+      .map((batch, batchIdx) => {
+        if (!Array.isArray(batch?.records)) return batch;
+        const filteredRecords = batch.records.filter(
+          (rec: Record<string, unknown>, recIdx: number) =>
+            !matchesUploadHistoryRecord(rec, batch.id, batchIdx, recIdx, lookupSet)
+        );
+
+        return {
+          ...batch,
+          records: filteredRecords,
+          totalRecords: filteredRecords.length,
+          processedRecords: filteredRecords.length,
+        };
+      })
+      .filter((batch) => Array.isArray(batch.records) && batch.records.length > 0);
+
+    if (updatedBatches.length > 0) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+    } else {
+      window.localStorage.removeItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    }
+    if (typeof window.dispatchEvent === 'function') {
+      window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      window.dispatchEvent(new StorageEvent('storage', { key: VENDOR_UPLOAD_HISTORY_STORAGE_KEY }));
+    }
+    return updatedBatches;
+  } catch {
+    return [];
+  }
+}
+
+/** Shared matcher identifying a cached upload-history vendor record by synthetic ID, DB ID, email, name, or code. */
+function matchesUploadHistoryRecord(
+  rec: Record<string, unknown>,
+  batchId: string | number | undefined,
+  batchIdx: number,
+  recIdx: number,
+  lookupSet: Set<string>
+): boolean {
+  const recId = String(rec.id || rec.vendorId || '').trim().toLowerCase();
+  const recEmail = String(rec.email || '').trim().toLowerCase();
+  const recName = String(rec.name || rec.vendorName || rec.companyName || '').trim().toLowerCase();
+  const recCode = String(rec.vendorCode || '').trim().toLowerCase();
+  const syntheticId1 = `v-hist-local-${String(batchId ?? batchIdx)}-${recIdx}`.toLowerCase();
+  const syntheticId2 = `v-hist-local-${batchIdx}-${recIdx}`.toLowerCase();
+  const masterId = rec.id ? `v-master-${String(rec.id)}`.toLowerCase() : '';
+
+  return Boolean(
+    (recId && lookupSet.has(recId)) ||
+    (recEmail && lookupSet.has(recEmail)) ||
+    (recName && lookupSet.has(recName)) ||
+    (recCode && lookupSet.has(recCode)) ||
+    lookupSet.has(syntheticId1) ||
+    lookupSet.has(syntheticId2) ||
+    (masterId && lookupSet.has(masterId))
+  );
+}
+
+/**
+ * Updates matching vendor records inside `procucev_vendor_upload_history` in browser
+ * localStorage after a buyer edits, disables/reactivates, or promotes a synthetic fallback vendor.
+ */
+export function updateVendorInUploadHistoryStorage(
+  vendorIdentifiers: readonly string[],
+  updates: {
+    id?: string;
+    name?: string;
+    email?: string;
+    majorCategory?: string;
+    minorCategories?: string[];
+    contactPerson?: string;
+    phone?: string;
+    city?: string;
+    state?: string;
+    pincode?: string;
+    location?: string;
+    isActive?: boolean;
+    disabled?: boolean;
+    status?: string;
+    disabledAt?: string | null;
+    previousStatus?: string | null;
+  }
+): VendorUploadHistoryBatch[] {
+  if (typeof window === 'undefined' || typeof window.localStorage === 'undefined') return [];
+  const lookupSet = new Set(
+    (vendorIdentifiers || [])
+      .filter((id): id is string => typeof id === 'string' && Boolean(id.trim()))
+      .map((id) => id.trim().toLowerCase())
+  );
+  if (lookupSet.size === 0) return loadVendorUploadHistoryFromStorage();
+
+  try {
+    const raw = window.localStorage.getItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY);
+    if (!raw) return [];
+    const batches: unknown = JSON.parse(raw);
+    if (!Array.isArray(batches)) return [];
+
+    let changed = false;
+    const updatedBatches = (batches as VendorUploadHistoryBatch[]).map((batch, batchIdx) => {
+      if (!Array.isArray(batch?.records)) return batch;
+      const nextRecords = batch.records.map((rec: Record<string, unknown>, recIdx: number) => {
+        if (!matchesUploadHistoryRecord(rec, batch.id, batchIdx, recIdx, lookupSet)) return rec;
+        changed = true;
+        return {
+          ...rec,
+          ...(updates.id ? { vendorId: updates.id, id: updates.id } : {}),
+          ...(updates.name ? { name: updates.name } : {}),
+          ...(updates.email ? { email: updates.email } : {}),
+          ...(updates.majorCategory !== undefined
+            ? {
+                category: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+                majorCategory: isPlaceholderVendorCategory(updates.majorCategory) ? '' : updates.majorCategory,
+              }
+            : {}),
+          ...(updates.minorCategories !== undefined
+            ? { minorCategories: normalizeVendorCategoryList(updates.minorCategories) }
+            : {}),
+          ...(updates.contactPerson !== undefined ? { contactPerson: updates.contactPerson } : {}),
+          ...(updates.phone !== undefined ? { phone: updates.phone } : {}),
+          ...(updates.city !== undefined ? { city: updates.city } : {}),
+          ...(updates.state !== undefined ? { state: updates.state } : {}),
+          ...(updates.pincode !== undefined ? { pincode: updates.pincode } : {}),
+          ...(updates.location !== undefined ? { location: updates.location } : {}),
+          ...(updates.isActive !== undefined ? { isActive: updates.isActive } : {}),
+          ...(updates.disabled !== undefined ? { disabled: updates.disabled } : {}),
+          ...(updates.status !== undefined ? { status: updates.status } : {}),
+          ...(updates.disabledAt !== undefined ? { disabledAt: updates.disabledAt } : {}),
+          ...(updates.previousStatus !== undefined ? { previousStatus: updates.previousStatus } : {}),
+        };
+      });
+      return { ...batch, records: nextRecords };
+    });
+
+    if (changed) {
+      window.localStorage.setItem(VENDOR_UPLOAD_HISTORY_STORAGE_KEY, JSON.stringify(updatedBatches));
+      if (typeof window.dispatchEvent === 'function') {
+        window.dispatchEvent(new Event('vendor_upload_history_updated'));
+      }
+    }
+    return updatedBatches;
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Non-destructively marks matching vendor records active or inactive in local browser upload history
+ * so upload history stays intact while inactive vendors remain disabled across reloads.
+ */
+export function setVendorsActiveStateInStorage(
+  vendorIdentifiers: readonly string[],
+  isActive: boolean
+): VendorUploadHistoryBatch[] {
+  const active = Boolean(isActive);
+  return updateVendorInUploadHistoryStorage(vendorIdentifiers, {
+    isActive: active,
+    disabled: !active,
+    status: active ? 'REGISTERED / NOT EVALUATED' : VENDOR_ACTIVE_STATUSES.INACTIVE,
+    disabledAt: active ? null : new Date().toISOString(),
+  });
+}
+
+/**
  * Merges buyer vendor upload batches stored in localStorage with store buyerVendors,
  * deduplicating by email and vendor name so Vendor Directory and Evaluation Summary stay consistent.
  */
 export function reconcileBuyerVendorsWithUploadHistory(
   buyerVendors: readonly VendorEntry[],
   uploadHistory: readonly VendorUploadHistoryBatch[],
-  activeBuyerAccount?: { id?: string; organizationName?: string } | null
+  activeBuyerAccount?: {
+    id?: string;
+    organizationName?: string;
+    corporateEmail?: string;
+  } | null
 ): VendorEntry[] {
   if (!Array.isArray(uploadHistory) || uploadHistory.length === 0) {
     return [...buyerVendors];
   }
 
-  const seenEmails = new Set(
-    buyerVendors.map((v) => String(v.email || '').trim().toLowerCase()).filter(Boolean)
-  );
-  const seenNames = new Set(
-    buyerVendors.map((v) => String(v.name || '').trim().toLowerCase()).filter(Boolean)
-  );
+  const activeBuyerKeys = [
+    activeBuyerAccount?.id,
+    activeBuyerAccount?.corporateEmail,
+    (activeBuyerAccount as any)?.organizationId,
+    (activeBuyerAccount as any)?.organizationName,
+  ]
+    .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+    .map((val) => val.trim().toLowerCase());
+
+  const vendorsCopy = buyerVendors.map((v) => ({ ...v }));
+  const existingByEmail = new Map<string, VendorEntry>();
+  const existingByCode = new Map<string, VendorEntry>();
+  const existingByName = new Map<string, VendorEntry>();
+  for (const v of vendorsCopy) {
+    const eMail = String(v.email || '').trim().toLowerCase();
+    const eCode = String(v.vendorCode || '').trim().toLowerCase();
+    const eName = String(v.name || '').trim().toLowerCase();
+    if (eMail) existingByEmail.set(eMail, v);
+    if (eCode) existingByCode.set(eCode, v);
+    if (eName) existingByName.set(eName, v);
+  }
 
   const extras: VendorEntry[] = [];
   uploadHistory.forEach((batch, batchIdx) => {
+    if (batch?.status && (batch.status === 'FAILED' || batch.status === 'CANCELLED' || batch.status === 'DISCARDED')) {
+      return;
+    }
+    const batchOwnerKeys = [batch?.buyerId, batch?.buyerEmail, (batch as any)?.organizationId]
+      .filter((val): val is string => typeof val === 'string' && Boolean(val.trim()))
+      .map((val) => val.trim().toLowerCase());
+    if (
+      activeBuyerKeys.length > 0 &&
+      batchOwnerKeys.length > 0 &&
+      !batchOwnerKeys.some((key) => activeBuyerKeys.includes(key))
+    ) {
+      return;
+    }
+
     const records: ReadonlyArray<Record<string, unknown>> = Array.isArray(batch?.records) ? batch.records : [];
     records.forEach((rec: Record<string, unknown>, recIdx: number) => {
       const recStatus = String(rec.status || '').toUpperCase();
@@ -1803,15 +2425,41 @@ export function reconcileBuyerVendorsWithUploadHistory(
       }
       const rawName = String(rec.name || rec.vendorName || rec.companyName || '').trim();
       const rawEmail = String(rec.email || '').trim();
+      const rawCode = String(rec.vendorCode || '').trim().toLowerCase();
       if (!rawName && !rawEmail) return;
+
+      if (
+        isRfqOrPoSummaryEntity({
+          id: rec.id ? String(rec.id) : undefined,
+          name: rawName,
+          category: String(rec.category || rec.majorCategory || ''),
+        })
+      ) {
+        return;
+      }
 
       const emailKey = rawEmail.toLowerCase();
       const nameKey = rawName.toLowerCase();
-      if ((emailKey && seenEmails.has(emailKey)) || (!emailKey && nameKey && seenNames.has(nameKey))) {
+      const recGstin = String(rec.gstin || rec.gstNumber || rec.gst || (rec as Record<string, unknown>).taxId || '').trim().toUpperCase();
+
+      const matchedExisting =
+        (emailKey && existingByEmail.get(emailKey)) ||
+        (rawCode && existingByCode.get(rawCode)) ||
+        (nameKey && existingByName.get(nameKey));
+
+      if (matchedExisting) {
+        if (recGstin && (!matchedExisting.gstin || !matchedExisting.gst)) {
+          matchedExisting.gstin = matchedExisting.gstin || recGstin;
+          matchedExisting.gst = matchedExisting.gst || recGstin;
+        }
+        if (rawCode && !matchedExisting.vendorCode) {
+          matchedExisting.vendorCode = String(rec.vendorCode).trim();
+        }
         return;
       }
-      if (emailKey) seenEmails.add(emailKey);
-      if (nameKey) seenNames.add(nameKey);
+      if (emailKey) existingByEmail.set(emailKey, {} as VendorEntry);
+      if (rawCode) existingByCode.set(rawCode, {} as VendorEntry);
+      if (nameKey) existingByName.set(nameKey, {} as VendorEntry);
 
       const loc = resolveVendorLocationFields({
         address: rec.address ? String(rec.address) : '',
@@ -1823,31 +2471,41 @@ export function reconcileBuyerVendorsWithUploadHistory(
       });
       const city = loc.city;
       const state = loc.state;
-      const rawCategory = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategoryCandidate = String(rec.category || rec.majorCategory || '').trim();
+      const rawCategory = isPlaceholderVendorCategory(rawCategoryCandidate) ? '' : rawCategoryCandidate;
+      const minorCategories = normalizeVendorCategoryList(rec.minorCategories);
       const numericRating = Number(rec.rating);
       const rating =
         rec.rating !== null && rec.rating !== undefined && rec.rating !== '' && Number.isFinite(numericRating)
           ? numericRating
           : 0;
 
+      const isRecInactive =
+        rec.isActive === false ||
+        rec.disabled === true ||
+        String(rec.status || '').trim().toUpperCase() === VENDOR_ACTIVE_STATUSES.INACTIVE;
+
       extras.push({
         id: `v-hist-local-${String(batch.id || batchIdx)}-${recIdx}`,
+        vendorCode: String(rec.vendorCode || '').trim() || undefined,
         name: rawName || rawEmail,
         contactPerson: String(rec.contactPerson || ''),
         phone: String(rec.phone || ''),
         email: rawEmail,
         majorCategory: rawCategory,
-        minorCategories: Array.isArray(rec.minorCategories) ? (rec.minorCategories as string[]) : [],
+        minorCategories,
         location: loc.location || [city, state].filter(Boolean).join(', '),
         rating,
         source: 'buyer_uploaded',
-        status: 'REGISTERED / NOT EVALUATED',
+        status: isRecInactive ? VENDOR_ACTIVE_STATUSES.INACTIVE : 'REGISTERED / NOT EVALUATED',
+        ...(isRecInactive ? { isActive: false, disabled: true, disabledAt: typeof rec.disabledAt === 'string' ? rec.disabledAt : null } : {}),
         evaluated: false,
         hasRecord: false,
         addedByBuyerCompany: activeBuyerAccount?.organizationName,
         buyerId: activeBuyerAccount?.id,
         buyerAccountId: activeBuyerAccount?.id,
-        ...(rec.gstin ? { gstin: String(rec.gstin) } : {}),
+        buyerEmail: activeBuyerAccount?.corporateEmail,
+        ...(recGstin ? { gstin: recGstin, gst: recGstin } : {}),
         ...(city ? { city } : {}),
         ...(state ? { state } : {}),
         ...(loc.pincode ? { pincode: loc.pincode } : {}),
@@ -1855,7 +2513,7 @@ export function reconcileBuyerVendorsWithUploadHistory(
     });
   });
 
-  return extras.length > 0 ? [...buyerVendors, ...extras] : [...buyerVendors];
+  return extras.length > 0 ? [...vendorsCopy, ...extras] : vendorsCopy;
 }
 
 
@@ -1869,11 +2527,11 @@ export function parseSearchTokens(search?: string | null): string[] {
   const raw = search.trim();
   if (!raw) return [];
 
-  if (/[,\n\r;]/.test(raw)) {
+  if (/[\n\r,;\t]/.test(raw)) {
     return Array.from(
       new Set(
         raw
-          .split(/[,\n\r;]+/)
+          .split(/[\n\r,;\t]+/)
           .map((s) => s.trim())
           .filter(Boolean)
       )
@@ -1890,12 +2548,55 @@ export function parseSearchTokens(search?: string | null): string[] {
 
 
 export const REGISTRATION_CLIENT_TYPES = [
-  { id: 'all', label: 'All (Buyers & Sellers)' },
+  { id: 'all', label: 'All Users' },
   { id: 'buyer', label: 'Buyers' },
   { id: 'seller', label: 'Sellers' },
 ] as const;
 
 export const REGISTRATION_COLUMN_PREF_KEY = 'registration_columns_pref';
+
+export const USER_PREFERENCE_KEYS = Object.freeze({
+  THEME: 'theme',
+  BUYER_CONSOLE_COLUMNS: 'buyer_console_table_columns_v1',
+  BUYER_DIRECTORY_COLUMNS: 'buyer_directory_columns_pref',
+  SELLER_DIRECTORY_COLUMNS: 'seller_directory_columns_pref',
+  APPROVALS_COLUMNS: 'qua_approvals_columns',
+  DOC_VAULT_COLUMNS: 'qua_doc_vault_col_prefs',
+  LOGIN_LOGS_COLUMNS: 'qua_login_logs_col_prefs',
+  PAYMENT_DUES_COLUMNS: 'qua_payment_dues_column_prefs',
+  REGISTRATION_COLUMNS: 'registration_columns_pref',
+  SCORECARD_COLUMNS: 'qua_scorecard_col_prefs',
+  TICKETS_COLUMNS: 'qua_tickets_col_prefs',
+  INTERNAL_TASK_COLUMNS: 'qua_internal_task_col_prefs',
+} as const);
+
+export const LEGACY_LOCAL_STORAGE_KEYS: ReadonlyArray<string> = [
+  'procucev_vendor_upload_history',
+  'procucev_theme',
+  'procucev_session_expires_at',
+  'procucev_session_role',
+  'buyer_console_table_columns_v1',
+  'buyer_directory_columns_pref',
+  'seller_directory_columns_pref',
+  'qua_doc_vault_col_prefs',
+  'qua_login_logs_col_prefs',
+  'qua_payment_dues_column_prefs',
+  'registration_columns_pref',
+  'qua_scorecard_col_prefs',
+  'qua_tickets_col_prefs',
+  'qua_internal_task_col_prefs',
+];
+
+export const LEGACY_SESSION_STORAGE_KEYS: ReadonlyArray<string> = [
+  'procucev_cache_vendors',
+  'procucev_cache_evaluations',
+  'procucev_cache_rfqs',
+  'procucev_cache_activeBuyerAccount',
+  'procucev_cache_aiFeed',
+  'procucev_cache_taxonomy',
+  'buyer_directory_state',
+  'procucev_buyer_profile_reminder_dismissed',
+];
 
 export const DEFAULT_REGISTRATION_COLUMNS: RegistrationColumnConfig[] = [
   { key: 'userName', label: 'User Name', visible: true, required: true },
@@ -1981,33 +2682,81 @@ export const ACTION_CENTER_SMS_MAX_CHARS = 160;
 
 
 export const INTERNAL_TASK_CATEGORIES = {
+  CALL_TASK: 'CALL_TASK',
+  EMAIL_TASK: 'EMAIL_TASK',
+  SMS_TASK: 'SMS_TASK',
+  DEMO_SCHEDULE: 'DEMO_SCHEDULE',
+  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
+  SITE_VISITING_MEETING_CLIENTS: 'SITE_VISITING_MEETING_CLIENTS',
+  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   COMMUNICATION: 'COMMUNICATION',
   DEMO_SCHEDULING: 'DEMO_SCHEDULING',
-  CREDIT_MANAGEMENT: 'CREDIT_MANAGEMENT',
   BUSINESS_DEVELOPMENT: 'BUSINESS_DEVELOPMENT',
-  INTERNAL_OPERATIONS: 'INTERNAL_OPERATIONS',
   ONBOARDING: 'ONBOARDING',
 } as const;
 
 export const INTERNAL_TASK_CATEGORY_LIST = [
-  'COMMUNICATION',
-  'DEMO_SCHEDULING',
+  'CALL_TASK',
+  'EMAIL_TASK',
+  'SMS_TASK',
+  'DEMO_SCHEDULE',
   'CREDIT_MANAGEMENT',
-  'BUSINESS_DEVELOPMENT',
+  'SITE_VISITING_MEETING_CLIENTS',
   'INTERNAL_OPERATIONS',
-  'ONBOARDING',
 ] as const;
 
-export const INTERNAL_TASK_CATEGORY_LABELS = {
-  COMMUNICATION: 'Communication Tasks',
-  DEMO_SCHEDULING: 'Demo Scheduling',
+export const INTERNAL_TASK_CATEGORY_LABELS: Record<string, string> = {
+  CALL_TASK: 'Call Task',
+  EMAIL_TASK: 'Email Task',
+  SMS_TASK: 'SMS Task',
+  DEMO_SCHEDULE: 'Demo schedule',
   CREDIT_MANAGEMENT: 'Credit Management',
-  BUSINESS_DEVELOPMENT: 'Business Development Tasks',
-  INTERNAL_OPERATIONS: 'Internal Operations',
-  ONBOARDING: 'Onboarding Process',
-} as const;
+  SITE_VISITING_MEETING_CLIENTS: 'Site visiting/Meeting Clients',
+  INTERNAL_OPERATIONS: 'Internal operations',
+  COMMUNICATION: 'Call Task',
+  DEMO_SCHEDULING: 'Demo schedule',
+  BUSINESS_DEVELOPMENT: 'Site visiting/Meeting Clients',
+  ONBOARDING: 'Internal operations',
+};
 
 export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
+  CALL_TASK: [
+    'Phone Call',
+    'Outgoing Call',
+    'Incoming Call',
+    'Follow-up Call',
+  ],
+  EMAIL_TASK: [
+    'Email',
+    'Send Proposal',
+    'Send Corporate Email',
+    'Email Follow-up',
+  ],
+  SMS_TASK: [
+    'SMS',
+    'SMS Alert',
+    'SMS Follow-up',
+    'WhatsApp Notification',
+  ],
+  DEMO_SCHEDULE: [
+    'Schedule Demo',
+    'Product Demo',
+  ],
+  CREDIT_MANAGEMENT: [
+    'Add Credits',
+    'Delete Credits',
+    'Credit Approval Request',
+  ],
+  SITE_VISITING_MEETING_CLIENTS: [
+    'Site Visit',
+    'Client Meeting',
+    'Vendor Facility Inspection',
+  ],
+  INTERNAL_OPERATIONS: [
+    'Operational Task',
+    'Client Onboarding',
+    'Internal Review',
+  ],
   COMMUNICATION: [
     'Phone Call',
     'SMS',
@@ -2019,16 +2768,9 @@ export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
   DEMO_SCHEDULING: [
     'Schedule Demo',
   ],
-  CREDIT_MANAGEMENT: [
-    'Add Credits',
-    'Delete Credits',
-  ],
   BUSINESS_DEVELOPMENT: [
     'Send Proposal',
     'Send Corporate Email',
-  ],
-  INTERNAL_OPERATIONS: [
-    'Operational Task',
   ],
   ONBOARDING: [
     'Client Onboarding',
@@ -2036,13 +2778,9 @@ export const INTERNAL_TASK_CATEGORY_TYPES: Record<string, string[]> = {
 };
 
 export const INTERNAL_TASK_STATUSES = [
-  'New',
-  'Assigned',
-  'In Progress',
-  'Pending Approval',
-  'Completed',
-  'Rejected',
-  'Cancelled',
+  'Open',
+  'Pending',
+  'Closed',
 ] as const;
 
 export const INTERNAL_TASK_PRIORITIES = [
@@ -2051,6 +2789,23 @@ export const INTERNAL_TASK_PRIORITIES = [
   'High',
   'Critical',
 ] as const;
+
+export const DEFAULT_INTERNAL_ASSIGNEES = [
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+] as const;
+
+export const INTERNAL_TASK_USERS = [
+  'Govardhan',
+  'Chandan',
+  'Krishna Chaitanya',
+  'Sudheer',
+  'Srinu Sir',
+] as const;
+
+export type InternalTaskUser = (typeof INTERNAL_TASK_USERS)[number];
 
 export const DEMO_STATUSES = [
   'Scheduled',
@@ -2128,6 +2883,7 @@ export type AccountDocumentFilterType = (typeof ACCOUNT_DOCUMENT_TYPES)[number];
 
 export const CREDIT_APPROVAL_APPROVERS = [
   'Srinu Sir',
+  'Rao Sir',
   'Sudheer Sir',
 ] as const;
 
@@ -2139,6 +2895,12 @@ export const APPROVER_CONFIG = [
     title: 'Director / Management Authority',
   },
   {
+    id: 'rao_sir',
+    name: 'Rao Sir',
+    email: 'mnrao@procucev.com',
+    title: 'Management Authority',
+  },
+  {
     id: 'sudheer_sir',
     name: 'Sudheer Sir',
     email: 'sudheer.kangala@procucev.com',
@@ -2148,31 +2910,177 @@ export const APPROVER_CONFIG = [
 
 export type CreditApprovalApprover = (typeof CREDIT_APPROVAL_APPROVERS)[number];
 
-export const CREDIT_APPROVAL_INITIATORS = [
+export const STANDARD_APPROVAL_INITIATORS = [
   'Govardhan',
-  'Krishna',
-  'Chandhan',
+  'Chandan',
+  'Krishna Chaitanya',
 ] as const;
 
+export const CREDIT_APPROVAL_INITIATORS = STANDARD_APPROVAL_INITIATORS;
+
 export type CreditApprovalInitiator = (typeof CREDIT_APPROVAL_INITIATORS)[number];
+
+export const INITIATOR_OTHER_OPTION = 'Other';
+
+export const OFFLINE_PAYMENT_TYPES = [
+  'NEFT / RTGS',
+  'Cheque',
+  'UPI',
+  'Cash',
+] as const;
+
+export type OfflinePaymentType = (typeof OFFLINE_PAYMENT_TYPES)[number];
+
+export const BUYER_SOURCING_MODES = [
+  'Mode 1',
+  'Mode 2',
+  'Mode 3',
+] as const;
+
+export type BuyerSourcingModeOption = (typeof BUYER_SOURCING_MODES)[number];
+
+export const SELLER_PROFILE_REQUEST_TYPES = [
+  'Seller Credit Addition',
+  'Seller Credit Deletion',
+  'Discount',
+  'Trial Period',
+  'Offline Payments',
+] as const;
+
+export type SellerProfileRequestType = (typeof SELLER_PROFILE_REQUEST_TYPES)[number] | 'Discounts' | 'Trial Periods';
 
 export const SELLER_QUOTE_CREDITS_ALLOWED = [1, 2, 3, 4, 5] as const;
 
 export const APPROVAL_REQUEST_TYPES = [
   'Buyer Credit Addition',
+  'Buyer Credit Deletion',
   'Seller Credit Addition',
-  'Credit Notes',
-  'Purchase Requests',
-  'Payment Approvals',
+  'Seller Credit Deletion',
   'Discounts',
-  'Account Approvals',
   'Trial Periods',
   'Offline Payments',
-  'Unit Bookings',
-  'Cancellations & Refunds',
-  'Packages',
-  'Milestones',
 ] as const;
+
+export type ApprovalRequestType = (typeof APPROVAL_REQUEST_TYPES)[number];
+
+export const BUYER_PROFILE_REQUEST_TYPES = [
+  'Buyer Credit Addition',
+  'Buyer Credit Deletion',
+  'Discounts',
+  'Trial Periods',
+  'Offline Payments',
+] as const;
+
+export type BuyerProfileRequestType = (typeof BUYER_PROFILE_REQUEST_TYPES)[number];
+
+export const DISCOUNT_SOURCING_MODES = [
+  { id: 'version_1', label: 'Mode 1', title: 'Mode 1', description: 'Private Preferred Vendor Network (Silver Plan)' },
+  { id: 'version_2', label: 'Mode 2', title: 'Mode 2', description: 'AI Hybrid Sourcing & Network Pool (Gold Plan)' },
+  { id: 'version_3', label: 'Mode 3', title: 'Mode 3', description: 'Autonomous Category Desk & AI Discovery (Diamond Plan)' },
+] as const;
+
+export type DiscountSourcingModeId = (typeof DISCOUNT_SOURCING_MODES)[number]['id'];
+export type DiscountSourcingModeLabel = (typeof DISCOUNT_SOURCING_MODES)[number]['label'];
+
+export const TRIAL_PERIOD_SOURCING_MODES = [
+  { id: 'mode_1', label: 'Mode 1', title: 'Mode 1', description: 'Private Preferred Vendor Network (Silver Plan)' },
+  { id: 'mode_2', label: 'Mode 2', title: 'Mode 2', description: 'AI Hybrid Sourcing & Network Pool (Gold Plan)' },
+  { id: 'mode_3', label: 'Mode 3', title: 'Mode 3', description: 'Autonomous Category Desk & AI Discovery (Diamond Plan)' },
+] as const;
+
+export type TrialPeriodSourcingModeLabel = (typeof TRIAL_PERIOD_SOURCING_MODES)[number]['label'];
+
+export const SELLER_DISCOUNT_MODES = [
+  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)', price: 7499 },
+  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)', price: 14999 },
+] as const;
+
+export type SellerDiscountModeId = (typeof SELLER_DISCOUNT_MODES)[number]['id'];
+export type SellerDiscountModeLabel = (typeof SELLER_DISCOUNT_MODES)[number]['label'];
+
+export const SELLER_TRIAL_PERIOD_MODES = [
+  { id: 'connect', label: 'Connect Model', title: 'Connect Model', description: 'Marketplace Expansion (Connect Plan)' },
+  { id: 'select', label: 'Select Model', title: 'Select Model', description: 'Item Catalogue & High Volume (Select Plan)' },
+] as const;
+
+export type SellerTrialPeriodModeLabel = (typeof SELLER_TRIAL_PERIOD_MODES)[number]['label'];
+
+export function calculateTrialDaysFromDates(startDateStr: string, endDateStr: string): number {
+  if (!startDateStr || !endDateStr) return 0;
+  const start = new Date(startDateStr);
+  const end = new Date(endDateStr);
+  if (isNaN(start.getTime()) || isNaN(end.getTime())) return 0;
+  const diffTime = end.getTime() - start.getTime();
+  if (diffTime < 0) return -1;
+  return Math.round(diffTime / (1000 * 60 * 60 * 24));
+}
+
+export const DISCOUNT_BILLING_DURATIONS = [
+  { id: '6_months', label: '6 Months', months: 6 },
+  { id: '12_months', label: '12 Months', months: 12 },
+] as const;
+
+export type DiscountBillingDurationId = (typeof DISCOUNT_BILLING_DURATIONS)[number]['id'];
+export type DiscountBillingDurationLabel = (typeof DISCOUNT_BILLING_DURATIONS)[number]['label'];
+
+export interface DiscountCalculationBreakdown {
+  originalPlanPrice: number;
+  discountPercentage: number;
+  discountAmount: number;
+  remainingAmount: number;
+  gstAmount: number;
+  finalPayableAmount: number;
+}
+
+export function calculateDiscountBreakdown(
+  originalPlanPrice: number,
+  discountPercentage: number,
+  gstRate: number = 0.18
+): DiscountCalculationBreakdown {
+  const safeOriginal = Number.isFinite(originalPlanPrice) && originalPlanPrice >= 0 ? originalPlanPrice : 0;
+  const safeDiscount = Number.isFinite(discountPercentage) && discountPercentage >= 0 && discountPercentage <= 100
+    ? discountPercentage
+    : 0;
+
+  const discountAmount = Math.round(((safeOriginal * safeDiscount) / 100) * 100) / 100;
+  const remainingAmount = Math.round((safeOriginal - discountAmount) * 100) / 100;
+  const gstAmount = Math.round((remainingAmount * (gstRate || 0.18)) * 100) / 100;
+  const finalPayableAmount = Math.round((remainingAmount + gstAmount) * 100) / 100;
+
+  return {
+    originalPlanPrice: safeOriginal,
+    discountPercentage: safeDiscount,
+    discountAmount,
+    remainingAmount,
+    gstAmount,
+    finalPayableAmount,
+  };
+}
+
+export function getStandardDiscountPlanPrice(
+  pricingConfig: { buyer?: Record<string, Record<string, { baseDurationPrice?: number }>>; seller?: Record<string, Record<string, { baseDurationPrice?: number }>> } | null | undefined,
+  planId: 'version_1' | 'version_2' | 'version_3' | 'connect' | 'select' | string,
+  durationId: '6_months' | '12_months' | string
+): number {
+  const normPlan = planId === 'Select Model' ? 'select' : planId === 'Connect Model' ? 'connect' : planId;
+  const normDur = durationId === '6 Months' ? '6_months' : durationId === '12 Months' ? '12_months' : durationId;
+  const fromBuyerConfig = pricingConfig?.buyer?.[normPlan]?.[normDur]?.baseDurationPrice ?? pricingConfig?.buyer?.[planId]?.[durationId]?.baseDurationPrice;
+  if (typeof fromBuyerConfig === 'number' && Number.isFinite(fromBuyerConfig) && fromBuyerConfig > 0) {
+    return fromBuyerConfig;
+  }
+  const fromSellerConfig = pricingConfig?.seller?.[normPlan]?.[normDur]?.baseDurationPrice ?? pricingConfig?.seller?.[planId]?.[durationId]?.baseDurationPrice;
+  if (typeof fromSellerConfig === 'number' && Number.isFinite(fromSellerConfig) && fromSellerConfig > 0) {
+    return fromSellerConfig;
+  }
+  const FALLBACK_PRICES: Record<string, Record<string, number>> = {
+    version_1: { '6_months': 32994, '12_months': 59988 },
+    version_2: { '6_months': 47994, '12_months': 89988 },
+    version_3: { '6_months': 62994, '12_months': 119988 },
+    connect: { '6_months': 3999, '12_months': 7499 },
+    select: { '6_months': 7999, '12_months': 14999 },
+  };
+  return FALLBACK_PRICES[normPlan]?.[normDur] ?? FALLBACK_PRICES[planId]?.[durationId] ?? 0;
+}
 
 export const DEFAULT_APPROVAL_COLUMNS: Array<{
   key:
@@ -2287,3 +3195,360 @@ export function resolveAttachmentMimeType(fileName?: string | null, declaredMime
   }
   return normalized || 'application/octet-stream';
 }
+
+/**
+ * Subscribes to cross-tab `storage` updates for `VENDOR_UPLOAD_HISTORY_STORAGE_KEY`
+ * and returns a cleanup callback safe for React `useEffect`.
+ */
+export function subscribeVendorUploadHistory(
+  onUpdate: (batches: VendorUploadHistoryBatch[]) => void
+): () => void {
+  if (typeof window === 'undefined' || typeof window.addEventListener !== 'function') {
+    return () => {};
+  }
+  const handleStorage = (event: StorageEvent) => {
+    if (event.key === VENDOR_UPLOAD_HISTORY_STORAGE_KEY || event.key === null) {
+      onUpdate(loadVendorUploadHistoryFromStorage());
+    }
+  };
+  window.addEventListener('storage', handleStorage);
+  return () => {
+    window.removeEventListener('storage', handleStorage);
+  };
+}
+
+/**
+ * Builds a declarative backdrop click handler that invokes `onClose` (or a React
+ * state setter with `closeValue`) only when the user clicks directly on the outer
+ * backdrop overlay rather than inside the popup content.
+ */
+export function createBackdropClickHandler<T = boolean>(
+  onClose: (() => void) | ((value: T) => void) | null | undefined,
+  closeValue?: T,
+  isBlocked = false
+): (event: { target: EventTarget | null; currentTarget: EventTarget | null }) => void {
+  const hasCloseValue = arguments.length >= 2;
+  return (event) => {
+    if (isBlocked || typeof onClose !== 'function') return;
+    if (event.target === event.currentTarget) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+}
+
+/**
+ * Registers a document `mousedown` listener while `isOpen` is true to close
+ * a floating dropdown/popover whenever the user clicks outside `containerRef`.
+ */
+export function registerOutsideClickClose<T = boolean>(
+  isOpen: boolean,
+  containerRef: { current: HTMLElement | null },
+  onClose: (() => void) | ((value: T) => void),
+  closeValue?: T
+): (() => void) | undefined {
+  if (!isOpen || typeof document === 'undefined') return undefined;
+  const hasCloseValue = arguments.length >= 4;
+  const handleMouseDown = (event: MouseEvent) => {
+    if (containerRef.current && !containerRef.current.contains(event.target as Node)) {
+      if (hasCloseValue) {
+        (onClose as (value: T) => void)(closeValue as T);
+      } else {
+        (onClose as () => void)();
+      }
+    }
+  };
+  document.addEventListener('mousedown', handleMouseDown);
+  return () => {
+    document.removeEventListener('mousedown', handleMouseDown);
+  };
+}
+
+/**
+ * Extracts normalized lowercase vendor codes from existing buyer-owned vendor records
+ * so subsequent sequential vendor code generation avoids colliding with prior uploads.
+ */
+export function collectExistingBuyerVendorCodes(
+  vendors: Array<VendorOwnershipShape & { vendorCode?: string }> | null | undefined
+): Set<string> {
+  const codes = new Set<string>();
+  if (!Array.isArray(vendors)) return codes;
+  for (const v of vendors) {
+    if (isBuyerUploadedVendor(v) && v.vendorCode && String(v.vendorCode).trim()) {
+      codes.add(String(v.vendorCode).trim().toLowerCase());
+    }
+  }
+  return codes;
+}
+
+export interface TableSortState {
+  key: string | null;
+  dir: 'asc' | 'desc';
+}
+
+export interface TableColumnOption {
+  key: string;
+  label: string;
+  visible: boolean;
+  required?: boolean;
+}
+
+export const BUYER_VENDOR_DIRECTORY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'name', label: 'Supplier Name', visible: true, required: true },
+  { key: 'minorCategories', label: 'Category', visible: true },
+  { key: 'contactPerson', label: 'Contact Person Name', visible: true },
+  { key: 'phone', label: 'Phone', visible: true },
+  { key: 'email', label: 'Email', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'vendorCode', label: 'Vendor Code', visible: false },
+  { key: 'majorCategory', label: 'Division', visible: false },
+  { key: 'origin', label: 'Origin', visible: false },
+  { key: 'engagement', label: 'RFQ Engagement', visible: false },
+  { key: 'location', label: 'Location', visible: false },
+  { key: 'score', label: 'AI Score', visible: false }, // Hidden: Evaluation-related
+  { key: 'rating', label: 'Rating', visible: false },
+  { key: 'status', label: 'Status', visible: false },
+  { key: 'actions', label: 'Action', visible: true, required: true },
+];
+
+export const BUYER_RFQ_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'sourcingMode', label: 'Mode', visible: true },
+  { key: 'source', label: 'Source', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'items', label: 'Items', visible: true },
+  { key: 'quotes', label: 'Quotes', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'delivery', label: 'Target Delivery', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const BUYER_EVALUATION_SUMMARY_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'vendorName', label: 'Vendor Name', visible: true, required: true },
+  { key: 'status', label: 'Evaluation Status', visible: true, required: true },
+  { key: 'overallScore', label: 'Vendor Score', visible: true, required: true },
+];
+
+export const BUYER_ACCOUNTS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'organizationName', label: 'Organization', visible: true, required: true },
+  { key: 'brandName', label: 'Brand', visible: true },
+  { key: 'accountSource', label: 'Source', visible: true },
+  { key: 'contactPerson', label: 'Contact Person', visible: true },
+  { key: 'corporateEmail', label: 'Corporate Email', visible: true },
+  { key: 'mobileNumber', label: 'Mobile', visible: true },
+  { key: 'gstin', label: 'GSTIN', visible: true },
+  { key: 'panNumber', label: 'PAN', visible: true },
+  { key: 'sourcingMode', label: 'Sourcing Mode', visible: true },
+  { key: 'subscriptionPlan', label: 'Plan', visible: true },
+  { key: 'primaryPlantLocation', label: 'Plant Location', visible: true },
+  { key: 'industrySector', label: 'Industry', visible: true },
+  { key: 'supportedMajorCategories', label: 'Divisions', visible: true },
+  { key: 'status', label: 'Record Status', visible: true },
+  { key: 'totalRFQsCreated', label: 'Total RFQs', visible: true },
+  { key: 'totalSpend', label: 'Total Spend', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export const CM_ALL_RFQS_TABLE_COLUMNS: ReadonlyArray<TableColumnOption> = [
+  { key: 'rfqNumber', label: 'RFQ Number', visible: true, required: true },
+  { key: 'title', label: 'Title', visible: true },
+  { key: 'category', label: 'Division', visible: true },
+  { key: 'buyerAccountName', label: 'Buyer', visible: true },
+  { key: 'status', label: 'Status', visible: true },
+  { key: 'quotesCount', label: 'Quotes', visible: true },
+  { key: 'invitedVendors', label: 'Invited Vendors', visible: true },
+  { key: 'quotedVendors', label: 'Quoted Vendors', visible: true },
+  { key: 'budget', label: 'Budget', visible: true },
+  { key: 'createdAt', label: 'Raised', visible: true },
+  { key: 'latestQuote', label: 'Latest Quote', visible: true },
+  { key: 'actions', label: 'Actions', visible: true, required: true },
+];
+
+export function nextTableSortState(current: TableSortState, clickedKey: string): TableSortState {
+  if (current.key === clickedKey) {
+    return { key: clickedKey, dir: current.dir === 'asc' ? 'desc' : 'asc' };
+  }
+  return { key: clickedKey, dir: 'asc' };
+}
+
+export function createColumnSortClickHandler(
+  key: string,
+  setSort: (updater: (prev: TableSortState) => TableSortState) => void
+): () => void {
+  return () => {
+    setSort((prev) => nextTableSortState(prev, key));
+  };
+}
+
+export function createColumnResetHandler<T extends TableColumnOption>(
+  defaults: ReadonlyArray<T>,
+  setColumns: (cols: T[]) => void
+): () => void {
+  return () => {
+    setColumns(defaults.map((col) => ({ ...col })));
+  };
+}
+
+export function createBooleanSetterHandler(
+  setter: (value: boolean) => void,
+  value: boolean
+): () => void {
+  return () => {
+    setter(value);
+  };
+}
+
+export function getTableColumnClass(
+  columns: ReadonlyArray<TableColumnOption> | null | undefined,
+  key: string,
+  baseClass = ''
+): string {
+  if (Array.isArray(columns)) {
+    const found = columns.find((col) => col.key === key);
+    if (found && !found.visible) {
+      return baseClass ? `${baseClass} hidden` : 'hidden';
+    }
+  }
+  return baseClass;
+}
+
+export function getTableAriaSort(
+  sort: TableSortState | null | undefined,
+  key: string
+): 'ascending' | 'descending' | 'none' {
+  if (!sort || sort.key !== key) return 'none';
+  return sort.dir === 'asc' ? 'ascending' : 'descending';
+}
+
+export function getSortIndicatorSymbol(
+  sort: TableSortState | null | undefined,
+  key: string
+): string {
+  if (!sort || sort.key !== key) return '↕';
+  return sort.dir === 'asc' ? '↑' : '↓';
+}
+
+export function resolveSortableCellValue(
+  row: Record<string, unknown> | null | undefined,
+  key: string
+): string | number {
+  if (!row || typeof row !== 'object') return '';
+  if (key === 'items') {
+    const entities = row.extractedEntities;
+    if (Array.isArray(entities)) return entities.length;
+    const lineItems = row.lineItems;
+    if (Array.isArray(lineItems)) return lineItems.length;
+  }
+  if (key === 'quotes') {
+    return typeof row.quotesCount === 'number' ? row.quotesCount : Number(row.quotesCount) || 0;
+  }
+  if (key === 'delivery') {
+    return String(row.targetDeliveryDate || row.deadline || row.deliveryLocation || '');
+  }
+  if (key === 'minorCategories' || key === 'supportedMajorCategories') {
+    const list = row[key];
+    return Array.isArray(list) ? list.join(', ') : '';
+  }
+  if (key === 'location') {
+    return String(row.location || row.city || row.state || row.primaryPlantLocation || '');
+  }
+  if (key === 'totalSpend') {
+    const raw = String(row.totalSpend || '').replace(/[^0-9.-]/g, '');
+    const parsed = Number(raw);
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  const direct = row[key];
+  if (typeof direct === 'number' && Number.isFinite(direct)) return direct;
+  if (typeof direct === 'string') {
+    const trimmed = direct.trim();
+    const numeric = Number(trimmed);
+    if (trimmed !== '' && Number.isFinite(numeric) && /^-?\d+(\.\d+)?$/.test(trimmed)) {
+      return numeric;
+    }
+    return trimmed.toLowerCase();
+  }
+  if (Array.isArray(direct)) return direct.length;
+  return '';
+}
+
+export function sortTableRows<T>(
+  rows: ReadonlyArray<T>,
+  sort: TableSortState | null | undefined
+): T[] {
+  if (!Array.isArray(rows)) return [];
+  if (!sort || !sort.key) return [...rows];
+  const factor = sort.dir === 'asc' ? 1 : -1;
+  const key = sort.key;
+  return [...rows].sort((a, b) => {
+    const left = resolveSortableCellValue(a as unknown as Record<string, unknown>, key);
+    const right = resolveSortableCellValue(b as unknown as Record<string, unknown>, key);
+    if (typeof left === 'number' && typeof right === 'number') {
+      return (left - right) * factor;
+    }
+    return String(left).localeCompare(String(right), undefined, { numeric: true, sensitivity: 'base' }) * factor;
+  });
+}
+
+/**
+ * Normalizes vendor rating to a consistent 5.0-scale numeric rating with 1 decimal place.
+ * Handles:
+ * - Direct 1.0 - 5.0 scale (e.g., 4.5 -> 4.5)
+ * - Normalized ratios <= 1.0 (e.g., 0.9 -> 4.5)
+ * - 100-point scale scores > 5.0 (e.g., 90 -> 4.5, 85 -> 4.3)
+ * - Fallback to score when rating is omitted
+ */
+export function normalizeVendorRating(rating: unknown, score?: unknown): number | null {
+  const numRating = typeof rating === 'number' ? rating : typeof rating === 'string' && rating.trim() !== '' ? Number(rating) : null;
+  if (numRating !== null && Number.isFinite(numRating)) {
+    if (numRating === 0) return 0;
+    if (numRating > 0 && numRating < 1.0) {
+      return Number((numRating * 5).toFixed(1));
+    }
+    if (numRating > 5.0) {
+      return Number((numRating / 20).toFixed(1));
+    }
+    return numRating;
+  }
+  const numScore = typeof score === 'number' ? score : typeof score === 'string' && score.trim() !== '' ? Number(score) : null;
+  if (numScore !== null && Number.isFinite(numScore)) {
+    if (numScore === 0) return 0;
+    if (numScore <= 5.0) {
+      return numScore;
+    }
+    return Number((numScore / 20).toFixed(1));
+  }
+  return null;
+}
+
+/**
+ * Standardized Communication Categories across Internal Tasks, Buyer Directory, and Seller Directory.
+ */
+export const STANDARDIZED_COMMUNICATION_CATEGORIES = [
+  'Credit / Quote (Buyer / Seller)',
+  'Follow-up / New',
+  'Demo Schedule',
+  'Send Proposal',
+  'Send Corporate Email',
+  'Onboarding Process',
+  'Registration Task',
+  'Internal Operations (Others)',
+] as const;
+
+export type StandardizedCommunicationCategory = typeof STANDARDIZED_COMMUNICATION_CATEGORIES[number];
+
+export const STANDARDIZED_COMMUNICATION_SCENARIO_IDS = {
+  CREDIT_QUOTE: 'credit_quote',
+  FOLLOWUP_NEW: 'followup_new',
+  DEMO_SCHEDULE: 'demo_schedule',
+  SEND_PROPOSAL: 'send_proposal',
+  SEND_CORPORATE_EMAIL: 'send_corporate_email',
+  ONBOARDING_PROCESS: 'onboarding_process',
+  REGISTRATION_TASK: 'registration_task',
+  INTERNAL_OPERATIONS: 'internal_operations',
+} as const;
+

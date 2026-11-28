@@ -158,26 +158,37 @@ async function scheduled(controller, workerEnv, ctx) {
   const { default: storeService } = await import('./services/storeService.js');
   const loggerModule = await import('./services/loggerService.js');
   const logger = loggerModule.logger || loggerModule.default?.logger;
-  // Hydration reads the working set from the database, so it runs only for the jobs that work from the
-  // in-memory store. The reconciliation trigger works from the database directly and does not hydrate.
+  // Hydration reads the working set from the database, so idle queue/cron ticks avoid full 8-table
+  // loads unless a job/email path actually needs the in-memory store. Concurrent lazy callers share
+  // one in-flight load.
+  let hydratePromise = null;
   const hydrate = async () => {
     if (storeService.isHydratedFromDB) return;
-    await storeService.hydrateFromDB().catch((err) => {
-      if (logger?.error) {
-        logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
-      } else {
-        console.error('[CRON] hydration failed', err);
-      }
-    });
+    if (!hydratePromise) {
+      hydratePromise = storeService.hydrateFromDB()
+        .catch((err) => {
+          if (logger?.error) {
+            logger.error('Scheduled Worker state hydration failed', err, 'WORKER_CRON');
+          } else {
+            console.error('[CRON] hydration failed', err);
+          }
+        })
+        .finally(() => {
+          hydratePromise = null;
+        });
+    }
+    await hydratePromise;
   };
   if (isEmailGateway) {
-    await hydrate();
     await runCronJobsInTurn([
       () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
       () => rfqChaserScheduler.dispatchDueChaserJobs(),
       () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+      ...(typeof rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs === 'function'
+        ? [() => rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs()]
+        : []),
       () => storeService.closeExpiredRFQsDurably(),
-      () => emailGatewayService.pollBothInboxesOnce(),
+      () => emailGatewayService.pollBothInboxesOnce(undefined, undefined, { ensureHydrated: hydrate }),
     ]);
     return;
   }
@@ -204,6 +215,9 @@ async function scheduled(controller, workerEnv, ctx) {
     () => zohoReconciliationService.reconcileOnce(),
     () => rfqChaserScheduler.dispatchDueChaserJobs(),
     () => rfqChaserScheduler.dispatchDueRFQComparisonJobs(),
+    ...(typeof rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs === 'function'
+      ? [() => rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs()]
+      : []),
     () => eventOutboxService.dispatchScheduledEventOutboxJobs(),
     () => eventOutboxService.purgeExpiredEventOutboxRows(),
     () => storeService.closeExpiredRFQsDurably(),
@@ -212,7 +226,7 @@ async function scheduled(controller, workerEnv, ctx) {
 
 // Must match the `crons` entries in wrangler.jsonc exactly — Cloudflare
 // passes the matched cron expression string back on `controller.cron`.
-const EMAIL_GATEWAY_CRON = '*/5 * * * *';
+const EMAIL_GATEWAY_CRON = '* * * * *';
 const ZOHO_RECONCILIATION_CRON = '*/10 * * * *';
 const DAILY_RFQ_REPORT_CRON = '30 0 * * *';
 

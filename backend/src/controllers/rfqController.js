@@ -40,6 +40,12 @@ const {
   EMAIL_GATEWAY_CONFIG,
   AUTH_MESSAGES,
   RFQ_CREATION_ERRORS,
+  RFQ_CLOSURE_MESSAGES,
+  EMAIL_REGEX,
+  RFQ_AUTO_CLOSE_AFTER_MS,
+  RFQ_QUOTES_SEALED_REASON,
+  isRfqConcluded,
+  resolveRfqBiddingWindowEndMs,
   resolveAttachmentContentType,
 } = require('../config/constants');
 const { validateRFQLineItemsForCreate } = require('../config/validationSchemas');
@@ -201,15 +207,33 @@ function canVendorViewRfq(vendor, rfq) {
   const isV2 = mode === 'mode_2' || mode === 'v2' || mode === 'version_2';
   const isV3 = mode === 'mode_3' || mode === 'v3' || mode === 'version_3';
 
-  // Buyer-specific vendor access rule:
-  // When a vendor is mapped to the buyer who created the RFQ, they can view that buyer's RFQs across all modes.
+  // Mode 0 RFQs are public enquiries: visible to all vendors in public enquiries,
+  // even if the RFQ category does not match their registered categories.
+  if (isV0) {
+    return true;
+  }
+
+  // Explicitly invited vendors can view the RFQ regardless of their registered category
+  if (storeService._isInvitedVendor(vendor, rfq)) {
+    return true;
+  }
+
+  // For RFQs with an explicit assigned vendors list, only invited vendors may view it in private modes
+  const hasExplicitAssigned = Array.isArray(rfq.assignedVendors) && rfq.assignedVendors.length > 0;
+  if (hasExplicitAssigned) {
+    if (isV2 || isV3) {
+      if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
+    }
+    return false;
+  }
+
+  // Buyer-specific vendor access rule fallback when no explicit assignedVendors list exists:
   if (storeService.isVendorMappedToRfqBuyer(vendor, rfq)) {
     return true;
   }
 
-  // RFQ details should be visible to all vendors (including buyer-uploaded vendors behaving as normal vendors)
-  // across network modes (V0, V2, V3), even if they have not received an explicit invitation.
-  if (isV0 || isV2 || isV3) {
+  // RFQ details visible across network modes (V2, V3) for category-matched vendors
+  if (isV2 || isV3) {
     if (storeService._vendorCoversRFQCategories(vendor, rfq)) return true;
   }
 
@@ -263,27 +287,19 @@ function applyQuotesVisibility(rfq, role) {
     };
   }
 
-  const FORTY_EIGHT_HOURS_MS = 48 * 60 * 60 * 1000;
-  const createdAtMs = rfq.createdAt ? new Date(rfq.createdAt).getTime() : 0;
-  const isWithin48h = createdAtMs > 0 && Date.now() - createdAtMs < FORTY_EIGHT_HOURS_MS;
-  const isConcluded =
-    rfq.status === 'Closed' ||
-    rfq.status === 'PO Generated' ||
-    rfq.poFinalised ||
-    Boolean(rfq.poNumber) ||
-    rfq.status === 'Expired' ||
-    rfq.status === 'In Evaluation' ||
-    rfq.status === 'AI Recommended' ||
-    rfq.status === 'Quotes Received';
+  const windowEndMs = resolveRfqBiddingWindowEndMs(rfq);
+  const isWithinWindow = windowEndMs > 0 ? Date.now() < windowEndMs : Boolean(rfq.quotesHidden);
+  const concluded = isRfqConcluded(rfq);
 
-  if (isWithin48h && !isConcluded) {
-    const unhideAt = new Date(createdAtMs + FORTY_EIGHT_HOURS_MS).toISOString();
+  if (isWithinWindow && !concluded) {
+    const unsealMs = windowEndMs > 0 ? windowEndMs : Date.now() + RFQ_AUTO_CLOSE_AFTER_MS;
     return {
       ...rfq,
       quotes: [],
+      ...(rfq.aiRecommendation !== undefined ? { aiRecommendation: null } : {}),
       quotesHidden: true,
-      quotesHiddenUntil: unhideAt,
-      quotesHiddenReason: 'Received quotes remain hidden from the buyer for 48 hours after release to preserve bidding integrity.',
+      quotesHiddenUntil: new Date(unsealMs).toISOString(),
+      quotesHiddenReason: RFQ_QUOTES_SEALED_REASON,
     };
   }
 
@@ -368,21 +384,25 @@ function applyVendorBuyerPrivacy(rfq, vendorRecord) {
 /** Apply a read scope to the full RFQ list. */
 function scopedRfqList(scope) {
   const all = storeService.getRFQs(scope.restricted && scope.role === 'buyer' ? scope.buyerAccountId : null);
-  if (!scope.restricted) return all;
-  if (scope.role === 'vendor') {
-    return all
+  let list;
+  if (!scope.restricted) {
+    list = all;
+  } else if (scope.role === 'vendor') {
+    list = all
       .filter((rfq) => canVendorViewRfq(scope.vendor, rfq))
       .map((rfq) => applyVendorBuyerPrivacy(rfq, scope.vendor));
+  } else {
+    const buyerRfqs = all.filter((rfq) => {
+      if (!scope.buyerAccountId) return false;
+      if (rfq.buyerAccountId === scope.buyerAccountId) return true;
+      if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
+        return true;
+      }
+      return false;
+    });
+    list = buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
   }
-  const buyerRfqs = all.filter((rfq) => {
-    if (!scope.buyerAccountId) return false;
-    if (rfq.buyerAccountId === scope.buyerAccountId) return true;
-    if (Array.isArray(rfq.sharedBuyerAccountIds) && rfq.sharedBuyerAccountIds.includes(scope.buyerAccountId)) {
-      return true;
-    }
-    return false;
-  });
-  return buyerRfqs.map((rfq) => applyQuotesVisibility(rfq, scope.role));
+  return list.slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
 }
 
 // Fields a buyer's own edit may touch. Deliberately a whitelist: id,
@@ -409,6 +429,7 @@ const RFQ_UPDATABLE_FIELDS = [
   'extractedEntities',
   'attachments',
   'inquiries',
+  'broadcasts',
   'assignedVendors',
 ];
 
@@ -433,11 +454,12 @@ async function getRFQs(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
     if (scope.restricted && scope.role === 'buyer' && scope.buyerAccountId) {
-      await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+      await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     } else {
-      await storeService.syncRFQsFromDB();
+      await storeService.syncRFQsFromDB(true);
     }
     let rfqs = scopedRfqList(scope);
+    rfqs = rfqs.slice().sort((a, b) => new Date(b.createdAt || 0).getTime() - new Date(a.createdAt || 0).getTime());
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
       ? Math.min(Number(req.query.limit), 500)
       : 200;
@@ -462,6 +484,9 @@ async function getRFQs(req, res, next) {
         }))
       : rfqs;
     logger.info('Fetching RFQs list', { role: scope.role, restricted: scope.restricted, count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data });
   } catch (err) {
     logger.error('Error fetching RFQs list', err, 'RFQ_CONTROLLER');
@@ -481,20 +506,31 @@ async function getRFQs(req, res, next) {
  */
 async function getAllRFQs(req, res, next) {
   try {
-    await storeService.syncRFQsFromDB();
-    let rfqs = storeService
-      .getRFQs()
-      .slice()
-      .sort((a, b) => new Date(b.createdAt || 0) - new Date(a.createdAt || 0));
+    await storeService.syncRFQsFromDB(true);
 
+    const page = Math.max(1, parseInt(req.query?.page, 10) || 1);
     const limit = (req.query && req.query.limit && Number.isInteger(Number(req.query.limit)) && Number(req.query.limit) > 0)
       ? Math.min(Number(req.query.limit), 500)
-      : 200;
-    rfqs = rfqs.slice(0, limit);
+      : 100;
+    const search = typeof req.query?.search === 'string' ? req.query.search : '';
+    const status = typeof req.query?.status === 'string' ? req.query.status : '';
+    const buyer = typeof req.query?.buyer === 'string' ? req.query.buyer : '';
+    const startDate = typeof req.query?.startDate === 'string' ? req.query.startDate : '';
+    const endDate = typeof req.query?.endDate === 'string' ? req.query.endDate : '';
+
+    const pageResult = await storeService.getRFQsPage({
+      page,
+      limit,
+      search,
+      status,
+      buyer,
+      startDate,
+      endDate,
+    });
 
     const summaryOnly = req.query && (req.query.summary === 'true' || req.query.summary === true);
     const data = summaryOnly
-      ? rfqs.map((r) => ({
+      ? pageResult.rows.map((r) => ({
           id: r.id,
           rfqNumber: r.rfqNumber,
           title: r.title,
@@ -512,6 +548,7 @@ async function getAllRFQs(req, res, next) {
           assignedVendors: (r.assignedVendors || []).map((av) => ({
             id: av.id || av.vendorId,
             name: av.name || av.vendorName || av.companyName || '',
+            email: av.email || av.corporateEmail || null,
             vendorId: av.vendorId || av.id,
             vendorName: av.vendorName || av.name || av.companyName || '',
             majorCategory: av.majorCategory || '',
@@ -542,13 +579,18 @@ async function getAllRFQs(req, res, next) {
             aiMatchScore: q.aiMatchScore,
           })),
         }))
-      : rfqs;
+      : pageResult.rows;
 
-    logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly }, 'RFQ_CONTROLLER');
+    logger.info('Fetching all RFQs for CM console', { count: data.length, summaryOnly, page, limit, total: pageResult.total }, 'RFQ_CONTROLLER');
     res.json({
       success: true,
-      source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory',
+      source: (pool.hasStorage() || storeService.isHydratedFromDB) ? 'persisted' : 'in_memory',
       data,
+      rfqs: data,
+      total: pageResult.total,
+      page: pageResult.page,
+      limit: pageResult.limit,
+      totalPages: pageResult.totalPages,
     });
   } catch (err) {
     logger.error('Error fetching all RFQs', err, 'RFQ_CONTROLLER');
@@ -610,16 +652,21 @@ async function inviteVendors(req, res, next) {
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
-    const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email);
+    const result = await storeService.inviteVendorsToRFQ(id, uniqueVendorIds, req.user && req.user.email, {
+      actorRole: (req.user && req.user.role) || null,
+    });
     if (!result) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
+    const role = req.user && req.user.role;
     res.json({
       success: true,
-      data: result.updatedRFQ,
+      data: applyQuotesVisibility(result.updatedRFQ, role),
       invitedCount: result.invitedCount,
       excludedCount: result.excludedCount || 0,
       excludedVendors: result.excludedVendors || [],
+      provisionedCount: result.provisionedCount || 0,
+      provisioningErrors: result.provisioningErrors || [],
     });
   } catch (err) {
     logger.error(`Error inviting vendors to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
@@ -699,33 +746,41 @@ async function requestVendorCategoryUpdate(req, res, next) {
       vendor = await storeService.getVendorByIdWithDBFallback(vendorEmail, 'all', { fresh: true });
     }
     const targetEmail = String((vendor && vendor.email) || vendorEmail || '').trim();
-    if (!targetEmail) {
-      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId is required.' });
+    if (!targetEmail || !EMAIL_REGEX.test(targetEmail)) {
+      return res.status(400).json({ success: false, error: 'Target vendor email or valid vendorId with a valid email address is required.' });
     }
 
     const buyerAccount = req.user && req.user.email ? await storeService.getBuyerAccountByEmail(req.user.email) : null;
-    const buyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
-    const buyerEmail = buyerAccount ? buyerAccount.corporateEmail : (req.user ? req.user.email : null);
+    const rawBuyerName = buyerAccount ? (buyerAccount.companyName || buyerAccount.name) : (req.user ? req.user.name : 'Buyer');
+    const buyerName = String(rawBuyerName || '').trim() || 'Buyer';
+    const rawBuyerEmail = (buyerAccount && buyerAccount.corporateEmail) || (req.user ? req.user.email : '');
+    const buyerEmail = EMAIL_REGEX.test(String(rawBuyerEmail).trim()) ? String(rawBuyerEmail).trim() : null;
 
-    const targetVendorName = (vendor && (vendor.name || vendor.contactPerson)) || vendorName || 'Supplier';
-    const targetCurrentCategory = (vendor && (vendor.majorCategory
+    const rawVendorName = (vendor && (vendor.name || vendor.contactPerson)) || vendorName || '';
+    const targetVendorName = String(rawVendorName).trim() || 'Supplier';
+    const rawCurrentCategory = (vendor && (vendor.majorCategory
       || (Array.isArray(vendor.minorCategories) ? vendor.minorCategories.join(', ') : '')))
-      || 'Not specified';
+      || '';
+    const targetCurrentCategory = String(rawCurrentCategory).trim() || 'Not specified';
+
+    const safeRfqNumber = String(rfqNumber || '').trim() || 'NEW-RFQ';
+    const safeRfqTitle = String(rfqTitle || '').trim() || 'Procurement Requisition';
+    const safeRfqCategory = String(rfqCategory || '').trim() || 'Required Procurement Category';
 
     const deliveryContext = {
       vendorId: vendor ? vendor.id : vendorId || null,
-      rfqNumber: rfqNumber || 'NEW-RFQ',
+      rfqNumber: safeRfqNumber,
       operation: 'request-vendor-category-update',
       recipientPresent: true,
     };
     const notificationPayload = {
       recipientEmail: targetEmail,
-      rfqNumber: rfqNumber || 'NEW-RFQ',
-      rfqTitle: rfqTitle || 'Procurement Requisition',
-      rfqCategory: rfqCategory || 'Required Procurement Category',
+      rfqNumber: safeRfqNumber,
+      rfqTitle: safeRfqTitle,
+      rfqCategory: safeRfqCategory,
       vendorName: targetVendorName,
       vendorCurrentCategory: targetCurrentCategory,
-      buyerAccountName: buyerName || 'Buyer',
+      buyerAccountName: buyerName,
       buyerEmail,
       vendorId: vendor ? vendor.id : vendorId || null,
     };
@@ -763,7 +818,18 @@ async function requestVendorCategoryUpdate(req, res, next) {
         deliveryStatus = 'queued';
         try {
           const dispatch = await eventOutboxService.dispatchDueEventOutboxJobs(1, [queuedEvent.id]);
-          if (dispatch.completedIds?.includes(queuedEvent.id)) deliveryStatus = 'sent';
+          if (dispatch.completedIds?.includes(queuedEvent.id)) {
+            deliveryStatus = 'sent';
+          } else if (dispatch.dead > 0 || dispatch.authUnavailable) {
+            return res.status(503).json({
+              success: false,
+              outboxId,
+              error: dispatch.authUnavailable
+                ? RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_PROVIDER_UNAVAILABLE
+                : RFQ_NOTIFICATION_MESSAGES.VENDOR_CATEGORY_UPDATE_EMAIL_UNCONFIRMED,
+              retryable: dispatch.dead === 0,
+            });
+          }
         } catch (dispatchError) {
           logger.error('Immediate vendor category update dispatch failed; durable retry remains scheduled', {
             error: dispatchError,
@@ -893,7 +959,15 @@ async function createRFQ(req, res, next) {
 
     // Every line item must be complete. The form asks for the same fields, and a vendor cannot
     // quote against a row that leaves any of them out.
-    const lineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const rawLineItems = Array.isArray(body.extractedEntities) ? body.extractedEntities : body.lineItems || [];
+    const lineItems = rawLineItems.map((item) => {
+      const qty = Number(item?.quantity) || 0;
+      const rawUnit = typeof item?.unit === 'string' ? item.unit.trim() : '';
+      return {
+        ...item,
+        unit: rawUnit || (qty > 0 ? 'Nos' : rawUnit),
+      };
+    });
     const lineItemValidation = validateRFQLineItemsForCreate(lineItems);
     if (!lineItemValidation.isValid) {
       logger.warn('Failed to create RFQ: line item validation failed', { errors: lineItemValidation.errors }, 'RFQ_CONTROLLER');
@@ -1090,6 +1164,7 @@ async function createRFQ(req, res, next) {
         sourceEmail: body.sourceEmail || (req.user && req.user.email) || null,
       }
       : null;
+    const shouldDeferAckUntilVendorPlan = Boolean(shouldSendBuyerAcknowledgement && pool.hasStorage());
     const created = await storeService.createRFQDurably({
       ...body,
       extractedEntities: lineItems,
@@ -1097,6 +1172,7 @@ async function createRFQ(req, res, next) {
       ...(buyerAcknowledgementRecipient ? { buyerEmail: buyerAcknowledgementRecipient } : {}),
       ...(req.user && req.user.name ? { raisedByName: req.user.name } : {}),
       creationAcknowledgementRequested: shouldSendBuyerAcknowledgement,
+      ...(shouldDeferAckUntilVendorPlan ? { vendorPlanPending: true } : {}),
       ...(gatewayNotificationTarget ? { gatewayNotificationTarget } : {}),
     }, requestingBuyerAccount);
 
@@ -1131,7 +1207,10 @@ async function createRFQ(req, res, next) {
       const needsTopUp = !createdIsV1 || !Array.isArray(finalRFQ.assignedVendors) || finalRFQ.assignedVendors.length === 0;
       if (needsTopUp && typeof storeService.autoAssignVendorsFromDB === 'function') {
         try {
-          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ || created, { notifyShortfall: true });
+          finalRFQ = await storeService.autoAssignVendorsFromDB(finalRFQ || created, {
+            notifyShortfall: true,
+            ...(shouldDeferAckUntilVendorPlan ? { preserveVendorPlanPending: true } : {}),
+          });
         } catch (err) {
           logger.warn('Could not apply DB-backed vendor auto-assignment', { error: err.message }, 'RFQ_CONTROLLER');
         }
@@ -1604,9 +1683,12 @@ async function stageExtractionDocument(req, res, next) {
 async function getRFQSummary(req, res, next) {
   try {
     const scope = await resolveRfqReadScope(req);
-    await storeService.syncRFQsFromDB(false, scope.buyerAccountId);
+    await storeService.syncRFQsFromDB(true, scope.buyerAccountId);
     const rfqs = scopedRfqList(scope);
     logger.info('Building RFQ portfolio summary', { role: scope.role, restricted: scope.restricted, count: rfqs.length }, 'RFQ_CONTROLLER');
+    if (typeof res.setHeader === 'function') {
+      res.setHeader('Cache-Control', 'private, no-cache, no-store, must-revalidate');
+    }
     res.json({ success: true, data: rfqSummaryService.buildPortfolioSummary(rfqs) });
   } catch (err) {
     logger.error('Error building RFQ summary', err, 'RFQ_CONTROLLER');
@@ -1794,7 +1876,7 @@ async function downloadQuoteAttachment(req, res, next) {
 async function updateRFQ(req, res, next) {
   const { id } = req.params;
   try {
-    const existing = storeService.getRFQById(id);
+    const existing = storeService.getRFQById(id) || (await storeService.getRFQByIdAsync(id));
     if (!existing || !(await canAccessRfq(req, existing))) {
       logger.warn(`RFQ not found for update: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -1909,6 +1991,31 @@ async function updateRFQ(req, res, next) {
     }
 
     const updates = pickUpdatableRfqFields(body);
+    if (
+      existing.status === 'Closed' &&
+      updates.status &&
+      updates.status !== 'Closed' &&
+      updates.status !== 'PO Generated'
+    ) {
+      logger.warn('RFQ update rejected: closed RFQ cannot be reopened', {
+        id,
+        rfqNumber: existing.rfqNumber,
+        attemptedStatus: updates.status,
+      }, 'RFQ_CONTROLLER');
+      return res.status(400).json({
+        success: false,
+        error: RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN,
+        fieldErrors: { status: RFQ_CLOSURE_MESSAGES.REOPEN_FORBIDDEN },
+      });
+    }
+    if (updates.status === 'Closed' && existing.status !== 'Closed') {
+      updates.closedAt = existing.closedAt || new Date().toISOString();
+      updates.closedByRole = role;
+      updates.closedByEmail = (req.user && req.user.email) || null;
+      updates.closedReason =
+        updates.closedReason ||
+        (role === 'buyer' ? RFQ_CLOSURE_MESSAGES.BUYER_CLOSE_REASON : RFQ_CLOSURE_MESSAGES.CM_CLOSE_REASON);
+    }
     if (existing.status === 'Parsing' && !updates.status) {
       const entities = updates.extractedEntities || existing.extractedEntities || [];
       const hasCategories = entities.length > 0 && entities.every((e) => e.majorCategory && e.minorCategory && e.minorCategory !== e.majorCategory);
@@ -2020,7 +2127,26 @@ async function addQuote(req, res, next) {
       return res.status(400).json({ success: false, error: 'Create your vendor profile before submitting a quote.' });
     }
 
-    const { unitPrice, totalPrice, leadTimeDays, warrantyYears, paymentTerms, remarks, vendorCategory, complianceStatus, lineItemQuotes } = req.body;
+    const {
+      unitPrice,
+      totalPrice,
+      subtotal,
+      discountPercent,
+      discountAmount,
+      taxableAmount,
+      taxRate,
+      gstPercent,
+      taxAmount,
+      gstAmount,
+      taxes,
+      leadTimeDays,
+      warrantyYears,
+      paymentTerms,
+      remarks,
+      vendorCategory,
+      complianceStatus,
+      lineItemQuotes,
+    } = req.body;
     const requestedAttachments = req.body?.attachments;
     if (requestedAttachments !== undefined && !Array.isArray(requestedAttachments)) {
       return res.status(400).json({ success: false, error: 'Bid documents must be provided as a list.' });
@@ -2052,10 +2178,10 @@ async function addQuote(req, res, next) {
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
     }
 
-    const isMode0 = targetRfq.sourcingMode === 'mode_0' || targetRfq.sourcingMode === 'v0';
+    const isPublic = storeService.isPublicRfq(targetRfq);
     const isUnlimitedVendor = hasUnlimitedQuoteAccess(vendorRecord) || hasUnlimitedQuoteAccess(req.user);
     const isUnlocked = storeService.isRfqUnlockedForVendor(vendorRecord.id, targetRfq.id);
-    if (isMode0 && !isUnlocked && !isUnlimitedVendor) {
+    if (isPublic && !isUnlocked && !isUnlimitedVendor) {
       logger.warn(
         `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} without downloading/unlocking it first`,
         { id, vendorId: vendorRecord.id },
@@ -2074,13 +2200,17 @@ async function addQuote(req, res, next) {
       (Array.isArray(vendorRecord.quotedRfqIds) && vendorRecord.quotedRfqIds.some((quotedRfqId) => String(quotedRfqId) === String(targetRfq.id)));
     if (!eligibility.eligible && !isUnlimitedVendor && !isResubmission) {
       logger.warn(
-        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits are exhausted`,
+        `Vendor ${vendorRecord.name} (${vendorRecord.id}) attempted to quote RFQ ${id} but quotation credits are exhausted`,
         { id, vendorId: vendorRecord.id, freeCreditsRemaining: eligibility.freeCreditsRemaining, subscriptionPlan: eligibility.subscriptionPlan },
         'RFQ_CONTROLLER'
       );
+      const isSubscribedPlan = eligibility.subscriptionPlan === 'connect' || eligibility.subscriptionPlan === 'select';
+      const quotaMsg = isSubscribedPlan
+        ? `Your ${eligibility.subscriptionPlan === 'select' ? 100 : 50} RFQ quotation credits for the ${eligibility.subscriptionPlan} plan have been used. Please renew or upgrade your subscription plan to continue submitting quotations.`
+        : `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`;
       return res.status(403).json({
         success: false,
-        error: `Your ${VENDOR_FREE_CREDITS_LIMIT} free quotation credits have been used. Please upgrade your subscription plan to continue submitting quotations.`,
+        error: quotaMsg,
         upgradeRequired: true,
         freeCreditsRemaining: 0,
         subscriptionPlan: eligibility.subscriptionPlan,
@@ -2109,6 +2239,15 @@ async function addQuote(req, res, next) {
       unitPrice,
       totalPrice: totalPrice || unitPrice,
       totalAmount: totalPrice || unitPrice,
+      subtotal: optionalQuoteNumber(subtotal),
+      discountPercent: optionalQuoteNumber(discountPercent),
+      discountAmount: optionalQuoteNumber(discountAmount),
+      taxableAmount: optionalQuoteNumber(taxableAmount),
+      taxRate: optionalQuoteNumber(taxRate ?? gstPercent),
+      gstPercent: optionalQuoteNumber(gstPercent ?? taxRate),
+      taxAmount: optionalQuoteNumber(taxAmount ?? gstAmount ?? taxes),
+      gstAmount: optionalQuoteNumber(gstAmount ?? taxAmount ?? taxes),
+      taxes: optionalQuoteNumber(taxes ?? taxAmount ?? gstAmount),
       leadTimeDays: optionalQuoteNumber(leadTimeDays),
       // No score is computed for a quote submitted through this route, so none is invented here.
       aiMatchScore: null,
@@ -2136,7 +2275,9 @@ async function addQuote(req, res, next) {
     res.json({
       success: true,
       data: finalData,
-      freeCreditsRemaining: updatedVendor ? updatedVendor.freeQuotationCredits : undefined,
+      freeCreditsRemaining: updatedVendor ? (
+        storeService.getVendorRfqCredits(updatedVendor.id, updatedVendor)?.freeCreditsRemaining ?? updatedVendor.freeQuotationCredits
+      ) : undefined,
     });
   } catch (err) {
     logger.error(`Error adding quote to RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
@@ -2211,7 +2352,7 @@ async function generateEmailPreview(req, res, next) {
     const { id } = req.params;
     const { vendorId } = req.query;
     logger.info(`Generating email preview for RFQ ${id}`, { id, vendorId }, 'RFQ_CONTROLLER');
-    const rfq = storeService.getRFQById(id);
+    const rfq = await storeService.getRFQByIdAsync(id);
     if (!rfq || !(await canAccessRfq(req, rfq))) {
       logger.warn(`RFQ not found for email preview: ${id}`, { id }, 'RFQ_CONTROLLER');
       return res.status(404).json({ success: false, error: `RFQ with ID ${id} not found.` });
@@ -2431,6 +2572,64 @@ async function replyInquiry(req, res, next) {
   }
 }
 
+async function getBroadcasts(req, res, next) {
+  try {
+    const { id } = req.params;
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+    return res.status(200).json({ success: true, data: rfq.broadcasts || [] });
+  } catch (err) {
+    logger.error(`Error getting broadcasts for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
+async function addBroadcast(req, res, next) {
+  try {
+    const { id } = req.params;
+    const { message, title, attachments } = req.body || {};
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ success: false, error: 'Broadcast message is required.' });
+    }
+
+    const rfq = await storeService.getRFQByIdAsync(id);
+    if (!rfq || !(await canAccessRfq(req, rfq))) {
+      return res.status(404).json({ success: false, error: 'RFQ not found.' });
+    }
+
+    const broadcast = {
+      id: globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : `bcast-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+      rfqId: rfq.id,
+      rfqNumber: rfq.rfqNumber,
+      title: title && typeof title === 'string' ? title.trim() : '',
+      message: message.trim(),
+      attachments: Array.isArray(attachments)
+        ? attachments.filter((att) => att && (att.id || att.fileName))
+        : [],
+      authorName: (req.user && (req.user.name || req.user.orgName)) || 'Procurement Team',
+      authorRole: (req.user && req.user.role) || 'buyer',
+      authorEmail: (req.user && req.user.email) || null,
+      createdAt: new Date().toISOString(),
+    };
+
+    const result = await storeService.addBroadcastToRFQ(rfq.id, broadcast);
+    if (!result) {
+      return res.status(500).json({ success: false, error: 'Failed to record broadcast announcement.' });
+    }
+
+    return res.status(201).json({
+      success: true,
+      data: result.broadcast,
+      rfq: result.updatedRfq,
+    });
+  } catch (err) {
+    logger.error(`Error publishing broadcast for RFQ ${req.params.id}`, err, 'RFQ_CONTROLLER');
+    next(err);
+  }
+}
+
 module.exports = {
   getRFQs,
   getAllRFQs,
@@ -2458,6 +2657,8 @@ module.exports = {
   approvePO,
   addInquiry,
   replyInquiry,
+  getBroadcasts,
+  addBroadcast,
   validateVendorCategories,
   requestVendorCategoryUpdate,
   isPastDate,

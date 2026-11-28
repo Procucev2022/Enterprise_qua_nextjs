@@ -1,18 +1,18 @@
 #!/bin/sh
-# Procucev Enterprise Fast Pre-Commit Quality Gate
-# Enforces Linting, Typechecking, and Unit Tests for changed files in active workflows
+# Procucev Enterprise Pre-Commit Quality Gate
+# Enforces Typecheck, Lint, DB Schema Parity, 90% Per-File Coverage on staged source files, and Next.js Build
 
-echo "⚡ [PRE-COMMIT GATE] Executing fast incremental quality check..."
+echo "🛡️  [PRE-COMMIT GATE] Executing strict staged-change quality & coverage gate..."
 
-npm run check:fast
+npm run pre-commit -- --staged
 
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -ne 0 ]; then
   echo ""
-  echo "❌ [PRE-COMMIT REJECTED] Fast quality check failed. Please resolve all errors before committing."
+  echo "❌ [PRE-COMMIT REJECTED] Quality or 90% per-file coverage check failed. Please fix all errors before committing."
   exit 1
 fi
 
-echo "✅ [PRE-COMMIT APPROVED] All fast quality gates verified."
+echo "✅ [PRE-COMMIT APPROVED] All pre-commit quality & coverage gates verified."
 exit 0

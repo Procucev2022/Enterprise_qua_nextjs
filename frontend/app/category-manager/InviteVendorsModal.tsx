@@ -30,7 +30,7 @@ import { fetchCategoryTaxonomy } from '@/lib/buyerProfileClient';
 import { getMajorCategories, getMinorCategories } from '@/lib/categoryTaxonomy';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
-import { MAX_INVITE_VENDORS, getIndianStates, getCitiesForState, parseSearchTokens } from '@/lib/constants';
+import { MAX_INVITE_VENDORS, createBackdropClickHandler, getIndianStates, getCitiesForState, isVendorActive, parseSearchTokens } from '@/lib/constants';
 import type { MajorMinorCategory, RFQItem, RFQVendorCandidate, VendorPageMeta } from '@/lib/types';
 import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 
@@ -39,6 +39,16 @@ import { minorNamesMatch, normalizeCategory } from '@/lib/vendorMatching';
 // than all at once, which previously crashed the browser tab.
 const ALL_VENDORS_PAGE_SIZE = 50;
 const SEARCH_DEBOUNCE_MS = 350;
+const VENDOR_QUERY_TIMEOUT_PATTERN = /CPU time limit|D1_ERROR|timeout|temporarily unavailable/i;
+
+function resolveAllVendorsErrorMessage(
+  rawError: string | undefined,
+  fallbackMessage: string,
+  timeoutMessage: string
+): string {
+  const message = rawError || fallbackMessage;
+  return VENDOR_QUERY_TIMEOUT_PATTERN.test(message) ? timeoutMessage : message;
+}
 
 interface InviteVendorsModalProps {
   isOpen: boolean;
@@ -191,6 +201,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const [categoryLoadError, setCategoryLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [submitting, setSubmitting] = useState(false);
+  const [submitFeedback, setSubmitFeedback] = useState<{ type: 'warning' | 'error'; message: string } | null>(null);
+  const [pasteSummary, setPasteSummary] = useState<string | null>(null);
 
   // Persistent registry of all seen vendor records to resolve names in selected chips
   const knownVendorsRef = useRef<Map<string, RFQVendorCandidate>>(new Map());
@@ -222,6 +234,8 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     setLoading(true);
     setError(null);
     setSelected(new Set());
+    setSubmitFeedback(null);
+    setPasteSummary(null);
     setAllVendors(null);
     setAllVendorsError(null);
     setAllVendorsPagination(null);
@@ -230,8 +244,9 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
 
     void fetchVendorCandidates(rfq.id).then((result) => {
       if (result.success) {
-        setCandidates(result.candidates);
-        result.candidates.forEach((c) => {
+        const activeCandidates = result.candidates.filter((c) => isVendorActive(c));
+        setCandidates(activeCandidates);
+        activeCandidates.forEach((c) => {
           if (c?.id) knownVendorsRef.current.set(c.id, c);
         });
       } else {
@@ -258,6 +273,22 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       });
   }, [isOpen, rfq]);
 
+  // Escape key support to close modals
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !submitting && !creatingVendor) {
+        if (showAddVendorModal) {
+          setShowAddVendorModal(false);
+        } else {
+          onClose();
+        }
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, submitting, creatingVendor, showAddVendorModal, onClose]);
+
   // Track known vendors for displaying chip names across searches and filters
   useEffect(() => {
     candidates.forEach((c) => {
@@ -279,9 +310,27 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     return () => clearTimeout(t);
   }, [search]);
 
+  const buildAssignedMatcher = (currentRfq: RFQItem | null) => {
+    const invitedIds = new Set<string>();
+    const invitedEmails = new Set<string>();
+    for (const v of currentRfq?.assignedVendors || []) {
+      const id = String(v?.id || (v as unknown as { vendorId?: string })?.vendorId || '').trim();
+      const email = String(v?.email || '').trim().toLowerCase();
+      if (id) invitedIds.add(id);
+      if (email) invitedEmails.add(email);
+    }
+    return (candidate: { id?: string; email?: string } | undefined | null): boolean => {
+      if (!candidate) return false;
+      const cid = String(candidate.id || '').trim();
+      if (cid && invitedIds.has(cid)) return true;
+      const cemail = String(candidate.email || '').trim().toLowerCase();
+      return Boolean(cemail && invitedEmails.has(cemail));
+    };
+  };
+
   const stampInvited = (vendors: RFQVendorCandidate[]): RFQVendorCandidate[] => {
-    const invitedIds = new Set((rfq?.assignedVendors || []).map((v) => v.id));
-    return vendors.map((v) => ({ ...v, alreadyInvited: invitedIds.has(v.id) }));
+    const isAssigned = buildAssignedMatcher(rfq);
+    return vendors.filter((v) => isVendorActive(v)).map((v) => ({ ...v, alreadyInvited: isAssigned(v) }));
   };
 
   // Fetched lazily on first switch into "All Vendors", and re-fetched from
@@ -321,9 +370,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         setAllVendors(stampInvited(result.candidates));
         setAllVendorsPagination(result.pagination);
       } else {
-        const rawErr = result.error || S.allVendorsLoadFailed;
-        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
-        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
+        setAllVendorsError(resolveAllVendorsErrorMessage(result.error, S.allVendorsLoadFailed, S.dbQueryTimeout));
       }
       setAllVendorsLoading(false);
     });
@@ -354,9 +401,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
         });
         setAllVendorsPagination(result.pagination);
       } else {
-        const rawErr = result.error || S.allVendorsLoadFailed;
-        const isTimeout = /CPU time limit|D1_ERROR|timeout/i.test(rawErr);
-        setAllVendorsError(isTimeout ? S.dbQueryTimeout : rawErr);
+        setAllVendorsError(resolveAllVendorsErrorMessage(result.error, S.allVendorsLoadFailed, S.dbQueryTimeout));
       }
       setAllVendorsLoadingMore(false);
     });
@@ -536,6 +581,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const allSelected = selectableIds.length > 0 && selectableIds.every((id) => selected.has(id));
 
   const toggle = (id: string) => {
+    setSubmitFeedback(null);
     setSelected((prev) => {
       const next = new Set(prev);
       if (next.has(id)) {
@@ -594,43 +640,79 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
   const handleSubmit = async () => {
     if (selected.size === 0) return;
 
-    // Duplicate-invitation prevention: filter out already invited vendors
-    const invitedIds = new Set((rfq.assignedVendors || []).map((v) => v.id));
-    const toInvite = Array.from(selected).filter((id) => !invitedIds.has(id));
+    // Duplicate-invitation prevention: filter out already invited vendors by id or email
+    const isAssigned = buildAssignedMatcher(rfq);
+    const toInvite = Array.from(selected).filter((id) => {
+      const candidate = knownVendorsRef.current.get(id);
+      return !isAssigned(candidate || { id });
+    });
 
     if (toInvite.length === 0) {
-      showToast('Already Invited', 'All selected vendors have already been invited to this RFQ.', 'warning');
+      setSubmitFeedback({ type: 'warning', message: S.alreadyInvitedMessage });
+      showToast(S.alreadyInvitedTitle, S.alreadyInvitedMessage, 'warning');
       return;
     }
 
     if (toInvite.length > MAX_INVITE_VENDORS) {
-      showToast('Limit Reached', formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS }), 'warning');
+      const limitMsg = formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS });
+      setSubmitFeedback({ type: 'warning', message: limitMsg });
+      showToast('Limit Reached', limitMsg, 'warning');
       return;
     }
 
+    setSubmitFeedback(null);
     setSubmitting(true);
-    const result = await inviteVendorsToRFQ(rfq.id, toInvite);
-    setSubmitting(false);
+    try {
+      const result = await inviteVendorsToRFQ(rfq.id, toInvite);
 
-    if (result.success) {
-      if (result.invitedCount > 0) {
-        showToast(
-          S.successTitle,
-          formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber }),
-          'success'
-        );
+      if (result.success) {
+        const excludedCount = typeof result.excludedCount === 'number' ? result.excludedCount : 0;
+        const excludedReason = result.excludedVendors?.[0]?.reason;
+        const provisionedCount = typeof result.provisionedCount === 'number' ? result.provisionedCount : 0;
+        const provisioningErrors = Array.isArray(result.provisioningErrors) ? result.provisioningErrors : [];
+
+        if (result.invitedCount > 0) {
+          const successMsg = provisionedCount > 0
+            ? formatString(S.successWithAccountsMessage, {
+                count: result.invitedCount,
+                rfqNumber: rfq.rfqNumber,
+                provisioned: provisionedCount,
+              })
+            : formatString(S.successMessage, { count: result.invitedCount, rfqNumber: rfq.rfqNumber });
+          showToast(S.successTitle, successMsg, 'success');
+        }
+        if (provisioningErrors.length > 0) {
+          showToast(
+            S.onboardingDeliveryWarningTitle,
+            formatString(S.onboardingDeliveryWarning, { count: provisioningErrors.length }),
+            'warning'
+          );
+        }
+        if (excludedCount > 0) {
+          showToast(
+            S.excludedTitle,
+            excludedReason || formatString(S.excludedMessage, { count: excludedCount }),
+            'warning'
+          );
+        }
+        if (result.invitedCount === 0 && excludedCount === 0) {
+          setSubmitFeedback({ type: 'warning', message: S.noNewVendorsMessage });
+          showToast(S.noNewVendorsTitle, S.noNewVendorsMessage, 'warning');
+          onInvited?.(result.rfq, result.invitedCount);
+          return;
+        }
+        onInvited?.(result.rfq, result.invitedCount);
+        onClose();
+      } else {
+        const errMsg = result.error || S.inviteRequestFailedMessage;
+        setSubmitFeedback({ type: 'error', message: errMsg });
+        showToast(S.failTitle, errMsg, 'warning');
       }
-      if ((result as any).excludedCount > 0) {
-        showToast(
-          'Category Mismatch Excluded',
-          `${(result as any).excludedCount} vendor(s) were excluded from shortlist due to category mismatch. Profile update emails dispatched.`,
-          'warning'
-        );
-      }
-      onInvited?.(result.rfq, result.invitedCount);
-      onClose();
-    } else {
-      showToast(S.failTitle, result.error, 'warning');
+    } catch {
+      setSubmitFeedback({ type: 'error', message: S.inviteRequestFailedMessage });
+      showToast(S.failTitle, S.inviteRequestFailedMessage, 'warning');
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -645,7 +727,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     const majorCategory = newVendorMajorCategory.trim() || rfq?.category || '';
 
     if (!name || !contactPerson || !email || !phone || !majorCategory) {
-      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Major Category).');
+      setAddVendorError('Please fill in all required fields (Name, Contact Person, Email, Phone, Division).');
       return;
     }
 
@@ -747,15 +829,6 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     }
   };
 
-  const sourcingMode = String(rfq?.sourcingMode || '').toLowerCase();
-  const isV0OrV2 =
-    sourcingMode === 'mode_0' ||
-    sourcingMode === 'v0' ||
-    sourcingMode === 'version_0' ||
-    sourcingMode === 'mode_2' ||
-    sourcingMode === 'v2' ||
-    sourcingMode === 'version_2';
-
   // Resolved list of selected vendors for the removable chips display
   const selectedVendorsList = Array.from(selected).map((id) => {
     const found = knownVendorsRef.current.get(id);
@@ -765,15 +838,94 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
     };
   });
 
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    const pastedText = e.clipboardData.getData('text');
+    if (!pastedText) return;
+
+    // Detect if this is a multi-entry or delimited paste (newline, carriage return, tab, comma, semicolon, or space-separated emails)
+    const isDelimited = /[\n\r,;\t]/.test(pastedText);
+    const tokens = parseSearchTokens(pastedText);
+    if (!isDelimited && tokens.length <= 1) return;
+    if (tokens.length === 0) return;
+
+    e.preventDefault();
+    setSearch(pastedText.replace(/[\r\n\t]+/g, ' ').trim());
+
+    // Build the deduplicated pool of all available vendors known in the modal
+    const poolMap = new Map<string, RFQVendorCandidate>();
+    candidates.forEach((c) => poolMap.set(c.id, c));
+    (allVendors || []).forEach((v) => poolMap.set(v.id, v));
+    knownVendorsRef.current.forEach((v, id) => poolMap.set(id, v));
+
+    const isAssigned = buildAssignedMatcher(rfq);
+    const availablePool = Array.from(poolMap.values()).filter((v) => isVendorActive(v) && !isAssigned(v));
+
+    const matchedVendors: RFQVendorCandidate[] = [];
+    const matchedVendorIds = new Set<string>();
+    let notFoundCount = 0;
+
+    for (const token of tokens) {
+      const q = token.toLowerCase().trim();
+      if (!q) continue;
+
+      const found = availablePool.find((v) => {
+        if (matchedVendorIds.has(v.id)) return false;
+        const vEmail = String(v.email || '').toLowerCase().trim();
+        const vName = String(v.name || '').toLowerCase().trim();
+        const vContact = String(v.contactPerson || '').toLowerCase().trim();
+
+        if (q.includes('@')) {
+          return vEmail === q || vEmail.includes(q);
+        }
+        return vName === q || vName.includes(q) || vContact === q || vContact.includes(q);
+      });
+
+      if (found) {
+        matchedVendors.push(found);
+        matchedVendorIds.add(found.id);
+      } else {
+        notFoundCount++;
+      }
+    }
+
+    if (matchedVendors.length > 0) {
+      let reachedLimit = false;
+      setSelected((prev) => {
+        const next = new Set(prev);
+        for (const v of matchedVendors) {
+          if (next.size >= MAX_INVITE_VENDORS) {
+            reachedLimit = true;
+            break;
+          }
+          next.add(v.id);
+        }
+        return next;
+      });
+
+      if (reachedLimit || matchedVendors.length > MAX_INVITE_VENDORS) {
+        showToast('Limit Reached', formatString(S.maxSelectionWarning, { max: MAX_INVITE_VENDORS }), 'warning');
+      }
+    }
+
+    const summary = notFoundCount > 0
+      ? formatString(S.pasteSummary, { matched: matchedVendors.length, notFound: notFoundCount })
+      : formatString(S.pasteSummaryAllMatched, { matched: matchedVendors.length });
+    setPasteSummary(summary);
+  };
+
   return (
     <div
+      onClick={createBackdropClickHandler(onClose, undefined, submitting)}
       className="fixed inset-0 z-50 flex items-center justify-center overflow-y-auto bg-slate-900/60 backdrop-blur-sm p-3 sm:p-5 md:p-6"
       role="dialog"
       aria-modal="true"
       aria-labelledby="invite-vendors-modal-title"
       data-testid="invite-vendors-modal"
     >
-      <div className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up">
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="w-full max-w-4xl lg:max-w-5xl rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 my-auto flex flex-col max-h-[92vh] overflow-hidden animate-scale-up"
+      >
         {/* Header */}
         <header className="flex items-center justify-between gap-3 px-6 py-4 border-b border-slate-200 dark:border-gray-800 shrink-0">
           <div>
@@ -823,29 +975,27 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
             </button>
           </div>
 
-          {isV0OrV2 && (
-            <button
-              type="button"
-              data-testid="add-new-vendor-button"
-              onClick={() => {
-                setShowAddVendorModal(true);
-                setAddVendorError(null);
-                setNewVendorName('');
-                setNewVendorContactPerson('');
-                setNewVendorEmail('');
-                setNewVendorPhone('');
-                setNewVendorMajorCategory(rfq?.category || '');
-                setNewVendorMinorCategory(rfq?.extractedEntities?.[0]?.minorCategory || '');
-                setNewVendorCity('');
-                setNewVendorState('');
-                setNewVendorPincode('');
-              }}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
-            >
-              <UserPlus size={14} />
-              <span>Add New Vendor</span>
-            </button>
-          )}
+          <button
+            type="button"
+            data-testid="add-new-vendor-button"
+            onClick={() => {
+              setShowAddVendorModal(true);
+              setAddVendorError(null);
+              setNewVendorName('');
+              setNewVendorContactPerson('');
+              setNewVendorEmail('');
+              setNewVendorPhone('');
+              setNewVendorMajorCategory(rfq?.category || '');
+              setNewVendorMinorCategory(rfq?.extractedEntities?.[0]?.minorCategory || '');
+              setNewVendorCity('');
+              setNewVendorState('');
+              setNewVendorPincode('');
+            }}
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold bg-indigo-50 dark:bg-indigo-950/70 text-indigo-600 dark:text-indigo-400 border border-indigo-200 dark:border-indigo-800 hover:bg-indigo-100 dark:hover:bg-indigo-900/60 transition-colors"
+          >
+            <UserPlus size={14} />
+            <span>Add New Vendor</span>
+          </button>
         </div>
 
         {/* Responsive Multi-Criteria Filter Bar */}
@@ -858,7 +1008,11 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 type="text"
                 data-testid="invite-vendors-search"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={(e) => {
+                  setSearch(e.target.value);
+                  if (!e.target.value) setPasteSummary(null);
+                }}
+                onPaste={handlePaste}
                 placeholder={S.searchPlaceholder}
                 className="w-full pl-8 pr-8 py-2 rounded-xl border border-slate-200 dark:border-gray-800 bg-white dark:bg-gray-900 text-xs text-slate-900 dark:text-white placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm transition-all"
               />
@@ -866,12 +1020,20 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 <button
                   type="button"
                   data-testid="clear-search-btn"
-                  onClick={() => setSearch('')}
+                  onClick={() => {
+                    setSearch('');
+                    setPasteSummary(null);
+                  }}
                   className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 p-0.5"
                   aria-label="Clear search"
                 >
                   <X size={13} />
                 </button>
+              )}
+              {pasteSummary && (
+                <p data-testid="invite-paste-summary" className="mt-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                  {pasteSummary}
+                </p>
               )}
             </div>
 
@@ -1203,6 +1365,22 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
             )}
         </div>
 
+        {/* Inline Invitation Action Feedback */}
+        {submitFeedback && (
+          <div
+            role="alert"
+            data-testid="invite-submit-feedback"
+            className={`mx-6 mt-2 mb-1 px-3 py-2 rounded-lg border text-xs flex items-center gap-2 shrink-0 ${
+              submitFeedback.type === 'error'
+                ? 'bg-rose-50 dark:bg-rose-950/40 border-rose-200 dark:border-rose-800 text-rose-700 dark:text-rose-300'
+                : 'bg-amber-50 dark:bg-amber-950/40 border-amber-200 dark:border-amber-800 text-amber-800 dark:text-amber-300'
+            }`}
+          >
+            <AlertTriangle size={14} className="shrink-0" />
+            <span>{submitFeedback.message}</span>
+          </div>
+        )}
+
         {/* Footer with Clear Count and Action Buttons */}
         <div className="p-4 px-6 border-t border-slate-200 dark:border-gray-800 bg-slate-50/60 dark:bg-gray-950/30 flex items-center justify-between gap-3 shrink-0">
           <div className="text-xs text-slate-500 dark:text-gray-400 font-medium">
@@ -1240,13 +1418,17 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
       {/* Add New Vendor Modal (Sub-modal for V0 and V2) */}
       {showAddVendorModal && (
         <div
+          onClick={createBackdropClickHandler(setShowAddVendorModal, false, creatingVendor)}
           className="fixed inset-0 z-60 flex items-center justify-center p-4 bg-slate-900/70 backdrop-blur-sm"
           role="dialog"
           aria-modal="true"
           aria-labelledby="add-new-vendor-title"
           data-testid="add-vendor-modal"
         >
-          <div className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up">
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-md rounded-2xl bg-white dark:bg-gray-900 shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden animate-scale-up"
+          >
             <header className="flex items-center justify-between px-5 py-3.5 border-b border-slate-200 dark:border-gray-800">
               <div className="flex items-center gap-2">
                 <div className="p-1.5 rounded-lg bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400">
@@ -1339,7 +1521,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
               <div className="grid grid-cols-2 gap-2">
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Major Category *
+                    Division *
                   </label>
                   <select
                     value={newVendorMajorCategory}
@@ -1355,7 +1537,7 @@ export default function InviteVendorsModal({ isOpen, rfq, onClose, onInvited }: 
                 </div>
                 <div>
                   <label className="text-[10px] font-bold uppercase tracking-wider text-slate-400 block mb-1">
-                    Minor Category
+                    Category
                   </label>
                   <input
                     type="text"

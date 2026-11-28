@@ -113,7 +113,7 @@ describe('registrationQueries', () => {
           phoneNumber: '+919999911111',
           userEmail: 'buyer@example.com',
           regDate: '2026-01-02T03:04:05.000Z',
-          status: 'Accepted',
+          status: 'Auto-Approved',
           sourceType: 'Web App',
           isApproved: true,
           clientType: 'Buyer',
@@ -162,7 +162,7 @@ describe('registrationQueries', () => {
       const result = await registrationQueries.getRegisteredClients();
 
       expect(result.total).toBe(9);
-      expect(result.clients[0]).toEqual(expect.objectContaining({ id: 'u-2', status: 'New', sourceType: 'Email' }));
+      expect(result.clients[0]).toEqual(expect.objectContaining({ id: 'u-2', status: 'Auto-Approved', sourceType: 'Email' }));
       expect(querySpy).toHaveBeenCalledTimes(2);
     });
 
@@ -206,6 +206,60 @@ describe('registrationQueries', () => {
       expect(sql).toContain("LOWER(COALESCE(u.email, u.username, '')) LIKE");
       expect(params).toEqual(expect.arrayContaining(['whatsapp', 'new', 'seller', '%buyer%']));
       expect(params.slice(-2)).toEqual([200, 0]);
+    });
+
+    it('pushes startDate and endDate into the query when provided', async () => {
+      querySpy.mockResolvedValueOnce({
+        rows: [{
+          id: 'filtered-user-date',
+          userName: 'Date Filtered User',
+          userEmail: 'date@example.com',
+          isApproved: true,
+          verificationStatus: 'verified',
+          sourceTypeRaw: 'web_app',
+          roleName: 'buyer',
+          total: 1,
+        }],
+      });
+
+      const result = await registrationQueries.getRegisteredClients({
+        startDate: '2026-11-06',
+        endDate: '2026-11-16',
+      });
+
+      expect(result.total).toBe(1);
+      const [sql, params] = querySpy.mock.calls[0];
+      expect(sql).toContain('u.created_ts >= $');
+      expect(sql).toContain('u.created_ts <= $');
+      expect(params).toContain('2026-11-06');
+      expect(params).toContain('2026-11-16T23:59:59.999Z');
+    });
+
+    it('handles ISO string format for startDate and endDate', async () => {
+      querySpy.mockResolvedValueOnce({
+        rows: [{
+          id: 'filtered-user-iso',
+          userName: 'ISO Date User',
+          userEmail: 'iso@example.com',
+          isApproved: true,
+          verificationStatus: 'verified',
+          sourceTypeRaw: 'web_app',
+          roleName: 'buyer',
+          total: 1,
+        }],
+      });
+
+      const result = await registrationQueries.getRegisteredClients({
+        startDate: '2026-11-06T12:00:00.000Z',
+        endDate: '2026-11-16T18:00:00.000Z',
+      });
+
+      expect(result.total).toBe(1);
+      const [sql, params] = querySpy.mock.calls[0];
+      expect(sql).toContain('u.created_ts >= $');
+      expect(sql).toContain('u.created_ts <= $');
+      expect(params).toContain('2026-11-06T12:00:00.000Z');
+      expect(params).toContain('2026-11-16T18:00:00.000Z');
     });
 
     it.each([
@@ -256,13 +310,13 @@ describe('registrationQueries', () => {
         sourceType: 'Email', status: 'Rejected', clientType: 'Seller', regDate: null, companyName: null, userEmail: null,
       }));
       expect(byId['db-web']).toEqual(expect.objectContaining({
-        sourceType: 'Web App', status: 'New', clientType: 'Buyer', regDate: null, userName: null,
+        sourceType: 'Web App', status: 'Auto-Approved', clientType: 'Buyer', regDate: null, userName: null,
       }));
       expect(byId['db-wa']).toEqual(expect.objectContaining({
-        sourceType: 'WhatsApp', status: 'Accepted', clientType: 'Seller', regDate: '2026-02-03T00:00:00.000Z',
+        sourceType: 'WhatsApp', status: 'Auto-Approved', clientType: 'Seller', regDate: '2026-02-03T00:00:00.000Z',
       }));
-      expect(byId['db-active']).toEqual(expect.objectContaining({ sourceType: 'WhatsApp', status: 'Accepted', clientType: 'Buyer' }));
-      expect(byId['db-no-status']).toEqual(expect.objectContaining({ sourceType: null, status: 'New', clientType: null }));
+      expect(byId['db-active']).toEqual(expect.objectContaining({ sourceType: 'WhatsApp', status: 'Auto-Approved', clientType: 'Buyer' }));
+      expect(byId['db-no-status']).toEqual(expect.objectContaining({ sourceType: null, status: 'Auto-Approved', clientType: null }));
     });
 
     it('fails closed when the list query fails', async () => {
@@ -299,7 +353,7 @@ describe('registrationQueries', () => {
 
       expect(result).toEqual(expect.objectContaining({
         id: 'reg-client-102',
-        status: 'Accepted',
+        status: 'Auto-Approved',
         isApproved: true,
         clientType: 'Buyer',
         sourceType: 'Web App',
@@ -457,7 +511,7 @@ describe('registrationQueries', () => {
         const accepted = await registrationQueries.updateClientRegistrationStatus(
           'reg-client-102', 'accept', 'Approved by admin', { sub: 'admin-1' }
         );
-        expect(accepted.status).toBe('Accepted');
+        expect(accepted.status).toBe('Auto-Approved');
         expect(accepted.remarks).toBe('Approved by admin');
         expect(storeService.buyerAccounts[0]).toEqual(expect.objectContaining({ status: 'ACTIVE_VERIFIED', profileVerified: true }));
         expect(storeService.buyerAccounts[1].status).toBe('PENDING');
@@ -484,7 +538,7 @@ describe('registrationQueries', () => {
       try {
         const result = await registrationQueries.updateClientRegistrationStatus('reg-client-102', 'accept', '', { sub: 'admin-1' });
 
-        expect(result.status).toBe('Accepted');
+        expect(result.status).toBe('Auto-Approved');
         expect(warnSpy).toHaveBeenCalledWith(
           expect.stringContaining('Could not synchronize'),
           expect.objectContaining({ operation: 'sync-registration-cache', registrationId: 'reg-client-102' }),
@@ -533,7 +587,7 @@ describe('registrationQueries', () => {
           'd1-user-1', 'accept', 'Reviewed', { sub: 'manager-1' }
         );
 
-        expect(result.status).toBe('Accepted');
+        expect(result.status).toBe('Auto-Approved');
         expect(result.clientType).toBe('Seller');
         expect(d1Binding.batch).toHaveBeenCalledTimes(1);
         expect(preparedStatements).toHaveLength(5);
@@ -575,7 +629,7 @@ describe('registrationQueries', () => {
       try {
         const result = await registrationQueries.updateClientRegistrationStatus('d1-user-4', 'accept', '', { sub: 'manager-4' });
 
-        expect(result.status).toBe('Accepted');
+        expect(result.status).toBe('Auto-Approved');
         expect(result.clientType).toBeNull();
       } finally {
         if (previousEnv === undefined) delete globalThis.__CF_ENV__;

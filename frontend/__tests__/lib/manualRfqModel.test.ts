@@ -662,4 +662,42 @@ describe('fromExtractedEntity', () => {
     expect(updatedInvalid.lineItems[0].majorCategory).toBe('Civil Works');
     expect(updatedInvalid.lineItems[0].minorCategory).toBe('');
   });
+
+  describe('unit and quantity extraction in fromExtractedEntity', () => {
+    it('extracts unit and numeric quantity when combined in quantity string', () => {
+      const row = fromExtractedEntity(
+        extracted({ quantity: '10 Nos' as any, unit: '' })
+      );
+      expect(row.quantity).toBe(10);
+      expect(row.unit).toBe('Nos');
+    });
+
+    it('extracts quantity and unit from alternate property names (qty / uom)', () => {
+      const row = fromExtractedEntity({
+        ...extracted(),
+        qty: 25,
+        uom: 'Mtr',
+        quantity: undefined as any,
+        unit: '',
+      } as any);
+      expect(row.quantity).toBe(25);
+      expect(row.unit).toBe('Mtr');
+    });
+
+    it('extracts unit from itemName when unit is omitted', () => {
+      const row = fromExtractedEntity(
+        extracted({ itemName: 'Centrifugal Pump (5 Sets)', quantity: 5, unit: '' })
+      );
+      expect(row.quantity).toBe(5);
+      expect(row.unit).toBe('Sets');
+    });
+
+    it('defaults unit to Nos when omitted from entity without explicit unit', () => {
+      const row = fromExtractedEntity(
+        extracted({ itemName: 'Business Laptops', quantity: 20, unit: '' })
+      );
+      expect(row.quantity).toBe(20);
+      expect(row.unit).toBe('Nos');
+    });
+  });
 });

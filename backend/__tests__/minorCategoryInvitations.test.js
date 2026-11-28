@@ -248,9 +248,10 @@ describe('RFQ invitations follow the minor category', () => {
       expect(minorLookup).toHaveBeenCalledWith(
         ['bearings & accessories', 'bearings & accessori'],
         expect.arrayContaining([MAJOR.toLowerCase()]),
-        expect.any(Number)
+        expect.any(Number),
+        { pincode: '400001' }
       );
-      expect(majorLookup).toHaveBeenCalledWith(expect.arrayContaining([MAJOR.toLowerCase()]), expect.any(Number));
+      expect(majorLookup).toHaveBeenCalledWith(expect.arrayContaining([MAJOR.toLowerCase()]), expect.any(Number), { pincode: '400001' });
       expect(pageLookup).not.toHaveBeenCalled();
       expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major', 'v-accessory']);
     });
@@ -329,7 +330,8 @@ describe('RFQ invitations follow the minor category', () => {
       expect(lookup).toHaveBeenCalledWith(
         ['bearings & accessories', 'bearings & accessori'],
         expect.arrayContaining(['engineering spares - mechanical']),
-        expect.any(Number)
+        expect.any(Number),
+        { pincode: '400001' }
       );
       expect(updated.assignedVendors.map((v) => v.id)).toEqual(['v-minor', 'v-major']);
     });
@@ -368,7 +370,7 @@ describe('RFQ invitations follow the minor category', () => {
 
       const rows = await storeService.candidateVendorsForRFQAsync(bearingRfq(), 5);
 
-      expect(lookup).toHaveBeenCalledWith(['bearings & accessories', 'bearings & accessori'], 5);
+      expect(lookup).toHaveBeenCalledWith(['bearings & accessories', 'bearings & accessori'], 5, { pincode: '400001' });
       expect(rows.map((v) => v.id)).toEqual(['v-minor']);
     });
   });

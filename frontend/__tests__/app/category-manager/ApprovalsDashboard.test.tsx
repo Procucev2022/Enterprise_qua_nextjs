@@ -4,6 +4,14 @@ import ApprovalsDashboard from '@/app/category-manager/components/ApprovalsDashb
 import * as approvalClient from '@/lib/approvalClient';
 import { authClient } from '@/lib/authClient';
 import { UI_STRINGS, formatString } from '@/lib/uiStrings';
+import { USER_PREFERENCE_KEYS } from '@/lib/constants';
+import * as userPreferencesClient from '@/lib/userPreferencesClient';
+
+jest.mock('@/lib/userPreferencesClient', () => ({
+  getUserPreference: jest.fn().mockResolvedValue(null),
+  saveUserPreference: jest.fn().mockResolvedValue(true),
+  deleteUserPreference: jest.fn().mockResolvedValue(true),
+}));
 
 jest.mock('@/lib/approvalClient', () => {
   const actual = jest.requireActual('@/lib/approvalClient');
@@ -12,6 +20,7 @@ jest.mock('@/lib/approvalClient', () => {
     fetchApprovalSummary: jest.fn(),
     fetchApprovals: jest.fn(),
     processApprovalAction: jest.fn(),
+    sendApprovalOtp: jest.fn(),
   };
 });
 
@@ -145,13 +154,16 @@ describe('ApprovalsDashboard', () => {
 
     // Toolbar controls rendered in single row
     expect(screen.getByPlaceholderText(strings.searchPlaceholder)).toBeInTheDocument();
-    expect(screen.getByLabelText(strings.projectFilterPlaceholder)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allRequestTypes)).toBeInTheDocument();
     expect(screen.getByLabelText(strings.allStatuses)).toBeInTheDocument();
-    expect(screen.getByTestId('toggle-my-approvals')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-export-csv-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-refresh-btn')).toBeInTheDocument();
+    expect(screen.getByTestId('toolbar-settings-btn')).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(strings.projectFilterPlaceholder)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('toggle-my-approvals')).not.toBeInTheDocument();
   });
 
-  it('filters by status and toggles my approvals cleanly', async () => {
+  it('filters by status via summary cards and total card cleanly', async () => {
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
@@ -190,24 +202,7 @@ describe('ApprovalsDashboard', () => {
     });
     fireEvent.click(screen.getAllByRole('button', { name: UI_STRINGS.actionCenter.summaryModal.closeBtn })[0]);
 
-    // 4. Toggle My Approvals button
-    const myApprovalsBtn = screen.getByTestId('toggle-my-approvals');
-    fireEvent.click(myApprovalsBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: 'Srinu Sir' })
-      );
-    });
-
-    // Toggle off My Approvals
-    fireEvent.click(myApprovalsBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: undefined })
-      );
-    });
-
-    // 5. Total Requests Card click
+    // 4. Total Requests Card click
     const totalCard = screen.getByTestId('card-total-requests');
     fireEvent.click(totalCard);
     await waitFor(() => {
@@ -282,8 +277,7 @@ describe('ApprovalsDashboard', () => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
 
-    // The project filter is typed text. The request type and status dropdowns are the first two comboboxes.
-    fireEvent.change(screen.getByLabelText(strings.projectFilterPlaceholder), { target: { value: 'Tata' } });
+    // The request type and status dropdowns are the first two comboboxes.
     const selects = screen.getAllByRole('combobox');
     fireEvent.change(selects[0], { target: { value: 'Buyer Credit Addition' } });
     fireEvent.change(selects[1], { target: { value: 'Pending' } });
@@ -291,7 +285,6 @@ describe('ApprovalsDashboard', () => {
     await waitFor(() => {
       expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
         expect.objectContaining({
-          project: 'Tata',
           module: 'Buyer Credit Addition',
           status: 'Pending',
         })
@@ -308,6 +301,16 @@ describe('ApprovalsDashboard', () => {
       );
     });
 
+    // Test Clear search button
+    const clearBtn = screen.getByRole('button', { name: strings.clearSearch });
+    fireEvent.click(clearBtn);
+
+    await waitFor(() => {
+      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+        expect.objectContaining({ search: undefined })
+      );
+    });
+
     // Test Refresh button
     const refreshBtn = screen.getByRole('button', { name: strings.refreshTooltip });
     fireEvent.click(refreshBtn);
@@ -316,6 +319,62 @@ describe('ApprovalsDashboard', () => {
       expect(approvalClient.fetchApprovalSummary).toHaveBeenCalledTimes(2);
       expect(approvalClient.fetchApprovals).toHaveBeenCalled();
     });
+  });
+
+  it('renders only the 7 exact request type options in the exact order and filters correctly', async () => {
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    const requestTypeSelect = screen.getByLabelText(strings.allRequestTypes);
+    const options = Array.from(requestTypeSelect.querySelectorAll('option')).map((opt) => opt.textContent);
+
+    expect(options).toEqual([
+      strings.allRequestTypes,
+      'Buyer Credit Addition',
+      'Buyer Credit Deletion',
+      'Seller Credit Addition',
+      'Seller Credit Deletion',
+      'Discounts',
+      'Trial Periods',
+      'Offline Payments',
+    ]);
+
+    // Verify removed options are NOT present
+    const removedOptions = [
+      'Purchase Requests',
+      'Payment Approvals',
+      'Account Approvals',
+      'Unit Bookings',
+      'Packages',
+      'Milestones',
+      'Credit Notes',
+      'Cancellations & Refunds',
+    ];
+    for (const removed of removedOptions) {
+      expect(options).not.toContain(removed);
+    }
+
+    // Verify filtering on all 7 options
+    const testTypes = [
+      'Buyer Credit Addition',
+      'Buyer Credit Deletion',
+      'Seller Credit Addition',
+      'Seller Credit Deletion',
+      'Discounts',
+      'Trial Periods',
+      'Offline Payments',
+    ];
+    for (const type of testTypes) {
+      fireEvent.change(requestTypeSelect, { target: { value: type } });
+      await waitFor(() => {
+        expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
+          expect.objectContaining({ module: type })
+        );
+      });
+    }
   });
 
   it('customizes table columns via Column Settings modal and persists to localStorage', async () => {
@@ -350,23 +409,24 @@ describe('ApprovalsDashboard', () => {
     fireEvent.click(saveBtn);
 
     expect(screen.queryByRole('heading', { name: strings.columnSettingsTitle })).not.toBeInTheDocument();
-    expect(window.localStorage.getItem('procucev_approval_col_prefs_u-1')).not.toBeNull();
+    expect(userPreferencesClient.saveUserPreference).toHaveBeenCalledWith(
+      USER_PREFERENCE_KEYS.APPROVALS_COLUMNS,
+      expect.any(Array)
+    );
   });
 
-  it('restores column preferences from localStorage when stored previously', async () => {
-    window.localStorage.setItem(
-      'procucev_approval_col_prefs_u-1',
-      JSON.stringify([
-        { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
-        { key: 'status', label: 'Status', visible: true, order: 2 },
-      ])
-    );
+  it('restores column preferences from backend user preferences when stored previously', async () => {
+    (userPreferencesClient.getUserPreference as jest.Mock).mockResolvedValueOnce([
+      { key: 'request_id', label: 'Request ID', visible: true, locked: true, order: 1 },
+      { key: 'status', label: 'Status', visible: true, order: 2 },
+    ]);
 
     render(<ApprovalsDashboard />);
 
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
     });
+    expect(userPreferencesClient.getUserPreference).toHaveBeenCalledWith(USER_PREFERENCE_KEYS.APPROVALS_COLUMNS);
   });
 
   it('supports sorting columns on header click', async () => {
@@ -981,9 +1041,9 @@ describe('ApprovalsDashboard', () => {
     });
     unmount2();
 
-    // 3. User with email only, no name
+    // 3. User with email only, no id
     jest.spyOn(authClient, 'getSessionUser').mockReturnValue({
-      id: 'u-email-only',
+      id: '',
       name: '',
       email: 'approver@enterprise.com',
       role: 'buyer',
@@ -993,13 +1053,6 @@ describe('ApprovalsDashboard', () => {
     const { unmount: unmount3 } = render(<ApprovalsDashboard />);
     await waitFor(() => {
       expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
-    });
-    const myApprBtn = screen.getByTestId('toggle-my-approvals');
-    fireEvent.click(myApprBtn);
-    await waitFor(() => {
-      expect(approvalClient.fetchApprovals).toHaveBeenCalledWith(
-        expect.objectContaining({ assigned_approver: 'approver@enterprise.com' })
-      );
     });
 
     // 4. Test ignored key on card
@@ -1079,5 +1132,438 @@ describe('ApprovalsDashboard', () => {
 
     const closeBtn = screen.getByRole('button', { name: strings.closeDetails });
     fireEvent.click(closeBtn);
+  });
+
+  it('renders discount, offline payment, and trial period details breakdown in details modal', async () => {
+    const detailedRequests = [
+      {
+        id: 'appr-discount-full',
+        request_number: 'REQ-DSC-FULL',
+        module: 'Discounts',
+        request_type: 'Discounts',
+        project: 'JSW Steel Energy Sourcing',
+        applicant_name: 'JSW Energy Plant 4',
+        applicant_email: 'sourcing@jsw.in',
+        value_impact: '20% Discount',
+        amount: 20000,
+        quantity: 1,
+        available_balance: 10,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Discount for annual commitment',
+        raw: {
+          original_price: 100000,
+          discount_percentage: 20,
+          discount_amount: 20000,
+          remaining_amount: 80000,
+          gst_amount: 14400,
+          final_payable_amount: 94400,
+          selected_mode: 'Full Sourcing',
+          billing_duration: '24 Months',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-discount-empty',
+        request_number: 'REQ-DSC-EMPTY',
+        module: 'Discounts',
+        request_type: 'Discounts',
+        project: 'Tata Steel Maintenance',
+        applicant_name: 'Tata Steel',
+        applicant_email: 'tata@steel.com',
+        value_impact: 'Custom Discount',
+        amount: 0,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Govardhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Discount without raw fields',
+        raw: {},
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-offline-full',
+        request_number: 'REQ-OFF-FULL',
+        module: 'Offline Payments',
+        request_type: 'Offline Payments',
+        project: 'Offline Bank Transfer',
+        applicant_name: 'Larsen & Toubro',
+        applicant_email: 'lt@lnt.com',
+        value_impact: '₹50,000 NEFT',
+        amount: 50000,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Krishna',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Sudheer Sir',
+        status: 'Pending',
+        details: 'Offline NEFT payment proof attached',
+        raw: {
+          buyer_source_mode: 'Annual Pass',
+          payment_date: '2026-11-15',
+          payment_type: 'NEFT',
+          transaction_id: 'TXN-OFFLINE-999',
+          payment_amount: 50000,
+          proof_file_name: 'receipt.pdf',
+          proof_file_url: 'https://example.com/receipt.pdf',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-offline-cash',
+        request_number: 'REQ-OFF-CASH',
+        module: 'Offline Payments',
+        request_type: 'Offline Payments',
+        project: 'Cash Counter Payment',
+        applicant_name: 'Small Supplier',
+        applicant_email: 'cash@vendor.com',
+        value_impact: '₹5,000 Cash',
+        amount: 5000,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Krishna',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Sudheer Sir',
+        status: 'Pending',
+        details: 'Cash payment without transaction id or proof',
+        raw: {
+          payment_type: 'Cash',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-trial-full',
+        request_number: 'REQ-TRL-FULL',
+        module: 'Trial Periods',
+        request_type: 'Trial Periods',
+        project: 'Trial Extension',
+        applicant_name: 'JSW Steel',
+        applicant_email: 'jsw@steel.com',
+        value_impact: '45 Days Trial',
+        amount: 45,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: '45 days trial extension for evaluation',
+        raw: {
+          selected_mode: 'Priority Access',
+          trial_days: 45,
+          start_date: '2026-11-01',
+          end_date: '2026-12-15',
+        },
+        created_at: '2026-10-30T10:00:00Z',
+      },
+      {
+        id: 'appr-trial-empty',
+        request_number: 'REQ-TRL-EMPTY',
+        module: 'Trial Periods',
+        request_type: 'Trial Periods',
+        project: 'Trial Basic',
+        applicant_name: 'JSW Steel',
+        applicant_email: 'jsw@steel.com',
+        value_impact: 'Trial',
+        amount: 0,
+        quantity: 1,
+        available_balance: 0,
+        maker_name: 'Chandhan',
+        maker_role: 'Category Manager',
+        assigned_approver: 'Srinu Sir',
+        status: 'Pending',
+        details: 'Trial with empty raw',
+        raw: {},
+        created_at: '2026-10-30T10:00:00Z',
+      },
+    ];
+
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
+      data: detailedRequests,
+      total: detailedRequests.length,
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-DSC-FULL')).toBeInTheDocument();
+    });
+
+    // 1. Open Discount Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-DSC-FULL' }));
+    expect(screen.getByText('Discount Price Breakdown')).toBeInTheDocument();
+    expect(screen.getByText(/Full Sourcing • 24 Months/)).toBeInTheDocument();
+    expect(screen.getByText('₹1,00,000')).toBeInTheDocument();
+    expect(screen.getByText('20%')).toBeInTheDocument();
+    expect(screen.getByText('−₹20,000')).toBeInTheDocument();
+    expect(screen.getByText('₹80,000')).toBeInTheDocument();
+    expect(screen.getByText('+₹14,400')).toBeInTheDocument();
+    expect(screen.getByText('₹94,400')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 2. Open Discount Empty Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-DSC-EMPTY' }));
+    expect(screen.getByText('Discount Price Breakdown')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 3. Open Offline Payment Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-OFF-FULL' }));
+    expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+    expect(screen.getByText('Annual Pass')).toBeInTheDocument();
+    expect(screen.getByText('2026-11-15')).toBeInTheDocument();
+    expect(screen.getByText('NEFT')).toBeInTheDocument();
+    expect(screen.getByText('TXN-OFFLINE-999')).toBeInTheDocument();
+    expect(screen.getByText('receipt.pdf')).toBeInTheDocument();
+    expect(screen.getByText('View / Download')).toHaveAttribute('href', 'https://example.com/receipt.pdf');
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 4. Open Offline Payment Cash Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-OFF-CASH' }));
+    expect(screen.getByText('Offline Payment Information')).toBeInTheDocument();
+    expect(screen.getByText('Cash')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 5. Open Trial Full Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-TRL-FULL' }));
+    expect(screen.getByText('Trial Period Details')).toBeInTheDocument();
+    expect(screen.getAllByText('Priority Access').length).toBeGreaterThanOrEqual(1);
+    expect(screen.getByText('45 Days')).toBeInTheDocument();
+    expect(screen.getByText('2026-11-01')).toBeInTheDocument();
+    expect(screen.getByText('2026-12-15')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+
+    // 6. Open Trial Empty Details
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-TRL-EMPTY' }));
+    expect(screen.getByText('Trial Period Details')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: strings.closeDetails }));
+  });
+
+  it('handles keyboard escape dismissals and action modal error reset', async () => {
+    const escapeApproval = {
+      id: 'appr-escape-1',
+      request_number: 'REQ-ESC-01',
+      module: '',
+      request_type: 'Discounts',
+      project: 'Escape Test Project',
+      applicant_name: 'Escape Buyer',
+      applicant_email: 'escape@buyer.com',
+      value_impact: '₹10,000',
+      amount: 10000,
+      quantity: 1,
+      available_balance: 0,
+      maker_name: 'Maker',
+      maker_role: 'Role',
+      assigned_approver: '',
+      status: 'Pending',
+      details: 'Escape test',
+      history: [
+        {
+          action: 'SUBMITTED',
+          actor_name: 'Maker',
+          actor_role: '',
+          timestamp: '2026-10-29T11:00:00Z',
+          remarks: '',
+        },
+      ],
+      created_at: '2026-10-30T10:00:00Z',
+    };
+
+    (approvalClient.fetchApprovals as jest.Mock).mockResolvedValue({
+      data: [escapeApproval],
+      total: 1,
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-ESC-01')).toBeInTheDocument();
+    });
+
+    // 1. Open details modal and close via Escape key
+    fireEvent.click(screen.getByRole('button', { name: 'REQ-ESC-01' }));
+    expect(screen.getByRole('heading', { name: strings.detailsTitle })).toBeInTheDocument();
+    expect(screen.getByText(/No notes/)).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.detailsTitle })).toBeNull();
+
+    // 2. Open column settings and close via Escape key
+    fireEvent.click(screen.getByTestId('toolbar-settings-btn'));
+    expect(screen.getByRole('heading', { name: strings.columnSettingsTitle })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.columnSettingsTitle })).toBeNull();
+
+    // 3. Open summary modal and close via Escape key
+    const totalCard = screen.getByTestId('card-total-requests');
+    fireEvent.click(totalCard);
+    await waitFor(() => {
+      expect(screen.getByRole('heading', { name: new RegExp(strings.summaryModalTitlePrefix) })).toBeInTheDocument();
+    });
+    fireEvent.keyDown(window, { key: 'Escape' });
+    await waitFor(() => {
+      expect(screen.queryByRole('heading', { name: new RegExp(strings.summaryModalTitlePrefix) })).toBeNull();
+    });
+
+    // 4. Open action modal, trigger password error, then type to clear password error
+    const rowApproveBtn = screen.getAllByRole('button', { name: strings.approveBtn })[0];
+    fireEvent.click(rowApproveBtn);
+    expect(screen.getByRole('heading', { name: strings.confirmApprovalTitle })).toBeInTheDocument();
+
+    // Click confirm without approver name -> sets passwordError to approverRequired
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    fireEvent.click(confirmBtn);
+    expect(screen.getByText(strings.approverRequired)).toBeInTheDocument();
+
+    // Typing in password input should clear passwordError (line 1688)
+    const passInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passInput, { target: { value: 'secret' } });
+    expect(screen.queryByText(strings.approverRequired)).toBeNull();
+
+    // Close action modal via Escape key (line 168)
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(screen.queryByRole('heading', { name: strings.confirmApprovalTitle })).toBeNull();
+  });
+
+  it('supports Email OTP authentication mode, sends OTP, and approves with OTP', async () => {
+    (approvalClient.sendApprovalOtp as jest.Mock).mockResolvedValue({
+      success: true,
+      email: 'srinivas.mukku@procucev.com',
+      expiresInSeconds: 600,
+    });
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValue({
+      success: true,
+      data: { ...mockApprovalsList[0], status: 'Approved' },
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    // Open action modal
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    // Click quick select buttons
+    const raoBtn = screen.getByRole('button', { name: 'Rao Sir' });
+    fireEvent.click(raoBtn);
+    expect(screen.getByDisplayValue('Rao Sir')).toBeInTheDocument();
+    expect(screen.getByText('mnrao@procucev.com')).toBeInTheDocument();
+
+    const srinuBtn = screen.getByRole('button', { name: 'Srinu Sir' });
+    fireEvent.click(srinuBtn);
+    expect(screen.getByDisplayValue('Srinu Sir')).toBeInTheDocument();
+    expect(screen.getByText('srinivas.mukku@procucev.com')).toBeInTheDocument();
+
+    // Switch to Email OTP mode
+    const otpModeBtn = screen.getByRole('button', { name: strings.authModeOtp });
+    fireEvent.click(otpModeBtn);
+
+    expect(screen.getByText(new RegExp(strings.recipientLabel, 'i'))).toBeInTheDocument();
+
+    // Click Send OTP
+    const sendOtpBtn = screen.getByRole('button', { name: strings.sendOtpBtn });
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+
+    expect(approvalClient.sendApprovalOtp).toHaveBeenCalledWith('Srinu Sir', 'appr-101');
+
+    // Verify OTP input placeholder
+    const otpInput = screen.getByPlaceholderText(strings.otpPlaceholder);
+    expect(otpInput).toBeInTheDocument();
+
+    // Try submitting without OTP -> error
+    fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    expect(screen.getByText(strings.otpRequiredError)).toBeInTheDocument();
+
+    // Enter OTP
+    fireEvent.change(otpInput, { target: { value: '123456' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: strings.confirmApproveBtn }));
+    });
+
+    expect(approvalClient.processApprovalAction).toHaveBeenCalledWith(
+      'appr-101',
+      'APPROVE',
+      '',
+      '123456',
+      'Srinu Sir',
+      'otp'
+    );
+  });
+
+  it('handles send OTP failure and error handling in action modal', async () => {
+    (approvalClient.sendApprovalOtp as jest.Mock).mockResolvedValue({
+      success: false,
+      error: 'Approver email not found',
+    });
+
+    render(<ApprovalsDashboard />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    // Clear approver and try sending OTP
+    const approverInput = screen.getByLabelText(strings.approverLabel);
+    fireEvent.change(approverInput, { target: { value: '   ' } });
+
+    // Switch to OTP mode
+    fireEvent.click(screen.getByRole('button', { name: strings.authModeOtp }));
+    expect(screen.getByText(strings.selectApproverFirst)).toBeInTheDocument();
+
+    fireEvent.change(approverInput, { target: { value: 'Srinu Sir' } });
+    const sendOtpBtn = screen.getByRole('button', { name: strings.sendOtpBtn });
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+
+    expect(screen.getByText('Approver email not found')).toBeInTheDocument();
+
+    // Also test sendApprovalOtp rejecting with exception
+    (approvalClient.sendApprovalOtp as jest.Mock).mockRejectedValueOnce(new Error('Network offline'));
+    await act(async () => {
+      fireEvent.click(sendOtpBtn);
+    });
+    expect(screen.getByText(strings.databaseSyncError)).toBeInTheDocument();
+
+    // Switch back to password mode
+    fireEvent.click(screen.getByRole('button', { name: strings.authModePassword }));
+    expect(screen.getByPlaceholderText(strings.passwordPlaceholder)).toBeInTheDocument();
+  });
+
+  it('triggers onApprovalDecision callback with approval details upon action completion', async () => {
+    const onApprovalDecision = jest.fn();
+    (approvalClient.processApprovalAction as jest.Mock).mockResolvedValueOnce({
+      success: true,
+      data: { id: 'appr-1', status: 'Approved' },
+    });
+
+    render(<ApprovalsDashboard onApprovalDecision={onApprovalDecision} />);
+
+    await waitFor(() => {
+      expect(screen.getByText('REQ-CR-9041')).toBeInTheDocument();
+    });
+
+    fireEvent.click(screen.getAllByRole('button', { name: strings.approveBtn })[0]);
+
+    const approverInput = screen.getByLabelText(strings.approverLabel);
+    fireEvent.change(approverInput, { target: { value: 'Sudheer Sir' } });
+
+    const passwordInput = screen.getByPlaceholderText(strings.passwordPlaceholder);
+    fireEvent.change(passwordInput, { target: { value: 'Secret123!' } });
+
+    const confirmBtn = screen.getByRole('button', { name: strings.confirmApproveBtn });
+    await act(async () => {
+      fireEvent.click(confirmBtn);
+    });
+
+    expect(onApprovalDecision).toHaveBeenCalledWith('appr-101', 'APPROVE', 'REQ-CR-9041');
   });
 });

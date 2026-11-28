@@ -3,12 +3,14 @@ import {
   extractRfqCategorySignals,
   extractRfqCategoryFilters,
   hasExplicitAllCategoriesChoice,
+  checkVendorRfqCategoryMatch,
   matchVendorAgainstSignals,
   getCategoryMatchedProcucevVendors,
   selectVendorsForCategories,
   scoreVendorLocation,
   rankProcucevVendorsForV3,
   selectTopProcucevVendorsForMode3,
+  compareVendorPincodeProximity,
   minorNamesMatch,
 } from '@/lib/vendorMatching';
 import type { VendorEntry } from '@/lib/types';
@@ -813,5 +815,162 @@ describe('Mode 3 top-10 vendor selection', () => {
     });
     expect(filters.minors).toEqual(['Centrifugal Pumps']);
     expect(filters.majors.map((m) => m.toLowerCase())).toContain('mechanical');
+  });
+
+  it('extracts pincode from vendor address/location and tie-breaks equal ratings by exact/closer PIN proximity', () => {
+    const exactInAddress = { id: 'v-exact', name: 'Exact', location: 'ITO, Central Delhi 110002', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+    const farDistrict = { id: 'v-far-pin', name: 'FarDistrict', pincode: '110099', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+    const midDistrict = { id: 'v-mid-pin', name: 'MidDistrict', pincode: '110005', majorCategory: 'IT', minorCategories: ['Laptop'], source: 'procucev_network', rating: 4 } as unknown as VendorEntry;
+
+    expect(scoreVendorLocation(exactInAddress, { pincode: '110002' }).score).toBe(100);
+    expect(compareVendorPincodeProximity(exactInAddress, farDistrict, '110002')).toBeLessThan(0);
+    expect(compareVendorPincodeProximity(midDistrict, farDistrict, '110002')).toBeLessThan(0);
+    expect(compareVendorPincodeProximity(exactInAddress, farDistrict, '12')).toBe(0);
+    expect(compareVendorPincodeProximity({ city: 'Delhi' } as unknown as VendorEntry, { city: 'Noida' } as unknown as VendorEntry, '110002')).toBe(0);
+
+    const v3Ranked = rankProcucevVendorsForV3([farDistrict, midDistrict, exactInAddress], ['Laptop'], { pincode: '110002' }, 3, ['Laptop'], true);
+    expect(v3Ranked.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-mid-pin', 'v-far-pin']);
+
+    const catRanked = selectVendorsForCategories([farDistrict, exactInAddress], ['Laptop'], 2, { pincode: '110002' });
+    expect(catRanked.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-far-pin']);
+
+    const allCatTop = selectTopProcucevVendorsForMode3([farDistrict, midDistrict, exactInAddress], {
+      majorCategory: 'All Categories',
+      deliveryPincode: '110002',
+    });
+    expect(allCatTop.map((r) => r.vendor.id)).toEqual(['v-exact', 'v-mid-pin', 'v-far-pin']);
+  });
+
+  describe('checkVendorRfqCategoryMatch', () => {
+    it('returns isMatch false when vendor is null or undefined', () => {
+      const res = checkVendorRfqCategoryMatch(null as any, { signals: ['Pumps'] });
+      expect(res.isMatch).toBe(false);
+      expect(res.matchScore).toBe(0);
+    });
+
+    it('returns isMatch true with 100 score when RFQ has no signals', () => {
+      const vendor = { id: 'v1', name: 'Vendor 1', majorCategory: 'Electrical' } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, { signals: [], rawSignals: [] });
+      expect(res.isMatch).toBe(true);
+      expect(res.matchScore).toBe(100);
+      expect(res.matchedCategories).toContain('Electrical');
+    });
+
+    it('matches vendors with strict minor category (Tier 1)', () => {
+      const vendor = {
+        id: 'v1',
+        name: 'Pump Supplier',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: ['Centrifugal Pumps'],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+      expect(res.isStrictMinorMatch).toBe(true);
+      expect(res.matchScore).toBeGreaterThanOrEqual(95);
+    });
+
+    it('matches vendors through parent major taxonomy association (Tier 3)', () => {
+      // Vendor only has parent majorCategory registered (common in bulk buyer uploads)
+      const vendor = {
+        id: 'v-bulk',
+        name: 'Industrial Spares Corp',
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Centrifugal Pumps'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+      expect(res.matchedMajor).toBe('Engineering Spares - Mechanical');
+    });
+
+    it('matches vendors through broad raw signals containing RFQ major category (Tier 2)', () => {
+      const vendor = {
+        id: 'v-elec',
+        name: 'Volt Supplies',
+        majorCategory: 'Electrical Equipment',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['LED Flood Lights'],
+        rawSignals: ['Electrical Equipment', 'LED Flood Lights'],
+        minorOnly: true,
+      });
+      expect(res.isMatch).toBe(true);
+    });
+
+    it('matches vendors through direct majorCategory fallback token matching (Tier 4)', () => {
+      const vendor = {
+        id: 'v-civil',
+        name: 'Concrete Ltd',
+        majorCategory: 'Civil Works & Construction',
+        minorCategories: [],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Civil Works'],
+        rawSignals: ['Civil Works'],
+        minorOnly: false,
+        majorCategory: 'Civil Works',
+      });
+      expect(res.isMatch).toBe(true);
+    });
+
+    it('correctly identifies true category mismatch when vendor has zero category overlap', () => {
+      const vendor = {
+        id: 'v-it',
+        name: 'Cloud Solutions Inc',
+        majorCategory: 'Information Technology',
+        minorCategories: ['Cloud Hosting', 'Software Development'],
+      } as unknown as VendorEntry;
+      const res = checkVendorRfqCategoryMatch(vendor, {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Centrifugal Pumps', 'Mechanical Spares'],
+        minorOnly: true,
+        majorCategory: 'Engineering Spares - Mechanical',
+      });
+      expect(res.isMatch).toBe(false);
+      expect(res.matchScore).toBe(0);
+      expect(res.matchedCategories).toHaveLength(0);
+    });
+
+    it('prevents 571 vendors false positive mismatch scenario', () => {
+      // Simulate 571 uploaded vendors that have division majorCategory but empty structured minor
+      const vendors571: VendorEntry[] = Array.from({ length: 571 }, (_, i) => ({
+        id: `v-${i}`,
+        name: `Approved Vendor ${i}`,
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategories: [],
+        rating: 4.5,
+      })) as unknown as VendorEntry[];
+
+      const categorySignalSet = {
+        signals: ['Centrifugal Pumps'],
+        rawSignals: ['Engineering Spares - Mechanical', 'Centrifugal Pumps'],
+        minorOnly: true,
+        majorCategory: 'Engineering Spares - Mechanical',
+        minorCategory: 'Centrifugal Pumps',
+      };
+
+      const matched: VendorEntry[] = [];
+      const mismatched: VendorEntry[] = [];
+
+      for (const v of vendors571) {
+        const evalRes = checkVendorRfqCategoryMatch(v, categorySignalSet);
+        if (evalRes.isMatch) {
+          matched.push(v);
+        } else {
+          mismatched.push(v);
+        }
+      }
+
+      // None of the 571 valid division vendors should be falsely identified as mismatched
+      expect(matched.length).toBe(571);
+      expect(mismatched.length).toBe(0);
+    });
   });
 });

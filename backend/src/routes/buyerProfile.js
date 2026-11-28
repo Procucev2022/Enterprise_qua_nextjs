@@ -47,6 +47,7 @@ function validateBuyerProfileDetailsQuery(req, res, next) {
 // organisation is then resolved from the session claims inside the service, which
 // is what stops one buyer reaching another buyer's profile.
 router.get('/me', authenticate, requireRole('buyer'), buyerProfileController.getMyProfile);
+router.get('/completion', authenticate, requireRole('buyer'), buyerProfileController.getProfileCompletion);
 router.put('/me', authenticate, requireRole('buyer'), buyerProfileController.updateMyProfile);
 
 // Details lookup for Category Managers and Admins to inspect buyer account profile

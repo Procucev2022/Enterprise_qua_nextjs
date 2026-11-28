@@ -541,6 +541,55 @@ describe('Controllers Error & Edge-Case Coverage', () => {
     ]);
   });
 
+  test('addQuote stores subtotal, discount, tax, and GST fields when supplied', async () => {
+    const next = jest.fn();
+    const vendorUser = { role: 'vendor', email: 'tax-vendor@test.com' };
+    const vendorProfile = storeService.addVendor({
+      name: 'Tax Vendor Co',
+      email: vendorUser.email,
+      majorCategory: 'Mechanical',
+    });
+
+    const seededRfq = storeService.createRFQ({
+      title: 'RFQ for tax calculation test',
+      category: 'Mechanical',
+      targetDeliveryDate: A_FUTURE_DATE,
+    });
+    storeService.updateRFQ(seededRfq.id, {
+      assignedVendors: [{ id: vendorProfile.id, email: vendorUser.email, name: vendorProfile.name }],
+    });
+
+    const res = mockRes();
+    await rfqController.addQuote(
+      {
+        params: { id: seededRfq.id },
+        body: {
+          unitPrice: 100,
+          totalPrice: 94.4,
+          subtotal: 100,
+          discountPercent: 20,
+          discountAmount: 20,
+          taxableAmount: 80,
+          taxRate: 18,
+          taxAmount: 14.4,
+        },
+        user: vendorUser,
+      },
+      res,
+      next
+    );
+
+    const storedRFQ = res.json.mock.calls[0][0].data;
+    expect(storedRFQ.quotes[0].subtotal).toBe(100);
+    expect(storedRFQ.quotes[0].discountPercent).toBe(20);
+    expect(storedRFQ.quotes[0].discountAmount).toBe(20);
+    expect(storedRFQ.quotes[0].taxableAmount).toBe(80);
+    expect(storedRFQ.quotes[0].taxRate).toBe(18);
+    expect(storedRFQ.quotes[0].gstPercent).toBe(18);
+    expect(storedRFQ.quotes[0].taxAmount).toBe(14.4);
+    expect(storedRFQ.quotes[0].gstAmount).toBe(14.4);
+  });
+
   test('addQuote omits lineItemQuotes entirely when the caller does not supply it', async () => {
     const next = jest.fn();
     const vendorUser = { role: 'vendor', email: 'blended-price-vendor@test.com' };

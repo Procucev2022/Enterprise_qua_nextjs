@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect } from 'react';
 import { useApp } from '@/lib/store';
+import { createBackdropClickHandler } from '@/lib/constants';
 import { fetchSubscriptionPricing, type SubscriptionPricingResponse } from '@/lib/subscriptionPaymentClient';
 import { PLAN_LABEL } from '@/app/buyer/subscription-center';
 import {
@@ -116,6 +117,7 @@ export default function RfqUpgradePlanModal({
   return (
     <div
       data-testid="rfq-upgrade-plan-modal"
+      onClick={createBackdropClickHandler(onClose, undefined, isRedirecting)}
       className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 dark:bg-black/80 backdrop-blur-sm p-4 overflow-y-auto animate-fade-in"
     >
       <div className="relative w-full max-w-xl bg-white dark:bg-gray-900 rounded-3xl shadow-2xl border border-slate-200 dark:border-gray-800 overflow-hidden text-slate-900 dark:text-white my-8">

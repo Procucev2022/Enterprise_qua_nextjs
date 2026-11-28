@@ -26,4 +26,13 @@ describe('buyerScopeIdsFor', () => {
   test('skips every identifier that is missing or blank', () => {
     expect(buyerScopeIdsFor({ email: 'buyer@acme.test' }, { id: '', organizationId: null })).toEqual(['buyer@acme.test']);
   });
+
+  test('includes organizationId and extraOrgId fallback when supplied', () => {
+    const ids = buyerScopeIdsFor(
+      { sub: 'sub-1', email: 'buyer@acme.test', organizationId: 'org-claim-1' },
+      { id: 'buyer-acc-1', organizationId: 'org-claim-1' },
+      'org-extra-2'
+    );
+    expect(ids).toEqual(['buyer-acc-1', 'org-claim-1', 'sub-1', 'buyer@acme.test', 'org-claim-1', 'org-extra-2']);
+  });
 });

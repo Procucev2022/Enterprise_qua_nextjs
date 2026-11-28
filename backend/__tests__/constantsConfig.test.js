@@ -733,6 +733,16 @@ describe('parseSearchTokens', () => {
     expect(parseSearchTokens('a@b.com; c@d.com\r\ne@f.com')).toEqual(['a@b.com', 'c@d.com', 'e@f.com']);
     expect(parseSearchTokens('user1@x.com user2@y.com')).toEqual(['user1@x.com', 'user2@y.com']);
   });
+
+  test('parses tabs and newlines from Excel raw copy-paste', () => {
+    const excelPasted = 'Vendor One\tVendor Two\r\nVendor Three\nvendor4@example.com';
+    expect(parseSearchTokens(excelPasted)).toEqual([
+      'Vendor One',
+      'Vendor Two',
+      'Vendor Three',
+      'vendor4@example.com',
+    ]);
+  });
 });
 
 describe('persistence recovery messages', () => {
@@ -791,7 +801,7 @@ describe('config/constants.js environment-only configuration', () => {
   test('ships no built-in mailbox, approver, or recipient addresses', () => {
     const constants = loadConstants();
     expect(constants.getCreditApproverEmail()).toBeNull();
-    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual([null, null]);
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual([null, null, null]);
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('PROD_RECIPIENTS');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEV_RECIPIENTS');
@@ -824,14 +834,15 @@ describe('config/constants.js environment-only configuration', () => {
   test('reads approver emails, credit approver, recipients, and mailboxes from the environment', () => {
     const constants = loadConstants({
       SRINU_APPROVER_EMAIL: 'director@corp.test',
+      RAO_APPROVER_EMAIL: 'management@corp.test',
       SUDHEER_APPROVER_EMAIL: 'manager@corp.test',
       CREDIT_APPROVER_EMAIL: 'credit@corp.test',
       DAILY_RFQ_REPORT_EMAILS: 'ops@corp.test, lead@corp.test',
       EMAIL_GATEWAY_ADDRESS: 'buyer-intake@corp.test',
       VENDOR_EMAIL_GATEWAY_ADDRESS: 'vendor-intake@corp.test',
     });
-    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual(['director@corp.test', 'manager@corp.test']);
-    expect(constants.CREDIT_APPROVAL_APPROVERS).toEqual(['Srinu Sir', 'Sudheer Sir']);
+    expect(constants.APPROVER_CONFIG.map((approver) => approver.email)).toEqual(['director@corp.test', 'management@corp.test', 'manager@corp.test']);
+    expect(constants.CREDIT_APPROVAL_APPROVERS).toEqual(['Srinu Sir', 'Rao Sir', 'Sudheer Sir']);
     expect(constants.getCreditApproverEmail()).toBe('credit@corp.test');
     expect(constants.DAILY_RFQ_REPORT_CONFIG).not.toHaveProperty('DEFAULT_RECIPIENTS');
     expect(constants.EMAIL_GATEWAY_CONFIG.GATEWAY_ADDRESS).toBe('buyer-intake@corp.test');
@@ -938,7 +949,31 @@ describe('free trial credits, moved message objects and ticket constants', () =>
     for (const key of keyMatches) counts.set(key, (counts.get(key) || 0) + 1);
     const duplicates = [...counts.entries()].filter(([, c]) => c > 1);
     expect(duplicates).toEqual([]);
-    expect(rawWrangler).not.toContain('quateam@procucev.com');
+    expect(rawWrangler).toContain('quateam@procucev.com');
+    expect(rawWrangler).toContain('sudheer.kangala@procucev.com');
+    expect(rawWrangler).not.toContain('anshul.goel@procucev.com');
+    expect(rawWrangler).not.toContain('gmtrfq@procucev.com');
+    expect(constantsSource).toContain('EXCLUDED_DAILY_REPORT_RECIPIENTS');
+
+    const testVars = wrangler.env?.test?.vars || {};
+    expect(testVars.EMAIL_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.EMAIL_GATEWAY_USER).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.EMAIL_GATEWAY_ADDRESS).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.GMAIL_SENDER_EMAIL).toBe('rfqprocucev1@gmail.com');
+    expect(testVars.OTP_GMAIL_SENDER_EMAIL).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.SMTP_USER).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.SMTP_FROM).toBe('notificationsprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_INVITE_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_DIRECT_RFQ_GATEWAY_ENABLED).toBe('true');
+    expect(testVars.VENDOR_INVITE_EMAIL_ADDRESS).toBe('invitationsprocucev@gmail.com');
+    expect(testVars.VENDOR_INVITE_GMAIL_SENDER_EMAIL).toBe('invitationsprocucev@gmail.com');
+    expect(testVars.VENDOR_DIRECT_RFQ_EMAIL_ADDRESS).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_DIRECT_RFQ_GMAIL_SENDER_EMAIL).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_USER).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_EMAIL_GATEWAY_ADDRESS).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_GMAIL_SENDER_EMAIL).toBe('gmtrfqprocucev@gmail.com');
+    expect(testVars.VENDOR_SMTP_USER).toBe('gmtrfqprocucev@gmail.com');
   });
 
   test('QUOTE_FAILURE_ALERT and VENDOR_QUOTE_SUPPORT_CC exclude quateam@procucev.com and default to gmtrfq, anshul, veerababu', () => {

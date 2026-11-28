@@ -23,6 +23,7 @@ beforeEach(() => {
   chasers = {
     dispatchDueChaserJobs: jest.fn().mockResolvedValue([]),
     dispatchDueRFQComparisonJobs: jest.fn().mockResolvedValue([]),
+    dispatchDueV0BuyerQuotationJobs: jest.fn().mockResolvedValue({ checked: 0, dispatched: 0, skipped: 0, failed: 0 }),
   };
   eventOutbox = {
     dispatchDueEventOutboxJobs: jest.fn().mockResolvedValue([]),
@@ -148,7 +149,7 @@ describe('Worker runtime bindings and fetch bridge', () => {
     const consoleError = jest.spyOn(console, 'error').mockImplementation(() => {});
 
     const worker = await loadWorker();
-    await worker.scheduled({ cron: '* * * * *' }, {}, {});
+    await worker.scheduled({ cron: '30 0 * * *' }, {}, {});
 
     expect(JSON.parse(consoleError.mock.calls[0][0])).toMatchObject({
       level: 'ERROR',
@@ -190,15 +191,34 @@ describe('Worker runtime bindings and fetch bridge', () => {
 });
 
 describe('Worker cron jobs', () => {
-  test('hydrates once before polling mailboxes and dispatching due chasers', async () => {
+  test('dispatches due queues without eager boot hydration and deduplicates lazy mailbox hydration', async () => {
     const worker = await loadWorker();
     const runtimeBindings = { WORKER_TEST_SETTING: 'cron', WORKER_TEST_NUMBER: 9 };
     await worker.scheduled({ cron: '* * * * *' }, runtimeBindings, {});
-    expect(store.hydrateFromDB).toHaveBeenCalledTimes(1);
-    expect(store.hydrateFromDB.mock.invocationCallOrder[0]).toBeLessThan(emailGateway.pollBothInboxesOnce.mock.invocationCallOrder[0]);
+    expect(store.hydrateFromDB).not.toHaveBeenCalled();
     expect(emailGateway.pollBothInboxesOnce).toHaveBeenCalledTimes(1);
+    const pollOptions = emailGateway.pollBothInboxesOnce.mock.calls[0][2];
+    expect(typeof pollOptions?.ensureHydrated).toBe('function');
+
+    // Concurrent calls to the lazy hydrate callback coalesce into one load.
+    let releaseHydration;
+    store.hydrateFromDB.mockImplementationOnce(
+      () => new Promise((resolve) => {
+        releaseHydration = () => {
+          store.isHydratedFromDB = true;
+          resolve();
+        };
+      })
+    );
+    const first = pollOptions.ensureHydrated();
+    const second = pollOptions.ensureHydrated();
+    expect(store.hydrateFromDB).toHaveBeenCalledTimes(1);
+    releaseHydration();
+    await Promise.all([first, second]);
+
     expect(chasers.dispatchDueChaserJobs).toHaveBeenCalledTimes(1);
     expect(chasers.dispatchDueRFQComparisonJobs).toHaveBeenCalledTimes(1);
+    expect(chasers.dispatchDueV0BuyerQuotationJobs).toHaveBeenCalledTimes(1);
     expect(store.closeExpiredRFQsDurably).toHaveBeenCalledTimes(1);
     expect(reconciliation.reconcileOnce).not.toHaveBeenCalled();
     expect(process.env.WORKER_TEST_SETTING).toBe('cron');
@@ -301,6 +321,10 @@ describe('Worker cron jobs', () => {
     const worker = await loadWorker();
     const error = new Error('hydration failure');
     store.hydrateFromDB.mockRejectedValue(error);
+    emailGateway.pollBothInboxesOnce.mockImplementationOnce(async (_buyerCfg, _vendorCfg, opts) => {
+      if (typeof opts?.ensureHydrated === 'function') await opts.ensureHydrated();
+      return {};
+    });
     const badBindings = new Proxy({}, { ownKeys() { throw new Error('binding failure'); } });
     await worker.scheduled({ cron: '* * * * *' }, badBindings, {});
     expect(loggerService.error).toHaveBeenCalledWith(

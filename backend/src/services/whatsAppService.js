@@ -420,6 +420,53 @@ async function sendRFQInvitationWhatsApp({
   };
 }
 
+/**
+ * Dispatches an RFQ closure notice over WhatsApp when Meta Cloud API is configured.
+ * Unlike invitations, sendmsg.in is not used because its pre-approved template is
+ * invitation-only and cannot carry a closure notice.
+ */
+async function sendRFQClosedWhatsApp({
+  phone,
+  contactPerson,
+  rfqNumber,
+  rfqTitle,
+}) {
+  const formattedPhone = formatWhatsAppNumber(phone);
+  if (!formattedPhone || formattedPhone.length < 10) {
+    logger.warn('[WHATSAPP] Closure notice skipped: invalid phone number', { phone }, 'WHATSAPP_SERVICE');
+    return { success: false, status: WHATSAPP_SEND_STATUS.SKIPPED, error: WHATSAPP_MESSAGES.INVALID_PHONE };
+  }
+
+  if (!rfqNumber) {
+    logger.warn('[WHATSAPP] Closure notice skipped: RFQ number missing', { phone: formattedPhone }, 'WHATSAPP_SERVICE');
+    return { success: false, status: WHATSAPP_SEND_STATUS.SKIPPED, error: WHATSAPP_MESSAGES.RFQ_NUMBER_REQUIRED };
+  }
+
+  const greeting = contactPerson ? `Hello ${contactPerson}, ` : 'Hello, ';
+  const scope = rfqTitle ? ` (${rfqTitle})` : '';
+  const closedText = `${greeting}RFQ ${rfqNumber}${scope} has been closed by the buyer on Procucev. Bidding is now concluded and no further quotations will be accepted.`;
+
+  const metaConfigured = Boolean(WHATSAPP_CONFIG.PHONE_NUMBER_ID && WHATSAPP_CONFIG.ACCESS_TOKEN);
+  if (!metaConfigured || process.env.NODE_ENV === 'test') {
+    return {
+      success: false,
+      status: metaConfigured ? WHATSAPP_SEND_STATUS.SKIPPED : WHATSAPP_SEND_STATUS.NOT_CONFIGURED,
+      error: WHATSAPP_MESSAGES.NOT_CONFIGURED,
+    };
+  }
+
+  try {
+    const result = await _sendViaMeta(formattedPhone, closedText);
+    if (result.success) {
+      return { success: true, status: WHATSAPP_SEND_STATUS.SENT, messageId: result.messageId };
+    }
+    return { success: false, status: WHATSAPP_SEND_STATUS.LINK_ONLY, error: result.error };
+  } catch (err) {
+    logger.warn(`[WHATSAPP] Closure notice failed for ${formattedPhone}: ${err.message}`, {}, 'WHATSAPP_SERVICE');
+    return { success: false, status: WHATSAPP_SEND_STATUS.LINK_ONLY, error: err.message };
+  }
+}
+
 module.exports = {
   WHATSAPP_CONFIG,
   WHATSAPP_SEND_STATUS,
@@ -429,4 +476,5 @@ module.exports = {
   generateOneClickBidUrl,
   buildDirectWhatsAppLink,
   sendRFQInvitationWhatsApp,
+  sendRFQClosedWhatsApp,
 };

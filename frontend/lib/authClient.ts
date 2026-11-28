@@ -56,12 +56,14 @@ class AuthClient {
         localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       } else {
         localStorage.removeItem(SESSION_KEY);
+        sessionStorage.removeItem(SESSION_KEY);
       }
 
       if (token) {
         localStorage.setItem(TOKEN_KEY, token);
       } else {
         localStorage.removeItem(TOKEN_KEY);
+        sessionStorage.removeItem(TOKEN_KEY);
       }
     }
   }
@@ -168,7 +170,7 @@ class AuthClient {
       if (res.ok) {
         const data = (await res.json()) as AuthResponse;
         if (data.success && data.user) {
-          this.currentSession = data.user;
+          this.setSession(data.user, this.token);
           return data.user;
         }
       }
@@ -195,7 +197,7 @@ class AuthClient {
   public async changePassword(
     currentPasswordOrCode: string,
     newPassword: string,
-    codeOrOptions?: string | { code?: string; resetToken?: string }
+    codeOrOptions?: string | { code?: string; resetToken?: string; currentPassword?: string }
   ): Promise<AuthResponse> {
     if (!this.token) {
       return { success: false, error: UI_STRINGS.auth.sessionExpired };
@@ -209,6 +211,7 @@ class AuthClient {
     } else if (codeOrOptions && typeof codeOrOptions === 'object') {
       if (codeOrOptions.code) payload.code = codeOrOptions.code;
       if (codeOrOptions.resetToken) payload.resetToken = codeOrOptions.resetToken;
+      if (codeOrOptions.currentPassword) payload.currentPassword = codeOrOptions.currentPassword;
     }
     if (currentPasswordOrCode) {
       if (/^\d{6}$/.test(currentPasswordOrCode.trim())) {
@@ -216,6 +219,9 @@ class AuthClient {
       } else {
         payload.currentPassword = currentPasswordOrCode;
       }
+    }
+    if (codeOrOptions && typeof codeOrOptions === 'object' && codeOrOptions.currentPassword) {
+      payload.currentPassword = codeOrOptions.currentPassword;
     }
 
     let res: Response;

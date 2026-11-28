@@ -121,6 +121,9 @@ async function bootstrapServer(port = PORT) {
     storeService.closeExpiredRFQsDurably().catch((error) => {
       logger.error('Scheduled RFQ closure sweep failed', { error }, 'SERVER');
     });
+    rfqChaserScheduler.dispatchDueV0BuyerQuotationJobs().catch((error) => {
+      logger.error('Scheduled V0 buyer quotation dispatch sweep failed', { error }, 'SERVER');
+    });
   }, RFQ_AUTO_CLOSE_POLL_INTERVAL_MS);
   if (typeof rfqClosureTimer.unref === 'function') rfqClosureTimer.unref();
   const eventOutboxTimer = setInterval(() => {

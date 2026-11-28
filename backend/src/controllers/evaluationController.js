@@ -1,4 +1,6 @@
 const storeService = require('../services/storeService');
+const domainQueries = require('../db/domainQueries');
+const pool = require('../db/pool');
 const { logger } = require('../services/loggerService');
 const { VALIDATION_SCHEMAS, validatePayload } = require('../config/validationSchemas');
 
@@ -13,11 +15,16 @@ async function getEvaluations(req, res, next) {
     const parsedLimit = req.query && req.query.limit ? Number(req.query.limit) : null;
     const limit = Number.isInteger(parsedLimit) && parsedLimit > 0 ? Math.min(parsedLimit, 500) : 100;
 
-    // A vendor lookup reads storage directly, so a saved record is found even when
-    // it is older than the in-memory window of recent evaluations.
-    const evals = queryValidation.sanitizedData.vendorId
-      ? await storeService.getVendorEvaluationsDurably(queryValidation.sanitizedData.vendorId, limit)
-      : storeService.getEvaluations(limit);
+    // Read storage directly whenever configured so every worker isolate returns
+    // consistent evaluations across all browsers and PCs.
+    let evals;
+    if (queryValidation.sanitizedData.vendorId) {
+      evals = await storeService.getVendorEvaluationsDurably(queryValidation.sanitizedData.vendorId, limit);
+    } else if (pool.hasStorage() && typeof domainQueries.getEvaluationsFromDB === 'function') {
+      evals = await domainQueries.getEvaluationsFromDB(limit);
+    } else {
+      evals = storeService.getEvaluations(limit);
+    }
     return res.json({ success: true, source: storeService.isHydratedFromDB ? 'persisted' : 'in_memory', data: evals });
   } catch (err) {
     logger.error('Error fetching vendor evaluations', err, 'EVALUATION_CONTROLLER');

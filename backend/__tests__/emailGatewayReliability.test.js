@@ -349,6 +349,41 @@ describe('pollViaGmailApi reliability', () => {
     expect(api.users.messages.modify).toHaveBeenCalledWith({ userId: 'me', id: 'n1', requestBody: { removeLabelIds: ['UNREAD'] } });
   });
 
+  test('skips lazy hydration on empty polls, invokes ensureHydrated for new mail, and logs automated rejections at INFO', async () => {
+    const { logger } = require('../src/services/loggerService');
+    const logSpy = jest.spyOn(logger, 'log');
+    const ensureHydrated = jest.fn().mockResolvedValue();
+
+    // Empty poll: ensureHydrated must NOT run.
+    jest.spyOn(googleapis.google, 'gmail').mockReturnValue(gmailApi([{ messages: [] }]));
+    await emailGatewayService.pollViaGmailApi(enabledConfig(), { ensureHydrated });
+    expect(ensureHydrated).not.toHaveBeenCalled();
+
+    // Unprocessed automated newsletter: ensureHydrated runs before processMessage, log uses INFO not WARN.
+    const apiWithMail = gmailApi([{ messages: [{ id: 'auto-1' }] }]);
+    googleapis.google.gmail.mockReturnValue(apiWithMail);
+    jest.spyOn(emailGatewayQueries, 'hasProcessed').mockResolvedValue(false);
+    jest.spyOn(emailGatewayService, 'processMessage').mockResolvedValue({
+      status: INGESTION_OUTCOME.INVALID_RFQ,
+      detail: 'Vendor email gateway only processes quotation replies for existing RFQs.',
+      message: {
+        messageId: '<job-alert@timesjobs.com>',
+        fromAddress: 'alerts@timesjobs.com',
+        subject: 'Hiring alert',
+        automatedReason: 'mailing list',
+      },
+    });
+
+    await emailGatewayService.pollViaGmailApi(enabledConfig(), { ensureHydrated });
+    expect(ensureHydrated).toHaveBeenCalledTimes(1);
+    expect(logSpy).toHaveBeenCalledWith(
+      'INFO',
+      expect.stringContaining('INVALID_RFQ'),
+      expect.objectContaining({ fromAddress: 'alerts@timesjobs.com' }),
+      'EMAIL_GATEWAY'
+    );
+  });
+
   test('a message already recorded under its Message-ID header is skipped and marked read', async () => {
     const api = gmailApi([{ messages: [{ id: 'dup1' }] }]);
     jest.spyOn(googleapis.google, 'gmail').mockReturnValue(api);

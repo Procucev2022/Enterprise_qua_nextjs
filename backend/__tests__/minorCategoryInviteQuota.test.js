@@ -664,4 +664,91 @@ describe('V0 minor lookup covers every major that lists the minor', () => {
     const [, majors] = minorSpy.mock.calls[0];
     expect(majors).toEqual(expect.arrayContaining(['engineering spares - electrical', 'capex - equipment & machinery']));
   });
+
+  test('counts 4 Laptop minor-category vendors at pincode 560037 (tagged, name/product-matched under IT, and stripped seeds) and fills 21 from IT major', async () => {
+    const laptopRfq = createQuietRfq({
+      sourcingMode: 'mode_0',
+      id: 'rfq-laptop-560037',
+      rfqNumber: 'RFQ261611062665',
+      title: '32GB RAM for Thinkbook14 G6 ITL & Allied Items Procurement',
+      category: 'IT',
+      deliveryLocation: 'Bengaluru, Karnataka',
+      deliveryPincode: '560037',
+      extractedEntities: [
+        { id: 'li-laptop', itemName: '32GB RAM for Thinkbook14', majorCategory: 'IT', minorCategory: 'Laptop', quantity: 5, unit: 'Nos' },
+      ],
+      // Seed entry missing minorCategories and email (as sent by client-side double-blind preview)
+      assignedVendors: [
+        { id: 'v-lap-seed', name: 'Seed Tech Pvt Ltd', email: null, phone: null, source: 'procucev_network', pincode: '560037' },
+      ],
+    });
+
+    const minorDbVendors = [
+      // Hydrates the stripped seed vendor with minorCategories and email
+      networkVendor('v-lap-seed', { major: 'IT', minors: ['Laptop'], pincode: '560037', rating: 4.9 }),
+      // Explicit minorCategories tag
+      networkVendor('v-lap-tag', { major: 'IT', minors: ['Laptop'], pincode: '560037', rating: 4.8 }),
+      // Bulk-catalogue IT vendor filed under Hardware with Laptop in company name
+      {
+        id: 'v-lap-name',
+        name: 'Sri Sai Laptop Service Center',
+        email: 'srisai@quota.test',
+        majorCategory: 'IT',
+        minorCategories: ['Hardware'],
+        pincode: '560037',
+        source: 'procucev_network',
+        rating: 4.7,
+      },
+      // Bulk-catalogue IT vendor with composite non-taxonomy minor label and products field
+      {
+        id: 'v-lap-composite',
+        name: 'Bengaluru Compute Hub',
+        email: 'hub@quota.test',
+        majorCategory: 'IT',
+        minorCategories: ['Desktop & Laptop Systems'],
+        products: 'Enterprise Laptops',
+        pincode: '560037',
+        source: 'procucev_network',
+        rating: 4.6,
+      },
+    ];
+    const itMajorFallbackVendors = Array.from({ length: 25 }, (_, i) =>
+      networkVendor(`v-it-maj-${i}`, { major: 'IT', minors: ['Hardware'], pincode: '560037', rating: 4.0 - i * 0.01 })
+    );
+
+    minorSpy.mockResolvedValue(minorDbVendors);
+    jest.spyOn(domainQueries, 'getPublicVendorsByMajorCategoryFromDB').mockResolvedValue(itMajorFallbackVendors);
+    const alertSpy = jest.spyOn(storeService, '_alertRfqMinorShortfall').mockImplementation(() => {});
+    jest.spyOn(storeService, 'updateRFQDurably').mockImplementation(async (_id, updater) => {
+      const patch = typeof updater === 'function' ? updater(laptopRfq) : updater;
+      return { ...laptopRfq, ...patch };
+    });
+    jest.spyOn(storeService, '_persistNotification').mockImplementation(() => {});
+    jest.spyOn(storeService, '_dispatchRFQVendorInviteOutbox').mockImplementation(() => {});
+    jest.spyOn(rfqChaserScheduler, 'scheduleRFQChasers').mockImplementation(() => {});
+
+    const updated = await storeService.augmentV0AssignmentsFromDB(laptopRfq, { notifyShortfall: true });
+
+    expect(alertSpy).toHaveBeenCalledWith(laptopRfq, [
+      { minorCategory: 'Laptop', majorCategory: 'IT', minorMatched: 4, majorFilled: 21, target: 25 },
+    ]);
+    expect(updated.assignedVendors).toHaveLength(25);
+    const hydratedSeed = updated.assignedVendors.find((v) => v.id === 'v-lap-seed');
+    expect(hydratedSeed.email).toBe('v-lap-seed@quota.test');
+  });
+
+  test('vendorCoversMinorCategory rejects name matches when vendor is under an unrelated major or minor term is under 4 chars', () => {
+    expect(
+      storeService.vendorCoversMinorCategory(
+        { name: 'Laptop Civil Contractors', majorCategory: 'Civil Works', minorCategories: ['Bricks'] },
+        'Laptop'
+      )
+    ).toBe(false);
+    expect(
+      storeService.vendorCoversMinorCategory(
+        { name: 'UPS Power Systems', majorCategory: 'CAPEX - Equipment & Machinery', minorCategories: ['Boilers'] },
+        'UPS'
+      )
+    ).toBe(false);
+  });
 });
